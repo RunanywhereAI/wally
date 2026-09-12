@@ -41,6 +41,16 @@ which is what lets an agent on the far side run the tools it was given rather
 than describe them. The JetBrains IDEs need no translator, because AI Assistant
 speaks OpenAI already.
 
+Both the translator and the JetBrains proxy keep their connections to the
+model endpoint open between requests, one per stream in flight, so a turn does
+not start with a new TLS handshake — against the hosted endpoint that handshake
+was measured at about half a second, and an agent makes several requests per
+turn. A connection that sat idle long enough for the far side to drop it (a
+long build, a walk away from the desk) is tried once more on a fresh one, only
+when nothing had come back yet; a request that has started answering is never
+repeated. So the first request after a long pause pays one handshake, and the
+rest of the session does not.
+
 ## Hosted models
 
 A model you have not downloaded can still answer, if the console serves it:
