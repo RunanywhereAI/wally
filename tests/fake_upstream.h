@@ -69,7 +69,7 @@ class FakeUpstream {
                              [this](size_t, httplib::DataSink& sink) {
                                  WaitForHold();
                                  const std::string body = kStreamBody;
-                                 if (die_) {
+                                 if (die_.load()) {
                                      size_t cut = body.find("\n\n");
                                      cut = body.find("\n\n", cut + 2) + 2;
                                      sink.write(body.data(), cut);
@@ -99,11 +99,11 @@ class FakeUpstream {
         return ports_;
     }
 
-    void hold_streams_until(int arrivals) { hold_until_ = arrivals; }
+    void hold_streams_until(int arrivals) { hold_until_.store(arrivals); }
 
     /// Send the first two SSE frames, then drop the connection without
     /// finishing the stream: an upstream that died mid-generation.
-    void die_mid_stream(bool on) { die_ = on; }
+    void die_mid_stream(bool on) { die_.store(on); }
 
    private:
     void Record(const httplib::Request& request) {
@@ -116,7 +116,7 @@ class FakeUpstream {
     void WaitForHold() {
         std::unique_lock<std::mutex> lock(mutex_);
         arrived_.wait_for(lock, std::chrono::seconds(5),
-                          [this] { return arrivals_ >= hold_until_; });
+                          [this] { return arrivals_ >= hold_until_.load(); });
     }
 
     httplib::Server server_;
@@ -126,8 +126,8 @@ class FakeUpstream {
     std::condition_variable arrived_;
     std::vector<int> ports_;
     int arrivals_ = 0;
-    int hold_until_ = 0;
-    bool die_ = false;
+    std::atomic<int> hold_until_{0};
+    std::atomic<bool> die_{false};
 };
 
 #if !defined(_WIN32)

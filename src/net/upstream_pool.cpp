@@ -16,6 +16,9 @@ UpstreamLease::UpstreamLease(UpstreamLease&& other) noexcept
 
 UpstreamLease& UpstreamLease::operator=(UpstreamLease&& other) noexcept {
     if (this != &other) {
+        // Whatever this lease held goes back (or is dropped) exactly as it
+        // would at end of scope, before the other lease's client moves in.
+        UpstreamLease previous(std::move(*this));
         pool_ = std::move(other.pool_);
         client_ = std::move(other.client_);
         reused_ = other.reused_;

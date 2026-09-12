@@ -27,10 +27,18 @@ using wally_tests::HalfOpenUpstream;
 
 /// A port nothing is listening on right now. StartProxy needs a real number:
 /// it writes the address into the editor's settings, so 0 is not an option.
+///
+/// The probe has to actually listen and then stop: httplib's stop() closes
+/// the listening socket only while the server is running, and its destructor
+/// does not close it at all, so a bind-and-drop probe leaks a listening
+/// socket per call.
 int FreePort() {
     httplib::Server probe;
     const int port = probe.bind_to_any_port("127.0.0.1");
+    std::thread listener([&probe] { probe.listen_after_bind(); });
+    probe.wait_until_ready();
     probe.stop();
+    listener.join();
     return port;
 }
 
