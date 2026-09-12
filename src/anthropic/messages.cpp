@@ -17,6 +17,7 @@
 #include "config/cli_paths.h"
 #include "io/output.h"
 #include "net/loopback_auth.h"
+#include "net/upstream_pool.h"
 
 namespace wally::anthropic {
 namespace {
@@ -93,6 +94,10 @@ struct Runtime {
     // processes out.
     std::string local_token;
     bool verbose = false;
+    // Upstream connections, kept open across requests. Shared, not owned:
+    // a streaming sink can still be running its request after Stop(), and
+    // the lease it holds keeps the pool alive until it is done.
+    std::shared_ptr<wally::net::UpstreamPool> pool;
 };
 
 // The token the wrapped tool presents, read from either header Claude Code may
@@ -112,20 +117,51 @@ std::string PresentedToken(const httplib::Request& request) {
 
 std::unique_ptr<Runtime> g_runtime;
 
-void ApplyAuth(httplib::Client& client, const std::string& api_key) {
-    if (!api_key.empty()) {
-        client.set_bearer_token_auth(api_key);
+/// Sends `body` upstream on a pooled connection, once more on a fresh one if
+/// the first went out on a stale keep-alive (see RetryOnFreshConnection).
+/// `received_any` reports whether any response bytes reached `receiver`, which
+/// is what forbids the retry once output has started.
+httplib::Result PostUpstream(Runtime& runtime, const std::string& path, const std::string& body,
+                             const httplib::ContentReceiver& receiver, bool* received_any) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        wally::net::UpstreamLease lease = runtime.pool->acquire(runtime.api_key);
+        if (runtime.verbose) {
+            out::status_line(std::string("anthropic: upstream connection ") +
+                             (lease.reused() ? "reused" : "fresh"));
+        }
+        *received_any = false;
+        httplib::Result reply =
+            receiver ? lease.client().Post(path, httplib::Headers(), body, "application/json",
+                                           [&](const char* data, size_t length) {
+                                               *received_any = true;
+                                               return receiver(data, length);
+                                           })
+                     : lease.client().Post(path, body, "application/json");
+        if (reply) {
+            // A complete reply, whatever its status, leaves the connection
+            // clean; the lease goes back to the pool when it is destroyed.
+            return reply;
+        }
+        // No reply: the socket is in no state to reuse.
+        lease.discard();
+        if (attempt == 0 && wally::net::RetryOnFreshConnection(reply.error(), false,
+                                                                *received_any, lease.reused())) {
+            if (runtime.verbose) {
+                out::status_line("anthropic: upstream connection was stale; retrying once on a "
+                                 "fresh one");
+            }
+            continue;
+        }
+        return reply;
     }
+    return httplib::Result{nullptr, httplib::Error::Unknown};
 }
 
 void HandleNonStreaming(Runtime& runtime, const Json& request, httplib::Response& response) {
-    httplib::Client client(runtime.origin);
-    client.set_read_timeout(600, 0);
-    ApplyAuth(client, runtime.api_key);
-
     const Json upstream = translate::RequestToOpenAI(request, runtime.model);
-    const httplib::Result reply =
-        client.Post(runtime.prefix + "/chat/completions", upstream.dump(), "application/json");
+    bool received_any = false;
+    const httplib::Result reply = PostUpstream(runtime, runtime.prefix + "/chat/completions",
+                                              upstream.dump(), nullptr, &received_any);
     if (!reply || reply->status < 200 || reply->status >= 300) {
         const int status = reply ? reply->status : 0;
         const std::string body = reply ? reply->body : std::string();
@@ -173,18 +209,15 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
     // after this function returns, and everything it touches has to outlive it.
     auto upstream = std::make_shared<std::string>(
         translate::RequestToOpenAI(request, runtime.model).dump());
-    auto origin = std::make_shared<std::string>(runtime.origin);
     auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
-    auto api_key = std::make_shared<std::string>(runtime.api_key);
     auto model = std::make_shared<std::string>(runtime.model);
+    // The Runtime outlives every sink: Stop() stops the server and joins its
+    // thread before the Runtime is destroyed, and the pool is shared besides.
+    Runtime* owner = &runtime;
 
     response.set_chunked_content_provider(
         "text/event-stream",
-        [upstream, origin, path, api_key, model](size_t /*offset*/, httplib::DataSink& sink) {
-            httplib::Client client(*origin);
-            client.set_read_timeout(600, 0);
-            ApplyAuth(client, *api_key);
-
+        [upstream, path, model, owner](size_t /*offset*/, httplib::DataSink& sink) {
             translate::StreamState state;
             state.model = *model;
             std::string pending;
@@ -196,8 +229,9 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
             std::string error_body;
             constexpr size_t kErrorBodyCap = 8192;
 
-            const httplib::Result reply = client.Post(
-                *path, httplib::Headers(), *upstream, "application/json",
+            bool received_any = false;
+            const httplib::Result reply = PostUpstream(
+                *owner, *path, *upstream,
                 [&](const char* data, size_t length) {
                     if (error_body.size() < kErrorBodyCap) {
                         error_body.append(data,
@@ -240,7 +274,8 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
                         }
                     }
                     return true;
-                });
+                },
+                &received_any);
 
             if (!reply || reply->status < 200 || reply->status >= 300) {
                 const int status = reply ? reply->status : 0;
@@ -287,6 +322,9 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
     runtime->advertised = advertised.empty() ? model : advertised;
     runtime->local_token = wally::net::GenerateLoopbackToken();
     runtime->verbose = verbose;
+    wally::net::UpstreamOptions pool_options;
+    pool_options.origin = runtime->origin;
+    runtime->pool = std::make_shared<wally::net::UpstreamPool>(pool_options);
 
     Runtime* raw = runtime.get();
     raw->server.Post("/v1/messages", [raw](const httplib::Request& request,

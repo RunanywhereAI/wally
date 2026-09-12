@@ -33,6 +33,15 @@ target_link_libraries(test_wally_codex PRIVATE wally_core nlohmann_json::nlohman
 wally_stage_windows_runtime_dlls(test_wally_codex)
 add_test(NAME wally_codex_tests COMMAND test_wally_codex --run-all)
 
+add_executable(test_wally_anthropic test_wally_anthropic.cpp)
+target_include_directories(test_wally_anthropic PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# httplib is private to wally_core; this suite runs a fake upstream server of
+# its own, so it links the header directly.
+target_link_libraries(test_wally_anthropic PRIVATE wally_core httplib::httplib nlohmann_json::nlohmann_json)
+wally_stage_windows_runtime_dlls(test_wally_anthropic)
+add_test(NAME wally_anthropic_tests COMMAND test_wally_anthropic --run-all)
+set_tests_properties(wally_anthropic_tests PROPERTIES TIMEOUT 60)
+
 add_executable(test_wally_harness test_wally_harness.cpp)
 target_include_directories(test_wally_harness PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_harness PRIVATE wally_core nlohmann_json::nlohmann_json)
