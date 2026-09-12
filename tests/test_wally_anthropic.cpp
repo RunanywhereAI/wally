@@ -1,9 +1,6 @@
 #include "test_common.h"
 
 #include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -12,113 +9,28 @@
 #include <nlohmann/json.hpp>
 
 #include "anthropic/messages.h"
+#include "fake_upstream.h"
 #include "harness/harness.h"
 #include "net/upstream_pool.h"
 
-// The translator's upstream connection behaviour, proven against a fake
-// OpenAI-shaped server on loopback. Every assertion here is about which TCP
-// connection a request arrived on, read from the server's side as the peer's
-// ephemeral port: the same port across requests means the same connection was
-// reused; a different port means a new connect (and, against the real
-// endpoint, a new TLS handshake). No network beyond 127.0.0.1, no models.
+// The Anthropic translator's upstream connection behaviour, against the fake
+// upstreams in fake_upstream.h.
 
 namespace {
 
 using Json = nlohmann::json;
-
-constexpr const char* kStreamBody =
-    "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,"
-    "\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n"
-    "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,"
-    "\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n"
-    "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,"
-    "\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
-    "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[],"
-    "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\n"
-    "data: [DONE]\n\n";
-
-constexpr const char* kJsonBody =
-    "{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,"
-    "\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],"
-    "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}";
-
-/// An OpenAI-shaped upstream that remembers which connection each request
-/// arrived on. `hold_streams_until` makes streaming responses wait until that
-/// many requests have arrived before emitting anything, so two concurrent
-/// requests are provably in flight together rather than one finishing and
-/// lending its connection to the next.
-class FakeUpstream {
-   public:
-    FakeUpstream() {
-        server_.Post("/v1/chat/completions",
-                     [this](const httplib::Request& request, httplib::Response& response) {
-                         Record(request);
-                         const bool streaming = Json::parse(request.body).value("stream", false);
-                         if (!streaming) {
-                             response.set_content(kJsonBody, "application/json");
-                             return;
-                         }
-                         response.set_chunked_content_provider(
-                             "text/event-stream",
-                             [this](size_t, httplib::DataSink& sink) {
-                                 WaitForHold();
-                                 const std::string body = kStreamBody;
-                                 sink.write(body.data(), body.size());
-                                 sink.done();
-                                 return true;
-                             });
-                     });
-        port_ = server_.bind_to_any_port("127.0.0.1");
-        thread_ = std::thread([this] { server_.listen_after_bind(); });
-        server_.wait_until_ready();
-    }
-
-    ~FakeUpstream() {
-        server_.stop();
-        if (thread_.joinable()) {
-            thread_.join();
-        }
-    }
-
-    std::string base_url() const { return "http://127.0.0.1:" + std::to_string(port_) + "/v1"; }
-
-    std::vector<int> ports() const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return ports_;
-    }
-
-    void hold_streams_until(int arrivals) { hold_until_ = arrivals; }
-
-   private:
-    void Record(const httplib::Request& request) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ports_.push_back(request.remote_port);
-        ++arrivals_;
-        arrived_.notify_all();
-    }
-
-    void WaitForHold() {
-        std::unique_lock<std::mutex> lock(mutex_);
-        arrived_.wait_for(lock, std::chrono::seconds(5),
-                          [this] { return arrivals_ >= hold_until_; });
-    }
-
-    httplib::Server server_;
-    std::thread thread_;
-    int port_ = 0;
-    mutable std::mutex mutex_;
-    std::condition_variable arrived_;
-    std::vector<int> ports_;
-    int arrivals_ = 0;
-    int hold_until_ = 0;
-};
+using wally_tests::Describe;
+using wally_tests::FakeUpstream;
+#if !defined(_WIN32)
+using wally_tests::HalfOpenUpstream;
+#endif
 
 /// A translator started against `upstream`, stopped on scope exit.
 class RunningShim {
    public:
-    explicit RunningShim(const FakeUpstream& upstream) {
+    explicit RunningShim(const std::string& upstream_base_url) {
         wally::harness::Endpoint endpoint;
-        endpoint.base_url = upstream.base_url();
+        endpoint.base_url = upstream_base_url;
         endpoint.api_key = "test-upstream-key";
         started_ = wally::anthropic::Start(endpoint, "glm-5.3", &shim_);
     }
@@ -147,13 +59,6 @@ class RunningShim {
     bool started_ = false;
 };
 
-std::string Describe(const std::vector<int>& ports) {
-    std::string out = "[";
-    for (size_t i = 0; i < ports.size(); ++i) {
-        out += (i ? ", " : "") + std::to_string(ports[i]);
-    }
-    return out + "]";
-}
 
 // Test A. Two requests, one after the other, must arrive at the upstream on
 // the same connection. Building a client per request (the behaviour #80
@@ -162,7 +67,7 @@ TestResult test_sequential_requests_reuse_the_upstream_connection() {
     TestResult result;
     result.test_name = "sequential_requests_reuse_the_upstream_connection";
     FakeUpstream upstream;
-    RunningShim shim(upstream);
+    RunningShim shim(upstream.base_url());
     if (!shim.started()) {
         result.details = "translator did not start";
         return result;
@@ -192,7 +97,7 @@ TestResult test_concurrent_requests_use_separate_connections() {
     result.test_name = "concurrent_requests_use_separate_connections";
     FakeUpstream upstream;
     upstream.hold_streams_until(2);
-    RunningShim shim(upstream);
+    RunningShim shim(upstream.base_url());
     if (!shim.started()) {
         result.details = "translator did not start";
         return result;
@@ -314,6 +219,7 @@ TestResult test_retry_rule_only_on_a_stale_reused_connection() {
         {E::Timeout, false, false, true, false, "read timeout is not a stale socket"},
         {E::ConnectionTimeout, false, false, true, false, "connect timeout is the network"},
         {E::SSLServerVerification, false, false, true, false, "certificate failure is not transient"},
+        {E::Canceled, false, false, true, false, "a reader that left is not a stale socket"},
     };
     for (const Case& c : cases) {
         const bool got = RetryOnFreshConnection(c.error, c.has_response, c.received_any, c.reused);
@@ -324,6 +230,74 @@ TestResult test_retry_rule_only_on_a_stale_reused_connection() {
         }
     }
     result.passed = true;
+    return result;
+}
+
+
+// Step 4a. A reused connection the far side has quietly stopped serving:
+// the request goes out, nothing comes back, the connection ends. The
+// translator must try once more on a fresh connection and answer 200, and the
+// upstream must see exactly three requests: the first (answered), the stale
+// one (dropped), and the retry (answered) on a NEW connection.
+TestResult test_stale_reused_connection_is_retried_once_on_a_fresh_one() {
+    TestResult result;
+    result.test_name = "stale_reused_connection_is_retried_once_on_a_fresh_one";
+#if defined(_WIN32)
+    result.passed = true;
+    result.details = "skipped: raw-socket fake upstream is POSIX-only";
+    return result;
+#else
+    HalfOpenUpstream upstream;
+    if (!upstream.ok()) {
+        result.details = "could not bind the half-open upstream";
+        return result;
+    }
+    RunningShim shim(upstream.base_url());
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    const int first = shim.Send(false);
+    const int second = shim.Send(false);
+    const std::vector<int> ports = upstream.ports();
+    result.expected =
+        "200, 200; three upstream requests, the first two on one connection, the third on another";
+    result.actual = std::to_string(first) + ", " + std::to_string(second) + "; " + Describe(ports);
+    result.passed = first == 200 && second == 200 && ports.size() == 3 &&
+                    ports[0] == ports[1] && ports[2] != ports[0];
+    return result;
+#endif
+}
+
+// Step 4b. The case received_any exists for: a REUSED connection whose far
+// side dies after it has started answering. The error is connection-class
+// and there is no status, so only the "bytes reached the caller" rule stops
+// a retry -- and a retry would run the generation twice. The upstream must
+// see exactly two requests: the one that warmed the connection and the one
+// that died on it.
+//
+// (An "editor abandons the stream" variant was tried and removed: on loopback
+// the translator's writes to the closed reader keep succeeding for longer than
+// the stream lasts, so that test could not observe the abort path and passed
+// for the wrong reason. Abandonment is Error::Canceled, which the retry table
+// test covers.)
+TestResult test_upstream_dying_mid_stream_is_not_retried() {
+    TestResult result;
+    result.test_name = "upstream_dying_mid_stream_is_not_retried";
+    FakeUpstream upstream;
+    RunningShim shim(upstream.base_url());
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    const int warm = shim.Send(false);
+    upstream.die_mid_stream(true);
+    const int dying = shim.Send(true);
+    const std::vector<int> ports = upstream.ports();
+    result.expected = "200, 200 (the error rides inside the stream); exactly two upstream "
+                      "requests on one connection";
+    result.actual = std::to_string(warm) + ", " + std::to_string(dying) + "; " + Describe(ports);
+    result.passed = warm == 200 && dying == 200 && ports.size() == 2 && ports[0] == ports[1];
     return result;
 }
 
@@ -340,5 +314,9 @@ int main(int argc, char** argv) {
     suite.add("pool_outlives_an_outstanding_lease", test_pool_outlives_an_outstanding_lease);
     suite.add("retry_rule_only_on_a_stale_reused_connection",
               test_retry_rule_only_on_a_stale_reused_connection);
+    suite.add("stale_reused_connection_is_retried_once_on_a_fresh_one",
+              test_stale_reused_connection_is_retried_once_on_a_fresh_one);
+    suite.add("upstream_dying_mid_stream_is_not_retried",
+              test_upstream_dying_mid_stream_is_not_retried);
     return suite.run(argc, argv);
 }
