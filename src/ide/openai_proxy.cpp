@@ -19,6 +19,7 @@
 #include "account/credentials.h"
 #include "io/output.h"
 #include "net/loopback_auth.h"
+#include "net/upstream_pool.h"
 
 namespace wally::ide {
 namespace {
@@ -51,6 +52,9 @@ struct Runtime {
     // out; this keeps another local process out.
     std::string local_token;
     bool verbose = false;
+    // Upstream connections kept open across requests (wally #80). Shared: a
+    // streaming sink still running after StopProxy() holds a lease on it.
+    std::shared_ptr<wally::net::UpstreamPool> pool;
 };
 
 std::unique_ptr<Runtime> g_runtime;
@@ -101,15 +105,6 @@ bool RenewToken(Runtime& runtime) {
     runtime.api_key = grant.access_token;
     Trace(runtime.verbose, "REFRESHED");
     return true;
-}
-
-httplib::Client Upstream(const Runtime& runtime) {
-    httplib::Client client(runtime.origin);
-    client.set_read_timeout(600, 0);
-    if (!runtime.api_key.empty()) {
-        client.set_bearer_token_auth(runtime.api_key);
-    }
-    return client;
 }
 
 /// Where the proxy writes its trace, when one was asked for.
@@ -273,9 +268,31 @@ void Fail(httplib::Response& response, int status, const std::string& message) {
 ///
 /// Nothing is parsed. Both ends speak the same wire format, so reframing SSE
 /// here would only add a place for it to go wrong — and did, the first time.
+/// A non-streaming request on a pooled connection, once more on a fresh one
+/// if a reused connection turned out to be stale. Nothing has been answered
+/// to the editor when that decision is made.
+httplib::Result PostOnce(Runtime& runtime, const std::string& path, const std::string& body) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        wally::net::UpstreamLease lease = runtime.pool->acquire(runtime.api_key);
+        Trace(runtime.verbose,
+              lease.reused() ? "UPSTREAM reused connection" : "UPSTREAM fresh connection");
+        httplib::Result reply = lease.client().Post(path, body, "application/json");
+        if (reply) {
+            return reply;
+        }
+        lease.discard();
+        if (attempt == 0 &&
+            wally::net::RetryOnFreshConnection(reply.error(), false, false, lease.reused())) {
+            Trace(runtime.verbose, "UPSTREAM stale connection; retrying once on a fresh one");
+            continue;
+        }
+        return reply;
+    }
+    return httplib::Result{nullptr, httplib::Error::Unknown};
+}
+
 void Stream(Runtime& runtime, const std::string& body, httplib::Response& response) {
     auto request = std::make_shared<std::string>(body);
-    auto origin = std::make_shared<std::string>(runtime.origin);
     auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
     auto api_key = std::make_shared<std::string>(runtime.api_key);
 
@@ -286,17 +303,21 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
 
     response.set_chunked_content_provider(
         "text/event-stream",
-        [request, origin, path, api_key, verbose, owner](size_t, httplib::DataSink& sink) {
-          // Two attempts at most: the second only after a token the console
-          // has just renewed. Nothing reaches the sink until an event stream
-          // is recognised, so a retry cannot duplicate output.
-          for (int attempt = 0; attempt < 2; ++attempt) {
-            httplib::Client client(*origin);
-            client.set_read_timeout(600, 0);
-            const std::string token = attempt == 0 ? *api_key : owner->api_key;
-            if (!token.empty()) {
-                client.set_bearer_token_auth(token);
-            }
+        [request, path, api_key, verbose, owner](size_t, httplib::DataSink& sink) {
+          // Two kinds of second attempt, each at most once: after a token
+          // the console has just renewed (a 401 came back), and on a fresh
+          // connection when a REUSED one turned out to be stale (nothing
+          // came back at all -- RetryOnFreshConnection). Nothing reaches the
+          // sink until an event stream is recognised, so neither retry can
+          // duplicate output.
+          int auth_attempt = 0;
+          bool stale_retried = false;
+          for (;;) {
+            const std::string token = auth_attempt == 0 ? *api_key : owner->api_key;
+            wally::net::UpstreamLease lease = owner->pool->acquire(token);
+            Trace(*verbose, lease.reused() ? "UPSTREAM reused connection"
+                                           : "UPSTREAM fresh connection");
+            bool received_any = false;
 
             // An upstream that refuses the request answers with a JSON error and
             // no SSE framing at all. Forwarding those bytes as if they were
@@ -329,8 +350,9 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
                 return true;
             };
             const httplib::Result reply =
-                client.Post(*path, httplib::Headers(), *request, "application/json",
+                lease.client().Post(*path, httplib::Headers(), *request, "application/json",
                             [&](const char* data, size_t length) {
+                                received_any = true;
                                 if (decided) {
                                     if (!streaming) {
                                         head.append(data, length);
@@ -362,7 +384,18 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
                 return true;
             }
 
-            if (attempt == 0 && reply && LooksLikeAuthFailure(head) && RenewToken(*owner)) {
+            if (!reply) {
+                // The socket is in no state to reuse.
+                lease.discard();
+                if (!stale_retried &&
+                    wally::net::RetryOnFreshConnection(reply.error(), false, received_any,
+                                                       lease.reused())) {
+                    stale_retried = true;
+                    Trace(*verbose, "UPSTREAM stale connection; retrying once on a fresh one");
+                    continue;
+                }
+            } else if (auth_attempt == 0 && LooksLikeAuthFailure(head) && RenewToken(*owner)) {
+                ++auth_attempt;
                 head.clear();
                 pending.clear();
                 decided = false;
@@ -395,8 +428,6 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
             sink.done();
             return true;
           }
-          sink.done();
-          return true;
         });
 }
 
@@ -418,6 +449,9 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
     runtime->model = model;
     runtime->local_token = wally::net::GenerateLoopbackToken();
     runtime->verbose = verbose;
+    wally::net::UpstreamOptions pool_options;
+    pool_options.origin = runtime->origin;
+    runtime->pool = std::make_shared<wally::net::UpstreamPool>(pool_options);
 
     Runtime* raw = runtime.get();
     // Every handler catches. An exception thrown into cpp-httplib takes the
@@ -464,9 +498,8 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
                                  Stream(*raw, body, response);
                                  return;
                              }
-                             httplib::Client client = Upstream(*raw);
-                             const httplib::Result reply = client.Post(
-                                 raw->prefix + "/chat/completions", body, "application/json");
+                             const httplib::Result reply =
+                                 PostOnce(*raw, raw->prefix + "/chat/completions", body);
                              if (!reply) {
                                  Fail(response, 502, "the model endpoint did not answer");
                                  return;
