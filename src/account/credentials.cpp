@@ -573,6 +573,17 @@ std::string DefaultConsoleUrl() {
     return kProductionConsoleApi;
 }
 
+std::string BakedConsoleApiUrl() {
+    if (WALLY_BAKED_CONSOLE_API_URL[0] == '\0') {
+        return {};
+    }
+    std::string normalized;
+    if (!NormalizeConsoleUrl(WALLY_BAKED_CONSOLE_API_URL, &normalized, nullptr)) {
+        return {};
+    }
+    return normalized;
+}
+
 std::vector<std::string> TrustedBrowserOrigins(const std::string& console_url) {
     // An operator who declared one has said which console they trust, and that
     // is then the only one.
@@ -588,8 +599,9 @@ std::vector<std::string> TrustedBrowserOrigins(const std::string& console_url) {
     // console may approve sign-ins for it (a local console on loopback,
     // typically). Trust holds pairwise: the baked web origin is honored only
     // while talking to the baked API, never for an arbitrary --base-url.
-    if (WALLY_BAKED_CONSOLE_WEB_ORIGIN[0] != '\0' &&
-        console_url == std::string(WALLY_BAKED_CONSOLE_API_URL)) {
+    const std::string baked_api = BakedConsoleApiUrl();
+    if (WALLY_BAKED_CONSOLE_WEB_ORIGIN[0] != '\0' && !baked_api.empty() &&
+        console_url == baked_api) {
         std::string baked_web;
         if (NormalizeConsoleUrl(WALLY_BAKED_CONSOLE_WEB_ORIGIN, &baked_web, nullptr)) {
             return {baked_web, console_url};
