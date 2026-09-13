@@ -2,10 +2,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <cstddef>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <thread>
@@ -168,102 +172,257 @@ void HandleNonStreaming(Runtime& runtime, const Json& request, httplib::Response
                          "application/json");
 }
 
-void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& response) {
-    // The upstream body is built here rather than in the sink: the sink runs
-    // after this function returns, and everything it touches has to outlive it.
-    auto upstream = std::make_shared<std::string>(
-        translate::RequestToOpenAI(request, runtime.model).dump());
-    auto origin = std::make_shared<std::string>(runtime.origin);
-    auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
-    auto api_key = std::make_shared<std::string>(runtime.api_key);
-    auto model = std::make_shared<std::string>(runtime.model);
+// A streaming upstream call whose HTTP status is known before anything has been
+// written downstream.
+//
+// The shim used to commit a 200 and only then make the call, because the chunked
+// content provider runs after the request handler returns. An upstream 429 with a
+// Retry-After therefore reached the editor as a 200 carrying an SSE error, with the
+// delay gone (#83). Running the call on its own thread lets the handler wait for the
+// upstream headers, which is the only thing it needs in order to answer honestly, and
+// still start writing on the first token rather than buffering the whole reply.
+struct StreamPump {
+    std::mutex mutex;
+    // Headers have landed, an event is queued, or the worker is finished.
+    std::condition_variable ready;
+    // The queue has fallen back under the cap.
+    std::condition_variable drained;
 
-    response.set_chunked_content_provider(
-        "text/event-stream",
-        [upstream, origin, path, api_key, model](size_t /*offset*/, httplib::DataSink& sink) {
-            httplib::Client client(*origin);
-            client.set_read_timeout(600, 0);
-            ApplyAuth(client, *api_key);
+    // Translated Anthropic SSE, in the order it is to be written.
+    std::deque<std::string> events;
+    std::size_t queued_bytes = 0;
 
-            translate::StreamState state;
-            state.model = *model;
-            std::string pending;
-            // The upstream status is only known once Post returns, so the start
-            // of the body is kept regardless. On a non-2xx reply that is the
-            // error body, which would otherwise be fed to the SSE frame parser
-            // and silently dropped; capped so a real (2xx) stream of any size
-            // costs only these few KB.
-            std::string error_body;
-            constexpr size_t kErrorBodyCap = 8192;
+    bool headers_known = false;
+    bool finished = false;
+    // The reader went away; the worker stops at its next chunk.
+    bool cancelled = false;
 
-            const httplib::Result reply = client.Post(
-                *path, httplib::Headers(), *upstream, "application/json",
-                [&](const char* data, size_t length) {
-                    if (error_body.size() < kErrorBodyCap) {
-                        error_body.append(data,
-                                          std::min(length, kErrorBodyCap - error_body.size()));
-                    }
-                    pending.append(data, length);
-                    // SSE frames are separated by a blank line, and a chunk can
-                    // split one in half, so only whole frames are consumed.
-                    size_t split = 0;
-                    while ((split = pending.find("\n\n")) != std::string::npos) {
-                        const std::string frame = pending.substr(0, split);
-                        pending.erase(0, split + 2);
-                        const size_t field = frame.find("data:");
-                        if (field == std::string::npos) {
-                            continue;
-                        }
-                        std::string payload = frame.substr(field + 5);
-                        while (!payload.empty() && (payload.front() == ' ' || payload.front() == '\r')) {
-                            payload.erase(payload.begin());
-                        }
-                        if (payload == "[DONE]") {
-                            continue;
-                        }
-                        Json chunk;
-                        try {
-                            chunk = Json::parse(payload);
-                        } catch (const Json::exception&) {
-                            continue;
-                        }
-                        std::string events;
-                        try {
-                            events = translate::StreamChunkToAnthropic(chunk, &state);
-                        } catch (const std::exception&) {
-                            // A chunk in a shape the mapping did not expect is
-                            // a chunk to skip, not a reason to kill the run.
-                            continue;
-                        }
-                        if (!events.empty() && !sink.write(events.data(), events.size())) {
-                            return false;
-                        }
-                    }
-                    return true;
-                });
+    int status = 0;
+    std::string retry_after;
+    // Kept only for a non-2xx reply, where the body is the error rather than a
+    // stream. Capped so a real stream of any size costs nothing here.
+    std::string error_body;
+};
 
-            if (!reply || reply->status < 200 || reply->status >= 300) {
-                const int status = reply ? reply->status : 0;
-                LogUpstreamError(*model, true, status, error_body);
-                std::string type;
-                std::string message;
-                translate::UpstreamFailure(status, error_body, &type, &message);
-                const std::string body =
-                    "event: error\ndata: " + translate::ErrorBody(type, message) + "\n\n";
-                sink.write(body.data(), body.size());
-                sink.done();
-                return false;
+constexpr std::size_t kErrorBodyCap = 8192;
+// A slow editor must not let a fast endpoint grow the queue without bound.
+constexpr std::size_t kQueuedBytesCap = 4 * 1024 * 1024;
+
+void PumpEvents(const std::shared_ptr<StreamPump>& pump, std::string events) {
+    if (events.empty()) {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(pump->mutex);
+    pump->drained.wait(lock, [&] { return pump->cancelled || pump->queued_bytes < kQueuedBytesCap; });
+    if (pump->cancelled) {
+        return;
+    }
+    pump->queued_bytes += events.size();
+    pump->events.push_back(std::move(events));
+    pump->ready.notify_all();
+}
+
+// Runs on the worker thread. Everything the translator touches — the stream state
+// and the half-frame buffer — lives here, so the mapping is still single-threaded.
+void RunUpstream(const std::shared_ptr<StreamPump>& pump, const std::string& origin,
+                 const std::string& path, const std::string& api_key, const std::string& model,
+                 const std::string& body) {
+    httplib::Client client(origin);
+    client.set_read_timeout(600, 0);
+    ApplyAuth(client, api_key);
+
+    translate::StreamState state;
+    state.model = model;
+    std::string pending;
+    bool upstream_ok = false;
+
+    httplib::Request request;
+    request.method = "POST";
+    request.path = path;
+    request.body = body;
+    request.set_header("Content-Type", "application/json");
+
+    request.response_handler = [&](const httplib::Response& reply) {
+        {
+            std::lock_guard<std::mutex> lock(pump->mutex);
+            pump->status = reply.status;
+            if (reply.has_header("Retry-After")) {
+                pump->retry_after = reply.get_header_value("Retry-After");
             }
+            pump->headers_known = true;
+            pump->ready.notify_all();
+        }
+        upstream_ok = reply.status >= 200 && reply.status < 300;
+        return true;
+    };
+
+    request.content_receiver = [&](const char* data, std::size_t length, std::size_t, std::size_t) {
+        if (!upstream_ok) {
+            std::lock_guard<std::mutex> lock(pump->mutex);
+            if (pump->error_body.size() < kErrorBodyCap) {
+                pump->error_body.append(data,
+                                        std::min(length, kErrorBodyCap - pump->error_body.size()));
+            }
+            return true;
+        }
+        pending.append(data, length);
+        // SSE frames are separated by a blank line, and a chunk can split one in
+        // half, so only whole frames are consumed.
+        std::size_t split = 0;
+        while ((split = pending.find("\n\n")) != std::string::npos) {
+            const std::string frame = pending.substr(0, split);
+            pending.erase(0, split + 2);
+            const std::size_t field = frame.find("data:");
+            if (field == std::string::npos) {
+                continue;
+            }
+            std::string payload = frame.substr(field + 5);
+            while (!payload.empty() && (payload.front() == ' ' || payload.front() == '\r')) {
+                payload.erase(payload.begin());
+            }
+            if (payload == "[DONE]") {
+                continue;
+            }
+            Json chunk;
             try {
-                const std::string closing = translate::StreamCloseToAnthropic(&state);
-                if (!closing.empty()) {
-                    sink.write(closing.data(), closing.size());
-                }
+                chunk = Json::parse(payload);
+            } catch (const Json::exception&) {
+                continue;
+            }
+            std::string events;
+            try {
+                events = translate::StreamChunkToAnthropic(chunk, &state);
+            } catch (const std::exception&) {
+                // A chunk in a shape the mapping did not expect is a chunk to
+                // skip, not a reason to kill the run.
+                continue;
+            }
+            PumpEvents(pump, std::move(events));
+        }
+        std::lock_guard<std::mutex> lock(pump->mutex);
+        return !pump->cancelled;
+    };
+
+    const httplib::Result reply = client.send(request);
+    const bool transport_ok = static_cast<bool>(reply);
+
+    {
+        std::lock_guard<std::mutex> lock(pump->mutex);
+        if (!pump->headers_known) {
+            // The call failed before any reply: no status was ever seen.
+            pump->status = reply ? reply->status : 0;
+            pump->headers_known = true;
+        }
+    }
+
+    if (upstream_ok) {
+        if (transport_ok) {
+            try {
+                std::string closing = translate::StreamCloseToAnthropic(&state);
+                PumpEvents(pump, std::move(closing));
             } catch (const std::exception&) {
                 // Nothing useful left to say; ending the stream cleanly beats
                 // aborting the process holding the reader's editor open.
             }
-            sink.done();
+        } else {
+            // The status is already spent on a 200, so a failure this late can
+            // only be a typed SSE error. It must not read as a normal stop.
+            LogUpstreamError(model, true, 0, "upstream stream ended early");
+            std::string type;
+            std::string message;
+            translate::UpstreamFailure(0, std::string(), &type, &message);
+            PumpEvents(pump, "event: error\ndata: " + translate::ErrorBody(type, message) + "\n\n");
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(pump->mutex);
+    pump->finished = true;
+    pump->ready.notify_all();
+}
+
+// Stops the worker and joins it however the provider ends: drained, refused by the
+// reader, or dropped by httplib without another call.
+class PumpJoiner {
+   public:
+    PumpJoiner(std::shared_ptr<StreamPump> pump, std::thread worker)
+        : pump_(std::move(pump)), worker_(std::move(worker)) {}
+    ~PumpJoiner() {
+        {
+            std::lock_guard<std::mutex> lock(pump_->mutex);
+            pump_->cancelled = true;
+        }
+        pump_->drained.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    PumpJoiner(const PumpJoiner&) = delete;
+    PumpJoiner& operator=(const PumpJoiner&) = delete;
+
+   private:
+    std::shared_ptr<StreamPump> pump_;
+    std::thread worker_;
+};
+
+void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& response) {
+    const std::string body = translate::RequestToOpenAI(request, runtime.model).dump();
+    const std::string path = runtime.prefix + "/chat/completions";
+    const std::string model = runtime.model;
+
+    auto pump = std::make_shared<StreamPump>();
+    std::thread worker([pump, origin = runtime.origin, path, api_key = runtime.api_key, model,
+                        body] { RunUpstream(pump, origin, path, api_key, model, body); });
+    auto joiner = std::make_shared<PumpJoiner>(pump, std::move(worker));
+
+    int status = 0;
+    {
+        std::unique_lock<std::mutex> lock(pump->mutex);
+        pump->ready.wait(lock, [&] { return pump->headers_known || pump->finished; });
+        status = pump->status;
+    }
+
+    if (status < 200 || status >= 300) {
+        // Nothing has been written downstream yet, so the refusal can be answered
+        // as itself: the upstream status, and the delay it asked for.
+        std::string error_body;
+        std::string retry_after;
+        {
+            std::unique_lock<std::mutex> lock(pump->mutex);
+            pump->ready.wait(lock, [&] { return pump->finished; });
+            error_body = pump->error_body;
+            retry_after = pump->retry_after;
+        }
+        LogUpstreamError(model, true, status, error_body);
+        response.status = status != 0 ? status : 502;
+        if (!retry_after.empty()) {
+            response.set_header("Retry-After", retry_after);
+        }
+        std::string type;
+        std::string message;
+        translate::UpstreamFailure(status, error_body, &type, &message);
+        response.set_content(translate::ErrorBody(type, message), "application/json");
+        return;
+    }
+
+    response.set_chunked_content_provider(
+        "text/event-stream", [pump, joiner](std::size_t /*offset*/, httplib::DataSink& sink) {
+            std::string events;
+            {
+                std::unique_lock<std::mutex> lock(pump->mutex);
+                pump->ready.wait(lock, [&] { return !pump->events.empty() || pump->finished; });
+                if (pump->events.empty()) {
+                    sink.done();
+                    return true;
+                }
+                events = std::move(pump->events.front());
+                pump->events.pop_front();
+                pump->queued_bytes -= events.size();
+                pump->drained.notify_all();
+            }
+            if (!sink.write(events.data(), events.size())) {
+                return false;
+            }
             return true;
         });
 }

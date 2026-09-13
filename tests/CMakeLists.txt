@@ -21,6 +21,13 @@ target_link_libraries(test_wally_contract PRIVATE wally_core nlohmann_json::nloh
 wally_stage_windows_runtime_dlls(test_wally_contract)
 add_test(NAME wally_contract_tests COMMAND test_wally_contract --run-all)
 
+add_executable(test_wally_anthropic_shim test_wally_anthropic_shim.cpp)
+target_include_directories(test_wally_anthropic_shim PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_wally_anthropic_shim PRIVATE wally_core httplib::httplib
+    nlohmann_json::nlohmann_json)
+wally_stage_windows_runtime_dlls(test_wally_anthropic_shim)
+add_test(NAME wally_anthropic_shim_tests COMMAND test_wally_anthropic_shim --run-all)
+
 add_executable(test_wally_opencode test_wally_opencode.cpp)
 target_include_directories(test_wally_opencode PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_opencode PRIVATE wally_core nlohmann_json::nlohmann_json)
