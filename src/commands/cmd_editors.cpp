@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "anthropic/messages.h"
+#include "commands/editor_env.h"
 #include "commands/commands.h"
 #include "config/cli_paths.h"
 #include "io/output.h"
@@ -114,29 +115,6 @@ std::string BundlePath(const Editor& editor) {
 /// longer. `-n` is what makes the wait mean that. open(1) without it "waits
 /// until the applications it opens **or that were already open** have exited",
 /// so a copy the reader already had running would both miss the wiring and hold
-/// the translator open behind it.
-std::vector<std::string> OpenArgs(const std::string& bundle, const anthropic::Shim& shim,
-                                  const std::vector<std::string>& passthrough) {
-    std::vector<std::string> args{"-n", "-W"};
-    if (shim.running) {
-        // `open --env` is what carries them across; launchd would otherwise
-        // start the app with the reader's login environment instead of ours.
-        args.push_back("--env");
-        args.push_back("ANTHROPIC_BASE_URL=" + shim.base_url);
-        // Bearer token only, no ANTHROPIC_API_KEY: the token outranks a key and
-        // setting a key is what makes Claude Code warn about claude.ai
-        // connectors being off. See the ScopedEnv path below.
-        args.push_back("--env");
-        args.push_back("ANTHROPIC_AUTH_TOKEN=" + shim.auth_token);
-    }
-    args.push_back("-a");
-    args.push_back(bundle);
-    if (!passthrough.empty()) {
-        args.push_back("--args");
-        args.insert(args.end(), passthrough.begin(), passthrough.end());
-    }
-    return args;
-}
 
 /// Whether a process named `name` is currently running. Matched on the
 /// process name rather than the command line: `pgrep -f` would also match the
@@ -400,7 +378,7 @@ int Run(const Editor& editor, const std::string& model,
     if (model.empty()) {
         // No model named means no wiring to do, so the tool runs exactly as the
         // reader has it configured. Same contract as `wally opencode`.
-        return is_bundle ? harness::Launch("open", {}, OpenArgs(bundle, {}, args))
+        return is_bundle ? harness::Launch("open", {}, OpenArgs(bundle, {}, args, model))
                          : harness::Launch(editor.command, {}, args);
     }
 
@@ -502,7 +480,7 @@ int Run(const Editor& editor, const std::string& model,
         // A new instance reads the gateway profile at startup. The one already
         // running keeps the profile it started with, and keeps whatever the
         // reader has open in it, which is the trade we want.
-        status = harness::Launch("open", {}, OpenArgs(bundle, shim, args));
+        status = harness::Launch("open", {}, OpenArgs(bundle, shim, args, model));
         if (!desktop::RestoreGateway(&failure)) {
             out::error_line(failure);
         }
@@ -511,7 +489,7 @@ int Run(const Editor& editor, const std::string& model,
         // does. A process only ever gets the environment it was started with,
         // so the wiring reaches a new instance and not the running one — which
         // is the whole reason `OpenArgs` passes `-n`.
-        status = harness::Launch("open", {}, OpenArgs(bundle, shim, args));
+        status = harness::Launch("open", {}, OpenArgs(bundle, shim, args, model));
     } else {
         // Scoped so the reader's own environment is back before we report
         // anything, and before a later call in the same process reads it.
@@ -539,6 +517,40 @@ int Run(const Editor& editor, const std::string& model,
                 out::status_line("context window: " + std::to_string(context) + " tokens");
             }
         }
+        // TELL CLAUDE CODE WHICH MODEL IT IS TALKING TO, because otherwise it
+        // labels our answers with its own default and reports that as fact.
+        //
+        // Wally 0.5.6 printed `using glm-5.3-flash`, returned the GLM sentinel,
+        // and the wrapped tool's own JSON reported
+        // `modelUsage.claude-sonnet-5` / `provider: firstParty`. Every hosted
+        // model did the same, because nothing here ever set a model and the
+        // wrapped tool has no other way to know.
+        //
+        // THIS CHANGES NO ROUTING. `anthropic::RequestToOpenAI` sets
+        // `openai["model"] = runtime.model` on every request it forwards
+        // (`src/anthropic/translate.cpp`), so the selected model is already what
+        // serves and already what the ledger charges -- nine usage rows
+        // reconciled correctly against the deployed catalog on 2026-09-12. Only
+        // the label was wrong, and these two variables are what make it true.
+        //
+        // BOTH, and the second is the one that is easy to miss. Claude Code
+        // makes background requests of its own -- titles, summaries -- and
+        // resolves them through the `haiku` alias, not the main model. Those
+        // reached us too and were served by `runtime.model` like everything
+        // else: measured on the same day, an auxiliary GLM pair of 766/599
+        // tokens costing 1,778 micros, and 816/821 for Qwen costing 2,790.
+        // Without the second variable those calls stay labelled as a Claude
+        // model that nothing here ever contacted.
+        //
+        // `ANTHROPIC_SMALL_FAST_MODEL` used to be the variable for that and is
+        // documented as deprecated in favour of `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
+        // so it is deliberately not set. Names and precedence checked against
+        // code.claude.com/docs/en/env-vars on 2026-09-13 rather than recalled:
+        // `ANTHROPIC_MODEL` is read before the `model` settings key, and
+        // `--model` or `/model` still override it, which is correct -- a reader
+        // who asks for something else inside the session should get it.
+        const ScopedEnv selected_model("ANTHROPIC_MODEL", model);
+        const ScopedEnv background_model("ANTHROPIC_DEFAULT_HAIKU_MODEL", model);
         status = harness::Launch(editor.command, {}, args);
     }
 
@@ -548,6 +560,44 @@ int Run(const Editor& editor, const std::string& model,
 }
 
 }  // namespace
+
+/// the translator open behind it.
+std::vector<std::string> OpenArgs(const std::string& bundle, const anthropic::Shim& shim,
+                                  const std::vector<std::string>& passthrough,
+                                  const std::string& model) {
+    std::vector<std::string> args{"-n", "-W"};
+    if (shim.running) {
+        // `open --env` is what carries them across; launchd would otherwise
+        // start the app with the reader's login environment instead of ours.
+        args.push_back("--env");
+        args.push_back("ANTHROPIC_BASE_URL=" + shim.base_url);
+        // Bearer token only, no ANTHROPIC_API_KEY: the token outranks a key and
+        // setting a key is what makes Claude Code warn about claude.ai
+        // connectors being off. See the ScopedEnv path below.
+        args.push_back("--env");
+        args.push_back("ANTHROPIC_AUTH_TOKEN=" + shim.auth_token);
+        // The same two the terminal path sets, for the same reason: without them
+        // the wrapped app reports its own default model as the one that answered.
+        // A bundle gets no inherited environment at all -- launchd starts it from
+        // the reader's login session -- so anything the terminal path sets with
+        // ScopedEnv has to be listed here too or the desktop launch silently
+        // keeps the wrong labels. `model` is empty on the no-wiring path, and an
+        // empty value would read as "unset this", so both are conditional.
+        if (!model.empty()) {
+            args.push_back("--env");
+            args.push_back("ANTHROPIC_MODEL=" + model);
+            args.push_back("--env");
+            args.push_back("ANTHROPIC_DEFAULT_HAIKU_MODEL=" + model);
+        }
+    }
+    args.push_back("-a");
+    args.push_back(bundle);
+    if (!passthrough.empty()) {
+        args.push_back("--args");
+        args.insert(args.end(), passthrough.begin(), passthrough.end());
+    }
+    return args;
+}
 
 void register_editors(CLI::App& app, GlobalOptions& options) {
     for (const Editor& editor : kEditors) {
