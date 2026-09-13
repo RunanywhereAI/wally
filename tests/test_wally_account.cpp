@@ -1,11 +1,13 @@
 #include "test_common.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <thread>
@@ -21,6 +23,7 @@
 #include <sys/stat.h>
 #endif
 
+#include "account/cancel_worker.h"
 #include "account/console.h"
 #include "account/credentials.h"
 
@@ -851,6 +854,92 @@ TestResult test_cancel_request_speaks_the_contract() {
     return result;
 }
 
+// The cancel worker (#81) sends off the request path, in order, and reads
+// the bearer when each cancel goes OUT -- the JetBrains proxy renews its
+// token mid-session, and a cancel sent with the old one is refused. Stop()
+// sends what is queued before returning, and takes nothing afterwards.
+TestResult test_the_cancel_worker_sends_in_order_with_the_current_bearer() {
+    TestResult result;
+    result.test_name = "the_cancel_worker_sends_in_order_with_the_current_bearer";
+    std::mutex mutex;
+    std::vector<wally::account::HttpRequest> requests;
+    std::promise<void> first_started;
+    std::promise<void> release_first;
+    std::atomic<bool> first_seen{false};
+    wally::account::Transport transport = [&](const wally::account::HttpRequest& request,
+                                             wally::account::HttpResponse* response,
+                                             std::string*) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            requests.push_back(request);
+        }
+        if (!first_seen.exchange(true)) {
+            // Hold the first cancel until the test has changed the bearer and
+            // queued the second, so the second's bearer is provably read late.
+            first_started.set_value();
+            release_first.get_future().wait();
+        }
+        response->status = 202;
+        response->body = Json{{"request_id", "x"}, {"status", "cancelling"}}.dump();
+        return true;
+    };
+    std::string bearer = "old-token";
+    std::mutex bearer_mutex;
+    std::vector<std::string> reported;
+    std::atomic<int> reports{0};
+    {
+        wally::account::CancelWorker worker(
+            "https://inference.runanywhere.ai",
+            [&] {
+                std::lock_guard<std::mutex> lock(bearer_mutex);
+                return bearer;
+            },
+            3000,
+            [&](const std::string& id, wally::account::CancelOutcome outcome, const std::string&) {
+                std::lock_guard<std::mutex> lock(mutex);
+                reported.push_back(id + (outcome == wally::account::CancelOutcome::Cancelled ? "=202" : "=?"));
+                ++reports;
+            },
+            transport);
+        worker.Enqueue("first");
+        first_started.get_future().wait();
+        {
+            std::lock_guard<std::mutex> lock(bearer_mutex);
+            bearer = "renewed-token";  // RenewToken, mid-session
+        }
+        worker.Enqueue("second");
+        if (worker.pending() != 1) {
+            result.details = "the second cancel must be queued while the first is in flight";
+            release_first.set_value();
+            return result;
+        }
+        release_first.set_value();
+        const int drained = worker.Stop();  // sends the second before returning
+        if (drained != 1 && drained != 0) {
+            result.details = "Stop() reports what it drained";
+            return result;
+        }
+        worker.Enqueue("after-stop");  // ignored
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    if (requests.size() != 2 || requests[0].url.find("/v1/requests/first/cancel") == std::string::npos ||
+        requests[1].url.find("/v1/requests/second/cancel") == std::string::npos) {
+        result.details = "exactly the two queued cancels, in order: n=" + std::to_string(requests.size());
+        return result;
+    }
+    if (requests[0].bearer_token != "old-token" || requests[1].bearer_token != "renewed-token") {
+        result.details = "the bearer must be read when the cancel goes out: first=" +
+                         requests[0].bearer_token + " second=" + requests[1].bearer_token;
+        return result;
+    }
+    if (reports.load() != 2 || reported[0] != "first=202" || reported[1] != "second=202") {
+        result.details = "every outcome reported, in order";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 // The transport honours `timeout_ms`: a socket that accepts and never answers
 // is given up within the request's own bound, not the 30 s default. Bites: with
 // the field ignored this test takes ~30 s and fails its budget.
@@ -920,6 +1009,8 @@ int main(int argc, char** argv) {
     suite.add("usage_counters_survive_beyond_thirty_two_bits",
               test_usage_counters_survive_beyond_thirty_two_bits);
     suite.add("cancel_request_speaks_the_contract", test_cancel_request_speaks_the_contract);
+    suite.add("the_cancel_worker_sends_in_order_with_the_current_bearer",
+              test_the_cancel_worker_sends_in_order_with_the_current_bearer);
     suite.add("a_request_timeout_bounds_the_real_transport",
               test_a_request_timeout_bounds_the_real_transport);
     return suite.run(argc, argv);

@@ -87,6 +87,8 @@ set(WALLY_SOURCES
     src/net/control_plane.cpp
     src/net/loopback_auth.cpp
     src/net/upstream_pool.cpp
+    src/net/upstream_call.cpp
+    src/account/cancel_worker.cpp
     src/io/wav_io.cpp
     src/io/image_io.cpp
     src/io/output.cpp

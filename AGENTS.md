@@ -71,9 +71,11 @@ Do not wrap protobuf in OpenAPI merely to change protocol names. When Wally only
 transports SDK-owned bytes, protobuf generation and `SCHEMA_LOCK` satisfy this
 rule. When Wally directly owns an HTTP call, the OpenAPI requirement applies.
 
-The console's six CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
-`/v1/cli/usage`) follow this. `contracts/wally-cli-v1.openapi.json` is the pinned
-artifact, extracted from InferenceInfra's `control-plane-v1.openapi.json` by
+The console's nine CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
+`/v1/cli/usage`, `/v1/models`, `/v1/models/catalog`,
+`/v1/requests/{request_id}/cancel`) follow this.
+`contracts/wally-cli-v1.openapi.json` is the pinned artifact, extracted from
+InferenceInfra's `control-plane-v1.openapi.json` by
 `contracts/extract-cli-contract.py`. `contracts/generate_console_binding.py`
 turns it into `src/account/console_contract.h` (typed requests and responses,
 DO NOT EDIT), which `console.cpp` uses instead of hand-built JSON. Requests
