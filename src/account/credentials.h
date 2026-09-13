@@ -39,6 +39,17 @@ std::string DefaultConsoleUrl();
 /// origin.
 std::vector<std::string> TrustedBrowserOrigins(const std::string& console_url);
 
+/// The baked development control plane, normalised the same way a runtime
+/// console URL is, or empty when this build baked none.
+///
+/// Callers compare a resolved console URL against this to decide whether the
+/// paired baked approval origin applies. Comparing against the raw macro is
+/// what this exists to prevent: the runtime value has been through
+/// `NormalizeConsoleUrl` (lowercased scheme and host, no trailing slash) and
+/// the macro has not, so `https://Dev.example.com/` baked in CI would never
+/// match itself and dev login would fail with nothing to explain it.
+std::string BakedConsoleApiUrl();
+
 /// Whether `url` sits on any of `origins`. Same origin rule as
 /// `BrowserUrlMatchesConsole`, which is what it defers to.
 bool BrowserUrlIsTrusted(const std::string& url, const std::vector<std::string>& origins);

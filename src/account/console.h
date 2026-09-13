@@ -163,6 +163,26 @@ struct CatalogPrice {
     std::int64_t output_per_mtok = 0;
 };
 
+/// The longest `wally login` waits on its own before handing the decision back
+/// to the person. A terminal that sits silent for minutes reads as a hang, so a
+/// server asking for longer than this is reported rather than slept through.
+constexpr int kLoginMaxWaitSeconds = 10;
+
+/// How long to wait before polling again, given the authorization's own
+/// interval and whatever delay the console asked for.
+///
+/// There is deliberately no ceiling here. Capping the wait and polling anyway
+/// is the bug this file is fixing, not a safety measure: a console asking for
+/// 60s and polled every 10s is refused six times as often as it asked for, and
+/// a rate limiter that penalises repeat offenders may then never let the login
+/// through at all. The caller bounds the wait by the authorization's own expiry
+/// and gives up when the delay outlasts it.
+///
+/// Its own function because the login loop is otherwise untestable: it sleeps
+/// and opens a browser. This is the arithmetic that decides whether a
+/// rate-limited console gets left alone, so it is the part worth pinning.
+int NextPollDelaySeconds(int interval, int retry_after);
+
 /// Console client independent of SDK/bootstrap state.
 ///
 /// The default transport uses WinHTTP on Windows and libcurl elsewhere. Tests
@@ -176,8 +196,11 @@ class ConsoleClient {
     bool BeginAuthorization(const std::string& console_url, const std::string& hostname,
                             Authorization* authorization, std::string* error,
                             const std::function<void()>& on_retry = nullptr) const;
+    /// `retry_after`, when given, receives the delay the console asked for on a
+    /// refusal, or 0 when it asked for none. The caller waits at least that long
+    /// before polling again: polling sooner is what a rate limiter is refusing.
     PollResult Poll(const std::string& console_url, const Authorization& authorization,
-                    Grant* grant, std::string* error) const;
+                    Grant* grant, std::string* error, int* retry_after = nullptr) const;
     /// `unavailable` is set true when the refresh failed because the console is
     /// rate limiting or down (429/5xx) rather than because the session is bad.
     bool Refresh(const std::string& console_url, const std::string& refresh_token, Grant* grant,

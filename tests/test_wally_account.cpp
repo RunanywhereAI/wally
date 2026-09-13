@@ -514,6 +514,151 @@ TestResult test_console_errors_do_not_echo_secrets() {
     return result;
 }
 
+// #90: the start call used to clip any Retry-After to five seconds and retry
+// anyway, so a console asking for 30 got three requests inside 15 seconds and
+// the login failed before the delay it asked for had passed. A delay we will not
+// wait out is handed back at once, and a short one is waited out in full.
+TestResult test_login_never_retries_sooner_than_the_server_asked() {
+    TestResult result;
+    result.test_name = "login_never_retries_sooner_than_the_server_asked";
+
+    // A long delay: one request, no early retry, and the wait is named.
+    int long_delay_requests = 0;
+    wally::account::ConsoleClient patient(
+        [&](const wally::account::HttpRequest&, wally::account::HttpResponse* response,
+            std::string*) {
+            ++long_delay_requests;
+            response->status = 429;
+            response->headers["retry-after"] = "30";
+            response->body = "{}";
+            return true;
+        });
+    wally::account::Authorization authorization;
+    std::string error;
+    const bool began =
+        patient.BeginAuthorization("https://console.runanywhere.ai", "host", &authorization, &error);
+    result.expected = "one request, and an error naming 30s";
+    result.actual = std::to_string(long_delay_requests) + " request(s), error: " + error;
+    if (began) {
+        result.details = "a 429 must not look like a successful authorization";
+        return result;
+    }
+    if (long_delay_requests != 1) {
+        result.details = "retried before the server's delay had passed";
+        return result;
+    }
+    if (error.find("30s") == std::string::npos) {
+        result.details = "the delay the server asked for was not passed on";
+        return result;
+    }
+
+    // A short delay is still waited out and retried, so a briefly busy console
+    // does not turn into a failed login.
+    int short_delay_requests = 0;
+    wally::account::ConsoleClient brief(
+        [&](const wally::account::HttpRequest&, wally::account::HttpResponse* response,
+            std::string*) {
+            ++short_delay_requests;
+            if (short_delay_requests == 1) {
+                response->status = 429;
+                response->headers["retry-after"] = "1";
+                response->body = "{}";
+                return true;
+            }
+            response->status = 200;
+            response->body = Json{{"request_code", "ABCD-EFGH"},
+                                  {"poll_secret", "poll-secret"},
+                                  {"verification_url", "https://console.runanywhere.ai/device"},
+                                  {"expires_in", 300},
+                                  {"interval", 1}}
+                                 .dump();
+            return true;
+        });
+    error.clear();
+    if (!brief.BeginAuthorization("https://console.runanywhere.ai", "host", &authorization,
+                                  &error) ||
+        short_delay_requests != 2) {
+        result.details = "a short Retry-After should be waited out and retried, got " +
+                         std::to_string(short_delay_requests) + " request(s): " + error;
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// #90: the wait between polls. Extracted from Login() because that loop sleeps
+// and opens a browser, so the arithmetic that decides whether a rate-limited
+// console is left alone had no test of its own.
+TestResult test_poll_delay_respects_the_console_and_the_ceiling() {
+    TestResult result;
+    result.test_name = "poll_delay_respects_the_console_and_the_ceiling";
+    using wally::account::NextPollDelaySeconds;
+
+    struct Case {
+        int interval;
+        int retry_after;
+        int want;
+        const char* why;
+    };
+    const Case cases[] = {
+        {2, 0, 2, "no delay asked for: the authorization's own cadence"},
+        {2, -1, 2, "an absent delay is not a negative wait"},
+        {2, 5, 5, "a delay longer than the interval is honored"},
+        {5, 2, 5, "a delay shorter than the interval does not speed polling up"},
+        {2, 3600, 3600,
+         "a long delay is honored in full: polling sooner is what it refused"},
+        {2, 60, 60, "the console's delay wins over the authorization's cadence"},
+        {0, 0, 1, "a zero interval still waits, or the loop spins"},
+    };
+    for (const Case& test : cases) {
+        const int got = NextPollDelaySeconds(test.interval, test.retry_after);
+        if (got != test.want) {
+            result.expected = std::to_string(test.want);
+            result.actual = std::to_string(got);
+            result.details = std::string("interval=") + std::to_string(test.interval) +
+                             " retry_after=" + std::to_string(test.retry_after) + ": " + test.why;
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+
+// #90: a rate-limited poll is still Pending, but the caller has to be told how
+// long the console asked for, or it polls straight back into the refusal.
+TestResult test_a_rate_limited_poll_reports_the_backoff() {
+    TestResult result;
+    result.test_name = "a_rate_limited_poll_reports_the_backoff";
+
+    wally::account::ConsoleClient client([&](const wally::account::HttpRequest&,
+                                             wally::account::HttpResponse* response, std::string*) {
+        response->status = 429;
+        response->headers["retry-after"] = "30";
+        response->body = "{}";
+        return true;
+    });
+    wally::account::Authorization authorization;
+    authorization.request_code = "ABCD-EFGH";
+    authorization.poll_secret = "poll-secret";
+    wally::account::Grant grant;
+    std::string error;
+    int retry_after = -1;
+    const wally::account::PollResult polled =
+        client.Poll("https://console.runanywhere.ai", authorization, &grant, &error, &retry_after);
+    result.expected = "Pending, and a 30 second backoff";
+    result.actual = "retry_after=" + std::to_string(retry_after);
+    if (polled != wally::account::PollResult::Pending) {
+        result.details = "a rate-limited poll is not a denial";
+        return result;
+    }
+    if (retry_after != 30) {
+        result.details = "the poll backoff was dropped, so the loop would poll straight back";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 TestResult test_a_rate_limit_surfaces_its_retry_after() {
     TestResult result;
     result.test_name = "a_rate_limit_surfaces_its_retry_after";
@@ -832,6 +977,12 @@ int main(int argc, char** argv) {
 #endif
     suite.add("console_client_contract", test_console_client_contract);
     suite.add("console_errors_do_not_echo_secrets", test_console_errors_do_not_echo_secrets);
+    suite.add("login_never_retries_sooner_than_the_server_asked",
+              test_login_never_retries_sooner_than_the_server_asked);
+    suite.add("poll_delay_respects_the_console_and_the_ceiling",
+              test_poll_delay_respects_the_console_and_the_ceiling);
+    suite.add("a_rate_limited_poll_reports_the_backoff",
+              test_a_rate_limited_poll_reports_the_backoff);
     suite.add("a_rate_limit_surfaces_its_retry_after", test_a_rate_limit_surfaces_its_retry_after);
     suite.add("a_rate_limited_poll_keeps_waiting", test_a_rate_limited_poll_keeps_waiting);
     suite.add("console_rejects_header_injection", test_console_rejects_header_injection);
