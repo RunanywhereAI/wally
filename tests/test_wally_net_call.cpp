@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -350,6 +351,42 @@ TestResult test_a_completed_call_is_not_held_for_a_poll() {
     return result;
 }
 
+// A receiver that throws (a translator bug, an allocation failure) must
+// unwind out of PostWatched with the watch thread joined: destroying a
+// joinable std::thread is std::terminate, and the whole wrapper with it.
+TestResult test_a_throwing_receiver_unwinds_with_the_watch_joined() {
+    TestResult result;
+    result.test_name = "a_throwing_receiver_unwinds_with_the_watch_joined";
+    FakeUpstream upstream;
+    auto pool = PoolFor(upstream);
+    Recorded rec;
+    auto lease = pool->acquire("test-key");
+    wally::net::WatchedCall call = CallFor(rec);
+    call.receiver = [](const char*, size_t) -> bool { throw std::runtime_error("receiver bug"); };
+    bool thrown = false;
+    try {
+        (void)wally::net::PostWatched(lease, call);
+    } catch (const std::runtime_error& error) {
+        thrown = std::string(error.what()) == "receiver bug";
+    }
+    if (!thrown) {
+        result.details = "the receiver's exception must reach the caller (httplib does not swallow it)";
+        return result;
+    }
+    // Still here: the process did not terminate, and the lease is usable
+    // again for a normal call on a fresh connection.
+    lease.discard();
+    auto again = pool->acquire("test-key");
+    Recorded rec2;
+    const auto out = wally::net::PostWatched(again, CallFor(rec2));
+    if (!out.reply || out.reply->status != 200) {
+        result.details = "a normal call after the throw must still work";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -366,5 +403,7 @@ int main(int argc, char** argv) {
     suite.add("a_receiver_that_refuses_the_bytes_names_the_cancel",
               test_a_receiver_that_refuses_the_bytes_names_the_cancel);
     suite.add("a_completed_call_is_not_held_for_a_poll", test_a_completed_call_is_not_held_for_a_poll);
+    suite.add("a_throwing_receiver_unwinds_with_the_watch_joined",
+              test_a_throwing_receiver_unwinds_with_the_watch_joined);
     return suite.run(argc, argv);
 }

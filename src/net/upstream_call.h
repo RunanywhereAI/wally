@@ -61,8 +61,9 @@ struct WatchedCall {
     /// headers never came; `status` is the upstream status, 0 when unknown;
     /// `during_prefill` says the reader left before the headers arrived (the
     /// id, if any, came later). Runs on the watch thread, inside the response
-    /// handler, or inside the receiver: it must be quick and must not touch
-    /// the sink.
+    /// handler, or inside the receiver, with the call's own lock held: it
+    /// must not block (queueing is fine, a network call is not) and must not
+    /// touch the sink.
     std::function<void(const std::string& request_id, int status, bool during_prefill)>
         on_abandoned;
     /// How often the reader is checked. The watch wakes early when the call

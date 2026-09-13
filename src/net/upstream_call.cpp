@@ -19,7 +19,9 @@ struct WatchState {
     std::mutex mutex;
     std::condition_variable ended;   // signalled when send() returns
     std::atomic<bool> abandoned{false};
-    bool done = false;               // send() returned
+    // Stored the instant send() returns, before any lock: a completed call
+    // must not be mistaken for an abandon by a poll that lands in the gap.
+    std::atomic<bool> done{false};
     bool headers_seen = false;
     bool during_prefill = false;     // the abandon came before the headers
     bool notified = false;           // on_abandoned already fired
@@ -41,6 +43,24 @@ void AbandonLocked(WatchState& state) {
     state.abandoned.store(true);
     state.during_prefill = !state.headers_seen;
 }
+
+/// Ends the watch and joins it however PostWatched leaves -- a callback
+/// throwing out of send() included, which would otherwise destroy a
+/// joinable thread and terminate the process.
+struct EndWatch {
+    WatchState& state;
+    std::thread& watch;
+    ~EndWatch() {
+        state.done.store(true);
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+        }
+        state.ended.notify_all();
+        if (watch.joinable()) {
+            watch.join();
+        }
+    }
+};
 
 /// Fires on_abandoned exactly once, for a request that ran something: a
 /// refusal (status >= 400) ran nothing and is not worth a cancel, so it is
@@ -121,9 +141,9 @@ WatchedResult PostWatched(UpstreamLease& lease, const WatchedCall& call) {
     std::thread watch([&] {
         std::chrono::steady_clock::time_point abandoned_at{};
         std::unique_lock<std::mutex> lock(state.mutex);
-        while (!state.done) {
-            state.ended.wait_for(lock, call.poll, [&] { return state.done; });
-            if (state.done) {
+        while (!state.done.load()) {
+            state.ended.wait_for(lock, call.poll, [&] { return state.done.load(); });
+            if (state.done.load()) {
                 break;
             }
             if (!state.abandoned.load()) {
@@ -132,7 +152,7 @@ WatchedResult PostWatched(UpstreamLease& lease, const WatchedCall& call) {
                 lock.unlock();
                 const bool gone = call.reader_gone && call.reader_gone();
                 lock.lock();
-                if (!gone || state.done) {
+                if (!gone || state.done.load()) {
                     continue;
                 }
                 AbandonLocked(state);
@@ -160,13 +180,11 @@ WatchedResult PostWatched(UpstreamLease& lease, const WatchedCall& call) {
         }
     });
 
-    result.reply = client.send(request);
     {
-        std::lock_guard<std::mutex> lock(state.mutex);
-        state.done = true;
+        EndWatch end_watch{state, watch};
+        result.reply = client.send(request);
+        state.done.store(true);
     }
-    state.ended.notify_all();
-    watch.join();
 
     std::lock_guard<std::mutex> lock(state.mutex);
     result.abandoned = state.abandoned.load();
