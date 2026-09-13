@@ -40,8 +40,15 @@ void fail(int status) {
 /// check above still runs against what the server sent; this replaces the origin
 /// only afterwards, only from the environment, and only with an origin that
 /// passes the same rules — the path and request code stay exactly as sent.
-/// The console origin the operator declared, normalised, or empty if none.
-std::string ConsoleWebOrigin() {
+/// The console origin the operator declared for `console_url`, normalised, or
+/// empty if none.
+///
+/// The baked origin is paired with the baked API and is used only when that API
+/// is the one being contacted. It used to apply to any API, so a dev build
+/// pointed at another console rewrote that console's approval URL to the baked
+/// origin and then refused it as off-origin — `WALLY_CONSOLE_URL` alone could
+/// not sign in to a local console (#91).
+std::string ConsoleWebOrigin(const std::string& console_url) {
     const char* configured = std::getenv("WALLY_CONSOLE_WEB_URL");
     if (configured == nullptr || *configured == '\0') {
         // rcli-era override, still honored so it doesn't go silently unread
@@ -51,8 +58,13 @@ std::string ConsoleWebOrigin() {
     if (configured == nullptr || *configured == '\0') {
         // A dev build carries its approval console compiled in (see
         // baked_endpoints.h.in) — empty in production builds, and the env
-        // overrides above always win.
-        configured = WALLY_BAKED_CONSOLE_WEB_ORIGIN;
+        // overrides above always win. Pairwise, exactly as
+        // account::TrustedBrowserOrigins pairs them.
+        if (console_url == std::string(WALLY_BAKED_CONSOLE_API_URL)) {
+            configured = WALLY_BAKED_CONSOLE_WEB_ORIGIN;
+        } else {
+            return {};
+        }
     }
     std::string origin;
     if (configured == nullptr || *configured == '\0' ||
@@ -62,8 +74,8 @@ std::string ConsoleWebOrigin() {
     return origin;
 }
 
-std::string RebaseApprovalUrl(const std::string& url) {
-    const std::string origin = ConsoleWebOrigin();
+std::string RebaseApprovalUrl(const std::string& url, const std::string& console_url) {
+    const std::string origin = ConsoleWebOrigin(console_url);
     if (origin.empty()) {
         return url;
     }
@@ -191,7 +203,8 @@ int Login(const std::string& requested_console, bool open_browser) {
     // in the shipped configuration, because the environment variable it read is
     // unset unless an operator sets it.
     const std::vector<std::string> trusted = account::TrustedBrowserOrigins(console_url);
-    const std::string approval_url = RebaseApprovalUrl(authorization.verification_url);
+    const std::string approval_url =
+        RebaseApprovalUrl(authorization.verification_url, console_url);
     if (!account::BrowserUrlIsTrusted(approval_url, trusted)) {
         out::error_line("console returned an approval URL outside its origin");
         return 1;
