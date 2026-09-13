@@ -1,6 +1,13 @@
 # CLI parse/REPL/output tests. Proto headers come from the kit via wally_core.
 enable_testing()
 
+add_executable(test_wally_stream_terminal test_wally_stream_terminal.cpp)
+target_include_directories(test_wally_stream_terminal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_wally_stream_terminal PRIVATE wally_core httplib::httplib nlohmann_json::nlohmann_json)
+wally_stage_windows_runtime_dlls(test_wally_stream_terminal)
+add_test(NAME wally_stream_terminal_tests COMMAND test_wally_stream_terminal --run-all)
+set_tests_properties(wally_stream_terminal_tests PROPERTIES TIMEOUT 60)
+
 add_executable(test_wally_unit test_wally_unit.cpp)
 target_include_directories(test_wally_unit PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_unit PRIVATE wally_core nlohmann_json::nlohmann_json)

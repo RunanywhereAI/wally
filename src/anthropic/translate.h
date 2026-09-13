@@ -47,6 +47,7 @@ struct StreamState {
     /// Set once the endpoint has reported a failure, after which the closing
     /// events would be describing a turn that never happened.
     bool failed = false;
+    bool closed = false;
     std::string message_id;
     std::string model;
     std::string stop_reason;
@@ -72,6 +73,9 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state);
 
 /// The closing events, written once the upstream stream ends.
 std::string StreamCloseToAnthropic(StreamState* state);
+
+/// Report one protocol failure; never emit successful terminal/tool events afterward.
+std::string StreamErrorToAnthropic(StreamState* state, const std::string& message);
 
 /// An Anthropic-shaped error body, so a failure reads as one to the client
 /// rather than as a malformed message.
