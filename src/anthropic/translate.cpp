@@ -372,7 +372,7 @@ Json ResponseToAnthropic(const Json& openai, const std::string& model) {
 }
 
 std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
-    if (state == nullptr) {
+    if (state == nullptr || state->failed || state->closed) {
         return {};
     }
     std::string out;
@@ -387,6 +387,11 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
     if (PayloadError(chunk, &failure_type, &failure)) {
         state->failed = true;
         return "event: error\ndata: " + ErrorBody(failure_type, failure) + "\n\n";
+    }
+
+    if (!chunk.is_object() || !chunk.contains("choices") || !chunk["choices"].is_array() ||
+        (!chunk["choices"].empty() && !chunk["choices"][0].is_object())) {
+        return StreamErrorToAnthropic(state, "the model endpoint sent a malformed stream chunk");
     }
 
     if (!state->opened) {
@@ -415,7 +420,18 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
     }
 
     const std::string finish = Field(choice, "finish_reason");
+    if (choice.contains("finish_reason") && !choice["finish_reason"].is_null() &&
+        !choice["finish_reason"].is_string()) {
+        return StreamErrorToAnthropic(state, "the model endpoint sent a malformed finish reason");
+    }
+    if (!state->stop_reason.empty() && !choice.is_null()) {
+        return StreamErrorToAnthropic(state, "the model endpoint sent a choice after its finish reason");
+    }
     if (!finish.empty()) {
+        if (finish != "stop" && finish != "length" && finish != "tool_calls" &&
+            finish != "content_filter" && finish != "function_call") {
+            return StreamErrorToAnthropic(state, "the model endpoint sent an unknown finish reason");
+        }
         state->stop_reason = StopReason(finish);
     }
     if (chunk.contains("usage") && chunk["usage"].is_object()) {
@@ -509,10 +525,32 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
     return out;
 }
 
-std::string StreamCloseToAnthropic(StreamState* state) {
-    if (state == nullptr || !state->opened || state->failed) {
+std::string StreamErrorToAnthropic(StreamState* state, const std::string& message) {
+    if (state == nullptr || state->failed || state->closed) {
         return {};
     }
+    state->failed = true;
+    return "event: error\ndata: " + ErrorBody("api_error", message) + "\n\n";
+}
+
+std::string StreamCloseToAnthropic(StreamState* state) {
+    if (state == nullptr || state->failed || state->closed) {
+        return {};
+    }
+    if (!state->opened || state->stop_reason.empty()) {
+        return StreamErrorToAnthropic(state, "the model endpoint ended its stream before a finish reason");
+    }
+    // Validate every buffered call before emitting any of them: a partial JSON
+    // argument must never become an executable Anthropic tool_use block.
+    for (const auto& entry : state->tool_calls) {
+        const auto& call = entry.second;
+        const Json arguments = Json::parse(call.arguments.empty() ? "{}" : call.arguments,
+                                           nullptr, false);
+        if (call.name.empty() || !arguments.is_object()) {
+            return StreamErrorToAnthropic(state, "the model endpoint returned incomplete tool arguments");
+        }
+    }
+    state->closed = true;
     std::string out;
     // Blocks are numbered in the order they are written, and the text — if the
     // turn had any — is always the one that came first.
