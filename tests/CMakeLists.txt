@@ -27,6 +27,12 @@ target_link_libraries(test_wally_opencode PRIVATE wally_core nlohmann_json::nloh
 wally_stage_windows_runtime_dlls(test_wally_opencode)
 add_test(NAME wally_opencode_tests COMMAND test_wally_opencode --run-all)
 
+add_executable(test_wally_editor_env test_wally_editor_env.cpp)
+target_include_directories(test_wally_editor_env PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_wally_editor_env PRIVATE wally_core nlohmann_json::nlohmann_json)
+wally_stage_windows_runtime_dlls(test_wally_editor_env)
+add_test(NAME wally_editor_env_tests COMMAND test_wally_editor_env --run-all)
+
 add_executable(test_wally_codex test_wally_codex.cpp)
 target_include_directories(test_wally_codex PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_codex PRIVATE wally_core nlohmann_json::nlohmann_json)
