@@ -31,6 +31,21 @@ namespace {
 using Json = nlohmann::json;
 constexpr std::size_t kMaximumResponseBytes = 1024 * 1024;
 
+// Every control-plane path the CLI calls, declared once. They were literals at
+// the six call sites until InferenceInfra#484 renamed five of them at once and
+// a path spelled out in six places became the obvious way to miss one.
+//
+// The base URL carries the deployment prefix (`/api-dev` for development); a
+// path here never does.
+constexpr char kAuthStartPath[] = "/v1/auth/cli/start";
+constexpr char kAuthPollPath[] = "/v1/auth/cli/poll";
+constexpr char kAuthRefreshPath[] = "/v1/auth/cli/refresh";
+constexpr char kAuthRevokePath[] = "/v1/auth/cli/revoke";
+constexpr char kIdentityPath[] = "/v1/auth/me";
+// Not renamed by #484, and not to be tidied into /v1/console/usage: that is a
+// different endpoint belonging to the console.
+constexpr char kUsagePath[] = "/v1/cli/usage";
+
 // The endpoint a call went to is internal detail: an ordinary person reading
 // "could not reach ... at https://inference.runanywhere.ai/api-dev" cannot act
 // on it, and `wally about` already stopped printing it. Name it only when
@@ -681,7 +696,7 @@ bool ConsoleClient::BeginAuthorization(const std::string& console_url, const std
     }
     // The client value is the contract enum, whose only member serializes to
     // "rcli" -- InferenceInfra's CliClient StrEnum recognizes exactly that, and
-    // sending anything else 422s /auth/cli/start. Renaming the wire value needs
+    // sending anything else 422s /v1/auth/cli/start. Renaming the wire value needs
     // a coordinated InferenceInfra change (add "wally" to the enum, re-vendor
     // this contract), which is why it is pinned here rather than free text.
     contract::CliStartRequest request;
@@ -695,7 +710,7 @@ bool ConsoleClient::BeginAuthorization(const std::string& console_url, const std
     // server asked, and only then fail with the same message as before.
     constexpr int kRateLimitRetries = 3;
     constexpr int kRateLimitMaxWaitSeconds = 5;
-    const HttpRequest start{"POST", origin + "/auth/cli/start", Json(request).dump(), {}};
+    const HttpRequest start{"POST", origin + kAuthStartPath, Json(request).dump(), {}};
     HttpResponse response;
     for (int attempt = 0;; ++attempt) {
         response = HttpResponse{};
@@ -754,7 +769,7 @@ PollResult ConsoleClient::Poll(const std::string& console_url, const Authorizati
     request.request_code = authorization.request_code;
     request.poll_secret = authorization.poll_secret;
     HttpResponse response;
-    if (!Send(transport_, {"POST", origin + "/auth/cli/poll", Json(request).dump(), {}}, &response,
+    if (!Send(transport_, {"POST", origin + kAuthPollPath, Json(request).dump(), {}}, &response,
               error)) {
         return PollResult::Failed;
     }
@@ -817,7 +832,7 @@ bool ConsoleClient::Refresh(const std::string& console_url, const std::string& r
     contract::CliRefreshRequest request;
     request.refresh_token = refresh_token;
     HttpResponse response;
-    if (!Send(transport_, {"POST", origin + "/auth/cli/refresh", Json(request).dump(), {}},
+    if (!Send(transport_, {"POST", origin + kAuthRefreshPath, Json(request).dump(), {}},
               &response, error)) {
         return false;
     }
@@ -861,7 +876,7 @@ IdentityResult ConsoleClient::WhoAmI(const std::string& console_url,
         return IdentityResult::Failed;
     }
     HttpResponse response;
-    if (!Send(transport_, {"GET", origin + "/v1/me", {}, access_token}, &response, error)) {
+    if (!Send(transport_, {"GET", origin + kIdentityPath, {}, access_token}, &response, error)) {
         return IdentityResult::Failed;
     }
     if (response.status == 401) {
@@ -1016,7 +1031,7 @@ IdentityResult ConsoleClient::FetchUsage(const std::string& console_url,
     // One read for the whole report: a terminal draws it in a single pass, and
     // three round-trips would only give it three chances to print parts that
     // disagree about when they were taken.
-    std::string url = origin + "/v1/cli/usage?days=" + std::to_string(std::clamp(query.days, 1, 365)) +
+    std::string url = origin + kUsagePath + "?days=" + std::to_string(std::clamp(query.days, 1, 365)) +
                       "&limit=" + std::to_string(std::clamp(query.limit, 1, 200));
     if (!query.model.empty()) {
         url += "&model=" + QueryEscape(query.model);
@@ -1129,7 +1144,7 @@ bool ConsoleClient::Revoke(const std::string& console_url, const std::string& ac
     contract::CliRefreshRequest request;
     request.refresh_token = refresh_token;
     HttpResponse response;
-    if (!Send(transport_, {"POST", origin + "/auth/cli/revoke", Json(request).dump(), access_token},
+    if (!Send(transport_, {"POST", origin + kAuthRevokePath, Json(request).dump(), access_token},
               &response, error)) {
         return false;
     }

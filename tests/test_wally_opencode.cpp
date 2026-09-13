@@ -95,7 +95,7 @@ TestResult test_ephemeral_config_and_passthrough() {
     const wally::account::ConsoleClient console(
         [](const wally::account::HttpRequest& request, wally::account::HttpResponse* response,
            std::string*) {
-            if (!request.url.ends_with("/v1/me")) {
+            if (!request.url.ends_with("/v1/auth/me")) {
                 return false;
             }
             response->status = 200;
@@ -156,12 +156,12 @@ TestResult test_refreshes_expired_session_without_sdk_bootstrap() {
     bool refreshed = false;
     wally::account::ConsoleClient console([&](const wally::account::HttpRequest& request,
                                              wally::account::HttpResponse* response, std::string*) {
-        if (request.url.ends_with("/v1/me")) {
+        if (request.url.ends_with("/v1/auth/me")) {
             response->status = 200;
             response->body = Json{{"email", "developer@example.test"}}.dump();
             return true;
         }
-        if (!request.url.ends_with("/auth/cli/refresh") || request.bearer_token.size() != 0 ||
+        if (!request.url.ends_with("/v1/auth/cli/refresh") || request.bearer_token.size() != 0 ||
             Json::parse(request.body).at("refresh_token") != "refresh-token") {
             return false;
         }
@@ -215,7 +215,7 @@ TestResult test_restores_config_when_spawn_throws() {
         const wally::account::ConsoleClient console(
             [](const wally::account::HttpRequest& request, wally::account::HttpResponse* response,
                std::string*) {
-                if (!request.url.ends_with("/v1/me")) {
+                if (!request.url.ends_with("/v1/auth/me")) {
                     return false;
                 }
                 response->status = 200;

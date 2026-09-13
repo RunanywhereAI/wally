@@ -71,9 +71,9 @@ Do not wrap protobuf in OpenAPI merely to change protocol names. When Wally only
 transports SDK-owned bytes, protobuf generation and `SCHEMA_LOCK` satisfy this
 rule. When Wally directly owns an HTTP call, the OpenAPI requirement applies.
 
-The console's six CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
-`/v1/cli/usage`) follow this. `contracts/wally-cli-v1.openapi.json` is the pinned
-artifact, extracted from InferenceInfra's `control-plane-v1.openapi.json` by
+The console's six CLI calls (`/v1/auth/cli/{start,poll,refresh,revoke}`,
+`/v1/auth/me`, `/v1/cli/usage`) follow this.
+`contracts/wally-cli-v1.openapi.json` is the pinned artifact, extracted from InferenceInfra's `control-plane-v1.openapi.json` by
 `contracts/extract-cli-contract.py`. `contracts/generate_console_binding.py`
 turns it into `src/account/console_contract.h` (typed requests and responses,
 DO NOT EDIT), which `console.cpp` uses instead of hand-built JSON. Requests
@@ -107,11 +107,23 @@ or a retired MetalRT / hardcoded catalog.
 asks for a code, a browser the person already trusts approves it, and the
 terminal collects a key. No password ever reaches the CLI.
 
-The four endpoints it calls are **not ours to rename**: an installed binary
-talks to whatever the console deploys, so a field or path change breaks every
-copy in the wild. They are `POST /auth/cli/start`, `/auth/cli/poll`,
-`/auth/cli/refresh`, and `GET /v1/me`. The console side has a test that reads
-`src/account/console.cpp` directly and fails if the two drift.
+The four endpoints it calls are `POST /v1/auth/cli/start`, `/v1/auth/cli/poll`,
+`/v1/auth/cli/refresh`, and `GET /v1/auth/me`. Renaming one is expensive, not
+forbidden: an installed binary talks to whatever the console deploys, so every
+copy in the wild 404s the moment the API stops serving the old path. They were
+renamed once, by InferenceInfra#484, and what made it safe was the order —
+the CLI release was published first, and three people held the binary. That
+stops being affordable the day a customer holds it.
+
+They are declared once each, at the top of `src/account/console.cpp`. Add a
+control-plane call by naming its path there, never as a literal at the call
+site.
+
+The console side pins these paths too, in
+`api/tests/fixtures/rcli_console_contract.json`, and checks them against its own
+OpenAPI document. That fixture is captured from a frozen commit of this file, so
+it does not track this repo — a rename here and a rename there are two separate
+pieces of work, and theirs goes last.
 
 Two secrets do different jobs. `request_code` is public and names the attempt;
 `poll_secret` proves the process collecting the grant is the one that started

@@ -42,10 +42,11 @@ using Json = nlohmann::json;
 // they replace was one constant doing both, and it broke every command that
 // talks to the console.
 //
-// The API is the control plane — /auth/cli/start, /auth/cli/poll,
-// /auth/cli/refresh, /v1/me, /v1/cli/* — and it is served by Cloud Run. The web
-// console is the page a person approves a sign-in on, and it is served by
-// Railway. Measured 2026-09-04:
+// The API is the control plane — /v1/auth/cli/start, /v1/auth/cli/poll,
+// /v1/auth/cli/refresh, /v1/auth/me, /v1/cli/* — and it is served by Cloud Run.
+// The web console is the page a person approves a sign-in on, and it is served
+// by Railway. Measured 2026-09-04, before InferenceInfra#484 moved the auth
+// paths under /v1/auth, so the paths below are the ones that answered then:
 //
 //   inference.runanywhere.ai  /auth/cli/start 422  /v1/me 405  Google Frontend
 //   console.runanywhere.ai    /auth/cli/start 404  /v1/me 404  railway-hikari
@@ -64,7 +65,7 @@ constexpr const char* kProductionConsoleApi = "https://inference.runanywhere.ai"
 // The raw Railway name is here because it is what the control plane actually
 // hands out today:
 //
-//   POST https://inference.runanywhere.ai/auth/cli/start
+//   POST https://inference.runanywhere.ai/v1/auth/cli/start
 //     -> verification_url: https://runanywhere-frontend-production.up.railway.app/cloud/cli?code=...
 //
 // Trusting only the custom domain would refuse every real sign-in. Delete the
@@ -140,7 +141,7 @@ struct ParsedUrl {
 /// and therefore reaches different code than any real client does.
 ///
 /// A query or fragment is still refused. Every caller builds an endpoint by
-/// appending to this string, and `?a=1` + `/v1/me` is not a URL.
+/// appending to this string, and `?a=1` + `/v1/auth/me` is not a URL.
 bool NormalizeBasePath(const std::string& suffix, std::string* base_path) {
     if (suffix.empty() || suffix == "/") {
         base_path->clear();

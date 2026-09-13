@@ -20,7 +20,7 @@ struct Credentials {
 };
 
 /// The console API used when neither a login flag nor WALLY_CONSOLE_URL is set.
-/// This is the control plane — `/auth/cli/*`, `/v1/me`, `/v1/cli/*` — and it is
+/// This is the control plane — `/v1/auth/cli/*`, `/v1/auth/me`, `/v1/cli/*` — and it is
 /// not the host a person approves a sign-in on. See `TrustedBrowserOrigin`.
 std::string DefaultConsoleUrl();
 

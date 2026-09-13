@@ -386,7 +386,7 @@ TestResult test_console_client_contract() {
     wally::account::Transport transport = [&](const wally::account::HttpRequest& request,
                                              wally::account::HttpResponse* response, std::string*) {
         requests.push_back(request);
-        if (request.url.ends_with("/auth/cli/start")) {
+        if (request.url.ends_with("/v1/auth/cli/start")) {
             response->status = 200;
             response->body =
                 Json{{"request_code", "ABCD-EFGH"},
@@ -395,7 +395,7 @@ TestResult test_console_client_contract() {
                      {"expires_in", 300},
                      {"interval", 1}}
                     .dump();
-        } else if (request.url.ends_with("/auth/cli/poll")) {
+        } else if (request.url.ends_with("/v1/auth/cli/poll")) {
             response->status = 200;
             response->body = polls++ == 0 ? Json{{"status", "pending"}}.dump()
                                           : Json{{"status", "approved"},
@@ -404,16 +404,16 @@ TestResult test_console_client_contract() {
                                                  {"email", "dev@example.test"},
                                                  {"expires_in", 3600}}
                                                 .dump();
-        } else if (request.url.ends_with("/auth/cli/refresh")) {
+        } else if (request.url.ends_with("/v1/auth/cli/refresh")) {
             response->status = 200;
             response->body = Json{{"access_token", "access-two"},
                                   {"refresh_token", "refresh-two"},
                                   {"expires_in", 3600}}
                                  .dump();
-        } else if (request.url.ends_with("/v1/me")) {
+        } else if (request.url.ends_with("/v1/auth/me")) {
             response->status = 200;
             response->body = Json{{"email", "dev@example.test"}}.dump();
-        } else if (request.url.ends_with("/auth/cli/revoke")) {
+        } else if (request.url.ends_with("/v1/auth/cli/revoke")) {
             response->status = 204;
         } else {
             return false;
@@ -579,12 +579,12 @@ TestResult test_console_rejects_header_injection() {
     wally::account::ConsoleClient client([](const wally::account::HttpRequest& request,
                                            wally::account::HttpResponse* response, std::string*) {
         response->status = 200;
-        if (request.url.ends_with("/auth/cli/poll")) {
+        if (request.url.ends_with("/v1/auth/cli/poll")) {
             response->body = Json{{"status", "approved"},
                                   {"access_token", "safe\r\nX-Injected: yes"},
                                   {"refresh_token", "refresh-token"}}
                                  .dump();
-        } else if (request.url.ends_with("/auth/cli/start")) {
+        } else if (request.url.ends_with("/v1/auth/cli/start")) {
             response->body = Json{{"request_code", "ABCD\nEFGH"},
                                   {"poll_secret", "poll-secret"},
                                   {"verification_url", "https://console.runanywhere.ai/device"}}
@@ -618,7 +618,8 @@ TestResult test_console_rejects_header_injection() {
 
 // The API host and the browser approval host are two deployments. Collapsing
 // them, or pointing the API at the console's Railway host, is the regression
-// this pins: measured 2026-09-04, console.runanywhere.ai answers
+// this pins: measured 2026-09-04, before InferenceInfra#484 moved the auth
+// paths under /v1/auth, console.runanywhere.ai answered the then-current
 // /auth/cli/start and /v1/me with 404 and its own SPA HTML, while
 // inference.runanywhere.ai answers 422 and 405 — the endpoints rejecting a bad
 // body and a wrong verb, which is how you know they exist.
@@ -632,12 +633,12 @@ TestResult test_the_api_host_and_the_browser_host_stay_apart() {
     const std::vector<std::string> browser = wally::account::TrustedBrowserOrigins(api);
 
     if (api == "https://console.runanywhere.ai") {
-        result.details = "the API default is the web console, which serves no /auth/cli or /v1 route";
+        result.details = "the API default is the web console, which serves no /v1/auth/cli or /v1 route";
         result.actual = api;
         return result;
     }
     if (api != "https://inference.runanywhere.ai") {
-        result.details = "the API default moved; confirm the new host serves /auth/cli/* and /v1/me";
+        result.details = "the API default moved; confirm the new host serves /v1/auth/cli/* and /v1/auth/me";
         result.actual = api;
         return result;
     }
@@ -774,7 +775,7 @@ TestResult test_a_rate_limited_poll_keeps_waiting() {
     int polls = 0;
     wally::account::ConsoleClient client([&](const wally::account::HttpRequest& request,
                                             wally::account::HttpResponse* response, std::string*) {
-        if (request.url.ends_with("/auth/cli/poll")) {
+        if (request.url.ends_with("/v1/auth/cli/poll")) {
             polls++;
             if (polls == 1) {           // busy console on the first poll
                 response->status = 429;

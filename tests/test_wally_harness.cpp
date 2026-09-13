@@ -206,7 +206,7 @@ TestResult test_verify_cloud_session_refreshes_and_reverifies() {
     bool verified_with_new_token = false;
     wally::account::ConsoleClient console([&](const wally::account::HttpRequest& request,
                                              wally::account::HttpResponse* response, std::string*) {
-        if (request.url.ends_with("/auth/cli/refresh")) {
+        if (request.url.ends_with("/v1/auth/cli/refresh")) {
             refreshed = true;
             response->status = 200;
             response->body = Json{{"access_token", "new-access-token"},
@@ -215,7 +215,7 @@ TestResult test_verify_cloud_session_refreshes_and_reverifies() {
                                  .dump();
             return true;
         }
-        if (request.url.ends_with("/v1/me")) {
+        if (request.url.ends_with("/v1/auth/me")) {
             verified_with_new_token = request.bearer_token == "new-access-token";
             response->status = 200;
             response->body = Json{{"email", "developer@example.test"}}.dump();
@@ -267,11 +267,11 @@ TestResult test_verify_cloud_session_accepts_real_session() {
     bool refresh_called = false;
     wally::account::ConsoleClient console([&](const wally::account::HttpRequest& request,
                                              wally::account::HttpResponse* response, std::string*) {
-        if (request.url.ends_with("/auth/cli/refresh")) {
+        if (request.url.ends_with("/v1/auth/cli/refresh")) {
             refresh_called = true;
             return false;
         }
-        if (request.url.ends_with("/v1/me") && request.bearer_token == "real-access-token") {
+        if (request.url.ends_with("/v1/auth/me") && request.bearer_token == "real-access-token") {
             response->status = 200;
             response->body = Json{{"email", "developer@example.test"}}.dump();
             return true;
@@ -298,8 +298,9 @@ TestResult test_verify_cloud_session_accepts_real_session() {
 }
 
 // A console that is merely RATE LIMITING must not read as a bad session. This
-// is InferenceInfra#444: a load test drove /v1/me to 429 and every signed-in
-// person was refused entry to their own harness, `wally login` included.
+// is InferenceInfra#444: a load test drove the identity route to 429 and every
+// signed-in person was refused entry to their own harness, `wally login`
+// included.
 TestResult test_verify_cloud_session_rate_limit_is_unverified_not_bad() {
     TestResult result;
     result.test_name = "verify_cloud_session_rate_limit_is_unverified_not_bad";
@@ -406,7 +407,7 @@ TestResult test_verify_cloud_session_rate_limited_refresh_is_unverified_not_bad(
     bool asked_refresh = false;
     wally::account::ConsoleClient console([&](const wally::account::HttpRequest& request,
                                              wally::account::HttpResponse* response, std::string*) {
-        if (request.url.ends_with("/auth/cli/refresh")) {
+        if (request.url.ends_with("/v1/auth/cli/refresh")) {
             asked_refresh = true;
         }
         response->status = 429;

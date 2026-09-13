@@ -88,7 +88,7 @@ wally::account::ConsoleClient WhoAmIConsole() {
     return wally::account::ConsoleClient(
         [](const wally::account::HttpRequest& request, wally::account::HttpResponse* response,
            std::string*) {
-            if (!request.url.ends_with("/v1/me")) {
+            if (!request.url.ends_with("/v1/auth/me")) {
                 return false;
             }
             response->status = 200;

@@ -96,7 +96,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.read_json()
         self.requests.append(("POST", self.path, self.headers.get("Authorization"), body))
-        if self.path == "/auth/cli/start":
+        if self.path == "/v1/auth/cli/start":
             self.reply(
                 200,
                 {
@@ -107,7 +107,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "interval": 1,
                 },
             )
-        elif self.path == "/auth/cli/poll":
+        elif self.path == "/v1/auth/cli/poll":
             self.reply(
                 200,
                 {
@@ -118,14 +118,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "expires_in": 3600,
                 },
             )
-        elif self.path == "/auth/cli/revoke":
+        elif self.path == "/v1/auth/cli/revoke":
             self.reply(204)
         else:
             self.reply(404, {"error": "unknown path"})
 
     def do_GET(self):
         self.requests.append(("GET", self.path, self.headers.get("Authorization"), None))
-        if self.path == "/v1/me":
+        if self.path == "/v1/auth/me":
             self.reply(200, {"email": EMAIL})
         elif self.path.startswith("/v1/cli/usage"):
             body = dict(USAGE_BODY)
@@ -254,9 +254,9 @@ def main():
                 raise AssertionError("logout did not remove the local session")
 
         expected = [
-            ("POST", "/auth/cli/start", None),
-            ("POST", "/auth/cli/poll", None),
-            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),
+            ("POST", "/v1/auth/cli/start", None),
+            ("POST", "/v1/auth/cli/poll", None),
+            ("GET", "/v1/auth/me", f"Bearer {ACCESS_TOKEN}"),
             # One read per invocation. The windows are totalled server-side, so
             # `days` and `limit` are held at the minimum the route accepts —
             # nothing below the balance renders `totals`, `timeline` or `recent`.
@@ -264,7 +264,7 @@ def main():
             ("GET", "/v1/cli/usage?days=1&limit=1", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/cli/usage?days=1&limit=1", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/cli/usage?days=1&limit=1", f"Bearer {ACCESS_TOKEN}"),
-            ("POST", "/auth/cli/revoke", f"Bearer {ACCESS_TOKEN}"),
+            ("POST", "/v1/auth/cli/revoke", f"Bearer {ACCESS_TOKEN}"),
         ]
         actual = [(method, path, authorization) for method, path, authorization, _ in ConsoleHandler.requests]
         if actual != expected:
@@ -272,12 +272,12 @@ def main():
         # Looked up by path, not by index: a new call anywhere in the flow
         # renumbers the list and would otherwise silently assert the wrong body.
         bodies = {path: body for _, path, _, body in ConsoleHandler.requests}
-        if bodies["/auth/cli/poll"] != {
+        if bodies["/v1/auth/cli/poll"] != {
             "request_code": "ABCD-EFGH",
             "poll_secret": "poll-secret",
         }:
             raise AssertionError("poll request did not use the server-issued secret")
-        if bodies["/auth/cli/revoke"] != {"refresh_token": REFRESH_TOKEN}:
+        if bodies["/v1/auth/cli/revoke"] != {"refresh_token": REFRESH_TOKEN}:
             raise AssertionError("logout did not request refresh-token revocation")
     finally:
         server.shutdown()
