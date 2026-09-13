@@ -31,7 +31,10 @@ TestResult test_overload_headers_survive_streaming() {
                                             httplib::Response& response) {
         ++calls;
         response.status = Json::parse(request.body).value("max_tokens", 429);
-        response.set_header("Retry-After", "7");
+        response.set_header("Retry-After", response.status == 429 ? "7" : "Wed, 21 Oct 2037 07:28:00 GMT");
+        if (request.get_header_value("Authorization") != "Bearer test-upstream-key") {
+            response.status = 401;
+        }
         response.set_content(R"({"error":{"message":"capacity exhausted"}})", "application/json");
     });
     const int port = server.bind_to_any_port("127.0.0.1");
@@ -39,6 +42,7 @@ TestResult test_overload_headers_survive_streaming() {
     server.wait_until_ready();
     wally::harness::Endpoint endpoint;
     endpoint.base_url = "http://127.0.0.1:" + std::to_string(port) + "/v1";
+    endpoint.api_key = "test-upstream-key";
     wally::anthropic::Shim shim;
     const bool started = wally::anthropic::Start(endpoint, "test-model", &shim);
     bool okay = started;
@@ -53,7 +57,8 @@ TestResult test_overload_headers_survive_streaming() {
                 auto reply = client.Post("/v1/messages", {{"x-api-key", shim.auth_token}},
                                          body.dump(), "application/json");
                 okay = okay && reply && reply->status == status &&
-                       reply->get_header_value("Retry-After") == "7" &&
+                       reply->get_header_value("Retry-After") ==
+                           (status == 429 ? "7" : "Wed, 21 Oct 2037 07:28:00 GMT") &&
                        reply->get_header_value("Content-Type").find("application/json") == 0 &&
                        reply->body.find("capacity exhausted") != std::string::npos;
                 result.actual += std::to_string(streaming) + ":" +
@@ -66,7 +71,7 @@ TestResult test_overload_headers_survive_streaming() {
     server.stop();
     thread.join();
     result.passed = okay && calls == 4;
-    result.expected = "stream/nonstream preserve 429/503 and Retry-After: 7; one call each";
+    result.expected = "stream/nonstream preserve 429/503 and numeric/date Retry-After; authenticated once each";
     return result;
 }
 #if !defined(_WIN32)
