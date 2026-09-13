@@ -96,18 +96,41 @@ class RunningProxy {
     bool started() const { return started_; }
     const std::string& base_url() const { return proxy_.base_url; }
 
+    /// The scheme and authority, which is all httplib::Client takes.
+    std::string origin() const {
+        const std::size_t scheme = proxy_.base_url.find("://");
+        const std::size_t slash = proxy_.base_url.find('/', scheme + 3);
+        return slash == std::string::npos ? proxy_.base_url : proxy_.base_url.substr(0, slash);
+    }
+
+    /// Everything after the authority, which the editor appends its route to.
+    /// It carries the session's secret segment, so it is the credential.
+    std::string prefix() const {
+        const std::size_t scheme = proxy_.base_url.find("://");
+        const std::size_t slash = proxy_.base_url.find('/', scheme + 3);
+        return slash == std::string::npos ? std::string() : proxy_.base_url.substr(slash);
+    }
+
    private:
     wally::ide::Proxy proxy_;
     bool started_ = false;
 };
 
 httplib::Result Ask(const RunningProxy& proxy, bool streaming, const httplib::Headers& headers) {
-    httplib::Client client(proxy.base_url());
+    httplib::Client client(proxy.origin());
     client.set_read_timeout(10, 0);
     const Json body{{"model", "anything"},
                     {"stream", streaming},
                     {"messages", Json::array({Json{{"role", "user"}, {"content", "hi"}}})}};
-    return client.Post("/v1/chat/completions", headers, body.dump(), "application/json");
+    return client.Post(proxy.prefix() + "/chat/completions", headers, body.dump(),
+                       "application/json");
+}
+
+/// One request with a body of the caller's choosing, on the real route.
+httplib::Result Send(const RunningProxy& proxy, const std::string& body) {
+    httplib::Client client(proxy.origin());
+    client.set_read_timeout(10, 0);
+    return client.Post(proxy.prefix() + "/chat/completions", body, "application/json");
 }
 
 TestResult test_serves_a_completion_with_no_credential() {
@@ -208,9 +231,9 @@ TestResult test_lists_models_with_no_credential() {
         result.details = "proxy did not start";
         return result;
     }
-    httplib::Client client(proxy.base_url());
+    httplib::Client client(proxy.origin());
     client.set_read_timeout(10, 0);
-    const httplib::Result reply = client.Get("/v1/models");
+    const httplib::Result reply = client.Get(proxy.prefix() + "/models");
     if (!reply) {
         result.details = "the proxy did not answer";
         return result;
@@ -238,10 +261,7 @@ TestResult test_refuses_a_body_it_cannot_retarget() {
         result.details = "proxy did not start";
         return result;
     }
-    httplib::Client client(proxy.base_url());
-    client.set_read_timeout(10, 0);
-    const httplib::Result reply = client.Post(
-        "/v1/chat/completions", "{\"model\":\"gpt-4\",\"messages\":[", "application/json");
+    const httplib::Result reply = Send(proxy, "{\"model\":\"gpt-4\",\"messages\":[");
     if (!reply) {
         result.details = "the proxy did not answer";
         return result;
@@ -407,10 +427,7 @@ TestResult test_repairs_empty_tool_call_arguments() {
                                       {"type", "function"},
                                       {"function", {{"name", "list_files"}, {"arguments", ""}}}}})}},
               Json{{"role", "tool"}, {"tool_call_id", "call_1"}, {"content", "ok"}}})}};
-    httplib::Client client(proxy.base_url());
-    client.set_read_timeout(10, 0);
-    const httplib::Result reply =
-        client.Post("/v1/chat/completions", body.dump(), "application/json");
+    const httplib::Result reply = Send(proxy, body.dump());
     if (!reply) {
         result.details = "the proxy did not answer";
         return result;
@@ -452,10 +469,7 @@ TestResult test_leaves_real_tool_call_arguments_alone() {
                                 {"function",
                                  {{"name", "write_file"},
                                   {"arguments", "{\"path\":\"src/main.rs\"}"}}}}})}}})}};
-    httplib::Client client(proxy.base_url());
-    client.set_read_timeout(10, 0);
-    const httplib::Result reply =
-        client.Post("/v1/chat/completions", body.dump(), "application/json");
+    const httplib::Result reply = Send(proxy, body.dump());
     if (!reply) {
         result.details = "the proxy did not answer";
         return result;
@@ -470,6 +484,82 @@ TestResult test_leaves_real_tool_call_arguments_alone() {
     return result;
 }
 
+// The guard that replaced the bearer token. A header could not be used — the
+// editor sends none — but the base URL is wally's to choose and the editor
+// appends to whatever it is given, so the secret rides in the path. Another
+// process on this machine that does not have the address cannot spend the
+// signed-in user's credit through the port.
+//
+// One proxy serves every assertion here: each RunningProxy start and stop costs
+// a listener and a thread, and this suite already stands up enough of them.
+TestResult test_the_session_path_is_the_credential() {
+    TestResult result;
+    result.test_name = "the_session_path_is_the_credential";
+    Upstream upstream;
+    RunningProxy proxy(upstream.base_url());
+    if (!proxy.started()) {
+        result.details = "proxy did not start";
+        return result;
+    }
+    const std::string prefix = proxy.prefix();
+    result.actual = prefix;
+
+    // The secret is what carries the entropy, and a short or fixed one is
+    // guessable by anything that can reach the port.
+    if (prefix.size() < 1 + 24 + std::string("/v1").size()) {
+        result.expected = "a long, unpredictable segment ahead of /v1";
+        result.details = "the session address is too short to be unguessable";
+        return result;
+    }
+    if (prefix.rfind("/v1") != prefix.size() - 3) {
+        result.details = "the session address does not end in the /v1 the editor appends to";
+        return result;
+    }
+    const std::string secret = prefix.substr(1, prefix.size() - 4);
+    if (secret.find_first_not_of(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") !=
+        std::string::npos) {
+        result.details = "the session address carries characters a URL path cannot: " + secret;
+        return result;
+    }
+
+    const Json body{{"model", "anything"},
+                    {"messages", Json::array({Json{{"role", "user"}, {"content", "hi"}}})}};
+    httplib::Client client(proxy.origin());
+    client.set_read_timeout(10, 0);
+
+    // The address the port would have had without a secret segment.
+    const httplib::Result bare =
+        client.Post("/v1/chat/completions", body.dump(), "application/json");
+    if (!bare) {
+        result.details = "the proxy did not answer a request without the session path";
+        return result;
+    }
+    if (bare->status == 200) {
+        result.expected = "not served";
+        result.actual = std::to_string(bare->status);
+        result.details = "a caller without the session address was served";
+        return result;
+    }
+
+    // A guessed segment is no better than none.
+    const httplib::Result guessed =
+        client.Post("/not-the-secret/v1/chat/completions", body.dump(), "application/json");
+    if (!guessed) {
+        result.details = "the proxy did not answer a request with a wrong session path";
+        return result;
+    }
+    if (guessed->status == 200) {
+        result.expected = "not served";
+        result.actual = std::to_string(guessed->status);
+        result.details = "a caller guessing the session address was served";
+        return result;
+    }
+
+    result.passed = true;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -480,6 +570,7 @@ int main(int argc, char** argv) {
               test_serves_a_request_carrying_any_credential);
     suite.add("lists_models_with_no_credential", test_lists_models_with_no_credential);
     suite.add("refuses_a_body_it_cannot_retarget", test_refuses_a_body_it_cannot_retarget);
+    suite.add("the_session_path_is_the_credential", test_the_session_path_is_the_credential);
     suite.add("repairs_empty_tool_call_arguments", test_repairs_empty_tool_call_arguments);
     suite.add("leaves_real_tool_call_arguments_alone",
               test_leaves_real_tool_call_arguments_alone);
