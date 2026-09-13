@@ -350,6 +350,9 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
             translate::StreamState state;
             state.model = *model;
             std::string pending;
+            std::string payload;
+            bool has_data = false;
+            bool saw_done = false;
             // Retain a bounded prefix for diagnosing a transport failure
             // after successful response headers have already been forwarded.
             std::string error_body;
@@ -360,38 +363,40 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
                     error_body.append(data, std::min(length, kErrorBodyCap - error_body.size()));
                 }
                 pending.append(data, length);
-                // SSE frames are separated by a blank line, and a chunk can
-                // split one in half, so only whole frames are consumed.
+                // Consume complete lines across arbitrary transport chunks.
+                // CRLF and multi-line data fields are valid SSE too.
                 size_t split = 0;
-                while ((split = pending.find("\n\n")) != std::string::npos) {
-                    const std::string frame = pending.substr(0, split);
-                    pending.erase(0, split + 2);
-                    const size_t field = frame.find("data:");
-                    if (field == std::string::npos) {
+                while ((split = pending.find('\n')) != std::string::npos) {
+                    std::string line = pending.substr(0, split);
+                    pending.erase(0, split + 1);
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    if (!line.empty()) {
+                        if (line == "data" || line.rfind("data:", 0) == 0) {
+                            std::string value = line == "data" ? "" : line.substr(5);
+                            if (!value.empty() && value.front() == ' ') value.erase(0, 1);
+                            if (has_data) payload += '\n';
+                            payload += value;
+                            has_data = true;
+                        }
                         continue;
                     }
-                    std::string payload = frame.substr(field + 5);
-                    while (!payload.empty() &&
-                           (payload.front() == ' ' || payload.front() == '\r')) {
-                        payload.erase(payload.begin());
-                    }
-                    if (payload == "[DONE]") {
-                        continue;
-                    }
-                    Json chunk;
-                    try {
-                        chunk = Json::parse(payload);
-                    } catch (const Json::exception&) {
-                        continue;
-                    }
+                    if (!has_data) continue;  // comments/keepalives
+                    has_data = false;
                     std::string events;
-                    try {
-                        events = translate::StreamChunkToAnthropic(chunk, &state);
-                    } catch (const std::exception&) {
-                        // A chunk in a shape the mapping did not expect is
-                        // a chunk to skip, not a reason to kill the run.
-                        continue;
+                    if (saw_done) {
+                        events = translate::StreamErrorToAnthropic(
+                            &state, "the model endpoint sent data after [DONE]");
+                    } else if (payload == "[DONE]") {
+                        saw_done = true;
+                    } else {
+                        try {
+                            events = translate::StreamChunkToAnthropic(Json::parse(payload), &state);
+                        } catch (const std::exception&) {
+                            events = translate::StreamErrorToAnthropic(
+                                &state, "the model endpoint sent a malformed stream frame");
+                        }
                     }
+                    payload.clear();
                     if (!events.empty() && !sink.write(events.data(), events.size())) {
                         return false;
                     }
@@ -410,20 +415,25 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
                 std::string type;
                 std::string message;
                 translate::UpstreamFailure(status, error_body, &type, &message);
-                const std::string body =
-                    "event: error\ndata: " + translate::ErrorBody(type, message) + "\n\n";
-                sink.write(body.data(), body.size());
+                const std::string body = translate::StreamErrorToAnthropic(&state, message);
+                if (!body.empty()) sink.write(body.data(), body.size());
                 sink.done();
                 return false;
             }
             try {
-                const std::string closing = translate::StreamCloseToAnthropic(&state);
+                // Transport EOF is not inference completion. Our OpenAI
+                // upstream must send a finish reason followed by [DONE].
+                const std::string closing = (!saw_done || has_data || !pending.empty())
+                    ? translate::StreamErrorToAnthropic(
+                          &state, "the model endpoint ended an incomplete stream before [DONE]")
+                    : translate::StreamCloseToAnthropic(&state);
                 if (!closing.empty()) {
                     sink.write(closing.data(), closing.size());
                 }
             } catch (const std::exception&) {
-                // Nothing useful left to say; ending the stream cleanly beats
-                // aborting the process holding the reader's editor open.
+                const std::string error = translate::StreamErrorToAnthropic(
+                    &state, "the model endpoint returned an invalid stream completion");
+                if (!error.empty()) sink.write(error.data(), error.size());
             }
             sink.done();
             return true;

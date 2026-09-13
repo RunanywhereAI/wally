@@ -439,6 +439,9 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
         state->output_tokens = Count(chunk["usage"], "completion_tokens", state->output_tokens);
     }
 
+    if (choice.contains("delta") && !choice["delta"].is_null() && !choice["delta"].is_object()) {
+        return StreamErrorToAnthropic(state, "the model endpoint sent a malformed delta");
+    }
     const Json delta = choice.contains("delta") && choice["delta"].is_object()
                            ? choice["delta"]
                            : Json::object();
@@ -447,10 +450,14 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
     // two of them at once; writing as they land would interleave two half-built
     // blocks, which Anthropic's stream cannot express. They go out whole in
     // StreamCloseToAnthropic instead.
+    if (delta.contains("tool_calls") && !delta["tool_calls"].is_null() &&
+        !delta["tool_calls"].is_array()) {
+        return StreamErrorToAnthropic(state, "the model endpoint sent malformed tool calls");
+    }
     if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
         for (const Json& call : delta["tool_calls"]) {
             if (!call.is_object()) {
-                continue;
+                return StreamErrorToAnthropic(state, "the model endpoint sent a malformed tool call");
             }
             const bool numbered = call.contains("index") && call["index"].is_number_integer();
             const int index = numbered ? call["index"].get<int>() : 0;
@@ -491,6 +498,11 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
             const Json function = call.contains("function") && call["function"].is_object()
                                       ? call["function"]
                                       : Json::object();
+            if ((call.contains("function") && !call["function"].is_object()) ||
+                (function.contains("arguments") && !function["arguments"].is_string()) ||
+                (function.contains("name") && !function["name"].is_string())) {
+                return StreamErrorToAnthropic(state, "the model endpoint sent malformed tool arguments");
+            }
             if (function.contains("name") && function["name"].is_string()) {
                 pending.name = function["name"].get<std::string>();
             }
@@ -544,8 +556,7 @@ std::string StreamCloseToAnthropic(StreamState* state) {
     // argument must never become an executable Anthropic tool_use block.
     for (const auto& entry : state->tool_calls) {
         const auto& call = entry.second;
-        const Json arguments = Json::parse(call.arguments.empty() ? "{}" : call.arguments,
-                                           nullptr, false);
+        const Json arguments = Json::parse(call.arguments, nullptr, false);
         if (call.name.empty() || !arguments.is_object()) {
             return StreamErrorToAnthropic(state, "the model endpoint returned incomplete tool arguments");
         }
@@ -563,11 +574,6 @@ std::string StreamCloseToAnthropic(StreamState* state) {
     bool emitted_tool_block = false;
     for (const auto& entry : state->tool_calls) {
         const StreamState::ToolCall& call = entry.second;
-        // A call nobody ever named cannot be run, and a block naming nothing is
-        // worse for the client than a call it never hears about.
-        if (call.name.empty()) {
-            continue;
-        }
         emitted_tool_block = true;
         // The client matches a result back to its call by this id, so a call
         // the endpoint never named still needs one it can quote.
@@ -584,19 +590,12 @@ std::string StreamCloseToAnthropic(StreamState* state) {
                      Json{{"type", "content_block_delta"},
                           {"index", index},
                           {"delta", Json{{"type", "input_json_delta"},
-                                         {"partial_json", call.arguments.empty()
-                                                              ? std::string("{}")
-                                                              : call.arguments}}}});
+                                         {"partial_json", call.arguments}}}});
         out += Event("content_block_stop",
                      Json{{"type", "content_block_stop"}, {"index", index}});
         ++index;
     }
-    // What was actually written, not what was pending. Every call being unnamed
-    // leaves tool_calls non-empty with no tool_use block in the content, and
-    // `tool_use` there parks the client waiting for a call that never arrives.
-    const std::string stop = StopWithTools(
-        state->stop_reason.empty() ? std::string("end_turn") : state->stop_reason,
-        emitted_tool_block);
+    const std::string stop = StopWithTools(state->stop_reason, emitted_tool_block);
     // `input_tokens` too, not just output. message_start had to emit 0 (the
     // upstream reports prompt_tokens only at the end of the stream), so this
     // final usage is the one place the real prompt count reaches the client.
