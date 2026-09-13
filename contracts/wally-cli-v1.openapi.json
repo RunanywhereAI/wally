@@ -1,5 +1,169 @@
 {
   "components": {
+    "parameters": {
+      "CancelRequestHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/CancelRequestHeaderAuthorizationValue"
+        }
+      },
+      "CancelRequestPathRequestIdParameter": {
+        "in": "path",
+        "name": "request_id",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CancelRequestPathRequestIdValue"
+        }
+      },
+      "GetCliUsageHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCliUsageHeaderAuthorizationValue"
+        }
+      },
+      "GetCliUsageQueryDaysParameter": {
+        "in": "query",
+        "name": "days",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCliUsageQueryDaysValue"
+        }
+      },
+      "GetCliUsageQueryLimitParameter": {
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCliUsageQueryLimitValue"
+        }
+      },
+      "GetCliUsageQueryModelParameter": {
+        "in": "query",
+        "name": "model",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCliUsageQueryModelValue"
+        }
+      },
+      "GetCurrentIdentityHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCurrentIdentityHeaderAuthorizationValue"
+        }
+      },
+      "GetCurrentIdentityHeaderXUserEmailParameter": {
+        "in": "header",
+        "name": "x-user-email",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCurrentIdentityHeaderXUserEmailValue"
+        }
+      },
+      "GetCurrentIdentityHeaderXUserIdParameter": {
+        "in": "header",
+        "name": "x-user-id",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCurrentIdentityHeaderXUserIdValue"
+        }
+      },
+      "RevokeCliAuthorizationHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/RevokeCliAuthorizationHeaderAuthorizationValue"
+        }
+      }
+    },
+    "responses": {
+      "ApiError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        },
+        "description": "Typed control-plane error"
+      },
+      "Error": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "OpenAI-shaped error; raw upstream bodies are never returned",
+        "headers": {
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "Entitlement or GPU admission capacity limit",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds before retrying when supplied",
+            "schema": {
+              "$ref": "#/components/schemas/RetryAfterSeconds"
+            }
+          },
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "Missing, malformed, or unknown Cloud key",
+        "headers": {
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "ValidationFailed": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        },
+        "description": "Request failed contract validation"
+      }
+    },
     "schemas": {
       "ApiError": {
         "additionalProperties": false,
@@ -28,6 +192,7 @@
           "unauthorized",
           "forbidden",
           "not_found",
+          "method_not_allowed",
           "conflict",
           "gone",
           "payload_too_large",
@@ -37,6 +202,7 @@
           "service_unavailable",
           "timeout",
           "bad_request",
+          "control_plane_overloaded",
           "expired_api_key",
           "gateway_unavailable",
           "idempotency_key_reused",
@@ -58,6 +224,88 @@
         ],
         "title": "ApiErrorCode",
         "type": "string"
+      },
+      "CancelRequestHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "CancelRequestPathRequestIdValue": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9._:-]+$",
+        "title": "Request Id",
+        "type": "string"
+      },
+      "CancelRequestResponse": {
+        "additionalProperties": false,
+        "description": "Answer to a cancel that reached an in-flight request the caller owns.\n\n`status` is \"cancelling\", not \"cancelled\": the node has ended the request's\ncontext and told the engine to abort; the stream's own end and its\nsettlement follow a moment later on their own path.",
+        "properties": {
+          "request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "cancelling",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
+        ],
+        "title": "CancelRequestResponse",
+        "type": "object"
+      },
+      "CatalogModelResponse": {
+        "additionalProperties": false,
+        "description": "One entitled model, priced. Straight from `pricing.catalog()` - the same\nnumbers the credit gate charges against, so a published price cannot drift\nfrom a billed one (G7).",
+        "properties": {
+          "cached_input_per_mtok": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cached Input Per Mtok",
+            "type": "integer"
+          },
+          "display_name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_per_mtok": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Input Per Mtok",
+            "type": "integer"
+          },
+          "output_per_mtok": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Output Per Mtok",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "input_per_mtok",
+          "output_per_mtok",
+          "cached_input_per_mtok"
+        ],
+        "title": "CatalogModelResponse",
+        "type": "object"
       },
       "CliClient": {
         "enum": [
@@ -400,6 +648,115 @@
         "title": "CreditResponse",
         "type": "object"
       },
+      "ErrorCode": {
+        "enum": [
+          "bad_request",
+          "not_found",
+          "payload_too_large",
+          "unprocessable",
+          "invalid_api_key",
+          "expired_api_key",
+          "revoked_api_key",
+          "insufficient_credit",
+          "account_frozen",
+          "model_not_entitled",
+          "not_in_cohort",
+          "user_rate_limited",
+          "request_cancelled",
+          "quota_exceeded",
+          "capacity_exceeded",
+          "idempotency_key_reused",
+          "unsupported_endpoint",
+          "proxy_retired",
+          "gateway_unavailable",
+          "control_plane_overloaded",
+          "credit_gate_unavailable",
+          "upstream_contract_violation",
+          "unattributed_key",
+          "internal",
+          "bad_gateway",
+          "draining",
+          "spool_unhealthy",
+          "cold",
+          "timeout"
+        ],
+        "type": "string"
+      },
+      "ErrorMessage": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ErrorParameter": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ErrorType": {
+        "enum": [
+          "invalid_request_error",
+          "authentication_error",
+          "permission_error",
+          "rate_limit_error",
+          "quota",
+          "capacity",
+          "server_error",
+          "timeout"
+        ],
+        "type": "string"
+      },
+      "GetCliUsageHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "GetCliUsageQueryDaysValue": {
+        "default": 30,
+        "maximum": 365,
+        "minimum": 1,
+        "title": "Days",
+        "type": "integer"
+      },
+      "GetCliUsageQueryLimitValue": {
+        "default": 20,
+        "maximum": 200,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "GetCliUsageQueryModelValue": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "GetCurrentIdentityHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "GetCurrentIdentityHeaderXUserEmailValue": {
+        "default": "",
+        "maxLength": 320,
+        "title": "X-User-Email",
+        "type": "string"
+      },
+      "GetCurrentIdentityHeaderXUserIdValue": {
+        "default": "",
+        "maxLength": 255,
+        "title": "X-User-Id",
+        "type": "string"
+      },
       "GrantResponse": {
         "additionalProperties": false,
         "properties": {
@@ -501,6 +858,111 @@
         "title": "IdentityResponse",
         "type": "object"
       },
+      "ModelCatalogResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "effective_from": {
+            "maxLength": 35,
+            "minLength": 20,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}",
+            "title": "Effective From",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogModelResponse"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "pricing_version": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Pricing Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pricing_version",
+          "effective_from",
+          "models"
+        ],
+        "title": "ModelCatalogResponse",
+        "type": "object"
+      },
+      "ModelList": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PublicModel"
+            },
+            "type": "array"
+          },
+          "object": {
+            "const": "list"
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ],
+        "type": "object"
+      },
+      "ModelOwner": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenAIError": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OpenAIErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "OpenAIErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "$ref": "#/components/schemas/ErrorMessage"
+          },
+          "param": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorParameter"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/ErrorType"
+          }
+        },
+        "required": [
+          "message",
+          "type"
+        ],
+        "type": "object"
+      },
       "PollResponse": {
         "additionalProperties": false,
         "properties": {
@@ -585,6 +1047,75 @@
           "expired"
         ],
         "title": "PollStatus",
+        "type": "string"
+      },
+      "PublicModel": {
+        "additionalProperties": false,
+        "properties": {
+          "created": {
+            "description": "OpenAI-shaped creation timestamp (unix seconds) the gateway reports; informational.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/PublicModelId"
+          },
+          "max_input_tokens": {
+            "description": "The advertised ceiling on input tokens for this model -- what an OpenAI-shaped coding agent reads to decide when to compact (contracts/public/status_semantics.json context_window). null means the deployment has not established one.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_output_tokens": {
+            "description": "The advertised ceiling on output tokens, when the deployment declares one separately from the context window (gateway/litellm/config/proxy_config.yaml model_info; gemma-4 does, qwen3.8-27b shares one budget and omits it).",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "description": "The gateway's model mode; every Wally model is a chat model.",
+            "enum": [
+              "chat"
+            ],
+            "type": "string"
+          },
+          "object": {
+            "const": "model"
+          },
+          "owned_by": {
+            "$ref": "#/components/schemas/ModelOwner"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "owned_by"
+        ],
+        "type": "object"
+      },
+      "PublicModelId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+        "type": "string"
+      },
+      "RequestId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "RetryAfterSeconds": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "RevokeCliAuthorizationHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
         "type": "string"
       },
       "UsageModelRollup": {
@@ -725,168 +1256,11 @@
         ],
         "title": "UsageTotals",
         "type": "object"
-      },
-      "ModelList": {
-        "additionalProperties": false,
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/PublicModel"
-            },
-            "type": "array"
-          },
-          "object": {
-            "const": "list"
-          }
-        },
-        "required": [
-          "object",
-          "data"
-        ],
-        "type": "object"
-      },
-      "ModelOwner": {
-        "maxLength": 128,
-        "minLength": 1,
-        "type": "string"
-      },
-      "PublicModel": {
-        "additionalProperties": false,
-        "properties": {
-          "created": {
-            "description": "OpenAI-shaped creation timestamp (unix seconds) the gateway reports; informational.",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "id": {
-            "$ref": "#/components/schemas/PublicModelId"
-          },
-          "max_input_tokens": {
-            "description": "The advertised ceiling on input tokens for this model -- what an OpenAI-shaped coding agent reads to decide when to compact (contracts/public/status_semantics.json context_window). null means the deployment has not established one.",
-            "minimum": 1,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "max_output_tokens": {
-            "description": "The advertised ceiling on output tokens, when the deployment declares one separately from the context window (gateway/litellm/config/proxy_config.yaml model_info; gemma-4 does, qwen3.8-27b shares one budget and omits it).",
-            "minimum": 1,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "mode": {
-            "description": "The gateway's model mode; every Wally model is a chat model.",
-            "enum": [
-              "chat"
-            ],
-            "type": "string"
-          },
-          "object": {
-            "const": "model"
-          },
-          "owned_by": {
-            "$ref": "#/components/schemas/ModelOwner"
-          }
-        },
-        "required": [
-          "id",
-          "object",
-          "owned_by"
-        ],
-        "type": "object"
-      },
-      "PublicModelId": {
-        "maxLength": 128,
-        "minLength": 1,
-        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
-        "type": "string"
-      },
-      "CatalogModelResponse": {
-        "additionalProperties": false,
-        "description": "One entitled model, priced. Straight from `pricing.catalog()` - the same\nnumbers the credit gate charges against, so a published price cannot drift\nfrom a billed one (G7).",
-        "properties": {
-          "cached_input_per_mtok": {
-            "maximum": 9007199254740991.0,
-            "minimum": 0.0,
-            "title": "Cached Input Per Mtok",
-            "type": "integer"
-          },
-          "display_name": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Display Name",
-            "type": "string"
-          },
-          "id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
-            "title": "Id",
-            "type": "string"
-          },
-          "input_per_mtok": {
-            "maximum": 9007199254740991.0,
-            "minimum": 0.0,
-            "title": "Input Per Mtok",
-            "type": "integer"
-          },
-          "output_per_mtok": {
-            "maximum": 9007199254740991.0,
-            "minimum": 0.0,
-            "title": "Output Per Mtok",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "display_name",
-          "input_per_mtok",
-          "output_per_mtok",
-          "cached_input_per_mtok"
-        ],
-        "title": "CatalogModelResponse",
-        "type": "object"
-      },
-      "ModelCatalogResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "effective_from": {
-            "maxLength": 35,
-            "minLength": 20,
-            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}",
-            "title": "Effective From",
-            "type": "string"
-          },
-          "models": {
-            "items": {
-              "$ref": "#/components/schemas/CatalogModelResponse"
-            },
-            "title": "Models",
-            "type": "array"
-          },
-          "pricing_version": {
-            "maxLength": 40,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-            "title": "Pricing Version",
-            "type": "string"
-          }
-        },
-        "required": [
-          "pricing_version",
-          "effective_from",
-          "models"
-        ],
-        "title": "ModelCatalogResponse",
-        "type": "object"
       }
     }
   },
   "info": {
-    "description": "CLI-facing operations extracted from control-plane-v1.openapi.json. Generated by contracts/extract-cli-contract.py; do not hand-edit.",
+    "description": "CLI-facing operations extracted from control-plane-v1.openapi.json by contracts/extract-cli-contract.py. Do not hand-edit.",
     "title": "Wally CLI control-plane contract (extract)",
     "version": "0.1.0"
   },
@@ -1176,6 +1550,42 @@
           }
         },
         "summary": "Model Catalog",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/v1/requests/{request_id}/cancel": {
+      "post": {
+        "description": "End an in-flight request the caller's key started (#440).\n\n`request_id` is the `x-request-id` the customer received on the response\nbeing cancelled. The GPU nodes are asked on this service's behalf with the\ncredential they already hold for this ledger (see services/cancel.py), and\neach ends the request only if that key started it. Anything else -- an id\nnobody is serving, a request that already finished, someone else's -- is\nthe same 404, so this route cannot be used to learn about other customers'\nrequests. A successful cancel is 202: the node has told the engine to stop;\nthe stream's end and its settlement follow on their own path.",
+        "operationId": "cancelRequest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CancelRequestPathRequestIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/CancelRequestHeaderAuthorizationParameter"
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "summary": "Cancel Request",
         "tags": [
           "console"
         ]

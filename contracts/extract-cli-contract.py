@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Carve the CLI-facing slice out of the full control-plane contract.
 
-The CLI uses six of the control plane's operations. Rather than vendor the whole
+The CLI uses nine of the control plane's operations. Rather than vendor the whole
 8000-line `control-plane-v1.openapi.json`, this extracts those operations and the
 transitive closure of the schemas they reference into a self-contained, valid
 OpenAPI document, `wally-cli-v1.openapi.json`, which is what gets pinned and fed
@@ -31,14 +31,37 @@ CLI_OPERATION_IDS = {
     "revokeCliAuthorization",
     "getCurrentIdentity",
     "getCliUsage",
+    # GET /v1/models and GET /v1/models/catalog: console.cpp's FetchModels and
+    # FetchCatalog (#75). The committed artifact carried both since #75 while
+    # this set still said six -- the artifact and the extractor had drifted,
+    # which is exactly what a hash pin cannot see. Listed now.
+    "listModels",
+    "getModelCatalog",
+    # POST /v1/requests/{request_id}/cancel (InferenceInfra #440): the shim
+    # calls it when the editor abandons a stream (wally #81).
+    "cancelRequest",
 }
 HTTP_METHODS = {"get", "post", "put", "delete", "patch"}
+# The component sections a kept operation may reference. Until wally #81 only
+# `schemas` was carried, so every `#/components/{parameters,responses}/...`
+# reference in a kept operation dangled in the extract; the generator reads only
+# `schemas`, so nothing broke, but the artifact was not the "self-contained,
+# valid OpenAPI document" the docstring promised. Now the closure follows every
+# section, and the extract is checked for dangling references before it is
+# written.
+COMPONENT_SECTIONS = ("schemas", "parameters", "responses", "requestBodies", "headers")
 
 
 def _refs(value: object, out: set[str]) -> None:
+    """Collect every `$ref` under `value`, as `(section, name)` pairs joined by '/'."""
     if isinstance(value, dict):
         if "$ref" in value:
-            out.add(value["$ref"].split("/")[-1])
+            ref = value["$ref"]
+            parts = ref.split("/")
+            if len(parts) == 4 and parts[:2] == ["#", "components"]:
+                out.add(parts[2] + "/" + parts[3])
+            else:
+                raise SystemExit(f"unsupported $ref shape in the source contract: {ref}")
         for child in value.values():
             _refs(child, out)
     elif isinstance(value, list):
@@ -52,16 +75,19 @@ def main() -> None:
     args = parser.parse_args()
 
     source = json.loads(args.source.read_text(encoding="utf-8"))
-    schemas = source["components"]["schemas"]
+    components = source["components"]
 
     closure: set[str] = set()
 
-    def visit(name: str) -> None:
-        if name in closure or name not in schemas:
+    def visit(key: str) -> None:
+        section, name = key.split("/", 1)
+        if key in closure:
             return
-        closure.add(name)
+        if section not in COMPONENT_SECTIONS or name not in components.get(section, {}):
+            raise SystemExit(f"kept operation references missing component {key}")
+        closure.add(key)
         found: set[str] = set()
-        _refs(schemas[name], found)
+        _refs(components[section][name], found)
         for dependency in found:
             visit(dependency)
 
@@ -75,8 +101,32 @@ def main() -> None:
                 _refs(operation, found)
                 for dependency in found:
                     visit(dependency)
+        # Path-level parameters apply to every operation under the path.
+        if kept and "parameters" in item:
+            kept_params = item["parameters"]
+            found = set()
+            _refs(kept_params, found)
+            for dependency in found:
+                visit(dependency)
+            kept = {"parameters": kept_params, **kept}
         if kept:
             paths[path] = kept
+
+    kept_operations = {op for op in CLI_OPERATION_IDS}
+    seen = {
+        operation.get("operationId")
+        for methods in paths.values()
+        for method, operation in methods.items()
+        if method in HTTP_METHODS
+    }
+    missing = sorted(kept_operations - seen)
+    if missing:
+        raise SystemExit(f"source contract lacks operations the CLI needs: {missing}")
+
+    extracted_components: dict[str, dict] = {}
+    for key in sorted(closure):
+        section, name = key.split("/", 1)
+        extracted_components.setdefault(section, {})[name] = components[section][name]
 
     extract = {
         "openapi": source["openapi"],
@@ -89,11 +139,18 @@ def main() -> None:
             ),
         },
         "paths": paths,
-        "components": {"schemas": {name: schemas[name] for name in sorted(closure)}},
+        "components": {section: extracted_components[section] for section in sorted(extracted_components)},
     }
+    # Self-contained means self-contained: every $ref in the extract resolves
+    # inside the extract.
+    dangling: set[str] = set()
+    _refs(extract, dangling)
+    unresolved = sorted(key for key in dangling if key not in closure)
+    if unresolved:
+        raise SystemExit(f"extract would carry dangling references: {unresolved}")
     OUT.write_text(json.dumps(extract, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    operations = sum(len(methods) for methods in paths.values())
-    print(f"wrote {OUT}: {operations} operations, {len(closure)} schemas")
+    operations = sum(1 for methods in paths.values() for method in methods if method in HTTP_METHODS)
+    print(f"wrote {OUT}: {operations} operations, {len(closure)} components")
 
 
 if __name__ == "__main__":
