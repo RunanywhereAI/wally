@@ -192,6 +192,25 @@ function(wally_define_engine_macros target)
     endif()
     if(TARGET RunAnywhere::server)
         target_link_libraries(${target} PRIVATE RunAnywhere::server)
+        # The kit's librac_server.a calls into libcrypto (OPENSSL_thread_stop,
+        # from httplib's thread pool) but its imported target does not say so,
+        # so nothing here asks for OpenSSL and the link only succeeds on a
+        # machine where CMake happened to find it anyway. On a clean consumer
+        # it configures fine and then fails at the very end with an undefined
+        # symbol (wally #92). Ask for it here, and say so at configure time.
+        if(NOT WIN32)
+            find_package(OpenSSL QUIET)
+            if(NOT OpenSSL_FOUND)
+                message(FATAL_ERROR
+                    "The RunAnywhere kit's server component needs OpenSSL, and it was not found.\n"
+                    "  macOS:  brew install openssl@3, then configure with "
+                    "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)\n"
+                    "  Linux:  install libssl-dev (or openssl-devel)\n"
+                    "Configure with -DWALLY_SDK_KIT pointing at a kit without the server "
+                    "component if you do not need `wally serve`.")
+            endif()
+            target_link_libraries(${target} PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+        endif()
     endif()
 endfunction()
 
