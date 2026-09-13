@@ -1,5 +1,7 @@
 #include "test_common.h"
 
+#include <chrono>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -45,12 +47,16 @@ int FreePort() {
 /// A proxy started against `upstream_base_url`, stopped on scope exit.
 class RunningProxy {
    public:
-    explicit RunningProxy(const std::string& upstream_base_url) {
+    /// `console_url`: where an abandoned request is cancelled (#81) -- the
+    /// fake's own origin, without the `/v1`. Empty means a local server.
+    explicit RunningProxy(const std::string& upstream_base_url, std::string console_url = {}) {
         wally::harness::Endpoint endpoint;
         endpoint.base_url = upstream_base_url;
         endpoint.api_key = "test-upstream-key";
+        endpoint.console_url = std::move(console_url);
         started_ = wally::ide::StartProxy(endpoint, "glm-5.3", FreePort(), &proxy_, false);
     }
+    const wally::ide::Proxy& proxy() const { return proxy_; }
     ~RunningProxy() { wally::ide::StopProxy(&proxy_); }
 
     bool started() const { return started_; }
@@ -129,12 +135,119 @@ TestResult test_proxy_stale_reused_connection_is_retried_once() {
 #endif
 }
 
+// #81. The JetBrains proxy's abandon path, the same property the Anthropic
+// suite proves: the editor leaves mid-body, the cancel names the request
+// with the session's bearer within a second, and the warmed (reused) lease
+// is NOT retried -- the prompt is never re-sent.
+TestResult test_proxy_abandoned_stream_is_cancelled_by_name_and_never_resent() {
+    TestResult result;
+    result.test_name = "proxy_abandoned_stream_is_cancelled_by_name_and_never_resent";
+    FakeUpstream upstream;
+    const std::string origin = upstream.base_url().substr(0, upstream.base_url().rfind("/v1"));
+    RunningProxy proxy(upstream.base_url(), origin);
+    if (!proxy.started()) {
+        result.details = "proxy did not start";
+        return result;
+    }
+    if (proxy.Send(false) != 200) {  // warm the pool: the next lease is reused
+        result.details = "warm-up request failed";
+        return result;
+    }
+    upstream.hold_streams_until(99);
+    httplib::Client editor(proxy.proxy().base_url);
+    editor.set_read_timeout(10, 0);
+    std::thread stream([&] {
+        const Json body{{"model", "anything"},
+                        {"stream", true},
+                        {"messages", Json::array({Json{{"role", "user"}, {"content", "hi"}}})}};
+        editor.Post("/v1/chat/completions", {{"Authorization", "Bearer " + proxy.proxy().auth_token}},
+                    body.dump(), "application/json", [](const char*, size_t) { return true; });
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    editor.stop();
+    stream.join();
+    if (!upstream.wait_for_cancels(1, std::chrono::seconds(1))) {
+        result.details = "no cancel reached the endpoint within 1 s of the editor leaving";
+        return result;
+    }
+    const auto cancels = upstream.cancels();
+    if (cancels[0].request_id != FakeUpstream::request_id_of(2) ||
+        cancels[0].authorization != "Bearer test-upstream-key") {
+        result.details = "wrong cancel: id=" + cancels[0].request_id + " auth=" + cancels[0].authorization;
+        return result;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    if (upstream.arrivals() != 2) {
+        result.expected = "two upstream requests; no re-send";
+        result.actual = std::to_string(upstream.arrivals()) + " arrivals";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// #81. The proxy's common abandon: the editor leaves while tokens are
+// flowing, so the failed write in forward() -- not the poll -- is what
+// notices; the cancel is named all the same and the upstream is dropped.
+TestResult test_proxy_leaving_while_tokens_flow_cancels_by_name() {
+    TestResult result;
+    result.test_name = "proxy_leaving_while_tokens_flow_cancels_by_name";
+    FakeUpstream upstream;
+    const std::string origin = upstream.base_url().substr(0, upstream.base_url().rfind("/v1"));
+    RunningProxy proxy(upstream.base_url(), origin);
+    if (!proxy.started()) {
+        result.details = "proxy did not start";
+        return result;
+    }
+    upstream.drip(1000, 2);  // ~2 s of tokens
+    // The editor CLOSES its socket when it leaves (see the Anthropic suite's
+    // Editor): stop, join, destroy -- so the proxy's next write to it fails.
+    auto editor = std::make_unique<httplib::Client>(proxy.proxy().base_url);
+    editor->set_read_timeout(10, 0);
+    std::thread stream([&] {
+        const Json body{{"model", "anything"},
+                        {"stream", true},
+                        {"messages", Json::array({Json{{"role", "user"}, {"content", "hi"}}})}};
+        editor->Post("/v1/chat/completions", {{"Authorization", "Bearer " + proxy.proxy().auth_token}},
+                     body.dump(), "application/json", [](const char*, size_t) { return true; });
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    editor->stop();
+    stream.join();
+    editor.reset();
+    if (!upstream.wait_for_cancels(1, std::chrono::seconds(1))) {
+        result.details = "no cancel reached the endpoint within 1 s of the editor leaving";
+        return result;
+    }
+    const auto cancels = upstream.cancels();
+    if (cancels.size() != 1 || cancels[0].request_id != FakeUpstream::request_id_of(1) ||
+        cancels[0].authorization != "Bearer test-upstream-key") {
+        result.details = "one cancel naming the abandoned request: n=" + std::to_string(cancels.size());
+        return result;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const int dripped = upstream.dripped();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    if (upstream.dripped() != dripped || dripped >= 1000 || upstream.arrivals() != 1) {
+        result.details = "the upstream must be dropped and never re-sent: dripped " +
+                         std::to_string(dripped) + " then " + std::to_string(upstream.dripped()) +
+                         " arrivals=" + std::to_string(upstream.arrivals());
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     TestSuite suite("wally_ide_proxy");
     suite.add("proxy_sequential_requests_reuse_the_upstream_connection",
               test_proxy_sequential_requests_reuse_the_upstream_connection);
+    suite.add("proxy_abandoned_stream_is_cancelled_by_name_and_never_resent",
+              test_proxy_abandoned_stream_is_cancelled_by_name_and_never_resent);
+    suite.add("proxy_leaving_while_tokens_flow_cancels_by_name",
+              test_proxy_leaving_while_tokens_flow_cancels_by_name);
     suite.add("proxy_stale_reused_connection_is_retried_once",
               test_proxy_stale_reused_connection_is_retried_once);
     return suite.run(argc, argv);
