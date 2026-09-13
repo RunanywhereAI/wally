@@ -142,6 +142,31 @@ esac
 
 "${STAGE}/bin/wally" version >/dev/null
 
+# The archive name says which flavour this is; the binary has to agree. A dev
+# job whose endpoint variables were unset used to produce a `-dev` archive that
+# defaults to production, and nothing anywhere noticed (wally #87).
+#
+# Asked in an empty profile with the runtime overrides cleared, so a signed-in
+# account or a stray WALLY_CONSOLE_URL on the build machine cannot answer for
+# the bake.
+probe_profile="$(mktemp -d)"
+about="$(env -u WALLY_CONSOLE_URL -u WALLY_CONSOLE_WEB_URL -u RCLI_CONSOLE_URL \
+    -u RCLI_CONSOLE_WEB_URL WALLY_PROFILE_DIR="${probe_profile}" \
+    "${STAGE}/bin/wally" about --json)"
+rm -rf "${probe_profile}"
+built_channel="$(printf '%s' "$about" | sed -nE 's/.*"channel":"([^"]*)".*/\1/p')"
+case "${CHANNEL}" in
+    dev)  want_channel="development" ;;
+    *)    want_channel="production" ;;
+esac
+if [ "${built_channel}" != "${want_channel}" ]; then
+    echo "error: packaging a '${CHANNEL:-prod}' archive from a '${built_channel}' binary." >&2
+    echo "       Expected channel '${want_channel}'. Set WALLY_CHANNEL and the baked" >&2
+    echo "       endpoint variables in the configure environment, or package the" >&2
+    echo "       matching build." >&2
+    exit 1
+fi
+
 mkdir -p "${DIST}"
 rm -f "${TARBALL}" "${TARBALL}.sha256"
 # macOS tar otherwise serializes Finder metadata as `._*` AppleDouble roots,

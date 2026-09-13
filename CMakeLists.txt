@@ -125,6 +125,41 @@ target_include_directories(wally_core PUBLIC
 # macros and the production resolution order is untouched.
 set(WALLY_BAKED_CONSOLE_API_URL "$ENV{WALLY_BAKED_CONSOLE_API_URL}")
 set(WALLY_BAKED_CONSOLE_WEB_ORIGIN "$ENV{WALLY_BAKED_CONSOLE_WEB_ORIGIN}")
+# WALLY_CHANNEL states what is being built. A release job that means to build a
+# dev bottle but whose endpoint variables are unset would otherwise produce a
+# `-dev` archive that quietly defaults to production, because an empty bake is
+# indistinguishable from an ordinary production build (wally #87). Declaring the
+# intent is what lets that be caught here rather than by a person wondering why
+# nightly is billing them.
+set(WALLY_CHANNEL "$ENV{WALLY_CHANNEL}")
+if(WALLY_CHANNEL STREQUAL "dev")
+    if(NOT WALLY_BAKED_CONSOLE_API_URL OR NOT WALLY_BAKED_CONSOLE_WEB_ORIGIN)
+        message(FATAL_ERROR
+            "WALLY_CHANNEL=dev needs both WALLY_BAKED_CONSOLE_API_URL and "
+            "WALLY_BAKED_CONSOLE_WEB_ORIGIN in the configure environment. "
+            "Without them this builds a production binary under a -dev name.")
+    endif()
+endif()
+# Half a pair is a configuration mistake in either direction: an API with no
+# approval origin cannot complete a login, and an origin with no API is trusted
+# for nothing.
+if(WALLY_BAKED_CONSOLE_API_URL AND NOT WALLY_BAKED_CONSOLE_WEB_ORIGIN)
+    message(FATAL_ERROR "WALLY_BAKED_CONSOLE_API_URL is set without "
+                        "WALLY_BAKED_CONSOLE_WEB_ORIGIN; `wally login` could not "
+                        "trust any approval page.")
+endif()
+if(WALLY_BAKED_CONSOLE_WEB_ORIGIN AND NOT WALLY_BAKED_CONSOLE_API_URL)
+    message(FATAL_ERROR "WALLY_BAKED_CONSOLE_WEB_ORIGIN is set without "
+                        "WALLY_BAKED_CONSOLE_API_URL; the origin is paired with "
+                        "an API that was not baked.")
+endif()
+foreach(_baked_url "${WALLY_BAKED_CONSOLE_API_URL}" "${WALLY_BAKED_CONSOLE_WEB_ORIGIN}")
+    if(_baked_url AND NOT _baked_url MATCHES "^https?://[^/ ]+")
+        message(FATAL_ERROR
+            "a baked endpoint is not an http(s) origin. Values are withheld from "
+            "this log; check the configure environment.")
+    endif()
+endforeach()
 if(WALLY_BAKED_CONSOLE_API_URL)
     message(STATUS "wally: dev endpoint bake ON (values withheld from log)")
 else()
