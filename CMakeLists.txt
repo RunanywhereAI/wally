@@ -75,7 +75,6 @@ set(WALLY_SOURCES
     src/desktop/claude_profile.cpp
     src/harness/harness.cpp
     src/harness/opencode.cpp
-    src/harness/codex.cpp
     src/harness/local_models.cpp
     src/ide/jetbrains_profile.cpp
     src/ide/openai_proxy.cpp
