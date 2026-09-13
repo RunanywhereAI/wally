@@ -9,7 +9,8 @@ add_test(NAME wally_unit_tests COMMAND test_wally_unit --run-all)
 
 add_executable(test_wally_account test_wally_account.cpp)
 target_include_directories(test_wally_account PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(test_wally_account PRIVATE wally_core nlohmann_json::nlohmann_json)
+# httplib: the timeout test stands up a server that never answers (#81).
+target_link_libraries(test_wally_account PRIVATE wally_core httplib::httplib nlohmann_json::nlohmann_json)
 wally_stage_windows_runtime_dlls(test_wally_account)
 add_test(NAME wally_account_tests COMMAND test_wally_account --run-all)
 

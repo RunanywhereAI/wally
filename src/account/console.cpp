@@ -29,10 +29,20 @@ namespace {
 using Json = nlohmann::json;
 constexpr std::size_t kMaximumResponseBytes = 1024 * 1024;
 
-#if defined(_WIN32)
-
+// Both transports share the same defaults: 10 s to connect, 30 s in all. A
+// request's own `timeout_ms` bounds the whole call instead; the connect phase
+// never gets more than its usual share of it.
 constexpr int kConnectTimeoutMs = 10000;
 constexpr int kTotalTimeoutMs = 30000;
+
+int TotalTimeoutMs(const HttpRequest& input) {
+    return input.timeout_ms > 0 ? input.timeout_ms : kTotalTimeoutMs;
+}
+int ConnectTimeoutMs(const HttpRequest& input) {
+    return std::min(kConnectTimeoutMs, TotalTimeoutMs(input));
+}
+
+#if defined(_WIN32)
 
 class WinHttpHandle {
    public:
@@ -143,8 +153,10 @@ bool WinHttpTransport(const HttpRequest& input, HttpResponse* output, std::strin
         loopback ? WINHTTP_ACCESS_TYPE_NO_PROXY : WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
     const WinHttpHandle session(WinHttpOpen(L"wally-cloud-auth/1", access_type,
                                             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
-    if (!session || !WinHttpSetTimeouts(session.get(), kConnectTimeoutMs, kConnectTimeoutMs,
-                                        kTotalTimeoutMs, kTotalTimeoutMs)) {
+    const int total_timeout = TotalTimeoutMs(input);
+    const int connect_timeout = ConnectTimeoutMs(input);
+    if (!session || !WinHttpSetTimeouts(session.get(), connect_timeout, connect_timeout,
+                                        total_timeout, total_timeout)) {
         if (error != nullptr) {
             *error = "could not initialize the console HTTP client";
         }
@@ -152,7 +164,7 @@ bool WinHttpTransport(const HttpRequest& input, HttpResponse* output, std::strin
     }
 
     const Deadline deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(kTotalTimeoutMs);
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(total_timeout);
     const WinHttpHandle connection(
         WinHttpConnect(session.get(), host.c_str(), components.nPort, 0));
     const DWORD flags = components.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
@@ -170,8 +182,8 @@ bool WinHttpTransport(const HttpRequest& input, HttpResponse* output, std::strin
     const int initial_timeout = RemainingTimeout(deadline);
     DWORD redirect_policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
     if (initial_timeout == 0 ||
-        !WinHttpSetTimeouts(request.get(), std::min(kConnectTimeoutMs, initial_timeout),
-                            std::min(kConnectTimeoutMs, initial_timeout), initial_timeout,
+        !WinHttpSetTimeouts(request.get(), std::min(connect_timeout, initial_timeout),
+                            std::min(connect_timeout, initial_timeout), initial_timeout,
                             initial_timeout) ||
         !WinHttpSetOption(request.get(), WINHTTP_OPTION_REDIRECT_POLICY, &redirect_policy,
                           sizeof(redirect_policy))) {
@@ -404,8 +416,10 @@ bool DefaultTransport(const HttpRequest& input, HttpResponse* output, std::strin
         configured && curl_easy_setopt(request, CURLOPT_URL, input.url.c_str()) == CURLE_OK &&
         curl_easy_setopt(request, CURLOPT_CUSTOMREQUEST, input.method.c_str()) == CURLE_OK &&
         curl_easy_setopt(request, CURLOPT_HTTPHEADER, headers) == CURLE_OK &&
-        curl_easy_setopt(request, CURLOPT_CONNECTTIMEOUT_MS, 10000L) == CURLE_OK &&
-        curl_easy_setopt(request, CURLOPT_TIMEOUT_MS, 30000L) == CURLE_OK &&
+        curl_easy_setopt(request, CURLOPT_CONNECTTIMEOUT_MS,
+                         static_cast<long>(ConnectTimeoutMs(input))) == CURLE_OK &&
+        curl_easy_setopt(request, CURLOPT_TIMEOUT_MS,
+                         static_cast<long>(TotalTimeoutMs(input))) == CURLE_OK &&
         curl_easy_setopt(request, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
         curl_easy_setopt(request, CURLOPT_NOPROXY, "localhost,127.0.0.1,::1") == CURLE_OK &&
         curl_easy_setopt(request, CURLOPT_FOLLOWLOCATION, 0L) == CURLE_OK &&
@@ -1027,6 +1041,51 @@ IdentityResult ConsoleClient::FetchUsage(const std::string& console_url,
         usage->events.push_back(event);
     }
     return IdentityResult::Ok;
+}
+
+CancelOutcome ConsoleClient::CancelRequest(const std::string& console_url,
+                                           const std::string& access_token,
+                                           const std::string& request_id, int timeout_ms,
+                                           std::string* error) const {
+    if (!SessionTokenIsSafe(access_token)) {
+        if (error != nullptr) {
+            *error = "no access token is available";
+        }
+        return CancelOutcome::Failed;
+    }
+    // The id is the server's own (its x-request-id); it is still user-facing
+    // input to a path, so it is escaped rather than trusted.
+    if (request_id.empty()) {
+        if (error != nullptr) {
+            *error = "no request id to cancel";
+        }
+        return CancelOutcome::Failed;
+    }
+    std::string origin;
+    if (!ConsoleOrigin(console_url, &origin, error)) {
+        return CancelOutcome::Failed;
+    }
+    HttpRequest request{"POST", origin + "/v1/requests/" + QueryEscape(request_id) + "/cancel", {},
+                        access_token};
+    request.timeout_ms = timeout_ms;
+    HttpResponse response;
+    if (!Send(transport_, request, &response, error)) {
+        return CancelOutcome::Failed;
+    }
+    if (response.status == 202) {
+        contract::CancelRequestResponse parsed;
+        // The body is informational (the id echoed, status "cancelling"); a
+        // server that answered 202 has already done the work, so a body this
+        // binding cannot read is logged, not treated as a failure.
+        std::string ignored;
+        ParseContract(response, &parsed, &ignored);
+        return CancelOutcome::Cancelled;
+    }
+    if (response.status == 404) {
+        return CancelOutcome::NotFound;
+    }
+    HttpError("cancel request", origin, response, error);
+    return CancelOutcome::Failed;
 }
 
 bool ConsoleClient::Revoke(const std::string& console_url, const std::string& access_token,

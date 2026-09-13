@@ -5,9 +5,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <httplib.h>
 
 #if !defined(_WIN32)
 #include <cstdio>
@@ -764,6 +768,130 @@ TestResult test_usage_counters_survive_beyond_thirty_two_bits() {
     return result;
 }
 
+// CancelRequest (wally #81): the typed call behind the shim's abandon path.
+// Everything the control plane's contract fixes is asserted through a mock
+// transport -- the path with the id escaped into it, the method, the bearer,
+// the small timeout -- and each of the three outcomes maps from its status.
+TestResult test_cancel_request_speaks_the_contract() {
+    TestResult result;
+    result.test_name = "cancel_request_speaks_the_contract";
+    std::vector<wally::account::HttpRequest> requests;
+    int answer = 202;
+    bool reachable = true;
+    wally::account::Transport transport = [&](const wally::account::HttpRequest& request,
+                                             wally::account::HttpResponse* response,
+                                             std::string* error) {
+        requests.push_back(request);
+        if (!reachable) {
+            if (error != nullptr) {
+                *error = "connection refused";
+            }
+            return false;
+        }
+        response->status = answer;
+        response->body = answer == 202
+                             ? Json{{"request_id", "abc-123"}, {"status", "cancelling"}}.dump()
+                             : Json{{"code", "not_found"}, {"message", "no such request"}}.dump();
+        return true;
+    };
+    wally::account::ConsoleClient client(transport);
+    std::string error;
+
+    auto outcome = client.CancelRequest("https://inference.runanywhere.ai/api-dev", "sess-token",
+                                        "abc 123/../x", 3000, &error);
+    if (outcome != wally::account::CancelOutcome::Cancelled) {
+        result.details = "a 202 must be Cancelled: " + error;
+        return result;
+    }
+    if (requests.size() != 1 || requests[0].method != "POST" ||
+        requests[0].url !=
+            "https://inference.runanywhere.ai/api-dev/v1/requests/abc%20123%2F..%2Fx/cancel" ||
+        requests[0].bearer_token != "sess-token" || !requests[0].body.empty() ||
+        requests[0].timeout_ms != 3000) {
+        result.details = "request shape drifted: " + (requests.empty() ? "" : requests[0].url) +
+                         " timeout_ms=" + std::to_string(requests.empty() ? -1 : requests[0].timeout_ms);
+        return result;
+    }
+
+    answer = 404;
+    if (client.CancelRequest("https://inference.runanywhere.ai", "sess-token", "abc-123", 3000,
+                             &error) != wally::account::CancelOutcome::NotFound) {
+        result.details = "a 404 must be NotFound";
+        return result;
+    }
+    if (requests.back().url != "https://inference.runanywhere.ai/v1/requests/abc-123/cancel") {
+        result.details = "production shape drifted: " + requests.back().url;
+        return result;
+    }
+
+    answer = 500;
+    if (client.CancelRequest("https://inference.runanywhere.ai", "sess-token", "abc-123", 3000,
+                             &error) != wally::account::CancelOutcome::Failed ||
+        error.empty()) {
+        result.details = "a 500 must be Failed with a message";
+        return result;
+    }
+    reachable = false;
+    if (client.CancelRequest("https://inference.runanywhere.ai", "sess-token", "abc-123", 3000,
+                             &error) != wally::account::CancelOutcome::Failed) {
+        result.details = "an unreachable console must be Failed";
+        return result;
+    }
+    // No id, no token: refused before any transport call.
+    const std::size_t before = requests.size();
+    if (client.CancelRequest("https://inference.runanywhere.ai", "sess-token", "", 3000, &error) !=
+            wally::account::CancelOutcome::Failed ||
+        client.CancelRequest("https://inference.runanywhere.ai", "", "abc-123", 3000, &error) !=
+            wally::account::CancelOutcome::Failed ||
+        requests.size() != before) {
+        result.details = "an empty id or token must be refused without a call";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// The transport honours `timeout_ms`: a socket that accepts and never answers
+// is given up within the request's own bound, not the 30 s default. Bites: with
+// the field ignored this test takes ~30 s and fails its budget.
+TestResult test_a_request_timeout_bounds_the_real_transport() {
+    TestResult result;
+    result.test_name = "a_request_timeout_bounds_the_real_transport";
+    // The handler holds the request until the test lets go, so the test's own
+    // wall time is the client's bound, not a fixed sleep; neutered, the client
+    // waits its 30 s default before this test can fail it.
+    std::promise<void> release;
+    std::shared_future<void> released = release.get_future().share();
+    httplib::Server server;
+    server.Post("/v1/requests/:id/cancel",
+                [released](const httplib::Request&, httplib::Response&) { released.wait(); });
+    const int port = server.bind_to_any_port("127.0.0.1");
+    std::thread thread([&] { server.listen_after_bind(); });
+    server.wait_until_ready();
+
+    wally::account::ConsoleClient client;  // the real transport
+    std::string error;
+    const auto started = std::chrono::steady_clock::now();
+    const auto outcome = client.CancelRequest("http://127.0.0.1:" + std::to_string(port),
+                                              "sess-token", "abc-123", 500, &error);
+    const auto took = std::chrono::steady_clock::now() - started;
+    release.set_value();
+    server.stop();
+    thread.join();
+    if (outcome != wally::account::CancelOutcome::Failed) {
+        result.details = "a call that never gets an answer must be Failed";
+        return result;
+    }
+    if (took > std::chrono::seconds(5)) {
+        result.details = "timeout_ms was not honoured: the call took " +
+                         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()) +
+                         " ms";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -791,5 +919,8 @@ int main(int argc, char** argv) {
               test_the_trusted_browser_origin_is_never_empty);
     suite.add("usage_counters_survive_beyond_thirty_two_bits",
               test_usage_counters_survive_beyond_thirty_two_bits);
+    suite.add("cancel_request_speaks_the_contract", test_cancel_request_speaks_the_contract);
+    suite.add("a_request_timeout_bounds_the_real_transport",
+              test_a_request_timeout_bounds_the_real_transport);
     return suite.run(argc, argv);
 }
