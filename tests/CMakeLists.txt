@@ -21,6 +21,19 @@ target_link_libraries(test_wally_contract PRIVATE wally_core nlohmann_json::nloh
 wally_stage_windows_runtime_dlls(test_wally_contract)
 add_test(NAME wally_contract_tests COMMAND test_wally_contract --run-all)
 
+add_executable(test_wally_jetbrains_profile test_wally_jetbrains_profile.cpp)
+target_include_directories(test_wally_jetbrains_profile PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_wally_jetbrains_profile PRIVATE wally_core nlohmann_json::nlohmann_json)
+wally_stage_windows_runtime_dlls(test_wally_jetbrains_profile)
+add_test(NAME wally_jetbrains_profile_tests COMMAND test_wally_jetbrains_profile --run-all)
+
+add_executable(test_wally_ide_proxy_auth test_wally_ide_proxy_auth.cpp)
+target_include_directories(test_wally_ide_proxy_auth PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_wally_ide_proxy_auth PRIVATE wally_core httplib::httplib
+    nlohmann_json::nlohmann_json)
+wally_stage_windows_runtime_dlls(test_wally_ide_proxy_auth)
+add_test(NAME wally_ide_proxy_auth_tests COMMAND test_wally_ide_proxy_auth --run-all)
+
 add_executable(test_wally_opencode test_wally_opencode.cpp)
 target_include_directories(test_wally_opencode PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_opencode PRIVATE wally_core nlohmann_json::nlohmann_json)

@@ -23,9 +23,14 @@ struct Proxy {
     bool running = false;
     /// What to point the editor at. An OpenAI-compatible root ending in `/v1`.
     std::string base_url;
-    /// The API key the editor must send back. A per-session secret, so a stray
-    /// local process cannot reach the loopback port and spend on the signed-in
-    /// user's credit. Give it to the editor as the provider key.
+    /// Always empty for this proxy, and kept only so callers that wire a
+    /// provider key through still compile.
+    ///
+    /// The session secret is the unguessable segment inside `base_url` instead.
+    /// AI Assistant takes a provider key from its own settings dialog and
+    /// nowhere else, so a header-based secret refused every request the proxy
+    /// exists to serve; it does take a base URL, and it appends to whatever it
+    /// is given.
     std::string auth_token;
 };
 

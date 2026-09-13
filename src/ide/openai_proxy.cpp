@@ -4,10 +4,12 @@
 #include <nlohmann/json.hpp>
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 
 #if !defined(_WIN32)
@@ -49,7 +51,21 @@ struct Runtime {
     std::string model;
     // The secret the editor must present. Loopback binding keeps the network
     // out; this keeps another local process out.
+    /// An unguessable first path segment, and the only thing standing between
+    /// this endpoint and any other process on the machine.
+    ///
+    /// A header cannot be used: AI Assistant takes a provider key from its own
+    /// settings dialog and nowhere else, so it sends none. It does take a base
+    /// URL, and it appends to it, so the secret rides in the path instead —
+    /// which the editor transmits without having to know it is a secret.
     std::string local_token;
+    /// `api_key` is replaced by RenewToken from whichever request thread found
+    /// the session expired, while other threads are reading it to build an
+    /// upstream client.
+    std::mutex api_key_mutex;
+    /// Held across a renewal so two threads meeting a 401 together refresh once
+    /// rather than racing each other through the console.
+    std::mutex renewal_mutex;
     bool verbose = false;
 };
 
@@ -81,7 +97,17 @@ bool LooksLikeAuthFailure(const std::string& body) {
 /// The one held at startup is a snapshot, and an editor session outlives it.
 /// Without this the whole run dies on `access token expired` partway through,
 /// with nothing but a 401 to explain itself.
+/// The session key, read under its lock.
+std::string CurrentKey(Runtime& runtime) {
+    std::lock_guard<std::mutex> lock(runtime.api_key_mutex);
+    return runtime.api_key;
+}
+
 bool RenewToken(Runtime& runtime) {
+    // One renewal at a time: two threads meeting a 401 together would otherwise
+    // both spend a refresh token, and the second would spend one the first has
+    // already rotated away.
+    std::lock_guard<std::mutex> renewing(runtime.renewal_mutex);
     account::Credentials credentials = account::Load();
     if (credentials.refresh_token.empty()) {
         return false;
@@ -98,16 +124,20 @@ bool RenewToken(Runtime& runtime) {
     }
     std::string ignored;
     account::Save(credentials, &ignored);
-    runtime.api_key = grant.access_token;
+    {
+        std::lock_guard<std::mutex> lock(runtime.api_key_mutex);
+        runtime.api_key = grant.access_token;
+    }
     Trace(runtime.verbose, "REFRESHED");
     return true;
 }
 
-httplib::Client Upstream(const Runtime& runtime) {
+httplib::Client Upstream(Runtime& runtime) {
     httplib::Client client(runtime.origin);
     client.set_read_timeout(600, 0);
-    if (!runtime.api_key.empty()) {
-        client.set_bearer_token_auth(runtime.api_key);
+    const std::string key = CurrentKey(runtime);
+    if (!key.empty()) {
+        client.set_bearer_token_auth(key);
     }
     return client;
 }
@@ -251,13 +281,69 @@ std::string Normalise(const std::string& frame, bool verbose) {
 /// A stale selection saved in the editor's own settings outlives any change to
 /// the list we advertise, so the name in the request cannot be trusted even
 /// when only one is on offer.
-std::string Retarget(const Runtime& runtime, const std::string& body) {
+/// The request with its model replaced by the one wally was told to serve.
+///
+/// Returns false when the body is not a JSON object, and the caller refuses the
+/// request. Forwarding it unchanged was the old behaviour and it defeated the
+/// point: the model named by the caller is exactly what must not reach the
+/// endpoint, so a body we cannot rewrite is one we cannot safely send.
+/// Repairs tool calls the endpoint will not accept back.
+///
+/// A streamed tool call arrives as fragments, and this endpoint's first one
+/// carries `arguments: ""` before the real value follows. A client that keeps
+/// that first fragment instead of joining them replays the call with empty
+/// arguments on the next turn, and the endpoint refuses its own model's output
+/// with "Assistant tool call function.arguments must be a JSON object" — which
+/// names neither the message nor the call, and reads as a failure of whatever
+/// the person just asked for.
+///
+/// Empty arguments mean a call with no arguments, so that is what is sent.
+void RepairToolCalls(Json* request) {
+    const auto messages = request->find("messages");
+    if (messages == request->end() || !messages->is_array()) {
+        return;
+    }
+    for (Json& message : *messages) {
+        if (!message.is_object()) {
+            continue;
+        }
+        const auto calls = message.find("tool_calls");
+        if (calls == message.end() || !calls->is_array()) {
+            continue;
+        }
+        for (Json& call : *calls) {
+            if (!call.is_object()) {
+                continue;
+            }
+            const auto function = call.find("function");
+            if (function == call.end() || !function->is_object()) {
+                continue;
+            }
+            const auto arguments = function->find("arguments");
+            if (arguments == function->end()) {
+                continue;
+            }
+            if (arguments->is_string() &&
+                arguments->get<std::string>().find_first_not_of(" \t\r\n") == std::string::npos) {
+                *arguments = "{}";
+            } else if (arguments->is_object()) {
+                // The wire format carries arguments as a string holding JSON,
+                // and an object here is refused outright.
+                *arguments = arguments->dump();
+            }
+        }
+    }
+}
+
+bool Retarget(const Runtime& runtime, const std::string& body, std::string* retargeted) {
     Json request = Json::parse(body, nullptr, false);
     if (request.is_discarded() || !request.is_object()) {
-        return body;
+        return false;
     }
     request["model"] = runtime.model;
-    return request.dump();
+    RepairToolCalls(&request);
+    *retargeted = request.dump();
+    return true;
 }
 
 void Fail(httplib::Response& response, int status, const std::string& message) {
@@ -277,7 +363,7 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
     auto request = std::make_shared<std::string>(body);
     auto origin = std::make_shared<std::string>(runtime.origin);
     auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
-    auto api_key = std::make_shared<std::string>(runtime.api_key);
+    auto api_key = std::make_shared<std::string>(CurrentKey(runtime));
 
     auto verbose = std::make_shared<bool>(runtime.verbose);
     Runtime* owner = &runtime;
@@ -293,7 +379,7 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
           for (int attempt = 0; attempt < 2; ++attempt) {
             httplib::Client client(*origin);
             client.set_read_timeout(600, 0);
-            const std::string token = attempt == 0 ? *api_key : owner->api_key;
+            const std::string token = attempt == 0 ? *api_key : CurrentKey(*owner);
             if (!token.empty()) {
                 client.set_bearer_token_auth(token);
             }
@@ -422,7 +508,11 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
     Runtime* raw = runtime.get();
     // Every handler catches. An exception thrown into cpp-httplib takes the
     // process down with it, and a dead wally takes the model with it too.
-    raw->server.Get("/v1/models", [raw](const httplib::Request&, httplib::Response& response) {
+    // Every route sits under the session's secret segment, so the address the
+    // editor was given is the credential. A process that does not have it gets
+    // a 404 from a port it cannot otherwise use.
+    const std::string base = "/" + raw->local_token + "/v1";
+    raw->server.Get(base + "/models", [raw](const httplib::Request&, httplib::Response& response) {
         try {
             // Not forwarded. The one model wally was asked to serve is the one
             // offered, so there is nothing in the picker that cannot answer.
@@ -439,24 +529,32 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
         }
     });
 
-    raw->server.Post("/v1/chat/completions",
+    raw->server.Post(base + "/chat/completions",
                      [raw](const httplib::Request& request, httplib::Response& response) {
-                         // This endpoint spends the signed-in user's credit, so
-                         // it serves only the editor wally configured. Bearer
-                         // token, from the provider key stored in the IDE.
-                         std::string presented;
-                         const std::string authorization = request.get_header_value("Authorization");
-                         constexpr const char* kBearer = "Bearer ";
-                         if (authorization.rfind(kBearer, 0) == 0) {
-                             presented = authorization.substr(std::string(kBearer).size());
-                         }
-                         if (!wally::net::ConstantTimeEquals(presented, raw->local_token)) {
-                             Fail(response, 401,
-                                  "this local endpoint only serves the editor wally configured");
-                             return;
-                         }
+                         // No credential is required, and that is a deliberate
+                         // trade rather than an oversight.
+                         //
+                         // This used to demand a per-session bearer token, and
+                         // the IDE never sent one: AI Assistant's third-party
+                         // provider has no way to be handed a key from outside
+                         // its own settings dialog, so every chat request
+                         // arrived bare and was refused with a 401 that read as
+                         // a licensing problem. A guard that refuses the only
+                         // caller it exists to serve is not a guard.
+                         //
+                         // What remains is the bind: 127.0.0.1, so nothing off
+                         // this machine can reach it, and the port lives only
+                         // as long as the editor does. Another process on this
+                         // machine could spend the signed-in user's credit
+                         // through it while it is running, which is the cost.
                          try {
-                             const std::string body = Retarget(*raw, request.body);
+                             std::string body;
+                             if (!Retarget(*raw, request.body, &body)) {
+                                 Fail(response, 400,
+                                      "the request body is not a JSON object; wally could not "
+                                      "name the model it serves");
+                                 return;
+                             }
                              // The editor decides whether to stream; we only
                              // have to keep the answer in the shape it asked for.
                              if (body.find("\"stream\":true") != std::string::npos ||
@@ -464,9 +562,23 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
                                  Stream(*raw, body, response);
                                  return;
                              }
-                             httplib::Client client = Upstream(*raw);
-                             const httplib::Result reply = client.Post(
-                                 raw->prefix + "/chat/completions", body, "application/json");
+                             // Once more after a renewed token, the same as the
+                             // streaming path. A session that expired while the
+                             // editor was open otherwise hands the reader a bare
+                             // 401, which reads as a licensing problem rather
+                             // than as "sign in again" (wally #86).
+                             httplib::Result reply;
+                             for (int attempt = 0; attempt < 2; ++attempt) {
+                                 httplib::Client client = Upstream(*raw);
+                                 reply = client.Post(raw->prefix + "/chat/completions", body,
+                                                     "application/json");
+                                 const bool expired = reply && reply->status == 401 &&
+                                                      LooksLikeAuthFailure(reply->body);
+                                 if (attempt == 0 && expired && RenewToken(*raw)) {
+                                     continue;
+                                 }
+                                 break;
+                             }
                              if (!reply) {
                                  Fail(response, 502, "the model endpoint did not answer");
                                  return;
@@ -501,8 +613,11 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
     g_runtime = std::move(runtime);
 
     proxy->running = true;
-    proxy->base_url = "http://127.0.0.1:" + std::to_string(bound) + "/v1";
-    proxy->auth_token = raw->local_token;
+    proxy->base_url =
+        "http://127.0.0.1:" + std::to_string(bound) + "/" + raw->local_token + "/v1";
+    // Nothing to put in a header: the secret is in the address above, which is
+    // the only form the editor can carry.
+    proxy->auth_token.clear();
     return true;
 }
 

@@ -12,17 +12,19 @@
 /// already serves, so nothing has to be translated on the way.
 ///
 /// Three things have to be written before the IDE starts, and it reads all of
-/// them once at launch: a base URL in its own options tree, a key in the
-/// platform credential store, and the provider selection that the Providers &
-/// API keys page shows as a dropdown. The first two alone leave that dropdown
-/// on "None" and the IDE reporting `byok=null`, which is what makes this look
-/// like it worked when it has not.
+/// them once at launch: a base URL in its own options tree, the provider in the
+/// enabled set that the Providers & API keys page shows as a dropdown, and the
+/// model AI Chat should use. The first two alone leave Chat reporting "No
+/// compatible model is available" while the picker still lists the model,
+/// because the picker reads the provider and Chat reads its own setting.
 ///
-/// The selection is stored as model ids rather than as a provider name: each is
-/// `<providerId>/<model>`, and picking a provider is setting those three ids
-/// and the enable flag beside them.
+/// No credential is written. AI Assistant takes a provider key from its own
+/// settings dialog and nowhere else, so a key placed in the platform credential
+/// store from outside is never read — the IDE reports the provider with an
+/// empty key and sends none. The local proxy therefore asks for none.
 ///
-/// None of this needs a JetBrains AI subscription. BYOK is the supported path.
+/// None of this needs a JetBrains AI subscription. BYOK is the supported path,
+/// and AI Chat honours it when the model is named in AI Assistant's settings.
 namespace wally::ide {
 
 /// The port the local server is asked for when serving a JetBrains IDE.
@@ -33,6 +35,16 @@ namespace wally::ide {
 /// same one keeps the configuration true, and a second wally holding it only
 /// costs this run a rewrite.
 constexpr int kProviderPort = 11636;
+
+/// `document` with AI Chat's model set to `model`, everything else preserved.
+///
+/// Pure, and exposed for that reason: this edits a file the reader owns, where
+/// a mistake silently eats settings the IDE will not put back. The file I/O
+/// around it is trivial; this is the part that has to be right.
+///
+/// `document` may be empty or may have no AI Assistant component, both of which
+/// an IDE that has never opened the tool window will produce.
+std::string WithChatModel(const std::string& document, const std::string& model);
 
 /// A JetBrains IDE, named the way the reader types it.
 struct Product {
