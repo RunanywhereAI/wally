@@ -23,6 +23,10 @@ struct Endpoint {
     std::string base_url;
     /// Empty for a local server, which ignores what is in the header.
     std::string api_key;
+    /// The control plane the session belongs to (`credentials.console_url`,
+    /// base path included), where a request started against `base_url` can
+    /// be cancelled by name. Empty for a local server: nothing to cancel.
+    std::string console_url;
     /// True when `Resolve` started a server that `Release` has to stop.
     bool serving = false;
 };

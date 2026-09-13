@@ -58,17 +58,32 @@ class FakeUpstream {
     FakeUpstream() {
         server_.Post("/v1/chat/completions",
                      [this](const httplib::Request& request, httplib::Response& response) {
-                         Record(request);
+                         const int arrival = Record(request);
+                         // Every response names itself the way the real
+                         // endpoint does, so a client can cancel it by name.
+                         const std::string request_id = "req-" + std::to_string(arrival);
+                         response.set_header("x-request-id", request_id);
+                         // Withholding the HEADERS: block here, before the
+                         // response is written -- the endpoint's gateway
+                         // during prefill, which opens the response only at
+                         // the first token.
+                         WaitForHeaderHold();
                          const bool streaming = Json::parse(request.body).value("stream", false);
                          if (!streaming) {
+                             WaitForHold();
                              response.set_content(kJsonBody, "application/json");
                              return;
                          }
                          response.set_chunked_content_provider(
                              "text/event-stream",
                              [this](size_t, httplib::DataSink& sink) {
+                                 // Withholding the BODY: headers are already
+                                 // on the wire when this runs.
                                  WaitForHold();
                                  const std::string body = kStreamBody;
+                                 if (drip_chunks_.load() > 0) {
+                                     return Drip(sink);
+                                 }
                                  if (die_.load()) {
                                      size_t cut = body.find("\n\n");
                                      cut = body.find("\n\n", cut + 2) + 2;
@@ -80,12 +95,43 @@ class FakeUpstream {
                                  return true;
                              });
                      });
+        // The endpoint's cancel route (InferenceInfra #440), on the same
+        // origin the shim talks to: records who cancelled what, and can hold
+        // its answer so a test can prove the caller waited for it.
+        server_.Post("/v1/requests/:id/cancel",
+                     [this](const httplib::Request& request, httplib::Response& response) {
+                         // The delay comes FIRST, and the cancel is recorded
+                         // only once it is about to be answered: a caller that
+                         // did not wait for the answer has not "sent" it as far
+                         // as any test here is concerned.
+                         const int delay = cancel_delay_ms_.load();
+                         if (delay > 0) {
+                             std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+                         }
+                         {
+                             std::lock_guard<std::mutex> lock(mutex_);
+                             cancels_.push_back({request.path_params.at("id"),
+                                                 request.get_header_value("Authorization")});
+                         }
+                         cancelled_.notify_all();
+                         response.status = 202;
+                         response.set_content(
+                             Json{{"request_id", request.path_params.at("id")},
+                                  {"status", "cancelling"}}
+                                 .dump(),
+                             "application/json");
+                     });
         port_ = server_.bind_to_any_port("127.0.0.1");
         thread_ = std::thread([this] { server_.listen_after_bind(); });
         server_.wait_until_ready();
     }
 
     ~FakeUpstream() {
+        // Let go of everything held first, so a handler parked on a hold
+        // ends now rather than at its own 5 s timeout.
+        closing_.store(true);
+        hold_until_.store(0);
+        release_headers();
         server_.stop();
         if (thread_.joinable()) {
             thread_.join();
@@ -101,16 +147,92 @@ class FakeUpstream {
 
     void hold_streams_until(int arrivals) { hold_until_.store(arrivals); }
 
+    /// Withhold the response HEADERS (not just the body) until `release_headers`
+    /// or the timeout: a request still in prefill at the real endpoint.
+    void hold_headers(bool on) { hold_headers_.store(on); }
+    void release_headers() {
+        hold_headers_.store(false);
+        arrived_.notify_all();
+    }
+
     /// Send the first two SSE frames, then drop the connection without
     /// finishing the stream: an upstream that died mid-generation.
     void die_mid_stream(bool on) { die_.store(on); }
 
+    /// Stream like a decoding engine: a content frame every `interval_ms`,
+    /// `chunks` of them, then the finish frames and [DONE] -- unless a write
+    /// fails first (the reader dropped the connection), which ends the drip.
+    void drip(int chunks, int interval_ms) {
+        drip_interval_ms_.store(interval_ms);
+        drip_chunks_.store(chunks);
+    }
+    /// How many drip frames were written before the drip ended.
+    int dripped() const { return dripped_.load(); }
+
+    struct Cancel {
+        std::string request_id;
+        std::string authorization;
+    };
+    /// Every cancel the shim sent, in order.
+    std::vector<Cancel> cancels() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return cancels_;
+    }
+    /// Blocks until at least `n` cancels arrived, or the timeout. False on timeout.
+    bool wait_for_cancels(int n, std::chrono::milliseconds within = std::chrono::seconds(3)) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cancelled_.wait_for(lock, within,
+                                   [&] { return static_cast<int>(cancels_.size()) >= n; });
+    }
+    /// How long the cancel route sits on its answer before replying 202.
+    void delay_cancel_reply(int ms) { cancel_delay_ms_.store(ms); }
+    /// The request id the fake gave arrival `n` (1-based).
+    static std::string request_id_of(int arrival) { return "req-" + std::to_string(arrival); }
+    int arrivals() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return arrivals_;
+    }
+
    private:
-    void Record(const httplib::Request& request) {
+    bool Drip(httplib::DataSink& sink) {
+        const std::string role =
+            "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,"
+            "\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n";
+        if (!sink.write(role.data(), role.size())) {
+            return false;
+        }
+        const int chunks = drip_chunks_.load();
+        const auto interval = std::chrono::milliseconds(drip_interval_ms_.load());
+        for (int i = 0; i < chunks && !closing_.load(); ++i) {
+            std::this_thread::sleep_for(interval);
+            const std::string frame =
+                "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,"
+                "\"delta\":{\"content\":\"tok" +
+                std::to_string(i) + " \"},\"finish_reason\":null}]}\n\n";
+            if (!sink.write(frame.data(), frame.size())) {
+                return false;  // the reader is gone; httplib closes the connection
+            }
+            ++dripped_;
+        }
+        const std::string tail =
+            "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,"
+            "\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+            "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[],"
+            "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\n"
+            "data: [DONE]\n\n";
+        if (!sink.write(tail.data(), tail.size())) {
+            return false;
+        }
+        sink.done();
+        return true;
+    }
+
+    int Record(const httplib::Request& request) {
         std::lock_guard<std::mutex> lock(mutex_);
         ports_.push_back(request.remote_port);
         ++arrivals_;
         arrived_.notify_all();
+        return arrivals_;
     }
 
     void WaitForHold() {
@@ -119,15 +241,28 @@ class FakeUpstream {
                           [this] { return arrivals_ >= hold_until_.load(); });
     }
 
+    void WaitForHeaderHold() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        arrived_.wait_for(lock, std::chrono::seconds(5), [this] { return !hold_headers_.load(); });
+    }
+
     httplib::Server server_;
     std::thread thread_;
     int port_ = 0;
     mutable std::mutex mutex_;
     std::condition_variable arrived_;
     std::vector<int> ports_;
+    std::vector<Cancel> cancels_;
+    std::condition_variable cancelled_;
     int arrivals_ = 0;
     std::atomic<int> hold_until_{0};
+    std::atomic<bool> hold_headers_{false};
+    std::atomic<int> cancel_delay_ms_{0};
     std::atomic<bool> die_{false};
+    std::atomic<int> drip_chunks_{0};
+    std::atomic<int> drip_interval_ms_{5};
+    std::atomic<int> dripped_{0};
+    std::atomic<bool> closing_{false};
 };
 
 #if !defined(_WIN32)

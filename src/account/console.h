@@ -15,6 +15,11 @@ struct HttpRequest {
     std::string url;
     std::string body;
     std::string bearer_token;
+    // Total time the call may take, in milliseconds; 0 keeps the transport's
+    // defaults (10 s to connect, 30 s in all). A fire-and-forget call such as a
+    // cancel sets it small, so a wrapper that is exiting is never held longer
+    // than the call is worth.
+    int timeout_ms = 0;
 };
 
 struct HttpResponse {
@@ -34,6 +39,11 @@ struct HttpResponse {
 };
 
 using Transport = std::function<bool(const HttpRequest&, HttpResponse*, std::string*)>;
+
+/// What the control plane said to a cancel: Cancelled (202, a node ended it),
+/// NotFound (404: unknown, finished, or not this key's -- the server does not
+/// say which, by design), or Failed (anything else, including no reply).
+enum class CancelOutcome { Cancelled, NotFound, Failed };
 
 struct Identity {
     std::string email;
@@ -187,6 +197,15 @@ class ConsoleClient {
     /// spend instead of $0.00.
     IdentityResult FetchCatalog(const std::string& console_url, const std::string& access_token,
                                 std::vector<CatalogPrice>* prices, std::string* error) const;
+
+    /// Ask the control plane to end an in-flight request this session's key
+    /// started (`POST /v1/requests/{request_id}/cancel`, InferenceInfra #440).
+    /// `request_id` is the `x-request-id` the response being abandoned carried.
+    /// Fire-and-forget by nature: the caller has already dropped the stream,
+    /// so a short `timeout_ms` bounds how long an exiting wrapper waits.
+    CancelOutcome CancelRequest(const std::string& console_url, const std::string& access_token,
+                                const std::string& request_id, int timeout_ms,
+                                std::string* error) const;
 
    private:
     Transport transport_;

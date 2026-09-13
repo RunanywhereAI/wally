@@ -1,13 +1,19 @@
 #include "test_common.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <httplib.h>
 
 #if !defined(_WIN32)
 #include <cstdio>
@@ -17,6 +23,7 @@
 #include <sys/stat.h>
 #endif
 
+#include "account/cancel_worker.h"
 #include "account/console.h"
 #include "account/credentials.h"
 
@@ -764,6 +771,216 @@ TestResult test_usage_counters_survive_beyond_thirty_two_bits() {
     return result;
 }
 
+// CancelRequest (wally #81): the typed call behind the shim's abandon path.
+// Everything the control plane's contract fixes is asserted through a mock
+// transport -- the path with the id escaped into it, the method, the bearer,
+// the small timeout -- and each of the three outcomes maps from its status.
+TestResult test_cancel_request_speaks_the_contract() {
+    TestResult result;
+    result.test_name = "cancel_request_speaks_the_contract";
+    std::vector<wally::account::HttpRequest> requests;
+    int answer = 202;
+    bool reachable = true;
+    wally::account::Transport transport = [&](const wally::account::HttpRequest& request,
+                                             wally::account::HttpResponse* response,
+                                             std::string* error) {
+        requests.push_back(request);
+        if (!reachable) {
+            if (error != nullptr) {
+                *error = "connection refused";
+            }
+            return false;
+        }
+        response->status = answer;
+        response->body = answer == 202
+                             ? Json{{"request_id", "abc-123"}, {"status", "cancelling"}}.dump()
+                             : Json{{"code", "not_found"}, {"message", "no such request"}}.dump();
+        return true;
+    };
+    wally::account::ConsoleClient client(transport);
+    std::string error;
+
+    auto outcome = client.CancelRequest("https://inference.runanywhere.ai/api-dev", "sess-token",
+                                        "abc 123/../x", 3000, &error);
+    if (outcome != wally::account::CancelOutcome::Cancelled) {
+        result.details = "a 202 must be Cancelled: " + error;
+        return result;
+    }
+    if (requests.size() != 1 || requests[0].method != "POST" ||
+        requests[0].url !=
+            "https://inference.runanywhere.ai/api-dev/v1/requests/abc%20123%2F..%2Fx/cancel" ||
+        requests[0].bearer_token != "sess-token" || !requests[0].body.empty() ||
+        requests[0].timeout_ms != 3000) {
+        result.details = "request shape drifted: " + (requests.empty() ? "" : requests[0].url) +
+                         " timeout_ms=" + std::to_string(requests.empty() ? -1 : requests[0].timeout_ms);
+        return result;
+    }
+
+    answer = 404;
+    if (client.CancelRequest("https://inference.runanywhere.ai", "sess-token", "abc-123", 3000,
+                             &error) != wally::account::CancelOutcome::NotFound) {
+        result.details = "a 404 must be NotFound";
+        return result;
+    }
+    if (requests.back().url != "https://inference.runanywhere.ai/v1/requests/abc-123/cancel") {
+        result.details = "production shape drifted: " + requests.back().url;
+        return result;
+    }
+
+    answer = 500;
+    if (client.CancelRequest("https://inference.runanywhere.ai", "sess-token", "abc-123", 3000,
+                             &error) != wally::account::CancelOutcome::Failed ||
+        error.empty()) {
+        result.details = "a 500 must be Failed with a message";
+        return result;
+    }
+    reachable = false;
+    if (client.CancelRequest("https://inference.runanywhere.ai", "sess-token", "abc-123", 3000,
+                             &error) != wally::account::CancelOutcome::Failed) {
+        result.details = "an unreachable console must be Failed";
+        return result;
+    }
+    // No id, no token: refused before any transport call.
+    const std::size_t before = requests.size();
+    if (client.CancelRequest("https://inference.runanywhere.ai", "sess-token", "", 3000, &error) !=
+            wally::account::CancelOutcome::Failed ||
+        client.CancelRequest("https://inference.runanywhere.ai", "", "abc-123", 3000, &error) !=
+            wally::account::CancelOutcome::Failed ||
+        requests.size() != before) {
+        result.details = "an empty id or token must be refused without a call";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// The cancel worker (#81) sends off the request path, in order, and reads
+// the bearer when each cancel goes OUT -- the JetBrains proxy renews its
+// token mid-session, and a cancel sent with the old one is refused. Stop()
+// sends what is queued before returning, and takes nothing afterwards.
+TestResult test_the_cancel_worker_sends_in_order_with_the_current_bearer() {
+    TestResult result;
+    result.test_name = "the_cancel_worker_sends_in_order_with_the_current_bearer";
+    std::mutex mutex;
+    std::vector<wally::account::HttpRequest> requests;
+    std::promise<void> first_started;
+    std::promise<void> release_first;
+    std::atomic<bool> first_seen{false};
+    wally::account::Transport transport = [&](const wally::account::HttpRequest& request,
+                                             wally::account::HttpResponse* response,
+                                             std::string*) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            requests.push_back(request);
+        }
+        if (!first_seen.exchange(true)) {
+            // Hold the first cancel until the test has changed the bearer and
+            // queued the second, so the second's bearer is provably read late.
+            first_started.set_value();
+            release_first.get_future().wait();
+        }
+        response->status = 202;
+        response->body = Json{{"request_id", "x"}, {"status", "cancelling"}}.dump();
+        return true;
+    };
+    std::string bearer = "old-token";
+    std::mutex bearer_mutex;
+    std::vector<std::string> reported;
+    std::atomic<int> reports{0};
+    {
+        wally::account::CancelWorker worker(
+            "https://inference.runanywhere.ai",
+            [&] {
+                std::lock_guard<std::mutex> lock(bearer_mutex);
+                return bearer;
+            },
+            3000,
+            [&](const std::string& id, wally::account::CancelOutcome outcome, const std::string&) {
+                std::lock_guard<std::mutex> lock(mutex);
+                reported.push_back(id + (outcome == wally::account::CancelOutcome::Cancelled ? "=202" : "=?"));
+                ++reports;
+            },
+            transport);
+        worker.Enqueue("first");
+        first_started.get_future().wait();
+        {
+            std::lock_guard<std::mutex> lock(bearer_mutex);
+            bearer = "renewed-token";  // RenewToken, mid-session
+        }
+        worker.Enqueue("second");
+        if (worker.pending() != 1) {
+            result.details = "the second cancel must be queued while the first is in flight";
+            release_first.set_value();
+            return result;
+        }
+        release_first.set_value();
+        const int drained = worker.Stop();  // sends the second before returning
+        if (drained != 1 && drained != 0) {
+            result.details = "Stop() reports what it drained";
+            return result;
+        }
+        worker.Enqueue("after-stop");  // ignored
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    if (requests.size() != 2 || requests[0].url.find("/v1/requests/first/cancel") == std::string::npos ||
+        requests[1].url.find("/v1/requests/second/cancel") == std::string::npos) {
+        result.details = "exactly the two queued cancels, in order: n=" + std::to_string(requests.size());
+        return result;
+    }
+    if (requests[0].bearer_token != "old-token" || requests[1].bearer_token != "renewed-token") {
+        result.details = "the bearer must be read when the cancel goes out: first=" +
+                         requests[0].bearer_token + " second=" + requests[1].bearer_token;
+        return result;
+    }
+    if (reports.load() != 2 || reported[0] != "first=202" || reported[1] != "second=202") {
+        result.details = "every outcome reported, in order";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// The transport honours `timeout_ms`: a socket that accepts and never answers
+// is given up within the request's own bound, not the 30 s default. Bites: with
+// the field ignored this test takes ~30 s and fails its budget.
+TestResult test_a_request_timeout_bounds_the_real_transport() {
+    TestResult result;
+    result.test_name = "a_request_timeout_bounds_the_real_transport";
+    // The handler holds the request until the test lets go, so the test's own
+    // wall time is the client's bound, not a fixed sleep; neutered, the client
+    // waits its 30 s default before this test can fail it.
+    std::promise<void> release;
+    std::shared_future<void> released = release.get_future().share();
+    httplib::Server server;
+    server.Post("/v1/requests/:id/cancel",
+                [released](const httplib::Request&, httplib::Response&) { released.wait(); });
+    const int port = server.bind_to_any_port("127.0.0.1");
+    std::thread thread([&] { server.listen_after_bind(); });
+    server.wait_until_ready();
+
+    wally::account::ConsoleClient client;  // the real transport
+    std::string error;
+    const auto started = std::chrono::steady_clock::now();
+    const auto outcome = client.CancelRequest("http://127.0.0.1:" + std::to_string(port),
+                                              "sess-token", "abc-123", 500, &error);
+    const auto took = std::chrono::steady_clock::now() - started;
+    release.set_value();
+    server.stop();
+    thread.join();
+    if (outcome != wally::account::CancelOutcome::Failed) {
+        result.details = "a call that never gets an answer must be Failed";
+        return result;
+    }
+    if (took > std::chrono::seconds(5)) {
+        result.details = "timeout_ms was not honoured: the call took " +
+                         std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()) +
+                         " ms";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -791,5 +1008,10 @@ int main(int argc, char** argv) {
               test_the_trusted_browser_origin_is_never_empty);
     suite.add("usage_counters_survive_beyond_thirty_two_bits",
               test_usage_counters_survive_beyond_thirty_two_bits);
+    suite.add("cancel_request_speaks_the_contract", test_cancel_request_speaks_the_contract);
+    suite.add("the_cancel_worker_sends_in_order_with_the_current_bearer",
+              test_the_cancel_worker_sends_in_order_with_the_current_bearer);
+    suite.add("a_request_timeout_bounds_the_real_transport",
+              test_a_request_timeout_bounds_the_real_transport);
     return suite.run(argc, argv);
 }

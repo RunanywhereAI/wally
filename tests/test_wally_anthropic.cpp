@@ -1,6 +1,9 @@
 #include "test_common.h"
 
 #include <atomic>
+#include <mutex>
+#include <chrono>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,11 +31,24 @@ using wally_tests::HalfOpenUpstream;
 /// A translator started against `upstream`, stopped on scope exit.
 class RunningShim {
    public:
-    explicit RunningShim(const std::string& upstream_base_url) {
+    /// `console_url` is where the shim cancels an abandoned request (#81):
+    /// the fake upstream serves the cancel route on its own origin, so tests
+    /// pass its base without the `/v1`. Empty means a local server -- no
+    /// cancel is ever sent.
+    explicit RunningShim(const std::string& upstream_base_url, std::string console_url = {}) {
         wally::harness::Endpoint endpoint;
         endpoint.base_url = upstream_base_url;
         endpoint.api_key = "test-upstream-key";
+        endpoint.console_url = std::move(console_url);
         started_ = wally::anthropic::Start(endpoint, "glm-5.3", &shim_);
+    }
+    /// Stops the translator now (what the wrapper does when the editor exits)
+    /// and returns how long that took.
+    std::chrono::milliseconds StopNow() {
+        const auto started = std::chrono::steady_clock::now();
+        wally::anthropic::Stop(&shim_);
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started);
     }
     ~RunningShim() { wally::anthropic::Stop(&shim_); }
 
@@ -57,6 +73,66 @@ class RunningShim {
    private:
     wally::anthropic::Shim shim_;
     bool started_ = false;
+};
+
+/// The origin of a fake upstream's base URL: "http://127.0.0.1:port/v1" ->
+/// "http://127.0.0.1:port". What the shim treats as the console for cancels.
+std::string OriginOf(const std::string& base_url) {
+    return base_url.substr(0, base_url.rfind("/v1"));
+}
+
+/// An editor that opens a streaming request to the shim on its own thread and
+/// can leave in the middle of it -- `Leave()` closes its socket, which is
+/// what Claude Code's abort does (undici destroys the socket: a FIN).
+class Editor {
+   public:
+    explicit Editor(const wally::anthropic::Shim& shim)
+        : client_(std::make_unique<httplib::Client>(shim.base_url)), token_(shim.auth_token) {
+        client_->set_read_timeout(10, 0);
+    }
+    void StartStreaming() {
+        thread_ = std::thread([this] {
+            const Json body{{"model", "claude-x"},
+                            {"max_tokens", 16},
+                            {"stream", true},
+                            {"messages", Json::array({Json{{"role", "user"}, {"content", "hi"}}})}};
+            const httplib::Result reply = client_->Post(
+                "/v1/messages", {{"Authorization", "Bearer " + token_}}, body.dump(),
+                "application/json", [this](const char* data, size_t length) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    received_.append(data, length);
+                    return true;
+                });
+            status_ = reply ? reply->status : 0;
+        });
+    }
+    /// Leaves the way an editor does: the socket is CLOSED, not just shut
+    /// down (Claude Code aborts the fetch; a quitting app closes everything),
+    /// so the shim's next write to it fails. `stop()` alone keeps the fd open
+    /// until the client is destroyed, and writes into it keep succeeding.
+    void Leave() {
+        client_->stop();
+        Join();
+        client_.reset();
+    }
+    void Join() {
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+    std::string received() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return received_;
+    }
+    int status() const { return status_.load(); }
+
+   private:
+    std::unique_ptr<httplib::Client> client_;
+    std::string token_;
+    std::thread thread_;
+    std::mutex mutex_;
+    std::string received_;
+    std::atomic<int> status_{0};
 };
 
 
@@ -301,6 +377,263 @@ TestResult test_upstream_dying_mid_stream_is_not_retried() {
     return result;
 }
 
+// #81. The editor leaves while the upstream is still producing the body (the
+// engine is decoding; the id is already in hand). Within a second the fake's
+// cancel route sees that id with this session's bearer, the upstream socket
+// is dropped, and -- the pool having been warmed so the lease is REUSED --
+// the stale-retry rule does not re-send the prompt: arrivals stay at two.
+TestResult test_an_abandoned_stream_is_cancelled_by_name_and_never_resent() {
+    TestResult result;
+    result.test_name = "an_abandoned_stream_is_cancelled_by_name_and_never_resent";
+    FakeUpstream upstream;
+    RunningShim shim(upstream.base_url(), OriginOf(upstream.base_url()));
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    // Warm the pool: the second request goes out on a reused connection.
+    if (shim.Send(false) != 200) {
+        result.details = "warm-up request failed";
+        return result;
+    }
+    upstream.hold_streams_until(99);  // the body never comes on its own
+    Editor editor(shim.shim());
+    editor.StartStreaming();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    editor.Leave();
+    editor.Join();
+
+    if (!upstream.wait_for_cancels(1, std::chrono::seconds(1))) {
+        result.details = "no cancel reached the endpoint within 1 s of the editor leaving";
+        return result;
+    }
+    const auto cancels = upstream.cancels();
+    if (cancels[0].request_id != FakeUpstream::request_id_of(2) ||
+        cancels[0].authorization != "Bearer test-upstream-key") {
+        result.details = "the cancel must name the abandoned request with the session's bearer: id=" +
+                         cancels[0].request_id + " auth=" + cancels[0].authorization;
+        return result;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    if (upstream.arrivals() != 2) {
+        result.expected = "two upstream requests (warm-up + the abandoned one); no re-send";
+        result.actual = std::to_string(upstream.arrivals()) + " arrivals";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// #81. Leaving while tokens are FLOWING -- Esc mid-answer, the common case.
+// Here the leave is noticed by the failed write to the editor, not by the
+// poll (the fake drips a frame every 5 ms; the 100 ms poll rarely gets there
+// first), and that path must name the cancel just the same, and drop the
+// upstream socket so the drip stops.
+TestResult test_leaving_while_tokens_flow_cancels_by_name() {
+    TestResult result;
+    result.test_name = "leaving_while_tokens_flow_cancels_by_name";
+    FakeUpstream upstream;
+    RunningShim shim(upstream.base_url(), OriginOf(upstream.base_url()));
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    if (shim.Send(false) != 200) {  // warm the pool: the stream's lease is reused
+        result.details = "warm-up request failed";
+        return result;
+    }
+    upstream.drip(1000, 2);  // ~2 s of tokens
+    Editor editor(shim.shim());
+    editor.StartStreaming();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    editor.Leave();
+    editor.Join();
+    if (!upstream.wait_for_cancels(1, std::chrono::seconds(1))) {
+        result.details = "no cancel reached the endpoint within 1 s of the editor leaving";
+        return result;
+    }
+    const auto cancels = upstream.cancels();
+    if (cancels.size() != 1 || cancels[0].request_id != FakeUpstream::request_id_of(2) ||
+        cancels[0].authorization != "Bearer test-upstream-key") {
+        result.details = "one cancel naming the abandoned request: n=" + std::to_string(cancels.size()) +
+                         (cancels.empty() ? std::string() : " id=" + cancels[0].request_id);
+        return result;
+    }
+    // The upstream socket is dropped: the fake's drip stops growing.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const int dripped = upstream.dripped();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    if (upstream.dripped() != dripped || dripped >= 1000) {
+        result.details = "the upstream socket must be dropped once the editor left: dripped " +
+                         std::to_string(dripped) + " then " + std::to_string(upstream.dripped());
+        return result;
+    }
+    if (upstream.arrivals() != 2 || upstream.cancels().size() != 1) {
+        result.details = "no re-send and no second cancel: arrivals=" +
+                         std::to_string(upstream.arrivals()) + " cancels=" +
+                         std::to_string(upstream.cancels().size());
+        return result;
+    }
+    if (editor.received().find("content_block_delta") == std::string::npos) {
+        result.details = "the frames before the leave must have reached the editor";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// #81. A stream that completed is never cancelled, whenever the editor goes.
+TestResult test_a_completed_stream_is_not_cancelled() {
+    TestResult result;
+    result.test_name = "a_completed_stream_is_not_cancelled";
+    FakeUpstream upstream;
+    upstream.die_mid_stream(false);
+    RunningShim shim(upstream.base_url(), OriginOf(upstream.base_url()));
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    // A stream the fake finishes on its own is over in a millisecond, so the
+    // editor leaves after it -- that must NOT cancel (nothing is running).
+    Editor editor(shim.shim());
+    editor.StartStreaming();
+    editor.Join();
+    editor.Leave();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    if (!upstream.cancels().empty()) {
+        result.details = "a completed stream must never be cancelled";
+        return result;
+    }
+    if (editor.status() != 200 || editor.received().find("message_stop") == std::string::npos) {
+        result.details = "the completed stream must have reached the editor whole";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// #81. A local endpoint (no console, no key) has nothing to cancel: the
+// abandon is logged and no cancel is attempted anywhere.
+TestResult test_a_local_endpoint_is_never_cancelled() {
+    TestResult result;
+    result.test_name = "a_local_endpoint_is_never_cancelled";
+    FakeUpstream upstream;
+    upstream.hold_streams_until(99);
+    RunningShim shim(upstream.base_url());  // no console_url
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    Editor editor(shim.shim());
+    editor.StartStreaming();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    editor.Leave();
+    editor.Join();
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    if (!upstream.cancels().empty()) {
+        result.details = "a local server must not be asked to cancel";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// #81. The wrapper exits right after the editor abandoned a stream (app quit):
+// Stop() must let the cancel go out before returning -- the fake sits on its
+// answer for 500 ms, so an un-joined Stop() would return without it -- and
+// must still return within the bound (3 s per queued cancel), not after
+// waiting for the engine's first token.
+TestResult test_stop_sends_the_last_cancel_before_returning() {
+    TestResult result;
+    result.test_name = "stop_sends_the_last_cancel_before_returning";
+    FakeUpstream upstream;
+    upstream.hold_streams_until(99);
+    upstream.delay_cancel_reply(500);
+    RunningShim shim(upstream.base_url(), OriginOf(upstream.base_url()));
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    Editor editor(shim.shim());
+    editor.StartStreaming();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    editor.Leave();
+    editor.Join();
+    const auto took = shim.StopNow();
+    if (upstream.cancels().size() != 1) {
+        result.details = "Stop() returned without sending the abandoned request's cancel";
+        return result;
+    }
+    if (took > std::chrono::milliseconds(3500)) {
+        result.details = "Stop() took " + std::to_string(took.count()) + " ms";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// #81. The editor leaves during PREFILL -- the upstream has not sent its
+// headers, so no id exists yet. The shim keeps the upstream open, and when
+// the headers arrive it cancels by the id they carry; if the wrapper exits
+// first, it gives up within a poll instead of waiting for the first token.
+TestResult test_leaving_during_prefill_cancels_at_the_first_token() {
+    TestResult result;
+    result.test_name = "leaving_during_prefill_cancels_at_the_first_token";
+    FakeUpstream upstream;
+    upstream.hold_headers(true);
+    RunningShim shim(upstream.base_url(), OriginOf(upstream.base_url()));
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    Editor editor(shim.shim());
+    editor.StartStreaming();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    editor.Leave();
+    editor.Join();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    if (!upstream.cancels().empty()) {
+        result.details = "nothing can be cancelled before the id exists";
+        return result;
+    }
+    upstream.release_headers();  // the first token
+    if (!upstream.wait_for_cancels(1, std::chrono::seconds(1))) {
+        result.details = "the cancel must follow the headers within 1 s";
+        return result;
+    }
+    if (upstream.cancels()[0].request_id != FakeUpstream::request_id_of(1)) {
+        result.details = "wrong id: " + upstream.cancels()[0].request_id;
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+TestResult test_stopping_during_prefill_does_not_wait_for_the_first_token() {
+    TestResult result;
+    result.test_name = "stopping_during_prefill_does_not_wait_for_the_first_token";
+    FakeUpstream upstream;
+    upstream.hold_headers(true);
+    RunningShim shim(upstream.base_url(), OriginOf(upstream.base_url()));
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    Editor editor(shim.shim());
+    editor.StartStreaming();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    editor.Leave();
+    editor.Join();
+    const auto took = shim.StopNow();
+    upstream.release_headers();
+    if (took > std::chrono::milliseconds(1500)) {
+        result.details = "Stop() waited for the first token: " + std::to_string(took.count()) + " ms";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -316,6 +649,17 @@ int main(int argc, char** argv) {
               test_retry_rule_only_on_a_stale_reused_connection);
     suite.add("stale_reused_connection_is_retried_once_on_a_fresh_one",
               test_stale_reused_connection_is_retried_once_on_a_fresh_one);
+    suite.add("an_abandoned_stream_is_cancelled_by_name_and_never_resent",
+              test_an_abandoned_stream_is_cancelled_by_name_and_never_resent);
+    suite.add("leaving_while_tokens_flow_cancels_by_name", test_leaving_while_tokens_flow_cancels_by_name);
+    suite.add("a_completed_stream_is_not_cancelled", test_a_completed_stream_is_not_cancelled);
+    suite.add("a_local_endpoint_is_never_cancelled", test_a_local_endpoint_is_never_cancelled);
+    suite.add("stop_sends_the_last_cancel_before_returning",
+              test_stop_sends_the_last_cancel_before_returning);
+    suite.add("leaving_during_prefill_cancels_at_the_first_token",
+              test_leaving_during_prefill_cancels_at_the_first_token);
+    suite.add("stopping_during_prefill_does_not_wait_for_the_first_token",
+              test_stopping_during_prefill_does_not_wait_for_the_first_token);
     suite.add("upstream_dying_mid_stream_is_not_retried",
               test_upstream_dying_mid_stream_is_not_retried);
     return suite.run(argc, argv);

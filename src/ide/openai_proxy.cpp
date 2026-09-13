@@ -3,7 +3,10 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -15,10 +18,12 @@
 #include <unistd.h>
 #endif
 
+#include "account/cancel_worker.h"
 #include "account/console.h"
 #include "account/credentials.h"
 #include "io/output.h"
 #include "net/loopback_auth.h"
+#include "net/upstream_call.h"
 #include "net/upstream_pool.h"
 
 namespace wally::ide {
@@ -46,7 +51,19 @@ struct Runtime {
     std::thread thread;
     std::string origin;
     std::string prefix;
+    // The session's bearer. Renewed mid-session on a 401 (RenewToken) from a
+    // sink thread while other sinks and the cancel worker read it, so it
+    // goes through the guard below.
     std::string api_key;
+    mutable std::mutex key_mutex;
+    std::string Token() const {
+        std::lock_guard<std::mutex> lock(key_mutex);
+        return api_key;
+    }
+    void SetToken(std::string token) {
+        std::lock_guard<std::mutex> lock(key_mutex);
+        api_key = std::move(token);
+    }
     std::string model;
     // The secret the editor must present. Loopback binding keeps the network
     // out; this keeps another local process out.
@@ -55,6 +72,11 @@ struct Runtime {
     // Upstream connections kept open across requests (wally #80). Shared: a
     // streaming sink still running after StopProxy() holds a lease on it.
     std::shared_ptr<wally::net::UpstreamPool> pool;
+    // Where an abandoned request is cancelled by name (#81); see the
+    // Anthropic shim's Runtime for the same three fields.
+    std::string console_url;
+    std::atomic<bool> stopping{false};
+    std::unique_ptr<wally::account::CancelWorker> cancels;
 };
 
 std::unique_ptr<Runtime> g_runtime;
@@ -102,7 +124,7 @@ bool RenewToken(Runtime& runtime) {
     }
     std::string ignored;
     account::Save(credentials, &ignored);
-    runtime.api_key = grant.access_token;
+    runtime.SetToken(grant.access_token);
     Trace(runtime.verbose, "REFRESHED");
     return true;
 }
@@ -264,37 +286,86 @@ void Fail(httplib::Response& response, int status, const std::string& message) {
     response.set_content(Json{{"error", {{"message", message}}}}.dump(), "application/json");
 }
 
-/// Forwards a streaming completion, byte for byte.
-///
-/// Nothing is parsed. Both ends speak the same wire format, so reframing SSE
-/// here would only add a place for it to go wrong — and did, the first time.
+/// The abandon path (#81): trace it, and queue the cancel off this thread.
+void OnAbandoned(Runtime& runtime, bool streaming, const std::string& request_id, int status,
+                 bool during_prefill) {
+    std::string line = std::string("ABANDONED during=") + (during_prefill ? "prefill" : "stream") +
+                       " id=" + (request_id.empty() ? std::string("unknown") : request_id) +
+                       " status=" + std::to_string(status) + " stream=" + (streaming ? "1" : "0");
+    if (request_id.empty()) {
+        Trace(runtime.verbose, line + " cancel=none(no-id)");
+        return;
+    }
+    if (!runtime.cancels) {
+        // No worker: a local server, which has no console to tell.
+        Trace(runtime.verbose, line + " cancel=skipped(local)");
+        return;
+    }
+    Trace(runtime.verbose, line + " cancel=queued");
+    runtime.cancels->Enqueue(request_id);
+}
+
+/// One watched upstream POST on a lease (#81). The stale-retry decision stays
+/// with the callers, which also have the auth-renew retry to compose it with;
+/// both are vetoed once the editor left.
+wally::net::WatchedResult PostWatched(Runtime& runtime, wally::net::UpstreamLease& lease,
+                                      bool streaming, const std::string& path,
+                                      const std::string& body,
+                                      const httplib::ContentReceiver& receiver,
+                                      const std::function<bool()>& reader_gone) {
+    wally::net::WatchedCall call;
+    call.path = path;
+    call.body = body;
+    call.receiver = receiver;
+    call.reader_gone = reader_gone;
+    call.stopping = [&runtime] { return runtime.stopping.load(); };
+    call.on_abandoned = [&runtime, streaming](const std::string& id, int status,
+                                              bool during_prefill) {
+        OnAbandoned(runtime, streaming, id, status, during_prefill);
+    };
+    return wally::net::PostWatched(lease, call);
+}
+
 /// A non-streaming request on a pooled connection, once more on a fresh one
 /// if a reused connection turned out to be stale. Nothing has been answered
-/// to the editor when that decision is made.
-httplib::Result PostOnce(Runtime& runtime, const std::string& path, const std::string& body) {
+/// to the editor when that decision is made. A null result after the editor
+/// left is deliberate: the caller's 502 goes to nobody, and nothing is
+/// re-sent.
+httplib::Result PostOnce(Runtime& runtime, const std::string& path, const std::string& body,
+                         const std::function<bool()>& reader_gone) {
     for (int attempt = 0; attempt < 2; ++attempt) {
-        wally::net::UpstreamLease lease = runtime.pool->acquire(runtime.api_key);
+        wally::net::UpstreamLease lease = runtime.pool->acquire(runtime.Token());
         Trace(runtime.verbose,
               lease.reused() ? "UPSTREAM reused connection" : "UPSTREAM fresh connection");
-        httplib::Result reply = lease.client().Post(path, body, "application/json");
-        if (reply) {
-            return reply;
+        wally::net::WatchedResult result =
+            PostWatched(runtime, lease, false, path, body, nullptr, reader_gone);
+        if (result.reply) {
+            return std::move(result.reply);
         }
         lease.discard();
+        if (result.abandoned) {
+            Trace(runtime.verbose, "UPSTREAM request dropped: the editor left");
+            return std::move(result.reply);
+        }
         if (attempt == 0 &&
-            wally::net::RetryOnFreshConnection(reply.error(), false, false, lease.reused())) {
+            wally::net::RetryOnFreshConnection(result.reply.error(), false, false, lease.reused())) {
             Trace(runtime.verbose, "UPSTREAM stale connection; retrying once on a fresh one");
             continue;
         }
-        return reply;
+        return std::move(result.reply);
     }
     return httplib::Result{nullptr, httplib::Error::Unknown};
 }
 
-void Stream(Runtime& runtime, const std::string& body, httplib::Response& response) {
+/// Forwards a streaming completion, byte for byte.
+///
+/// Nothing is parsed. Both ends speak the same wire format, so reframing SSE
+/// here would only add a place for it to go wrong — and did, the first time.
+void Stream(Runtime& runtime, const std::function<bool()>& reader_gone, const std::string& body,
+            httplib::Response& response) {
     auto request = std::make_shared<std::string>(body);
     auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
-    auto api_key = std::make_shared<std::string>(runtime.api_key);
+    auto api_key = std::make_shared<std::string>(runtime.Token());
 
     auto verbose = std::make_shared<bool>(runtime.verbose);
     Runtime* owner = &runtime;
@@ -303,7 +374,7 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
 
     response.set_chunked_content_provider(
         "text/event-stream",
-        [request, path, api_key, verbose, owner](size_t, httplib::DataSink& sink) {
+        [request, path, api_key, verbose, owner, reader_gone](size_t, httplib::DataSink& sink) {
           // Two kinds of second attempt, each at most once: after a token
           // the console has just renewed (a 401 came back), and on a fresh
           // connection when a REUSED one turned out to be stale (nothing
@@ -313,7 +384,7 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
           int auth_attempt = 0;
           bool stale_retried = false;
           for (;;) {
-            const std::string token = auth_attempt == 0 ? *api_key : owner->api_key;
+            const std::string token = auth_attempt == 0 ? *api_key : owner->Token();
             wally::net::UpstreamLease lease = owner->pool->acquire(token);
             Trace(*verbose, lease.reused() ? "UPSTREAM reused connection"
                                            : "UPSTREAM fresh connection");
@@ -349,9 +420,9 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
                 }
                 return true;
             };
-            const httplib::Result reply =
-                lease.client().Post(*path, httplib::Headers(), *request, "application/json",
-                            [&](const char* data, size_t length) {
+            const wally::net::WatchedResult watched = PostWatched(
+                *owner, lease, true, *path, *request,
+                [&](const char* data, size_t length) {
                                 received_any = true;
                                 if (decided) {
                                     if (!streaming) {
@@ -377,7 +448,18 @@ void Stream(Runtime& runtime, const std::string& body, httplib::Response& respon
                                     decided = true;
                                 }
                                 return true;
-                            });
+                            },
+                reader_gone);
+            const httplib::Result& reply = watched.reply;
+
+            if (watched.abandoned) {
+                // The editor is gone. Neither retry may run for it: the stop
+                // that ended this call looks like a stale connection, and a
+                // renewed token would only re-send the prompt to nobody.
+                lease.discard();
+                sink.done();
+                return false;
+            }
 
             if (streaming) {
                 sink.done();
@@ -446,12 +528,28 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
         return false;
     }
     runtime->api_key = endpoint.api_key;
+    runtime->console_url = endpoint.console_url;
     runtime->model = model;
     runtime->local_token = wally::net::GenerateLoopbackToken();
     runtime->verbose = verbose;
     wally::net::UpstreamOptions pool_options;
     pool_options.origin = runtime->origin;
     runtime->pool = std::make_shared<wally::net::UpstreamPool>(pool_options);
+    if (!runtime->console_url.empty() && !runtime->api_key.empty()) {
+        Runtime* for_log = runtime.get();
+        // The bearer is read when each cancel goes out, so one sent after a
+        // renewal carries the renewed token.
+        runtime->cancels = std::make_unique<wally::account::CancelWorker>(
+            runtime->console_url, [for_log] { return for_log->Token(); }, 3000,
+            [for_log](const std::string& id, wally::account::CancelOutcome outcome,
+                      const std::string& error) {
+                const char* word = outcome == wally::account::CancelOutcome::Cancelled ? "202"
+                                   : outcome == wally::account::CancelOutcome::NotFound ? "404"
+                                                                                       : "failed";
+                Trace(for_log->verbose, "CANCEL id=" + id + " result=" + word +
+                                            (error.empty() ? std::string() : " error=" + error));
+            });
+    }
 
     Runtime* raw = runtime.get();
     // Every handler catches. An exception thrown into cpp-httplib takes the
@@ -495,11 +593,12 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
                              // have to keep the answer in the shape it asked for.
                              if (body.find("\"stream\":true") != std::string::npos ||
                                  body.find("\"stream\": true") != std::string::npos) {
-                                 Stream(*raw, body, response);
+                                 Stream(*raw, request.is_connection_closed, body, response);
                                  return;
                              }
                              const httplib::Result reply =
-                                 PostOnce(*raw, raw->prefix + "/chat/completions", body);
+                                 PostOnce(*raw, raw->prefix + "/chat/completions", body,
+                                          request.is_connection_closed);
                              if (!reply) {
                                  Fail(response, 502, "the model endpoint did not answer");
                                  return;
@@ -541,9 +640,19 @@ bool StartProxy(const harness::Endpoint& endpoint, const std::string& model, int
 
 void StopProxy(Proxy* proxy) {
     if (g_runtime) {
+        // Same order as the Anthropic shim's Stop(): let an in-flight watch
+        // give up waiting for an id, stop the server (joins every handler),
+        // then drain the cancel queue so the last abandon's cancel goes out.
+        g_runtime->stopping.store(true);
         g_runtime->server.stop();
         if (g_runtime->thread.joinable()) {
             g_runtime->thread.join();
+        }
+        if (g_runtime->cancels) {
+            if (g_runtime->cancels->pending() > 0) {
+                out::status_line("telling the model endpoint to stop the abandoned request");
+            }
+            g_runtime->cancels->Stop();
         }
         g_runtime.reset();
     }
