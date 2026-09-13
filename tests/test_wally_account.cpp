@@ -586,6 +586,44 @@ TestResult test_login_never_retries_sooner_than_the_server_asked() {
     return result;
 }
 
+// #90: the wait between polls. Extracted from Login() because that loop sleeps
+// and opens a browser, so the arithmetic that decides whether a rate-limited
+// console is left alone had no test of its own.
+TestResult test_poll_delay_respects_the_console_and_the_ceiling() {
+    TestResult result;
+    result.test_name = "poll_delay_respects_the_console_and_the_ceiling";
+    using wally::account::NextPollDelaySeconds;
+
+    struct Case {
+        int interval;
+        int retry_after;
+        int want;
+        const char* why;
+    };
+    const Case cases[] = {
+        {2, 0, 2, "no delay asked for: the authorization's own cadence"},
+        {2, -1, 2, "an absent delay is not a negative wait"},
+        {2, 5, 5, "a delay longer than the interval is honored"},
+        {5, 2, 5, "a delay shorter than the interval does not speed polling up"},
+        {2, 3600, 3600,
+         "a long delay is honored in full: polling sooner is what it refused"},
+        {2, 60, 60, "the console's delay wins over the authorization's cadence"},
+        {0, 0, 1, "a zero interval still waits, or the loop spins"},
+    };
+    for (const Case& test : cases) {
+        const int got = NextPollDelaySeconds(test.interval, test.retry_after);
+        if (got != test.want) {
+            result.expected = std::to_string(test.want);
+            result.actual = std::to_string(got);
+            result.details = std::string("interval=") + std::to_string(test.interval) +
+                             " retry_after=" + std::to_string(test.retry_after) + ": " + test.why;
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+
 // #90: a rate-limited poll is still Pending, but the caller has to be told how
 // long the console asked for, or it polls straight back into the refusal.
 TestResult test_a_rate_limited_poll_reports_the_backoff() {
@@ -941,6 +979,8 @@ int main(int argc, char** argv) {
     suite.add("console_errors_do_not_echo_secrets", test_console_errors_do_not_echo_secrets);
     suite.add("login_never_retries_sooner_than_the_server_asked",
               test_login_never_retries_sooner_than_the_server_asked);
+    suite.add("poll_delay_respects_the_console_and_the_ceiling",
+              test_poll_delay_respects_the_console_and_the_ceiling);
     suite.add("a_rate_limited_poll_reports_the_backoff",
               test_a_rate_limited_poll_reports_the_backoff);
     suite.add("a_rate_limit_surfaces_its_retry_after", test_a_rate_limit_surfaces_its_retry_after);
