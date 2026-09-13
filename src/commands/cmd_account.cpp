@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -207,9 +208,10 @@ int Login(const std::string& requested_console, bool open_browser) {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(authorization.expires_in);
     account::Grant grant;
+    int retry_after = 0;
     while (std::chrono::steady_clock::now() < deadline) {
-        switch (client.Poll(console_url, authorization, &grant, &failure)) {
-            case account::PollResult::Pending:
+        switch (client.Poll(console_url, authorization, &grant, &failure, &retry_after)) {
+            case account::PollResult::Pending: {
                 // Poll() reports a rate-limited console as Pending and leaves
                 // the reason in `failure`. Say so once rather than sitting
                 // silent, so a slow login does not look like a hang.
@@ -217,8 +219,19 @@ int Login(const std::string& requested_console, bool open_browser) {
                     out::status_line("server busy, retrying");
                     failure.clear();
                 }
-                std::this_thread::sleep_for(std::chrono::seconds(authorization.interval));
+                // A console that asked for a delay gets it. Polling at the
+                // authorization's own interval through a 30-second backoff is
+                // just refusing to hear the answer (#90). The grant's expiry
+                // still bounds the wait, so this cannot outlive the login.
+                const auto wait = std::chrono::seconds(std::max(authorization.interval, retry_after));
+                const auto remaining = deadline - std::chrono::steady_clock::now();
+                if (remaining <= std::chrono::seconds(0)) {
+                    break;
+                }
+                std::this_thread::sleep_for(wait < remaining ? wait : remaining);
+                retry_after = 0;
                 continue;
+            }
             case account::PollResult::Denied:
                 out::error_line("the request was denied in the browser");
                 return 1;

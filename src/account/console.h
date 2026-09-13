@@ -176,8 +176,11 @@ class ConsoleClient {
     bool BeginAuthorization(const std::string& console_url, const std::string& hostname,
                             Authorization* authorization, std::string* error,
                             const std::function<void()>& on_retry = nullptr) const;
+    /// `retry_after`, when given, receives the delay the console asked for on a
+    /// refusal, or 0 when it asked for none. The caller waits at least that long
+    /// before polling again: polling sooner is what a rate limiter is refusing.
     PollResult Poll(const std::string& console_url, const Authorization& authorization,
-                    Grant* grant, std::string* error) const;
+                    Grant* grant, std::string* error, int* retry_after = nullptr) const;
     /// `unavailable` is set true when the refresh failed because the console is
     /// rate limiting or down (429/5xx) rather than because the session is bad.
     bool Refresh(const std::string& console_url, const std::string& refresh_token, Grant* grant,
