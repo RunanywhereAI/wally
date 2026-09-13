@@ -23,9 +23,10 @@ struct Proxy {
     bool running = false;
     /// What to point the editor at. An OpenAI-compatible root ending in `/v1`.
     std::string base_url;
-    /// The API key the editor must send back. A per-session secret, so a stray
-    /// local process cannot reach the loopback port and spend on the signed-in
-    /// user's credit. Give it to the editor as the provider key.
+    /// Kept for callers that still wire a provider key through, and for the
+    /// Anthropic translator's own use. The JetBrains proxy no longer checks it:
+    /// AI Assistant cannot be handed a key from outside its settings dialog, so
+    /// requiring one refused every request it was built to serve.
     std::string auth_token;
 };
 
