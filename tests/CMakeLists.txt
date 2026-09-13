@@ -43,6 +43,13 @@ wally_stage_windows_runtime_dlls(test_wally_anthropic)
 add_test(NAME wally_anthropic_tests COMMAND test_wally_anthropic --run-all)
 set_tests_properties(wally_anthropic_tests PROPERTIES TIMEOUT 60)
 
+add_executable(test_wally_net_call test_wally_net_call.cpp)
+target_include_directories(test_wally_net_call PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_wally_net_call PRIVATE wally_core httplib::httplib nlohmann_json::nlohmann_json)
+wally_stage_windows_runtime_dlls(test_wally_net_call)
+add_test(NAME wally_net_call_tests COMMAND test_wally_net_call --run-all)
+set_tests_properties(wally_net_call_tests PROPERTIES TIMEOUT 60)
+
 add_executable(test_wally_ide_proxy test_wally_ide_proxy.cpp)
 target_include_directories(test_wally_ide_proxy PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_ide_proxy PRIVATE wally_core httplib::httplib nlohmann_json::nlohmann_json)

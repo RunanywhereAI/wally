@@ -51,6 +51,21 @@ when nothing had come back yet; a request that has started answering is never
 repeated. So the first request after a long pause pays one handshake, and the
 rest of the session does not.
 
+When the tool stops listening part-way through an answer — Esc in Claude Code,
+the app quitting — both notice within a tenth of a second rather than at the
+next chunk they fail to deliver, and ask the console to stop that request by
+name, so the model stops generating an answer nobody will read and the session
+stops paying for it. The name is the request id the endpoint sends with its
+first token, so a request abandoned while the model is still reading the prompt
+is stopped the moment that first token arrives, and nothing after it is passed
+on. When the tool quits, `wally` sends any cancel still queued before it
+returns (`--serve` is ended by Ctrl-C, which drops everything with it). Each
+cancel is a line in `shim.log` under the state directory
+(`~/.local/state/runanywhere/`, or `$XDG_STATE_HOME/runanywhere/`) for the
+translator, and in the profile directory's `proxy-trace.log` for the JetBrains
+proxy when it was started with `--verbose` -- never the tool's terminal. A
+local model needs none of this: the dropped connection is enough.
+
 ## Hosted models
 
 A model you have not downloaded can still answer, if the console serves it:
