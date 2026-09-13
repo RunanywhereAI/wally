@@ -27,6 +27,11 @@ runs:
   steps:
     - name: Configure + build (${{ inputs.variant }})
       shell: bash
+      env:
+        # Declared so configure can refuse a dev build whose endpoint variables
+        # never arrived, instead of quietly producing a production binary under
+        # a -dev name (wally #87).
+        WALLY_CHANNEL: ${{ inputs.variant }}
       run: |
         set -euo pipefail
         prefix="${{ inputs.kit-dir }}"

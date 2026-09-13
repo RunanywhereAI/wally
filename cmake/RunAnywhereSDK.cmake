@@ -192,6 +192,53 @@ function(wally_define_engine_macros target)
     endif()
     if(TARGET RunAnywhere::server)
         target_link_libraries(${target} PRIVATE RunAnywhere::server)
+        # The kit's librac_server.a calls into libcrypto (OPENSSL_thread_stop,
+        # from httplib's thread pool) but its imported target does not say so,
+        # so nothing here asks for OpenSSL and the link only succeeds on a
+        # machine where CMake happened to find it anyway. On a clean consumer
+        # it configures fine and then fails at the very end with an undefined
+        # symbol (wally #92). Ask for it here, and say so at configure time.
+        # Windows is excluded deliberately, not by oversight. Its kit carries the
+        # same undefined OPENSSL_thread_stop in rac_server.lib, but nothing in
+        # the Windows build references the object that needs it, so the linker
+        # never pulls it and the build is green without any OpenSSL at all.
+        # Requiring it there would break a working build for a dependency that
+        # does not currently bite. If a Windows link ever fails on that symbol,
+        # this is the block to extend.
+        if(NOT WIN32)
+            # Homebrew's openssl@3 is keg-only, so it is not on the default
+            # search path and a bare find_package misses it on an otherwise
+            # perfectly equipped Mac. Ask brew where it is before giving up:
+            # failing with "install openssl" on a machine that already has it
+            # is a worse outcome than the link error this replaces.
+            if(APPLE AND NOT DEFINED OPENSSL_ROOT_DIR AND NOT DEFINED ENV{OPENSSL_ROOT_DIR})
+                find_program(WALLY_BREW brew)
+                if(WALLY_BREW)
+                    execute_process(COMMAND "${WALLY_BREW}" --prefix openssl@3
+                                    OUTPUT_VARIABLE _brew_openssl
+                                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                                    ERROR_QUIET)
+                    if(_brew_openssl AND EXISTS "${_brew_openssl}")
+                        set(OPENSSL_ROOT_DIR "${_brew_openssl}")
+                    endif()
+                endif()
+            endif()
+            find_package(OpenSSL QUIET)
+            if(NOT OpenSSL_FOUND)
+                message(FATAL_ERROR
+                    "The RunAnywhere kit's server component needs OpenSSL, and it was not found.\n"
+                    "  macOS:  brew install openssl@3, then configure with "
+                    "-DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)\n"
+                    "  Linux:  install libssl-dev (or openssl-devel)\n"
+                    "Configure with -DWALLY_SDK_KIT pointing at a kit without the server "
+                    "component if you do not need `wally serve`.")
+            endif()
+            target_link_libraries(${target} PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+            if(NOT WALLY_REPORTED_OPENSSL)
+                message(STATUS "wally: OpenSSL ${OPENSSL_VERSION} for the kit's server component")
+                set(WALLY_REPORTED_OPENSSL ON CACHE INTERNAL "")
+            endif()
+        endif()
     endif()
 endfunction()
 

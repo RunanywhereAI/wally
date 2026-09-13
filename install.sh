@@ -128,6 +128,16 @@ rm -rf "$LIB_DIR"
 mkdir -p "$(dirname "$LIB_DIR")" "$BIN_DIR"
 cp -R "$staged" "$LIB_DIR"
 ln -sfn "${LIB_DIR}/bin/wally" "${BIN_DIR}/wally"
+
+# Whether a future shell will find wally is decided by the PATH the user already
+# had, so it is read before this script puts BIN_DIR on its own PATH. Testing
+# afterwards always found BIN_DIR and so never wrote the startup file, and the
+# install reported success while a fresh terminal could not run wally.
+case ":${PATH}:" in
+    *":${BIN_DIR}:"*) PATH_ALREADY_HAS_BIN_DIR=1 ;;
+    *)                PATH_ALREADY_HAS_BIN_DIR=0 ;;
+esac
+
 export PATH="${BIN_DIR}:${PATH}"
 
 if ! command -v wally >/dev/null 2>&1; then
@@ -141,26 +151,38 @@ if [ "${installed_version}" != "${VERSION}" ]; then
 fi
 ok "wally v${VERSION} on PATH"
 
-# Put ~/.local/bin on PATH for future shells if it is not already there.
-case ":${PATH}:" in
-    *":${BIN_DIR}:"*) : ;;
-    *)
-        # Written to the rc file literally; the user's shell expands it later.
-        # shellcheck disable=SC2016
-        line='export PATH="$HOME/.local/bin:$PATH"'
-        case "$(basename "${SHELL:-}")" in
-            zsh)  rc="${HOME}/.zshrc" ;;
-            bash) rc="${HOME}/.bashrc" ;;
-            *)    rc="${HOME}/.profile" ;;
-        esac
-        if [ -w "$rc" ] || [ ! -e "$rc" ]; then
-            printf '\n# Added by the Wally installer\n%s\n' "$line" >> "$rc"
-            warn "added ${BIN_DIR} to your PATH in ${rc} (open a new shell)"
-        else
-            warn "${BIN_DIR} is not on your PATH — add: ${line}"
-        fi
-        ;;
-esac
+# Put BIN_DIR on PATH for future shells if the user's own PATH did not have it.
+if [ "${PATH_ALREADY_HAS_BIN_DIR}" -eq 0 ]; then
+    # $HOME is left unexpanded so the rc file keeps working if the home
+    # directory ever moves; the user's shell expands it when it runs.
+    case "$BIN_DIR" in
+        "${HOME}/"*) path_entry="\$HOME/${BIN_DIR#"${HOME}"/}" ;;
+        *)           path_entry="$BIN_DIR" ;;
+    esac
+    line="export PATH=\"${path_entry}:\$PATH\""
+    case "$(basename "${SHELL:-}")" in
+        zsh)  rc="${HOME}/.zshrc" ;;
+        bash) rc="${HOME}/.bashrc" ;;
+        *)    rc="${HOME}/.profile" ;;
+    esac
+    # Matching the directory rather than our exact line: somebody who added
+    # ~/.local/bin to their own rc file by hand wrote it their own way, and
+    # appending a second entry for a directory already on PATH helps nobody.
+    if [ -f "$rc" ] && grep -q "$path_entry" "$rc" 2>/dev/null; then
+        ok "${BIN_DIR} is already on PATH in ${rc} (open a new shell)"
+    elif [ -e "$rc" ] && [ ! -f "$rc" ]; then
+        # A directory or a device where the rc file should be. Nothing to append
+        # to, and the shell's own redirection error would reach the terminal.
+        warn "${rc} is not a regular file; add this line to your shell startup: ${line}"
+    elif { [ -w "$rc" ] || [ ! -e "$rc" ]; } &&
+        printf '\n# Added by the Wally installer\n%s\n' "$line" >> "$rc" 2>/dev/null; then
+        warn "added ${BIN_DIR} to your PATH in ${rc} (open a new shell)"
+    else
+        # Saying "added" when the write failed is how somebody ends up with a
+        # terminal that cannot find wally and no idea why.
+        warn "could not write ${rc}; add this line to it yourself: ${line}"
+    fi
+fi
 
 # The skill is what makes the next step self-explanatory in Claude Code: it
 # teaches the assistant the commands, the harnesses, and what to do when one is

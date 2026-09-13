@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -39,8 +40,15 @@ void fail(int status) {
 /// check above still runs against what the server sent; this replaces the origin
 /// only afterwards, only from the environment, and only with an origin that
 /// passes the same rules — the path and request code stay exactly as sent.
-/// The console origin the operator declared, normalised, or empty if none.
-std::string ConsoleWebOrigin() {
+/// The console origin the operator declared for `console_url`, normalised, or
+/// empty if none.
+///
+/// The baked origin is paired with the baked API and is used only when that API
+/// is the one being contacted. It used to apply to any API, so a dev build
+/// pointed at another console rewrote that console's approval URL to the baked
+/// origin and then refused it as off-origin — `WALLY_CONSOLE_URL` alone could
+/// not sign in to a local console (#91).
+std::string ConsoleWebOrigin(const std::string& console_url) {
     const char* configured = std::getenv("WALLY_CONSOLE_WEB_URL");
     if (configured == nullptr || *configured == '\0') {
         // rcli-era override, still honored so it doesn't go silently unread
@@ -50,8 +58,14 @@ std::string ConsoleWebOrigin() {
     if (configured == nullptr || *configured == '\0') {
         // A dev build carries its approval console compiled in (see
         // baked_endpoints.h.in) — empty in production builds, and the env
-        // overrides above always win.
-        configured = WALLY_BAKED_CONSOLE_WEB_ORIGIN;
+        // overrides above always win. Pairwise, exactly as
+        // account::TrustedBrowserOrigins pairs them.
+        const std::string baked_api = account::BakedConsoleApiUrl();
+        if (!baked_api.empty() && console_url == baked_api) {
+            configured = WALLY_BAKED_CONSOLE_WEB_ORIGIN;
+        } else {
+            return {};
+        }
     }
     std::string origin;
     if (configured == nullptr || *configured == '\0' ||
@@ -61,8 +75,8 @@ std::string ConsoleWebOrigin() {
     return origin;
 }
 
-std::string RebaseApprovalUrl(const std::string& url) {
-    const std::string origin = ConsoleWebOrigin();
+std::string RebaseApprovalUrl(const std::string& url, const std::string& console_url) {
+    const std::string origin = ConsoleWebOrigin(console_url);
     if (origin.empty()) {
         return url;
     }
@@ -190,7 +204,8 @@ int Login(const std::string& requested_console, bool open_browser) {
     // in the shipped configuration, because the environment variable it read is
     // unset unless an operator sets it.
     const std::vector<std::string> trusted = account::TrustedBrowserOrigins(console_url);
-    const std::string approval_url = RebaseApprovalUrl(authorization.verification_url);
+    const std::string approval_url =
+        RebaseApprovalUrl(authorization.verification_url, console_url);
     if (!account::BrowserUrlIsTrusted(approval_url, trusted)) {
         out::error_line("console returned an approval URL outside its origin");
         return 1;
@@ -207,18 +222,50 @@ int Login(const std::string& requested_console, bool open_browser) {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(authorization.expires_in);
     account::Grant grant;
+    int retry_after = 0;
     while (std::chrono::steady_clock::now() < deadline) {
-        switch (client.Poll(console_url, authorization, &grant, &failure)) {
-            case account::PollResult::Pending:
+        switch (client.Poll(console_url, authorization, &grant, &failure, &retry_after)) {
+            case account::PollResult::Pending: {
                 // Poll() reports a rate-limited console as Pending and leaves
                 // the reason in `failure`. Say so once rather than sitting
                 // silent, so a slow login does not look like a hang.
-                if (!failure.empty()) {
+                // Said once per refusal, and only when the wait below will not
+                // say it better. Two lines for one condition is noise.
+                if (!failure.empty() && retry_after <= authorization.interval) {
                     out::status_line("server busy, retrying");
-                    failure.clear();
                 }
-                std::this_thread::sleep_for(std::chrono::seconds(authorization.interval));
+                failure.clear();
+                // A console that asked for a delay gets it. Polling at the
+                // authorization's own interval through a 30-second backoff is
+                // just refusing to hear the answer (#90). The grant's expiry
+                // still bounds the wait, so this cannot outlive the login.
+                const int delay =
+                    account::NextPollDelaySeconds(authorization.interval, retry_after);
+                const auto wait = std::chrono::seconds(delay);
+                const auto remaining = deadline - std::chrono::steady_clock::now();
+                if (remaining <= std::chrono::seconds(0)) {
+                    // Leaves the switch, not the loop; the `while` condition
+                    // re-reads the clock and ends it on the next turn, which is
+                    // where the "expired" message lives.
+                    break;
+                }
+                if (wait > remaining) {
+                    // The console will still be refusing when this request
+                    // expires. Sleeping until then would look like a hang and
+                    // end in the same failure, so say the number and stop.
+                    out::error_line("Wally Cloud is busy - try again in " +
+                                    std::to_string(delay) + "s");
+                    return 1;
+                }
+                // A wait the console asked for is longer than the cadence the
+                // person was told about, so it is worth naming.
+                if (delay > authorization.interval) {
+                    out::status_line("console busy, waiting " + std::to_string(delay) + "s as asked");
+                }
+                std::this_thread::sleep_for(wait);
+                retry_after = 0;
                 continue;
+            }
             case account::PollResult::Denied:
                 out::error_line("the request was denied in the browser");
                 return 1;

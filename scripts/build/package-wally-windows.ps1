@@ -93,6 +93,38 @@ try {
     $env:PATH = "$BinDir;$OldPath"
     & (Join-Path $BinDir "wally.exe") version
     if ($LASTEXITCODE -ne 0) { throw "packaged wally version smoke failed" }
+
+    # The archive name says which flavour this is; the binary has to agree. A dev
+    # job whose endpoint variables were unset used to produce a `-dev` archive
+    # that defaults to production, and nothing noticed (wally #87). Asked in an
+    # empty profile with the runtime overrides cleared, so a signed-in account or
+    # a stray WALLY_CONSOLE_URL on the build machine cannot answer for the bake.
+    $ProbeProfile = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
+    New-Item $ProbeProfile -ItemType Directory -Force | Out-Null
+    $SavedEnv = @{}
+    foreach ($name in @("WALLY_CONSOLE_URL", "WALLY_CONSOLE_WEB_URL", "RCLI_CONSOLE_URL",
+                        "RCLI_CONSOLE_WEB_URL", "WALLY_PROFILE_DIR")) {
+        $SavedEnv[$name] = [Environment]::GetEnvironmentVariable($name)
+        Remove-Item "env:$name" -ErrorAction SilentlyContinue
+    }
+    $env:WALLY_PROFILE_DIR = $ProbeProfile
+    try {
+        $About = & (Join-Path $BinDir "wally.exe") about --json
+        if ($LASTEXITCODE -ne 0) { throw "packaged wally about --json failed" }
+    } finally {
+        foreach ($name in $SavedEnv.Keys) {
+            if ($null -eq $SavedEnv[$name]) { Remove-Item "env:$name" -ErrorAction SilentlyContinue }
+            else { Set-Item "env:$name" $SavedEnv[$name] }
+        }
+        Remove-Item $ProbeProfile -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $BuiltChannel = ([regex]::Match(($About -join ""), '"channel":"([^"]*)"')).Groups[1].Value
+    $WantChannel = if ($Channel -eq "dev") { "development" } else { "production" }
+    if ($BuiltChannel -ne $WantChannel) {
+        throw ("packaging a '$Channel' archive from a '$BuiltChannel' binary; expected " +
+               "channel '$WantChannel'. Set WALLY_CHANNEL and the baked endpoint variables " +
+               "in the configure environment, or package the matching build.")
+    }
 } finally {
     $env:PATH = $OldPath
 }

@@ -5,7 +5,6 @@
 #include "catalog/catalog.h"
 #include "commands/commands.h"
 #include "io/output.h"
-#include "harness/codex.h"
 #include "harness/harness.h"
 #include "harness/opencode.h"
 
@@ -51,26 +50,6 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
             return;
         }
         fail(harness::Launch("opencode", effective, *rest));
-    });
-
-    // Codex speaks the Responses API, which the hosted gateway serves and a
-    // local `wally serve` does not, so `wally codex` is hosted-only for now.
-    // Same prefix-command passthrough as opencode.
-    auto codex_model = std::make_shared<std::string>();
-    auto codex_rest = std::make_shared<std::vector<std::string>>();
-    auto* codex =
-        app.add_subcommand("codex", "open a coding session in Codex against a hosted model");
-    codex->add_option("-m,--model", *codex_model, "a console model id (e.g. glm-5.3-flash)");
-    codex->add_option("args", *codex_rest, "passed through to codex")->allow_extra_args();
-    codex->prefix_command();
-    codex->callback([codex_model, codex_rest] {
-        const std::string effective = ResolveDefaultModel(*codex_model);
-        if (effective.empty()) {
-            out::error_line("wally codex needs a hosted model: wally codex -m <console-model-id> "
-                            "(or set one with wally default-models <id>)");
-            fail(2);
-        }
-        fail(harness::LaunchCodexCloud(effective, *codex_rest));
     });
 }
 

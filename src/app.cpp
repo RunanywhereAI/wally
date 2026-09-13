@@ -117,8 +117,8 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
         {"run", kModels},        {"chat", kModels},       {"ls", kModels},
         {"show", kModels},       {"pull", kModels},       {"rm", kModels},
         {"models", kModels},     {"lora", kModels},
-        {"opencode", kAgents},        {"codex", kAgents},
-        {"claude-code", kAgents},     {"claude-desktop", kAgents},
+        {"opencode", kAgents},        {"claude-code", kAgents},
+        {"claude-desktop", kAgents},
         {"clion", kAgents},           {"rustrover", kAgents},
         {"default-models", kAgents},
         {"auth", kCloud},        {"login", kCloud},       {"logout", kCloud},
@@ -159,7 +159,7 @@ namespace {
 /// register_harness; a name here that is not a real subcommand is harmless.
 bool IsPassthroughCommand(const std::string& token) {
     static const std::set<std::string> kNames = {"claude-code", "claude-desktop", "clion",
-                                                 "rustrover",   "opencode",       "codex"};
+                                                 "rustrover", "opencode"};
     return kNames.count(token) != 0;
 }
 
@@ -233,8 +233,8 @@ int run(int argc, char** argv) {
     // cloud path exists.
     app.footer(
         "A model your account has on the hosted console (not this machine) runs through "
-        "`wally claude-code -m <id>`, `wally opencode --cloud -m <id>` or "
-        "`wally codex -m <id>`, not `run`/`llm generate`.");
+        "`wally claude-code -m <id>` or `wally opencode --cloud -m <id>`, not "
+        "`run`/`llm generate`.");
 
     // A `--` before the wrapped tool's own arguments, added for the reader, so
     // `wally claude-code --dangerously-skip-permissions` forwards the flag

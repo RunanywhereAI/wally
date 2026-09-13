@@ -663,6 +663,14 @@ int HttpResponse::retry_after_seconds() const {
     return seconds > 86400 ? 86400 : seconds;
 }
 
+int NextPollDelaySeconds(int interval, int retry_after) {
+    // The authorization's own cadence is the floor and the console's request
+    // raises it. A negative or absent delay means the console asked for nothing.
+    const int floor = std::max(interval, 1);
+    const int asked = std::max(retry_after, 0);
+    return std::max(floor, asked);
+}
+
 ConsoleClient::ConsoleClient(Transport transport)
     : transport_(transport ? std::move(transport) : Transport(DefaultTransport)) {}
 
@@ -694,7 +702,6 @@ bool ConsoleClient::BeginAuthorization(const std::string& console_url, const std
     // out by hand (InferenceInfra#444). Do the waiting here, for as long as the
     // server asked, and only then fail with the same message as before.
     constexpr int kRateLimitRetries = 3;
-    constexpr int kRateLimitMaxWaitSeconds = 5;
     const HttpRequest start{"POST", origin + "/auth/cli/start", Json(request).dump(), {}};
     HttpResponse response;
     for (int attempt = 0;; ++attempt) {
@@ -706,8 +713,19 @@ bool ConsoleClient::BeginAuthorization(const std::string& console_url, const std
             break;
         }
         const int asked = response.retry_after_seconds();
-        const int wait =
-            asked >= 0 ? std::min(std::max(asked, 1), kRateLimitMaxWaitSeconds) : 1;
+        // No header is the only case this guesses at, and it guesses small.
+        const int wait = asked >= 0 ? std::max(asked, 1) : 1;
+        // Clipping the delay to a ceiling and retrying anyway was the bug: a
+        // "Retry-After: 30" became three refused attempts inside 15 seconds,
+        // and the login failed before the server had finished asking for quiet
+        // (#90). Past the ceiling, waiting is the person's call, not ours.
+        if (wait > kLoginMaxWaitSeconds) {
+            // Retrying before this elapses would only be refused again. Say what
+            // the server asked for, in the words the ordinary rate-limit path
+            // already uses, and let the person decide.
+            HttpError("authorization", origin, response, error);
+            return false;
+        }
         if (on_retry) {
             on_retry();
         }
@@ -739,7 +757,10 @@ bool ConsoleClient::BeginAuthorization(const std::string& console_url, const std
 }
 
 PollResult ConsoleClient::Poll(const std::string& console_url, const Authorization& authorization,
-                               Grant* grant, std::string* error) const {
+                               Grant* grant, std::string* error, int* retry_after) const {
+    if (retry_after != nullptr) {
+        *retry_after = 0;
+    }
     if (grant == nullptr) {
         if (error != nullptr) {
             *error = "internal authorization grant error";
@@ -766,6 +787,11 @@ PollResult ConsoleClient::Poll(const std::string& console_url, const Authorizati
         // failing the whole login on one refusal (InferenceInfra#444). The loop
         // is bounded by the authorization's own expiry, so this cannot spin.
         if (response.status == 429 || response.status >= 500) {
+            // Pending is the right answer, but polling again at the normal
+            // cadence is not: a console asking for 30s means it (#90).
+            if (retry_after != nullptr) {
+                *retry_after = std::max(response.retry_after_seconds(), 0);
+            }
             return PollResult::Pending;
         }
         return PollResult::Failed;
