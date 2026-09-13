@@ -1,17 +1,18 @@
 #include "anthropic/messages.h"
 
+#include <httplib.h>
+
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
 #include <thread>
-
-#include <httplib.h>
-#include <nlohmann/json.hpp>
 
 #include "anthropic/translate.h"
 #include "config/cli_paths.h"
@@ -58,8 +59,8 @@ void LogUpstreamError(const std::string& model, bool streaming, int status,
             character = ' ';
         }
     }
-    log << when << " model=" << model << " stream=" << (streaming ? 1 : 0)
-        << " status=" << status << " body=" << snippet << '\n';
+    log << when << " model=" << model << " stream=" << (streaming ? 1 : 0) << " status=" << status
+        << " body=" << snippet << '\n';
 }
 
 /// Split "http://host:port/v1" into the host root and the path prefix httplib
@@ -121,8 +122,11 @@ std::unique_ptr<Runtime> g_runtime;
 /// the first went out on a stale keep-alive (see RetryOnFreshConnection).
 /// `received_any` reports whether any response bytes reached `receiver`, which
 /// is what forbids the retry once output has started.
-httplib::Result PostUpstream(Runtime& runtime, const std::string& path, const std::string& body,
-                             const httplib::ContentReceiver& receiver, bool* received_any) {
+httplib::Result
+PostUpstream(Runtime& runtime, const std::string& path, const std::string& body,
+             const httplib::ContentReceiver& receiver, bool* received_any,
+             const httplib::ResponseHandler& headers = nullptr,
+             const std::function<void(httplib::Client*)>& client_changed = nullptr) {
     for (int attempt = 0; attempt < 2; ++attempt) {
         wally::net::UpstreamLease lease = runtime.pool->acquire(runtime.api_key);
         if (runtime.verbose) {
@@ -130,13 +134,34 @@ httplib::Result PostUpstream(Runtime& runtime, const std::string& path, const st
                              (lease.reused() ? "reused" : "fresh"));
         }
         *received_any = false;
-        httplib::Result reply =
-            receiver ? lease.client().Post(path, httplib::Headers(), body, "application/json",
-                                           [&](const char* data, size_t length) {
-                                               *received_any = true;
-                                               return receiver(data, length);
-                                           })
-                     : lease.client().Post(path, body, "application/json");
+        // Clear the published pointer before the lease dies, including when
+        // the HTTP library throws, so cancellation never sees a freed client.
+        struct Registration {
+            const std::function<void(httplib::Client*)>& changed;
+            ~Registration() {
+                if (changed)
+                    changed(nullptr);
+            }
+        } registration{client_changed};
+        if (client_changed)
+            client_changed(&lease.client());
+        bool received_headers = false;
+        httplib::Request outbound;
+        outbound.method = "POST";
+        outbound.path = path;
+        outbound.body = body;
+        outbound.set_header("Content-Type", "application/json");
+        outbound.response_handler = [&](const httplib::Response& response) {
+            received_headers = true;
+            return !headers || headers(response);
+        };
+        if (receiver) {
+            outbound.content_receiver = [&](const char* data, size_t length, uint64_t, uint64_t) {
+                *received_any = true;
+                return receiver(data, length);
+            };
+        }
+        httplib::Result reply = lease.client().send(outbound);
         if (reply) {
             // A complete reply, whatever its status, leaves the connection
             // clean; the lease goes back to the pool when it is destroyed.
@@ -144,11 +169,12 @@ httplib::Result PostUpstream(Runtime& runtime, const std::string& path, const st
         }
         // No reply: the socket is in no state to reuse.
         lease.discard();
-        if (attempt == 0 && wally::net::RetryOnFreshConnection(reply.error(), false,
-                                                                *received_any, lease.reused())) {
+        if (attempt == 0 && wally::net::RetryOnFreshConnection(reply.error(), received_headers,
+                                                               *received_any, lease.reused())) {
             if (runtime.verbose) {
-                out::status_line("anthropic: upstream connection was stale; retrying once on a "
-                                 "fresh one");
+                out::status_line(
+                    "anthropic: upstream connection was stale; retrying once on a "
+                    "fresh one");
             }
             continue;
         }
@@ -161,7 +187,7 @@ void HandleNonStreaming(Runtime& runtime, const Json& request, httplib::Response
     const Json upstream = translate::RequestToOpenAI(request, runtime.model);
     bool received_any = false;
     const httplib::Result reply = PostUpstream(runtime, runtime.prefix + "/chat/completions",
-                                              upstream.dump(), nullptr, &received_any);
+                                               upstream.dump(), nullptr, &received_any);
     if (!reply || reply->status < 200 || reply->status >= 300) {
         const int status = reply ? reply->status : 0;
         const std::string body = reply ? reply->body : std::string();
@@ -169,7 +195,7 @@ void HandleNonStreaming(Runtime& runtime, const Json& request, httplib::Response
         response.status = reply ? reply->status : 502;
         // A 429 from the hosted API carries a Retry-After the wrapped tool
         // should honor; httplib drops upstream headers unless we copy them.
-        if (reply && reply->status == 429 && reply->has_header("Retry-After")) {
+        if (reply && reply->has_header("Retry-After")) {
             response.set_header("Retry-After", reply->get_header_value("Retry-After"));
         }
         std::string type;
@@ -204,81 +230,182 @@ void HandleNonStreaming(Runtime& runtime, const Json& request, httplib::Response
                          "application/json");
 }
 
+// Read headers before the server commits its downstream response. A single
+// chunk slot bounds read-ahead and preserves backpressure on long streams.
+struct StreamingReply {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::thread worker;
+    httplib::Client* client = nullptr;
+    bool headers_ready = false;
+    bool finished = false;
+    bool stopped = false;
+    bool successful = false;
+    int status = 0;
+    std::string retry_after;
+    std::string chunk;
+    std::string error_body;
+
+    ~StreamingReply() {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            stopped = true;
+            if (client)
+                client->stop();
+            changed.notify_all();
+        }
+        if (worker.joinable())
+            worker.join();
+    }
+
+    bool Read(std::string* next) {
+        std::unique_lock<std::mutex> lock(mutex);
+        changed.wait(lock, [&] { return !chunk.empty() || finished; });
+        if (chunk.empty())
+            return false;
+        *next = std::move(chunk);
+        chunk.clear();
+        changed.notify_all();
+        return true;
+    }
+};
+
 void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& response) {
     // The upstream body is built here rather than in the sink: the sink runs
     // after this function returns, and everything it touches has to outlive it.
-    auto upstream = std::make_shared<std::string>(
-        translate::RequestToOpenAI(request, runtime.model).dump());
+    auto upstream =
+        std::make_shared<std::string>(translate::RequestToOpenAI(request, runtime.model).dump());
     auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
     auto model = std::make_shared<std::string>(runtime.model);
     // The Runtime outlives every sink: Stop() stops the server and joins its
     // thread before the Runtime is destroyed, and the pool is shared besides.
     Runtime* owner = &runtime;
 
+    auto stream = std::make_shared<StreamingReply>();
+    StreamingReply* transfer = stream.get();
+    transfer->worker = std::thread([transfer, owner, upstream, path] {
+        bool received_any = false;
+        try {
+            auto reply = PostUpstream(
+                *owner, *path, *upstream,
+                [&](const char* data, size_t length) {
+                    std::unique_lock<std::mutex> lock(transfer->mutex);
+                    if (transfer->status < 200 || transfer->status >= 300) {
+                        constexpr size_t cap = 8192;
+                        transfer->error_body.append(
+                            data, std::min(length, cap - transfer->error_body.size()));
+                        return !transfer->stopped;
+                    }
+                    transfer->changed.wait(
+                        lock, [&] { return transfer->chunk.empty() || transfer->stopped; });
+                    if (transfer->stopped)
+                        return false;
+                    transfer->chunk.assign(data, length);
+                    transfer->changed.notify_all();
+                    return true;
+                },
+                &received_any,
+                [&](const httplib::Response& headers) {
+                    std::lock_guard<std::mutex> lock(transfer->mutex);
+                    transfer->status = headers.status;
+                    transfer->retry_after = headers.get_header_value("Retry-After");
+                    transfer->headers_ready = true;
+                    transfer->changed.notify_all();
+                    return !transfer->stopped;
+                },
+                [&](httplib::Client* client) {
+                    std::lock_guard<std::mutex> lock(transfer->mutex);
+                    transfer->client = client;
+                    if (client && transfer->stopped)
+                        client->stop();
+                });
+            std::lock_guard<std::mutex> lock(transfer->mutex);
+            transfer->successful = reply && reply->status >= 200 && reply->status < 300;
+            transfer->finished = true;
+            transfer->changed.notify_all();
+        } catch (const std::exception&) {
+            std::lock_guard<std::mutex> lock(transfer->mutex);
+            transfer->finished = true;
+            transfer->changed.notify_all();
+        }
+    });
+    {
+        std::unique_lock<std::mutex> lock(stream->mutex);
+        stream->changed.wait(lock, [&] { return stream->headers_ready || stream->finished; });
+        if (stream->status < 200 || stream->status >= 300) {
+            stream->changed.wait(lock, [&] { return stream->finished; });
+            response.status = stream->status ? stream->status : 502;
+            if (!stream->retry_after.empty())
+                response.set_header("Retry-After", stream->retry_after);
+            std::string type, message;
+            translate::UpstreamFailure(stream->status, stream->error_body, &type, &message);
+            LogUpstreamError(*model, true, stream->status, stream->error_body);
+            response.set_content(translate::ErrorBody(type, message), "application/json");
+            return;
+        }
+    }
+
     response.set_chunked_content_provider(
-        "text/event-stream",
-        [upstream, path, model, owner](size_t /*offset*/, httplib::DataSink& sink) {
+        "text/event-stream", [stream, model](size_t /*offset*/, httplib::DataSink& sink) {
             translate::StreamState state;
             state.model = *model;
             std::string pending;
-            // The upstream status is only known once Post returns, so the start
-            // of the body is kept regardless. On a non-2xx reply that is the
-            // error body, which would otherwise be fed to the SSE frame parser
-            // and silently dropped; capped so a real (2xx) stream of any size
-            // costs only these few KB.
+            // Retain a bounded prefix for diagnosing a transport failure
+            // after successful response headers have already been forwarded.
             std::string error_body;
             constexpr size_t kErrorBodyCap = 8192;
 
-            bool received_any = false;
-            const httplib::Result reply = PostUpstream(
-                *owner, *path, *upstream,
-                [&](const char* data, size_t length) {
-                    if (error_body.size() < kErrorBodyCap) {
-                        error_body.append(data,
-                                          std::min(length, kErrorBodyCap - error_body.size()));
+            auto receive = [&](const char* data, size_t length) {
+                if (error_body.size() < kErrorBodyCap) {
+                    error_body.append(data, std::min(length, kErrorBodyCap - error_body.size()));
+                }
+                pending.append(data, length);
+                // SSE frames are separated by a blank line, and a chunk can
+                // split one in half, so only whole frames are consumed.
+                size_t split = 0;
+                while ((split = pending.find("\n\n")) != std::string::npos) {
+                    const std::string frame = pending.substr(0, split);
+                    pending.erase(0, split + 2);
+                    const size_t field = frame.find("data:");
+                    if (field == std::string::npos) {
+                        continue;
                     }
-                    pending.append(data, length);
-                    // SSE frames are separated by a blank line, and a chunk can
-                    // split one in half, so only whole frames are consumed.
-                    size_t split = 0;
-                    while ((split = pending.find("\n\n")) != std::string::npos) {
-                        const std::string frame = pending.substr(0, split);
-                        pending.erase(0, split + 2);
-                        const size_t field = frame.find("data:");
-                        if (field == std::string::npos) {
-                            continue;
-                        }
-                        std::string payload = frame.substr(field + 5);
-                        while (!payload.empty() && (payload.front() == ' ' || payload.front() == '\r')) {
-                            payload.erase(payload.begin());
-                        }
-                        if (payload == "[DONE]") {
-                            continue;
-                        }
-                        Json chunk;
-                        try {
-                            chunk = Json::parse(payload);
-                        } catch (const Json::exception&) {
-                            continue;
-                        }
-                        std::string events;
-                        try {
-                            events = translate::StreamChunkToAnthropic(chunk, &state);
-                        } catch (const std::exception&) {
-                            // A chunk in a shape the mapping did not expect is
-                            // a chunk to skip, not a reason to kill the run.
-                            continue;
-                        }
-                        if (!events.empty() && !sink.write(events.data(), events.size())) {
-                            return false;
-                        }
+                    std::string payload = frame.substr(field + 5);
+                    while (!payload.empty() &&
+                           (payload.front() == ' ' || payload.front() == '\r')) {
+                        payload.erase(payload.begin());
                     }
-                    return true;
-                },
-                &received_any);
+                    if (payload == "[DONE]") {
+                        continue;
+                    }
+                    Json chunk;
+                    try {
+                        chunk = Json::parse(payload);
+                    } catch (const Json::exception&) {
+                        continue;
+                    }
+                    std::string events;
+                    try {
+                        events = translate::StreamChunkToAnthropic(chunk, &state);
+                    } catch (const std::exception&) {
+                        // A chunk in a shape the mapping did not expect is
+                        // a chunk to skip, not a reason to kill the run.
+                        continue;
+                    }
+                    if (!events.empty() && !sink.write(events.data(), events.size())) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            std::string bytes;
+            while (stream->Read(&bytes)) {
+                if (!receive(bytes.data(), bytes.size()))
+                    return false;
+            }
 
-            if (!reply || reply->status < 200 || reply->status >= 300) {
-                const int status = reply ? reply->status : 0;
+            if (!stream->successful) {
+                const int status = 0;
                 LogUpstreamError(*model, true, status, error_body);
                 std::string type;
                 std::string message;
@@ -305,8 +432,8 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
 
 }  // namespace
 
-bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* shim,
-           bool verbose, const std::string& advertised) {
+bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* shim, bool verbose,
+           const std::string& advertised) {
     if (shim == nullptr) {
         return false;
     }
@@ -327,46 +454,46 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
     runtime->pool = std::make_shared<wally::net::UpstreamPool>(pool_options);
 
     Runtime* raw = runtime.get();
-    raw->server.Post("/v1/messages", [raw](const httplib::Request& request,
-                                           httplib::Response& response) {
-        if (!wally::net::ConstantTimeEquals(PresentedToken(request), raw->local_token)) {
-            response.status = 401;
-            response.set_content(
-                translate::ErrorBody("authentication_error",
-                                     "this local endpoint only serves the tool wally launched"),
-                "application/json");
-            return;
-        }
-        if (raw->verbose) {
-            out::status_line("anthropic: POST /v1/messages, " +
-                        std::to_string(request.body.size()) + " bytes");
-        }
-        Json parsed;
-        try {
-            parsed = Json::parse(request.body);
-        } catch (const Json::exception& error) {
-            response.status = 400;
-            response.set_content(translate::ErrorBody("invalid_request_error", error.what()),
-                                 "application/json");
-            return;
-        }
-        try {
-            if (parsed.value("stream", false)) {
-                HandleStreaming(*raw, parsed, response);
-            } else {
-                HandleNonStreaming(*raw, parsed, response);
+    raw->server.Post(
+        "/v1/messages", [raw](const httplib::Request& request, httplib::Response& response) {
+            if (!wally::net::ConstantTimeEquals(PresentedToken(request), raw->local_token)) {
+                response.status = 401;
+                response.set_content(
+                    translate::ErrorBody("authentication_error",
+                                         "this local endpoint only serves the tool wally launched"),
+                    "application/json");
+                return;
             }
-        } catch (const std::exception& error) {
-            // httplib does not catch, and an exception leaving here reaches
-            // std::terminate: the editor's model call would abort wally.
             if (raw->verbose) {
-                out::status_line(std::string("anthropic: request failed: ") + error.what());
+                out::status_line("anthropic: POST /v1/messages, " +
+                                 std::to_string(request.body.size()) + " bytes");
             }
-            response.status = 500;
-            response.set_content(translate::ErrorBody("api_error", error.what()),
-                                 "application/json");
-        }
-    });
+            Json parsed;
+            try {
+                parsed = Json::parse(request.body);
+            } catch (const Json::exception& error) {
+                response.status = 400;
+                response.set_content(translate::ErrorBody("invalid_request_error", error.what()),
+                                     "application/json");
+                return;
+            }
+            try {
+                if (parsed.value("stream", false)) {
+                    HandleStreaming(*raw, parsed, response);
+                } else {
+                    HandleNonStreaming(*raw, parsed, response);
+                }
+            } catch (const std::exception& error) {
+                // httplib does not catch, and an exception leaving here reaches
+                // std::terminate: the editor's model call would abort wally.
+                if (raw->verbose) {
+                    out::status_line(std::string("anthropic: request failed: ") + error.what());
+                }
+                response.status = 500;
+                response.set_content(translate::ErrorBody("api_error", error.what()),
+                                     "application/json");
+            }
+        });
 
     // Discovery, in Anthropic's shape rather than OpenAI's.
     //
@@ -377,16 +504,15 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
     raw->server.Get("/v1/models", [raw](const httplib::Request&, httplib::Response& response) {
         if (raw->verbose) {
             out::status_line("anthropic: GET /v1/models -> " + raw->advertised + " (serving " +
-                        raw->model + ")");
+                             raw->model + ")");
         }
         // The shape claude.com/docs/third-party/claude-desktop documents for a
         // gateway, which is OpenAI's list envelope rather than Anthropic's.
         // Guessing the Anthropic shape here is what produced "Gateway returned
         // no usable models".
         const Json entry{{"id", raw->advertised}, {"object", "model"}};
-        response.set_content(
-            Json{{"object", "list"}, {"data", Json::array({entry})}}.dump(),
-            "application/json");
+        response.set_content(Json{{"object", "list"}, {"data", Json::array({entry})}}.dump(),
+                             "application/json");
     });
 
     // Claude Code probes this before it sends anything and treats a failure as
@@ -408,20 +534,19 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
 
     // A route we do not translate should say so, not 404 into a silence the
     // reader has to guess at.
-    raw->server.set_error_handler([raw](const httplib::Request& request,
-                                        httplib::Response& response) {
-        if (raw->verbose) {
-            out::status_line("anthropic: " + request.method + " " + request.path + " -> " +
-                        std::to_string(response.status));
-        }
-        if (response.body.empty()) {
-            response.set_content(
-                translate::ErrorBody("not_found_error",
-                                     request.method + " " + request.path +
-                                         " is not something wally translates"),
-                "application/json");
-        }
-    });
+    raw->server.set_error_handler(
+        [raw](const httplib::Request& request, httplib::Response& response) {
+            if (raw->verbose) {
+                out::status_line("anthropic: " + request.method + " " + request.path + " -> " +
+                                 std::to_string(response.status));
+            }
+            if (response.body.empty()) {
+                response.set_content(translate::ErrorBody("not_found_error",
+                                                          request.method + " " + request.path +
+                                                              " is not something wally translates"),
+                                     "application/json");
+            }
+        });
 
     const int port = raw->server.bind_to_any_port("127.0.0.1");
     if (port <= 0) {

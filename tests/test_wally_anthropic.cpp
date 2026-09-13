@@ -1,15 +1,15 @@
+#include "fake_upstream.h"
 #include "test_common.h"
 
+#include <httplib.h>
+
 #include <atomic>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include <httplib.h>
-#include <nlohmann/json.hpp>
-
 #include "anthropic/messages.h"
-#include "fake_upstream.h"
 #include "harness/harness.h"
 #include "net/upstream_pool.h"
 
@@ -21,6 +21,59 @@ namespace {
 using Json = nlohmann::json;
 using wally_tests::Describe;
 using wally_tests::FakeUpstream;
+
+TestResult test_overload_headers_survive_streaming() {
+    TestResult result;
+    result.test_name = "overload_headers_survive_streaming";
+    httplib::Server server;
+    std::atomic<int> calls{0};
+    server.Post("/v1/chat/completions", [&](const httplib::Request& request,
+                                            httplib::Response& response) {
+        ++calls;
+        response.status = Json::parse(request.body).value("max_tokens", 429);
+        response.set_header("Retry-After", response.status == 429 ? "7" : "Wed, 21 Oct 2037 07:28:00 GMT");
+        if (request.get_header_value("Authorization") != "Bearer test-upstream-key") {
+            response.status = 401;
+        }
+        response.set_content(R"({"error":{"message":"capacity exhausted"}})", "application/json");
+    });
+    const int port = server.bind_to_any_port("127.0.0.1");
+    std::thread thread([&] { server.listen_after_bind(); });
+    server.wait_until_ready();
+    wally::harness::Endpoint endpoint;
+    endpoint.base_url = "http://127.0.0.1:" + std::to_string(port) + "/v1";
+    endpoint.api_key = "test-upstream-key";
+    wally::anthropic::Shim shim;
+    const bool started = wally::anthropic::Start(endpoint, "test-model", &shim);
+    bool okay = started;
+    if (started) {
+        httplib::Client client(shim.base_url);
+        for (bool streaming : {false, true}) {
+            for (int status : {429, 503}) {
+                Json body{{"model", "test"},
+                          {"stream", streaming},
+                          {"max_tokens", status},
+                          {"messages", Json::array({Json{{"role", "user"}, {"content", "hi"}}})}};
+                auto reply = client.Post("/v1/messages", {{"x-api-key", shim.auth_token}},
+                                         body.dump(), "application/json");
+                okay = okay && reply && reply->status == status &&
+                       reply->get_header_value("Retry-After") ==
+                           (status == 429 ? "7" : "Wed, 21 Oct 2037 07:28:00 GMT") &&
+                       reply->get_header_value("Content-Type").find("application/json") == 0 &&
+                       reply->body.find("capacity exhausted") != std::string::npos;
+                result.actual += std::to_string(streaming) + ":" +
+                                 std::to_string(reply ? reply->status : 0) + ":" +
+                                 (reply ? reply->get_header_value("Retry-After") : "") + " ";
+            }
+        }
+    }
+    wally::anthropic::Stop(&shim);
+    server.stop();
+    thread.join();
+    result.passed = okay && calls == 4;
+    result.expected = "stream/nonstream preserve 429/503 and numeric/date Retry-After; authenticated once each";
+    return result;
+}
 #if !defined(_WIN32)
 using wally_tests::HalfOpenUpstream;
 #endif
@@ -59,7 +112,6 @@ class RunningShim {
     bool started_ = false;
 };
 
-
 // Test A. Two requests, one after the other, must arrive at the upstream on
 // the same connection. Building a client per request (the behaviour #80
 // fixes) opens a new connection each time, so the ports differ.
@@ -77,8 +129,8 @@ TestResult test_sequential_requests_reuse_the_upstream_connection() {
     const std::vector<int> ports = upstream.ports();
     if (first != 200 || second != 200 || ports.size() != 2) {
         result.expected = "two 200s and two upstream requests";
-        result.actual = std::to_string(first) + ", " + std::to_string(second) + ", " +
-                        Describe(ports);
+        result.actual =
+            std::to_string(first) + ", " + std::to_string(second) + ", " + Describe(ports);
         return result;
     }
     result.passed = ports[0] == ports[1];
@@ -111,8 +163,8 @@ TestResult test_concurrent_requests_use_separate_connections() {
     const std::vector<int> ports = upstream.ports();
     if (first != 200 || second != 200 || ports.size() != 2) {
         result.expected = "two 200s and two upstream requests";
-        result.actual = std::to_string(first.load()) + ", " + std::to_string(second.load()) +
-                        ", " + Describe(ports);
+        result.actual = std::to_string(first.load()) + ", " + std::to_string(second.load()) + ", " +
+                        Describe(ports);
         return result;
     }
     result.passed = ports[0] != ports[1];
@@ -120,7 +172,6 @@ TestResult test_concurrent_requests_use_separate_connections() {
     result.actual = Describe(ports);
     return result;
 }
-
 
 // The pool on its own, no translator in front of it.
 TestResult test_pool_returns_a_clean_lease_and_drops_a_discarded_one() {
@@ -134,8 +185,8 @@ TestResult test_pool_returns_a_clean_lease_and_drops_a_discarded_one() {
         wally::net::UpstreamLease first = pool->acquire("k");
         if (first.reused() || pool->idle() != 0) {
             result.expected = "a fresh lease from an empty pool";
-            result.actual = "reused=" + std::to_string(first.reused()) + " idle=" +
-                            std::to_string(pool->idle());
+            result.actual = "reused=" + std::to_string(first.reused()) +
+                            " idle=" + std::to_string(pool->idle());
             return result;
         }
     }
@@ -218,7 +269,8 @@ TestResult test_retry_rule_only_on_a_stale_reused_connection() {
         {E::Read, false, true, true, false, "bytes reached the caller: never repeat"},
         {E::Timeout, false, false, true, false, "read timeout is not a stale socket"},
         {E::ConnectionTimeout, false, false, true, false, "connect timeout is the network"},
-        {E::SSLServerVerification, false, false, true, false, "certificate failure is not transient"},
+        {E::SSLServerVerification, false, false, true, false,
+         "certificate failure is not transient"},
         {E::Canceled, false, false, true, false, "a reader that left is not a stale socket"},
     };
     for (const Case& c : cases) {
@@ -232,7 +284,6 @@ TestResult test_retry_rule_only_on_a_stale_reused_connection() {
     result.passed = true;
     return result;
 }
-
 
 // Step 4a. A reused connection the far side has quietly stopped serving:
 // the request goes out, nothing comes back, the connection ends. The
@@ -263,8 +314,8 @@ TestResult test_stale_reused_connection_is_retried_once_on_a_fresh_one() {
     result.expected =
         "200, 200; three upstream requests, the first two on one connection, the third on another";
     result.actual = std::to_string(first) + ", " + std::to_string(second) + "; " + Describe(ports);
-    result.passed = first == 200 && second == 200 && ports.size() == 3 &&
-                    ports[0] == ports[1] && ports[2] != ports[0];
+    result.passed = first == 200 && second == 200 && ports.size() == 3 && ports[0] == ports[1] &&
+                    ports[2] != ports[0];
     return result;
 #endif
 }
@@ -294,8 +345,9 @@ TestResult test_upstream_dying_mid_stream_is_not_retried() {
     upstream.die_mid_stream(true);
     const int dying = shim.Send(true);
     const std::vector<int> ports = upstream.ports();
-    result.expected = "200, 200 (the error rides inside the stream); exactly two upstream "
-                      "requests on one connection";
+    result.expected =
+        "200, 200 (the error rides inside the stream); exactly two upstream "
+        "requests on one connection";
     result.actual = std::to_string(warm) + ", " + std::to_string(dying) + "; " + Describe(ports);
     result.passed = warm == 200 && dying == 200 && ports.size() == 2 && ports[0] == ports[1];
     return result;
@@ -305,6 +357,7 @@ TestResult test_upstream_dying_mid_stream_is_not_retried() {
 
 int main(int argc, char** argv) {
     TestSuite suite("wally_anthropic");
+    suite.add("overload_headers_survive_streaming", test_overload_headers_survive_streaming);
     suite.add("sequential_requests_reuse_the_upstream_connection",
               test_sequential_requests_reuse_the_upstream_connection);
     suite.add("concurrent_requests_use_separate_connections",
