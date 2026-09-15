@@ -52,18 +52,10 @@ struct StreamState {
     bool opened = false;
     /// A text content block is currently open (assigned text_index).
     bool block_open = false;
-    /// A thinking content block is currently open (assigned thinking_index).
-    /// Reasoning models stream it separately from the answer text — OpenAI's
-    /// `delta.reasoning_content` next to `delta.content` — and it can run to
-    /// the model's whole token budget before any answer text exists, so it
-    /// gets its own live block rather than being folded into (or dropped
-    /// from) the text one.
-    bool thinking_open = false;
-    /// Content-block indices are assigned in the order a block first opens,
-    /// live ones (thinking, text) claiming theirs before any tool_use block
-    /// deferred to StreamCloseToAnthropic. -1 until assigned.
+    /// The text block claims index 0 the first time content arrives; a tool_use
+    /// block deferred to StreamCloseToAnthropic takes whatever follows. -1 until
+    /// assigned.
     int text_index = -1;
-    int thinking_index = -1;
     /// The next index StreamCloseToAnthropic hands to a tool_use block.
     int next_index = 0;
     /// Set once the endpoint has reported a failure, after which the closing

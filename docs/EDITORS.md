@@ -11,7 +11,7 @@ configure by hand:
 wally claude-code -m qwen3-0.6b
 wally hermes -m qwen3-0.6b
 wally deepseek -m glm-5.3-flash
-wally openclaw -m models/gemma-4-31b-it
+wally openclaw -m gemma-4-31b-it
 ```
 
 The model can be one on this machine or one the console serves. Without `-m` the
@@ -73,7 +73,7 @@ A model you have not downloaded can still answer, if the console serves it:
 ```bash
 wally login
 wally whoami
-wally run models/gemma-4-31b-it "why is the sky blue"
+wally run gemma-4-31b-it "why is the sky blue"
 ```
 
 `wally login` opens the console in a browser and waits for you to approve the

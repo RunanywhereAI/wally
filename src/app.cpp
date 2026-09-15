@@ -225,16 +225,25 @@ namespace {
 /// Only our own profile: `GatewayApplied()` is false for a gateway somebody
 /// else configured, and for the run that is deliberately re-applying ours.
 void RestoreStaleDesktopGateway(int argc, char** argv) {
+    bool quiet = false;
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "claude-desktop") {
+        const std::string arg = argv[i];
+        if (arg == "claude-desktop") {
             return;
+        }
+        // This runs before CLI11 parses the root flags, so `--quiet` is read
+        // straight off argv, the same way `--no-color` is above. Under it the
+        // healing still happens; only the status line is held back, because
+        // quiet promises errors only.
+        if (arg == "-q" || arg == "--quiet") {
+            quiet = true;
         }
     }
     if (!desktop::GatewayApplied()) {
         return;
     }
     std::string failure;
-    if (desktop::RestoreGateway(&failure)) {
+    if (desktop::RestoreGateway(&failure) && !quiet) {
         out::status_line("claude desktop was still pointed at a wally endpoint; put it back");
     }
 }

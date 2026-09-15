@@ -518,32 +518,17 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
     // Reasoning models (glm-5.3-flash among them) stream their thinking as
     // `reasoning_content`, separate from and usually well before `content` —
     // curled directly against the console, a throwaway max_tokens spent 199
-    // of 200 completion_tokens here before ever reaching answer text. Mapped
-    // to Anthropic's own `thinking` content block, the same shape Claude
-    // Code and Desktop already render for extended thinking. There is no
-    // `signature` to carry: that field authenticates Anthropic's own
-    // extended-thinking output for a later tool-use round trip, and an
-    // OpenAI-shaped endpoint never produces one — sending a fabricated value
-    // would claim a guarantee nobody backed, so it goes out empty instead.
-    const std::string thinking = delta.contains("reasoning_content") &&
-                                         delta["reasoning_content"].is_string()
-                                     ? delta["reasoning_content"].get<std::string>()
-                                     : std::string();
-    if (!thinking.empty()) {
-        state->output_chars += static_cast<int>(thinking.size());
-        if (!state->thinking_open) {
-            state->thinking_open = true;
-            state->thinking_index = state->next_index++;
-            out += Event("content_block_start",
-                         Json{{"type", "content_block_start"},
-                              {"index", state->thinking_index},
-                              {"content_block",
-                               Json{{"type", "thinking"}, {"thinking", ""}, {"signature", ""}}}});
-        }
-        out += Event("content_block_delta",
-                     Json{{"type", "content_block_delta"},
-                          {"index", state->thinking_index},
-                          {"delta", Json{{"type", "thinking_delta"}, {"thinking", thinking}}}});
+    // of 200 completion_tokens here before ever reaching answer text. Those
+    // characters are counted toward the fallback output estimate so a
+    // thinking-heavy turn is not mistaken for a free one, but they are NOT
+    // forwarded as a content block: Anthropic's streaming `thinking` block
+    // requires a `signature_delta` before it closes, an OpenAI-shaped endpoint
+    // produces no signature, and a fabricated one claims a guarantee nobody
+    // backed. The real `completion_tokens` the endpoint reports already
+    // includes these tokens, so the count stays correct without surfacing an
+    // unsigned block a strict client could reject.
+    if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
+        state->output_chars += static_cast<int>(delta["reasoning_content"].get<std::string>().size());
     }
 
     // content is null on the chunk that only carries a finish reason.
@@ -578,17 +563,8 @@ std::string StreamCloseToAnthropic(StreamState* state) {
         return {};
     }
     std::string out;
-    // Blocks are numbered in the order they first opened live (thinking,
-    // then text — glm-5.3-flash's own ordering, and the natural one: an
-    // answer follows the reasoning behind it), and tool_use blocks, decided
-    // only once the stream ends, take whatever indices are left.
-    if (state->thinking_open) {
-        state->thinking_open = false;
-        // No signature_delta: there was never a signature to carry (see
-        // StreamChunkToAnthropic), so there is nothing to close it with.
-        out += Event("content_block_stop",
-                     Json{{"type", "content_block_stop"}, {"index", state->thinking_index}});
-    }
+    // The text block opened first (index 0); tool_use blocks, decided only
+    // once the stream ends, take whatever indices are left.
     if (state->block_open) {
         state->block_open = false;
         out += Event("content_block_stop",

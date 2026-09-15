@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -13,7 +14,8 @@
 #include <vector>
 
 #if !defined(_WIN32)
-#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 #include "account/console.h"
@@ -103,6 +105,36 @@ class TemporaryConfig {
         std::random_device entropy;
         path_ = directory / ("wally-agent-" + std::to_string(entropy()) + extension);
 
+#if !defined(_WIN32)
+        // The config carries the session's API key, so the file is created
+        // 0600 up front rather than chmod'd after the write: chmod leaves a
+        // window where the key sits in a 0644 (umask-default) file, and
+        // O_EXCL refuses a name a local attacker pre-created or symlinked
+        // (CWE-378). fdopen adopts the descriptor so the ofstream path below
+        // stays a Windows-only fallback.
+        const int fd = open(path_.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+        if (fd < 0) {
+            *error = "could not create the agent config at " + path_.string();
+            path_.clear();
+            return false;
+        }
+        FILE* file = fdopen(fd, "wb");
+        if (file == nullptr) {
+            close(fd);
+            Remove();
+            *error = "could not write the agent config to " + path_.string();
+            return false;
+        }
+        const bool ok = std::fwrite(contents.data(), 1, contents.size(), file) == contents.size();
+        if (std::fclose(file) != 0 || !ok) {
+            Remove();
+            *error = "could not write the agent config to " + path_.string();
+            return false;
+        }
+#else
+        // Windows: the per-user temp directory is ACL-restricted to its owner,
+        // so a plain write is already private on the platform that has no mode
+        // bits to set.
         std::ofstream file(path_, std::ios::binary | std::ios::trunc);
         if (!file) {
             *error = "could not write the agent config to " + path_.string();
@@ -111,14 +143,6 @@ class TemporaryConfig {
         }
         file << contents;
         file.close();
-#if !defined(_WIN32)
-        // The config carries the session's API key, so it is readable by its
-        // owner and nobody else — the same rule the credential file follows.
-        if (chmod(path_.c_str(), S_IRUSR | S_IWUSR) != 0) {
-            Remove();
-            *error = "could not restrict permissions on " + path_.string();
-            return false;
-        }
 #endif
         return true;
     }
@@ -438,14 +462,31 @@ std::string BuildDeepSeekSettings(const std::string& model, const std::string& b
     return settings.dump();
 }
 
+/// A YAML single-quoted scalar: the value wrapped in \'...\' with every single
+/// quote doubled. A temp path or model id has no business carrying a quote, but
+/// an unescaped one would break the whole patch document rather than fail
+/// loudly, so the boundary is closed here.
+std::string YamlSingleQuoted(const std::string& value) {
+    std::string escaped = "'";
+    for (const char c : value) {
+        if (c == '\'') {
+            escaped += "''";
+        } else {
+            escaped += c;
+        }
+    }
+    escaped += "'";
+    return escaped;
+}
+
 std::string BuildDeepSeekPatch(const std::string& settings_path, const std::string& model) {
     return std::string("- id: settings\n") +               //
            "  config:\n" +                                 //
-           "    path: '" + settings_path + "'\n" +         //
+           "    path: " + YamlSingleQuoted(settings_path) + "\n" +  //
            "- id: agent-default-model\n" +                 //
            "  config:\n" +                                 //
            "    provider: " + kProviderId + "\n" +         //
-           "    model: '" + model + "'\n";
+           "    model: " + YamlSingleQuoted(model) + "\n";
 }
 
 int LaunchAgent(const Agent& agent, const std::string& model,

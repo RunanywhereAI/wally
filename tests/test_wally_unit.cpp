@@ -2736,17 +2736,18 @@ TestResult test_stream_usage_falls_back_when_endpoint_never_reports_it() {
   return result;
 }
 
-TestResult test_reasoning_content_becomes_a_thinking_block() {
+TestResult test_reasoning_content_counts_without_an_unsigned_block() {
   TestResult result;
-  result.test_name = "reasoning_content_becomes_a_thinking_block";
+  result.test_name = "reasoning_content_counts_without_an_unsigned_block";
   namespace tr = wally::anthropic::translate;
 
-  // glm-5.3-flash's own shape, curled directly against the console: thinking
-  // arrives as `delta.reasoning_content`, separate from `delta.content`, and
-  // on a tight max_tokens budget it can be the ONLY thing the model ever
-  // emits (measured: 199 of 200 completion_tokens, answer text never
-  // started). A shim that only reads delta.content drops every one of those
-  // characters -- nothing shown to the reader, nothing counted anywhere.
+  // glm-5.3-flash streams its thinking as `delta.reasoning_content`, separate
+  // from `delta.content`, and on a tight max_tokens budget it can be the ONLY
+  // thing the model emits (measured: 199 of 200 completion_tokens, answer text
+  // never started). Those characters must count toward the fallback estimate
+  // so the turn is not mistaken for a free one -- but they must NOT go out as
+  // a `thinking` block, which Anthropic's stream requires a signature_delta to
+  // close and an OpenAI endpoint cannot sign.
   tr::StreamState state;
   const nlohmann::json thinking_chunk = nlohmann::json::parse(
       R"({"id":"c1","choices":[{"delta":{"reasoning_content":"counting to five"}}]})");
@@ -2756,21 +2757,17 @@ TestResult test_reasoning_content_becomes_a_thinking_block() {
   tr::StreamChunkToAnthropic(finish_chunk, &state);
   const std::string closing = tr::StreamCloseToAnthropic(&state);
 
-  if (opening.find("\"type\":\"content_block_start\"") == std::string::npos ||
-      opening.find("\"type\":\"thinking\"") == std::string::npos) {
-    result.details = "reasoning_content did not open a thinking block; got: " +
-                     opening.substr(0, 300);
-    return result;
-  }
-  if (opening.find("\"type\":\"thinking_delta\"") == std::string::npos ||
-      opening.find("\"thinking\":\"counting to five\"") == std::string::npos) {
-    result.details = "reasoning_content text did not reach a thinking_delta; got: " +
-                     opening.substr(0, 300);
+  // No unsigned thinking block on the wire, in either half of the stream.
+  if (opening.find("\"type\":\"thinking\"") != std::string::npos ||
+      opening.find("thinking_delta") != std::string::npos ||
+      closing.find("\"type\":\"thinking\"") != std::string::npos) {
+    result.details = "reasoning must not surface as a thinking block; got: " +
+                     opening.substr(0, 300) + " | " + closing.substr(0, 200);
     return result;
   }
   // "counting to five" is 17 characters -> a 4-token fallback estimate. The
-  // real point: not 0. A model that visibly spent its whole budget thinking
-  // must not report as though nothing happened.
+  // real point: not 0. A turn that spent its whole budget thinking must not
+  // report as though nothing happened.
   if (closing.find("\"output_tokens\":0") != std::string::npos) {
     result.details = "thinking-only turn still reports 0 output_tokens; got: " +
                      closing.substr(0, 300);
@@ -2892,8 +2889,8 @@ int main(int argc, char **argv) {
             test_message_start_usage_carries_input_estimate);
   suite.add("stream_usage_falls_back_when_endpoint_never_reports_it",
             test_stream_usage_falls_back_when_endpoint_never_reports_it);
-  suite.add("reasoning_content_becomes_a_thinking_block",
-            test_reasoning_content_becomes_a_thinking_block);
+  suite.add("reasoning_content_counts_without_an_unsigned_block",
+            test_reasoning_content_counts_without_an_unsigned_block);
   suite.add("system_turns_fold_into_the_leading_system_message",
             test_system_turns_fold_into_the_leading_system_message);
   return suite.run(argc, argv);

@@ -513,10 +513,6 @@ TestResult test_agent_table_rows_are_usable_subcommands() {
     TestResult result;
     result.test_name = "agent_table_rows_are_usable_subcommands";
 
-    if (wally::harness::kAgentCount < 2) {
-        result.details = "hermes and openclaw must both be registered";
-        return result;
-    }
     std::set<std::string> seen;
     for (int index = 0; index < wally::harness::kAgentCount; ++index) {
         const std::string id = wally::harness::kAgents[index].id;
@@ -538,6 +534,12 @@ TestResult test_agent_table_rows_are_usable_subcommands() {
         const std::string command = wally::harness::kAgents[index].command;
         if (command.empty() || command.find(' ') != std::string::npos) {
             result.details = id + " has no usable executable name";
+            return result;
+        }
+    }
+    for (const std::string& required : {"hermes", "openclaw", "deepseek"}) {
+        if (seen.find(required) == seen.end()) {
+            result.details = "agent table is missing " + required;
             return result;
         }
     }
