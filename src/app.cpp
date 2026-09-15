@@ -86,6 +86,7 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     commands::register_info(app, options);
     commands::register_about(app, options);
     commands::register_version(app, options);
+    commands::register_update(app, options);
     commands::register_auth(app, options);
     commands::register_account(app, options);
     commands::register_usage(app, options);
@@ -127,6 +128,7 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
         {"whoami", kCloud},      {"usage", kCloud},
         {"serve", kServe},       {"bench", kServe},       {"backends", kServe},
         {"info", kAbout},        {"about", kAbout},       {"version", kAbout},
+        {"update", kAbout},
     };
     // configure_app() runs ahead of run()'s own try/catch (and tests call it
     // directly with none at all), so a typo here must never propagate as an

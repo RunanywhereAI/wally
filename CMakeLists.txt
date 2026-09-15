@@ -38,6 +38,7 @@ set(WALLY_SOURCES
     src/catalog/catalog.cpp
     src/catalog/model_ref.cpp
     src/commands/cmd_version.cpp
+    src/commands/cmd_update.cpp
     src/commands/cmd_info.cpp
     src/commands/cmd_about.cpp
     src/commands/cmd_auth.cpp

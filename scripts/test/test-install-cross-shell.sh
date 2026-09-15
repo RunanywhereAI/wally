@@ -103,27 +103,34 @@ check() {
 # path, binary path), and each shell gets its own HOME so the three runs
 # cannot clobber each other's install tree.
 run_case() {
-    shell="$1"; stub_dir="$2"; os="$3"; arch="$4"
+    shell="$1"; stub_dir="$2"; os="$3"; arch="$4"; extra="$5"
     home="$WORK/home-$shell"
     rm -rf "$home"; mkdir -p "$home"
     set +e
+    # shellcheck disable=SC2086 -- $extra is a controlled, space-free flag list.
     out="$(WALLY_STUB_DIR="$stub_dir" WALLY_STUB_OS="$os" WALLY_STUB_ARCH="$arch" \
-        HOME="$home" PATH="$STUB:$PATH" "$shell" "$INSTALL" 2>&1)"
+        HOME="$home" PATH="$STUB:$PATH" "$shell" "$INSTALL" $extra 2>&1)"
     code=$?
     set -e
     printf '%s\n%s' "$code" "$(printf '%s' "$out" | sed "s#$home#\$HOME#g")"
 }
 
-for case_name in happy-path unsupported-platform bad-checksum failed-release-lookup; do
+for case_name in happy-path unsupported-platform bad-checksum failed-release-lookup \
+                 update-already-latest update-available; do
+    extra=""
     case "$case_name" in
         happy-path)             stub="$GOOD";   os="Darwin"; arch="arm64"  ;;
         unsupported-platform)   stub="$GOOD";   os="Darwin"; arch="x86_64" ;;
         bad-checksum)           stub="$BADSUM"; os="Darwin"; arch="arm64"  ;;
         failed-release-lookup)  stub="$EMPTY";  os="Darwin"; arch="arm64"  ;;
+        # `wally update` from a build already current: stops before download.
+        update-already-latest)  stub="$GOOD";   os="Darwin"; arch="arm64"; extra="--version=1.2.3" ;;
+        # `wally update` from an older build: proceeds to the full install.
+        update-available)       stub="$GOOD";   os="Darwin"; arch="arm64"; extra="--version=1.0.0" ;;
     esac
-    bash_out="$(run_case bash "$stub" "$os" "$arch")"
-    dash_out="$(run_case dash "$stub" "$os" "$arch")"
-    sh_out="$(run_case sh "$stub" "$os" "$arch")"
+    bash_out="$(run_case bash "$stub" "$os" "$arch" "$extra")"
+    dash_out="$(run_case dash "$stub" "$os" "$arch" "$extra")"
+    sh_out="$(run_case sh "$stub" "$os" "$arch" "$extra")"
     check "$case_name: dash byte-identical to bash" "$bash_out" "$dash_out"
     check "$case_name: sh byte-identical to bash"    "$bash_out" "$sh_out"
 done

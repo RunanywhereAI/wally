@@ -58,6 +58,7 @@ void register_models_aliases(CLI::App& app, GlobalOptions& options);  // list, p
 
 // --- Infrastructure --------------------------------------------------------
 void register_version(CLI::App& app, GlobalOptions& options);
+void register_update(CLI::App& app, GlobalOptions& options);
 void register_info(CLI::App& app, GlobalOptions& options);
 void register_about(CLI::App& app, GlobalOptions& options);
 void register_backends(CLI::App& app, GlobalOptions& options);

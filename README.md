@@ -68,6 +68,7 @@ commands work with a model on your machine, and `claude-desktop`, `hermes` and
 | `wally serve` | OpenAI-compatible API |
 | `wally login` / `wally usage` | sign in, check credit |
 | `wally opencode` / `wally claude-code` | start a coding agent on a model |
+| `wally update` | update wally to the latest release |
 
 `wally --help` and `wally <command> --help` cover the rest, including vision,
 speech, embeddings and image generation.
