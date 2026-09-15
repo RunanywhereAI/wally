@@ -9,8 +9,9 @@ configure by hand:
 
 ```bash
 wally claude-code -m qwen3-0.6b
-wally clion -m models/gemma-4-31b-it
-wally claude-desktop -m models/gemma-4-31b-it
+wally hermes -m qwen3-0.6b
+wally deepseek -m glm-5.3-flash
+wally openclaw -m models/gemma-4-31b-it
 ```
 
 The model can be one on this machine or one the console serves. Without `-m` the
@@ -20,26 +21,50 @@ tool starts the way you already have it configured, and wally wires nothing.
 | --- | --- |
 | `claude-code`, `opencode` | `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in the process |
 | `claude-desktop` | a gateway profile in Claude Desktop's third party mode, covering the chat and Cowork tabs |
-| `clion`, `rustrover` | AI Assistant's OpenAI-compatible provider, which works without a JetBrains AI subscription |
+| `hermes` | `CUSTOM_BASE_URL`, `HERMES_INFERENCE_PROVIDER=custom`, the model in `HERMES_INFERENCE_MODEL`, and the key under the name its host gates on |
+| `openclaw` | your own `openclaw.json` plus one provider, written for the run and named by `OPENCLAW_CONFIG_PATH` |
+| `deepseek` | a `--patch` overlay on the argv, pointing dsh at a settings document wally wrote; nothing enters `$DSH_HOME` |
 
 Two flags go with `-m`. `--serve` holds the endpoint open and prints it instead
 of launching anything, which is how a tool nobody has taught wally about gets
-wired up. `--restore` puts Claude Desktop or a JetBrains IDE back the way it was
-and starts nothing; a normal run already undoes its own configuration when the
-app quits, so this is for the run that was interrupted before it could.
-
-The first `wally clion` on a machine takes a while, because it installs the AI
-Assistant plugin headlessly before starting the IDE. Later runs are quick. That
-endpoint sits on a fixed port rather than whatever happened to be free, because
-the IDE reads the address once at startup out of a file wally writes beforehand,
-and a port that moved would leave that file naming something dead.
+wired up. `--restore` puts Claude Desktop back the way it was and starts
+nothing; a normal run already undoes its own configuration when the app quits,
+so this is for the run that was interrupted before it could.
 
 Claude Code and Claude Desktop speak Anthropic's Messages API, while the models
 wally serves speak OpenAI's, so a translator sits between them. It carries tool
 definitions out, tool calls back, and the results of those calls out again,
 which is what lets an agent on the far side run the tools it was given rather
-than describe them. The JetBrains IDEs need no translator, because AI Assistant
-speaks OpenAI already.
+than describe them. `opencode`, `hermes` and `openclaw` speak OpenAI already, so
+they talk to the endpoint directly.
+
+Nothing wally writes for a tool outlives the run. The variables go in the child
+process. DeepSeek Harness is handed a settings document and a one-row patch in
+a temp directory, both deleted when it exits; its own `$DSH_HOME` is never
+written to, and the API key never enters either file, because the provider names
+an environment variable and dsh resolves it per request.
+
+OpenClaw and DeepSeek also get told the model's real context window and max
+output, read from the console catalog. Hermes does not: it takes a
+context-window hint from exactly one place, `model.context_length` (or a
+`custom_providers` entry) in `~/.hermes/config.yaml`, and there is no
+path-override env var, no CLI flag, and no way to swap in a second config
+file without swapping in a second Hermes — `HERMES_HOME` governs the whole
+tree, so pointing it elsewhere for the run would cost the person their
+SOUL.md, sessions and skills to deliver one field. wally will not write to
+`~/.hermes/config.yaml` either. So it prints the real number instead: `wally
+hermes -m <model>` says how many tokens the model actually supports and names
+the `model.context_length` line to add if you want Hermes to budget the
+session against the full window rather than its own guess. `wally deepseek` opens
+its web ui; `wally deepseek "fix the failing test"` runs its headless profile
+instead. OpenClaw's config is a copy of your own `~/.openclaw/openclaw.json`
+with one provider added, written to a temp file and deleted when the tool exits.
+Your file is never touched. It is a copy rather than a fresh document because
+`OPENCLAW_CONFIG_PATH` replaces the whole thing: a bare provider block would
+drop your agents, your gateway token and the flag that says onboarding is done,
+so OpenClaw would run its wizard on every launch. wally also pins
+`OPENCLAW_STATE_DIR` to where your state already lives, because OpenClaw
+otherwise takes the state directory from the config file's own folder.
 
 ## Hosted models
 

@@ -4,10 +4,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 
 #include "account/console.h"
 #include "account/credentials.h"
+#include "harness/agents.h"
 #include "harness/harness.h"
 
 namespace {
@@ -86,10 +88,9 @@ TestResult test_model_id_rejects_xml_and_path_structural_characters() {
     TestResult result;
     result.test_name = "model_id_rejects_xml_and_path_structural_characters";
 
-    // Each of these would corrupt or extend the raw string-concatenated XML
-    // that ide::jetbrains_profile's ModelsXML writes into a live IDE's
-    // settings, or claims a directory separator no real local/upstream id
-    // ever contains.
+    // Each of these would corrupt or extend a raw string-concatenated config
+    // file wally writes for a tool it wires up, or claims a directory
+    // separator no real local/upstream id ever contains.
     const std::string unsafe[] = {
         "qwen3\"/><option name=\"evil\" value=\"x",
         "qwen3</option><option name=\"x",
@@ -442,6 +443,324 @@ TestResult test_verify_cloud_session_rate_limited_refresh_is_unverified_not_bad(
     return result;
 }
 
+// OpenClaw reads a whole config document rather than a base-URL variable, so the
+// document is the contract: the wrong provider id, a missing `mode`, or a model
+// the selection does not name all fail silently as "it ignored our endpoint".
+TestResult test_openclaw_config_selects_our_provider_and_model() {
+    TestResult result;
+    result.test_name = "openclaw_config_selects_our_provider_and_model";
+
+    const Json config = Json::parse(wally::harness::BuildOpenClawConfig(
+        "", "gemma-4-31b-it", "https://inference.runanywhere.ai/v1", "sk-live-xyz", 131072,
+        8192, 300000, 1200000));
+
+    if (config["agents"]["defaults"]["model"]["primary"] != "runanywhere/gemma-4-31b-it") {
+        result.details = "the agent default must name <provider>/<model>, or OpenClaw keeps its own";
+        return result;
+    }
+    if (config["models"]["mode"] != "merge") {
+        result.details = "merge mode, so the person's own providers survive the run";
+        return result;
+    }
+    const Json& provider = config["models"]["providers"]["runanywhere"];
+    if (provider["baseUrl"] != "https://inference.runanywhere.ai/v1" ||
+        provider["apiKey"] != "sk-live-xyz" || provider["api"] != "openai-completions") {
+        result.details = "the provider must carry our endpoint, key and API shape";
+        return result;
+    }
+    if (provider["models"].size() != 1 || provider["models"][0]["id"] != "gemma-4-31b-it") {
+        result.details = "the provider must advertise exactly the model that was asked for";
+        return result;
+    }
+    // Without these OpenClaw shows its own default 128k and no spend, whatever
+    // the model really is.
+    if (provider["models"][0]["contextWindow"] != 131072 ||
+        provider["models"][0]["maxTokens"] != 8192) {
+        result.details = "the real context window and output cap must reach the config";
+        return result;
+    }
+    if (provider["models"][0]["cost"]["input"] != 0.3 ||
+        provider["models"][0]["cost"]["output"] != 1.2) {
+        result.details = "micro-dollars per Mtok must arrive as whole currency per Mtok";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// A local server needs no credential and is handed none by Resolve, but an
+// OpenAI client sends the Authorization header regardless. An empty key there
+// is a 401 from our own loopback server.
+TestResult test_openclaw_config_substitutes_a_key_for_a_local_endpoint() {
+    TestResult result;
+    result.test_name = "openclaw_config_substitutes_a_key_for_a_local_endpoint";
+
+    const Json config = Json::parse(
+        wally::harness::BuildOpenClawConfig("", "qwen3-0.6b", "http://127.0.0.1:52431/v1", "", 8192,
+                                            0, 0, 0));
+    const std::string key = config["models"]["providers"]["runanywhere"]["apiKey"];
+    if (key.empty()) {
+        result.details = "an empty apiKey must become a placeholder, not an empty header";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// The table is the integration surface. A row that names an id the command
+// registration cannot use, or a duplicate, is a broken subcommand.
+TestResult test_agent_table_rows_are_usable_subcommands() {
+    TestResult result;
+    result.test_name = "agent_table_rows_are_usable_subcommands";
+
+    if (wally::harness::kAgentCount < 2) {
+        result.details = "hermes and openclaw must both be registered";
+        return result;
+    }
+    std::set<std::string> seen;
+    for (int index = 0; index < wally::harness::kAgentCount; ++index) {
+        const std::string id = wally::harness::kAgents[index].id;
+        if (id.empty() || id.find(' ') != std::string::npos) {
+            result.details = "an agent id must be a single bare word";
+            return result;
+        }
+        if (!seen.insert(id).second) {
+            result.details = "duplicate agent id: " + id;
+            return result;
+        }
+        if (wally::harness::kAgents[index].summary == nullptr ||
+            wally::harness::kAgents[index].default_args == nullptr) {
+            result.details = id + " has a null summary or default_args";
+            return result;
+        }
+        // The subcommand and the executable are not always the same word, and
+        // launching the subcommand name is a "not installed" for a tool that is.
+        const std::string command = wally::harness::kAgents[index].command;
+        if (command.empty() || command.find(' ') != std::string::npos) {
+            result.details = id + " has no usable executable name";
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+
+// OPENCLAW_CONFIG_PATH replaces the whole document, so anything of theirs that
+// is not carried over is gone for the run: the wizard flag, the agents, the
+// gateway token. Dropping the first is what made onboarding run every launch.
+TestResult test_openclaw_config_preserves_the_existing_document() {
+    TestResult result;
+    result.test_name = "openclaw_config_preserves_the_existing_document";
+
+    const std::string existing = R"({
+      "wizard": {"securityAcknowledgedAt": "2026-09-15T08:01:31.669Z"},
+      "telemetry": {"enabled": false},
+      "gateway": {"auth": {"token": "abc123"}, "port": 18789},
+      "agents": {"entries": {"main": {"name": "main"}}}
+    })";
+    const Json config = Json::parse(wally::harness::BuildOpenClawConfig(
+        existing, "glm-5.3-flash", "https://inference.runanywhere.ai/api-dev/v1", "sk-live", 0, 0,
+        0, 0));
+
+    if (!config.contains("wizard") || !config["wizard"].contains("securityAcknowledgedAt")) {
+        result.details = "the wizard flag must survive, or onboarding runs on every launch";
+        return result;
+    }
+    if (config["gateway"]["auth"]["token"] != "abc123" || config["gateway"]["port"] != 18789) {
+        result.details = "the gateway token and port must survive";
+        return result;
+    }
+    if (config["agents"]["entries"]["main"]["name"] != "main") {
+        result.details = "their agents must survive";
+        return result;
+    }
+    if (config["agents"]["defaults"]["model"]["primary"] != "runanywhere/glm-5.3-flash") {
+        result.details = "and our model must still be selected alongside them";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// Hermes gates a key on the endpoint's own host. The wrong variable name means
+// the key is silently dropped and the call goes out unauthenticated.
+TestResult test_hermes_key_variable_follows_the_host() {
+    TestResult result;
+    result.test_name = "hermes_key_variable_follows_the_host";
+
+    const std::string upstream =
+        wally::harness::HermesKeyVariable("https://inference.runanywhere.ai/api-dev/v1");
+    if (upstream != "RUNANYWHERE_API_KEY") {
+        result.details = "expected RUNANYWHERE_API_KEY, got '" + upstream + "'";
+        return result;
+    }
+    if (!wally::harness::HermesKeyVariable("http://127.0.0.1:52431/v1").empty()) {
+        result.details = "a loopback server takes no key name";
+        return result;
+    }
+    if (!wally::harness::HermesKeyVariable("https://api.openai.com/v1").empty()) {
+        result.details = "OPENAI_API_KEY is host-gated on its own vendor; never borrow the name";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// Hermes has no config-path override, no CLI flag, and a fresh HERMES_HOME costs
+// the person's SOUL.md/skills/sessions to deliver one field (see `HermesContextHint`'s
+// doc comment) — so the real number is surfaced in a status line rather than
+// written anywhere. The line must actually carry the number and the self-serve
+// fix, and a caller must be able to tell "nothing to say" from "say it."
+TestResult test_hermes_context_hint_surfaces_the_real_window() {
+    TestResult result;
+    result.test_name = "hermes_context_hint_surfaces_the_real_window";
+
+    const std::string hint = wally::harness::HermesContextHint(1048567);
+    if (hint.find("1048567") == std::string::npos) {
+        result.details = "the hint must carry the actual token count";
+        return result;
+    }
+    if (hint.find("model.context_length") == std::string::npos) {
+        result.details = "the hint must name the self-serve override the person can set";
+        return result;
+    }
+    if (!wally::harness::HermesContextHint(0).empty()) {
+        result.details = "an unknown window (0) must produce no hint, not a hint about zero";
+        return result;
+    }
+    if (!wally::harness::HermesContextHint(-1).empty()) {
+        result.details = "a negative window must produce no hint either";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// `--provider`/`--model` must lead the argv Hermes actually parses (see
+// `HermesArgv`'s doc comment): pinned ahead of `--tui`, and ahead of whatever
+// a person's own args carry so a `--provider`/`--model` of theirs still wins
+// (Hermes argparse keeps the last value of a repeated flag).
+TestResult test_hermes_argv_pins_provider_and_model_ahead_of_the_rest() {
+    TestResult result;
+    result.test_name = "hermes_argv_pins_provider_and_model_ahead_of_the_rest";
+
+    const std::vector<std::string> bare =
+        wally::harness::HermesArgv("glm-5.3-flash", {"--tui"});
+    const std::vector<std::string> want_bare{"--provider", "custom", "--model", "glm-5.3-flash",
+                                             "--tui"};
+    if (bare != want_bare) {
+        result.details = "expected --provider/--model ahead of --tui, in that order";
+        return result;
+    }
+
+    const std::vector<std::string> overridden =
+        wally::harness::HermesArgv("glm-5.3-flash", {"--provider", "anthropic", "-z", "hi"});
+    const std::vector<std::string> want_overridden{"--provider", "custom", "--model",
+                                                    "glm-5.3-flash", "--provider", "anthropic",
+                                                    "-z",           "hi"};
+    if (overridden != want_overridden) {
+        result.details = "our pin must still lead; the person's own --provider rides after it";
+        return result;
+    }
+
+    const std::vector<std::string> no_args = wally::harness::HermesArgv("qwen3-0.6b", {});
+    if (no_args != std::vector<std::string>{"--provider", "custom", "--model", "qwen3-0.6b"}) {
+        result.details = "no child args must still produce exactly the pinned four";
+        return result;
+    }
+
+    result.passed = true;
+    return result;
+}
+
+// dsh reads our provider out of a settings document it is pointed at, so the
+// document is the contract. A missing apiKeyEnv on an upstream route fails
+// every request with MISSING_CREDENTIAL; a present one on a loopback route
+// does the same, because there is no key to resolve.
+TestResult test_deepseek_settings_carry_the_route() {
+    TestResult result;
+    result.test_name = "deepseek_settings_carry_the_route";
+
+    const Json upstream = Json::parse(wally::harness::BuildDeepSeekSettings(
+        "glm-5.3-flash", "https://inference.runanywhere.ai/api-dev/v1", "RUNANYWHERE_API_KEY",
+        1000000, 32768));
+    const Json& provider = upstream["llm-pi-ai"]["providers"]["runanywhere"];
+    if (provider["api"] != "openai-completions" ||
+        provider["baseURL"] != "https://inference.runanywhere.ai/api-dev/v1") {
+        result.details = "the route must carry our endpoint and protocol";
+        return result;
+    }
+    if (provider["apiKeyEnv"] != "RUNANYWHERE_API_KEY") {
+        result.details = "the key must arrive as a reference, never as a literal in the file";
+        return result;
+    }
+    if (provider["models"][0]["contextWindow"] != 1000000 ||
+        provider["models"][0]["maxTokens"] != 32768) {
+        result.details = "the catalog's real limits must reach the settings document";
+        return result;
+    }
+
+    const Json local = Json::parse(
+        wally::harness::BuildDeepSeekSettings("qwen3-0.6b", "http://127.0.0.1:52431/v1", "", 8192, 0));
+    if (local["llm-pi-ai"]["providers"]["runanywhere"].contains("apiKeyEnv")) {
+        result.details = "a keyless local route must not name a reference that resolves to nothing";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// The overlay is the only thing that reaches dsh: it repoints the settings row
+// at our document and names our provider for a fresh agent. Getting either row
+// id wrong is reported on stderr as an unmatched target and otherwise ignored.
+TestResult test_deepseek_patch_targets_both_rows() {
+    TestResult result;
+    result.test_name = "deepseek_patch_targets_both_rows";
+
+    const std::string patch = wally::harness::BuildDeepSeekPatch("/tmp/x.json", "glm-5.3-flash");
+    if (patch.find("- id: settings\n") == std::string::npos ||
+        patch.find("path: '/tmp/x.json'") == std::string::npos) {
+        result.details = "the settings row must be repointed at our document";
+        return result;
+    }
+    if (patch.find("- id: agent-default-model\n") == std::string::npos ||
+        patch.find("provider: runanywhere") == std::string::npos ||
+        patch.find("model: 'glm-5.3-flash'") == std::string::npos) {
+        result.details = "a fresh agent must start on our provider and model";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// dsh's interactive surface is a browser and its terminal entry is one-shot, so
+// which one runs is decided by whether the person gave it something to do.
+TestResult test_deepseek_prompt_picks_headless() {
+    TestResult result;
+    result.test_name = "deepseek_prompt_picks_headless";
+
+    if (wally::harness::DeepSeekWantsHeadless({})) {
+        result.details = "no arguments means the web ui";
+        return result;
+    }
+    if (wally::harness::DeepSeekWantsHeadless({"--port", "8080"})) {
+        result.details = "flags belong to the web app, not to a prompt";
+        return result;
+    }
+    if (!wally::harness::DeepSeekWantsHeadless({"run the tests"})) {
+        result.details = "a prompt means headless";
+        return result;
+    }
+    // The value after a flag is not a prompt, which is the case the first
+    // version of this got wrong.
+    if (wally::harness::DeepSeekWantsHeadless({"--no-open", "--port", "8080"})) {
+        result.details = "a flag's value must not be read as a prompt";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -463,5 +782,22 @@ int main(int argc, char** argv) {
               test_verify_cloud_session_rejected_session_is_not_unverified);
     suite.add("verify_cloud_session_rate_limited_refresh_is_unverified_not_bad",
               test_verify_cloud_session_rate_limited_refresh_is_unverified_not_bad);
+    suite.add("openclaw_config_selects_our_provider_and_model",
+              test_openclaw_config_selects_our_provider_and_model);
+    suite.add("openclaw_config_substitutes_a_key_for_a_local_endpoint",
+              test_openclaw_config_substitutes_a_key_for_a_local_endpoint);
+    suite.add("agent_table_rows_are_usable_subcommands",
+              test_agent_table_rows_are_usable_subcommands);
+    suite.add("openclaw_config_preserves_the_existing_document",
+              test_openclaw_config_preserves_the_existing_document);
+    suite.add("hermes_key_variable_follows_the_host",
+              test_hermes_key_variable_follows_the_host);
+    suite.add("hermes_context_hint_surfaces_the_real_window",
+              test_hermes_context_hint_surfaces_the_real_window);
+    suite.add("deepseek_settings_carry_the_route", test_deepseek_settings_carry_the_route);
+    suite.add("deepseek_patch_targets_both_rows", test_deepseek_patch_targets_both_rows);
+    suite.add("deepseek_prompt_picks_headless", test_deepseek_prompt_picks_headless);
+    suite.add("hermes_argv_pins_provider_and_model_ahead_of_the_rest",
+              test_hermes_argv_pins_provider_and_model_ahead_of_the_rest);
     return suite.run(argc, argv);
 }

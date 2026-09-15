@@ -75,9 +75,8 @@ set(WALLY_SOURCES
     src/desktop/claude_profile.cpp
     src/harness/harness.cpp
     src/harness/opencode.cpp
+    src/harness/agents.cpp
     src/harness/local_models.cpp
-    src/ide/jetbrains_profile.cpp
-    src/ide/openai_proxy.cpp
     src/commands/engine_options.cpp
     src/commands/model_setup.cpp
     src/config/cli_paths.cpp
@@ -172,7 +171,7 @@ configure_file(
 )
 target_include_directories(wally_core PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-# The Anthropic translator and the JetBrains proxy need an HTTP client and a
+# The Anthropic translator needs an HTTP client and a
 # JSON reader. Both used to arrive from the SDK's own source build; a kit
 # consumer never configures that build, so they are fetched here.
 #
@@ -231,8 +230,6 @@ endif()
 # Include path + google=runanywhere_internal come from RunAnywhere::commons.
 
 if(APPLE)
-    # SecItem, for the credential a JetBrains IDE reads its provider key from.
-    target_link_libraries(wally_core PRIVATE "-framework Security" "-framework CoreFoundation")
     target_link_libraries(wally_core PUBLIC "-framework IOKit" "-framework CoreFoundation")
 endif()
 

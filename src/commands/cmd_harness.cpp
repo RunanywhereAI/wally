@@ -6,6 +6,7 @@
 #include "commands/commands.h"
 #include "io/output.h"
 #include "harness/harness.h"
+#include "harness/agents.h"
 #include "harness/opencode.h"
 
 namespace wally::commands {
@@ -51,6 +52,24 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
         }
         fail(harness::Launch("opencode", effective, *rest));
     });
+
+    // The OpenAI-shaped agents, one subcommand per row of the table. They need
+    // no translator, so there is nothing here but resolving the model and
+    // handing the endpoint over the way each one takes it.
+    for (int index = 0; index < harness::kAgentCount; ++index) {
+        const harness::Agent& agent = harness::kAgents[index];
+        auto agent_model = std::make_shared<std::string>();
+        auto agent_rest = std::make_shared<std::vector<std::string>>();
+        auto* command = app.add_subcommand(agent.id, agent.summary);
+        command->add_option("-m,--model", *agent_model,
+                            "a model on this machine, or one served upstream");
+        command->add_option("args", *agent_rest, "passed through to the tool")
+            ->allow_extra_args();
+        command->prefix_command();
+        command->callback([&agent, agent_model, agent_rest] {
+            fail(harness::LaunchAgent(agent, ResolveDefaultModel(*agent_model), *agent_rest));
+        });
+    }
 }
 
 }  // namespace wally::commands
