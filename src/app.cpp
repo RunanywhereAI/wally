@@ -12,6 +12,7 @@
 #include "bootstrap.h"
 #include "cli_formatter.h"
 #include "commands/commands.h"
+#include "desktop/claude_profile.h"
 #include "io/output.h"
 
 #include "rac/core/rac_logger.h"
@@ -85,6 +86,7 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     commands::register_info(app, options);
     commands::register_about(app, options);
     commands::register_version(app, options);
+    commands::register_update(app, options);
     commands::register_auth(app, options);
     commands::register_account(app, options);
     commands::register_usage(app, options);
@@ -119,12 +121,14 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
         {"models", kModels},     {"lora", kModels},
         {"opencode", kAgents},        {"claude-code", kAgents},
         {"claude-desktop", kAgents},
-        {"clion", kAgents},           {"rustrover", kAgents},
+        {"hermes", kAgents},          {"openclaw", kAgents},
+        {"deepseek", kAgents},
         {"default-models", kAgents},
         {"auth", kCloud},        {"login", kCloud},       {"logout", kCloud},
         {"whoami", kCloud},      {"usage", kCloud},
         {"serve", kServe},       {"bench", kServe},       {"backends", kServe},
         {"info", kAbout},        {"about", kAbout},       {"version", kAbout},
+        {"update", kAbout},
     };
     // configure_app() runs ahead of run()'s own try/catch (and tests call it
     // directly with none at all), so a typo here must never propagate as an
@@ -158,8 +162,8 @@ namespace {
 /// of the command line to it. Kept in step with register_editors and
 /// register_harness; a name here that is not a real subcommand is harmless.
 bool IsPassthroughCommand(const std::string& token) {
-    static const std::set<std::string> kNames = {"claude-code", "claude-desktop", "clion",
-                                                 "rustrover", "opencode"};
+    static const std::set<std::string> kNames = {"claude-code", "claude-desktop", "opencode",
+                                                 "hermes",      "openclaw",       "deepseek"};
     return kNames.count(token) != 0;
 }
 
@@ -208,8 +212,62 @@ std::vector<std::string> SplitPassthroughArgv(const std::vector<std::string>& ar
     return out;  // only wally flags, nothing to forward
 }
 
+namespace {
+
+/// Puts Claude Desktop back on Anthropic when a previous run could not.
+///
+/// The gateway profile is the one piece of wiring wally leaves on disk rather
+/// than in a child process, so it is the one that survives wally being killed —
+/// close the terminal mid-session and the app is left pointing at a port
+/// nothing is serving, with no error that names us. Every later wally run heals
+/// it here, whatever the person actually typed.
+///
+/// Only our own profile: `GatewayApplied()` is false for a gateway somebody
+/// else configured, and for the run that is deliberately re-applying ours.
+void RestoreStaleDesktopGateway(int argc, char** argv) {
+    // Runs before CLI11 parses, so the invoked subcommand is read off argv by
+    // hand: the first token that is neither a root option nor a root option's
+    // value. Only `--home` takes a value; the rest are flags. Everything after
+    // that first token belongs to the subcommand, so a `claude-desktop` among
+    // another agent's forwarded arguments (`wally opencode ... claude-desktop`)
+    // is not this command being invoked and must not skip the heal. `--quiet`,
+    // a root flag, is read the same way as `--no-color` above; under it the
+    // heal still happens and only the status line is held back.
+    std::string subcommand;
+    bool quiet = false;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--home") {
+            ++i;  // its value, not a subcommand
+            continue;
+        }
+        if (arg == "-q" || arg == "--quiet") {
+            quiet = true;
+            continue;
+        }
+        if (!arg.empty() && arg.front() == '-') {
+            continue;  // any other root flag
+        }
+        subcommand = arg;
+        break;
+    }
+    if (subcommand == "claude-desktop") {
+        return;
+    }
+    if (!desktop::GatewayApplied()) {
+        return;
+    }
+    std::string failure;
+    if (desktop::RestoreGateway(&failure) && !quiet) {
+        out::status_line("claude desktop was still pointed at a wally endpoint; put it back");
+    }
+}
+
+}  // namespace
+
 int run(int argc, char** argv) {
     GlobalOptions options;
+    RestoreStaleDesktopGateway(argc, argv);
 
     // Decided ahead of CLI11's own parse: a subcommand inherits its parent's
     // formatter_ at construction time (App::App), which configure_app()

@@ -2646,6 +2646,168 @@ TestResult test_stream_usage_reports_input_tokens() {
   return result;
 }
 
+TestResult test_estimate_request_tokens() {
+  TestResult result;
+  result.test_name = "estimate_request_tokens";
+  namespace tr = wally::anthropic::translate;
+
+  // Nothing to estimate from.
+  if (tr::EstimateRequestTokens(nlohmann::json::object()) != 0) {
+    result.details = "an empty request should estimate to 0 tokens";
+    return result;
+  }
+  // 10-character system prompt plus a 10-character user turn: ~4 chars/token
+  // over 20 characters is 5.
+  const nlohmann::json request = nlohmann::json::parse(
+      R"({"system": "0123456789", "messages": [{"role": "user", "content": "0123456789"}]})");
+  const int got = tr::EstimateRequestTokens(request);
+  if (got != 5) {
+    result.details = "expected 5 estimated tokens for 20 characters, got " + std::to_string(got);
+    return result;
+  }
+
+  // A coding turn's bulk is tool results and call arguments, not top-level
+  // text. A tool_result with 40 characters of nested content and a tool_use
+  // whose serialized input is 20 characters must both reach the estimate, or a
+  // request built almost entirely of them looks nearly free and compaction
+  // fires too late. 60 characters -> 15 tokens; counting only the empty
+  // top-level text would give 0.
+  const nlohmann::json tools = nlohmann::json::parse(R"({
+    "messages": [
+      {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1",
+         "content": [{"type": "text", "text": "0123456789012345678901234567890123456789"}]}
+      ]},
+      {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t2", "name": "edit", "input": {"path": "0123456789"}}
+      ]}
+    ]
+  })");
+  // tool_result content is 40 chars; the tool_use input serializes to
+  // {"path":"0123456789"} = 21 chars. 61 -> 15 tokens.
+  const int with_tools = tr::EstimateRequestTokens(tools);
+  if (with_tools < 14) {
+    result.details = "tool_result content and tool_use input must reach the estimate; got " +
+                     std::to_string(with_tools);
+    return result;
+  }
+  result.passed = true;
+  return result;
+}
+
+TestResult test_message_start_usage_carries_input_estimate() {
+  TestResult result;
+  result.test_name = "message_start_usage_carries_input_estimate";
+  namespace tr = wally::anthropic::translate;
+
+  // message_start fires on the very first chunk, before the upstream has
+  // said anything about usage -- there is no real input_tokens to report yet,
+  // only the caller's pre-computed estimate (EstimateRequestTokens).
+  tr::StreamState state;
+  state.input_estimate = 42;
+  const nlohmann::json chunk =
+      nlohmann::json::parse(R"({"id":"c1","choices":[{"delta":{"role":"assistant"}}]})");
+  const std::string opening = tr::StreamChunkToAnthropic(chunk, &state);
+
+  if (opening.find("\"input_tokens\":42") == std::string::npos) {
+    result.details = "message_start did not carry the input estimate; got: " +
+                     opening.substr(0, 300);
+    return result;
+  }
+  // output_tokens is genuinely 0 here -- nothing has been generated yet, so
+  // this one is not an estimate.
+  if (opening.find("\"output_tokens\":0") == std::string::npos) {
+    result.details = "message_start's output_tokens should read 0; got: " + opening.substr(0, 300);
+    return result;
+  }
+  result.passed = true;
+  return result;
+}
+
+TestResult test_stream_usage_falls_back_when_endpoint_never_reports_it() {
+  TestResult result;
+  result.test_name = "stream_usage_falls_back_when_endpoint_never_reports_it";
+  namespace tr = wally::anthropic::translate;
+
+  // Content and a finish reason arrive -- a turn that, by every other signal,
+  // completed normally -- but the endpoint's stream ends without ever
+  // attaching a usage object. A dropped tail chunk (the failure this repro's
+  // against a live upstream) and a backend that silently ignores
+  // stream_options.include_usage both look like this from here.
+  tr::StreamState state;
+  state.input_estimate = 40;  // stands in for EstimateRequestTokens on the request
+  const nlohmann::json content_chunk =
+      nlohmann::json::parse(R"({"id":"c1","choices":[{"delta":{"content":"0123456789"}}]})");
+  const nlohmann::json finish_chunk =
+      nlohmann::json::parse(R"({"id":"c1","choices":[{"delta":{},"finish_reason":"stop"}]})");
+  tr::StreamChunkToAnthropic(content_chunk, &state);
+  tr::StreamChunkToAnthropic(finish_chunk, &state);
+  const std::string closing = tr::StreamCloseToAnthropic(&state);
+
+  // Neither count may read as a confident, endpoint-reported zero: shown as
+  // 0, a wrapped tool's cost display reads that as "this turn cost nothing,"
+  // which is a specific false claim when the truth is simply unmeasured. The
+  // fallback is the same ~4-chars-per-token estimate EstimateRequestTokens
+  // uses, applied to the 10 assistant characters actually written.
+  if (closing.find("\"input_tokens\":40") == std::string::npos) {
+    result.details = "message_delta dropped the input estimate; got: " + closing.substr(0, 300);
+    return result;
+  }
+  if (closing.find("\"output_tokens\":3") == std::string::npos) {
+    result.details = "message_delta did not fall back to the character estimate; got: " +
+                     closing.substr(0, 300);
+    return result;
+  }
+  result.passed = true;
+  return result;
+}
+
+TestResult test_reasoning_content_counts_without_an_unsigned_block() {
+  TestResult result;
+  result.test_name = "reasoning_content_counts_without_an_unsigned_block";
+  namespace tr = wally::anthropic::translate;
+
+  // glm-5.3-flash streams its thinking as `delta.reasoning_content`, separate
+  // from `delta.content`, and on a tight max_tokens budget it can be the ONLY
+  // thing the model emits (measured: 199 of 200 completion_tokens, answer text
+  // never started). Those characters must count toward the fallback estimate
+  // so the turn is not mistaken for a free one -- but they must NOT go out as
+  // a `thinking` block, which Anthropic's stream requires a signature_delta to
+  // close and an OpenAI endpoint cannot sign.
+  tr::StreamState state;
+  const nlohmann::json thinking_chunk = nlohmann::json::parse(
+      R"({"id":"c1","choices":[{"delta":{"reasoning_content":"counting to five"}}]})");
+  const nlohmann::json finish_chunk = nlohmann::json::parse(
+      R"({"id":"c1","choices":[{"delta":{},"finish_reason":"length"}]})");
+  const std::string opening = tr::StreamChunkToAnthropic(thinking_chunk, &state);
+  tr::StreamChunkToAnthropic(finish_chunk, &state);
+  const std::string closing = tr::StreamCloseToAnthropic(&state);
+
+  // No unsigned thinking block on the wire, in either half of the stream.
+  if (opening.find("\"type\":\"thinking\"") != std::string::npos ||
+      opening.find("thinking_delta") != std::string::npos ||
+      closing.find("\"type\":\"thinking\"") != std::string::npos) {
+    result.details = "reasoning must not surface as a thinking block; got: " +
+                     opening.substr(0, 300) + " | " + closing.substr(0, 200);
+    return result;
+  }
+  // "counting to five" is 17 characters -> a 4-token fallback estimate. The
+  // real point: not 0. A turn that spent its whole budget thinking must not
+  // report as though nothing happened.
+  if (closing.find("\"output_tokens\":0") != std::string::npos) {
+    result.details = "thinking-only turn still reports 0 output_tokens; got: " +
+                     closing.substr(0, 300);
+    return result;
+  }
+  if (closing.find("\"output_tokens\":4") == std::string::npos) {
+    result.details = "expected the 4-token character estimate for 17 characters; got: " +
+                     closing.substr(0, 300);
+    return result;
+  }
+  result.passed = true;
+  return result;
+}
+
 }  // namespace
 
 TestResult test_system_turns_fold_into_the_leading_system_message() {
@@ -2748,6 +2910,13 @@ int main(int argc, char **argv) {
   suite.add("upstream_failure_mapping", test_upstream_failure_mapping);
   suite.add("passthrough_argv_split", test_passthrough_argv_split);
   suite.add("stream_usage_reports_input_tokens", test_stream_usage_reports_input_tokens);
+  suite.add("estimate_request_tokens", test_estimate_request_tokens);
+  suite.add("message_start_usage_carries_input_estimate",
+            test_message_start_usage_carries_input_estimate);
+  suite.add("stream_usage_falls_back_when_endpoint_never_reports_it",
+            test_stream_usage_falls_back_when_endpoint_never_reports_it);
+  suite.add("reasoning_content_counts_without_an_unsigned_block",
+            test_reasoning_content_counts_without_an_unsigned_block);
   suite.add("system_turns_fold_into_the_leading_system_message",
             test_system_turns_fold_into_the_leading_system_message);
   return suite.run(argc, argv);

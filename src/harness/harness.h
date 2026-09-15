@@ -28,9 +28,8 @@ struct Endpoint {
 };
 
 /// Whether `id` is safe to carry into a live editor/agent session: forwarded
-/// into HTTP request bodies, environment variables, and — for the JetBrains
-/// wiring — an XML settings file built by plain string concatenation with no
-/// escaping. Empty, over-long, control-character, and structurally dangerous
+/// into HTTP request bodies, environment variables, and config files built by
+/// plain string concatenation with no escaping. Empty, over-long, control-character, and structurally dangerous
 /// (`< > " ' & / \`) ids are rejected; the last four have no legitimate local
 /// or upstream model name anyway (`LocalModels()` only ever yields a bare
 /// directory name). Exposed so the contract can be tested directly.
@@ -56,11 +55,6 @@ bool VerifyCloudSession(const account::ConsoleClient& console, account::Credenti
 /// this machine and confirming the signed-in console session for real —
 /// `VerifyCloudSession`, not just `Credentials::signed_in()` — when it is not.
 ///
-/// `preferred_port` asks the local server for one particular port, and is
-/// ignored when something else already holds it or the model is upstream.
-/// An integration that writes the port into a file the tool reads at startup
-/// wants this: the same port every run is what keeps that file true.
-///
 /// Returns false having already explained why not: an unknown model, an
 /// unsafe model id, a framework the local server cannot load, or an upstream
 /// model with nobody signed in (or a session that does not check out against
@@ -68,7 +62,7 @@ bool VerifyCloudSession(const account::ConsoleClient& console, account::Credenti
 /// from launching anything — and callers that go on to do something
 /// destructive (quitting a running editor) must not do it until this returns
 /// true.
-bool Resolve(const std::string& model, Endpoint* endpoint, int preferred_port = 0);
+bool Resolve(const std::string& model, Endpoint* endpoint);
 
 /// Stops whatever `Resolve` started. Safe on an endpoint it did not serve.
 void Release(const Endpoint& endpoint);

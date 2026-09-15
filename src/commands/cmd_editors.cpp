@@ -18,8 +18,6 @@
 #include "io/output.h"
 #include "desktop/claude_profile.h"
 #include "harness/harness.h"
-#include "ide/jetbrains_profile.h"
-#include "ide/openai_proxy.h"
 
 namespace wally::commands {
 namespace {
@@ -46,9 +44,6 @@ enum class Wiring {
     /// Claude Desktop's third-party gateway profile, because it ignores the
     /// environment for authentication and says so.
     ClaudeProfile,
-    /// AI Assistant's OpenAI-compatible provider, for a JetBrains IDE. The one
-    /// wiring that needs no translator: the endpoint is already that shape.
-    JetBrainsProvider,
 };
 
 struct Editor {
@@ -60,12 +55,7 @@ struct Editor {
     const char* bundle;
     const char* summary;
     Wiring wiring;
-    /// Set only for Wiring::JetBrainsProvider.
-    const ide::Product* jetbrains;
 };
-
-constexpr ide::Product kCLion{"clion", "CLion.app", "clion", "CLion"};
-constexpr ide::Product kRustRover{"rustrover", "RustRover.app", "rustrover", "RustRover"};
 
 /// Only tools that speak the Anthropic Messages API belong here. Anything
 /// OpenAI-shaped needs no translator and goes through `wally opencode`.
@@ -74,19 +64,9 @@ constexpr ide::Product kRustRover{"rustrover", "RustRover.app", "rustrover", "Ru
 /// to the Claude Code it runs inside itself, and ANTHROPIC_BASE_URL is one of
 /// them. That is the same trick as `wally claude-code`, one process further out.
 constexpr Editor kEditors[] = {
-    {"claude-code", "claude", "", "open Claude Code against a model", Wiring::Environment,
-     nullptr},
+    {"claude-code", "claude", "", "open Claude Code against a model", Wiring::Environment},
     {"claude-desktop", "", "Claude.app", "open Claude Desktop against a model",
-     Wiring::ClaudeProfile, nullptr},
-    // A JetBrains IDE gets its own agent pointed at the model rather than a
-    // second one nested inside it. Wiring the bundled Claude Agent through the
-    // environment was the first attempt and bought nothing: the IDE already
-    // ships AI Assistant and Junie, and the nested agent asks for its own
-    // credential regardless.
-    {"clion", "", "CLion.app", "open CLion against a model", Wiring::JetBrainsProvider,
-     &kCLion},
-    {"rustrover", "", "RustRover.app", "open RustRover against a model",
-     Wiring::JetBrainsProvider, &kRustRover},
+     Wiring::ClaudeProfile},
 };
 
 /// Where `editor`'s application bundle is, or empty when it is not installed.
@@ -115,25 +95,6 @@ std::string BundlePath(const Editor& editor) {
 /// longer. `-n` is what makes the wait mean that. open(1) without it "waits
 /// until the applications it opens **or that were already open** have exited",
 /// so a copy the reader already had running would both miss the wiring and hold
-
-/// Whether a process named `name` is currently running. Matched on the
-/// process name rather than the command line: `pgrep -f` would also match the
-/// shell running the search, and report the IDE as alive forever.
-bool ProcessRunning(const std::string& name) {
-    const std::string probe = "pgrep -x " + name + " >/dev/null 2>&1";
-    return harness::Launch("/bin/sh", {}, {"-c", probe}) == 0;
-}
-
-/// Blocks until `name` is running or gone, whichever `running` asks for.
-/// `timeout` in seconds, or 0 to wait indefinitely.
-void AwaitProcess(const std::string& name, bool running, int timeout) {
-    for (int waited = 0; timeout == 0 || waited < timeout; waited += 2) {
-        if (ProcessRunning(name) == running) {
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-    }
-}
 
 /// Sets `name` for the child, remembering what was there so it can be undone.
 class ScopedEnv {
@@ -342,14 +303,6 @@ int Serve(const std::string& model, bool verbose) {
 /// same verb Ollama offers for the same reason.
 int Restore(const Editor& editor) {
     std::string failure;
-    if (editor.wiring == Wiring::JetBrainsProvider) {
-        if (!ide::RestoreProvider(*editor.jetbrains, &failure)) {
-            out::error_line(failure);
-            return 1;
-        }
-        out::status_line(std::string(editor.id) + " no longer points at a local model");
-        return 0;
-    }
     if (!desktop::RestoreGateway(&failure)) {
         out::error_line(failure);
         return 1;
@@ -383,67 +336,8 @@ int Run(const Editor& editor, const std::string& model,
     }
 
     harness::Endpoint endpoint;
-    if (!harness::Resolve(model, &endpoint,
-                          editor.wiring == Wiring::JetBrainsProvider ? ide::kProviderPort : 0)) {
+    if (!harness::Resolve(model, &endpoint)) {
         return 1;
-    }
-
-    if (editor.wiring == Wiring::JetBrainsProvider) {
-        // No translator on this path. AI Assistant's provider speaks OpenAI,
-        // which is what `Resolve` already handed us, so the IDE talks to the
-        // model directly and nothing sits in between to get the wire format
-        // wrong.
-        // An upstream model arrives with a credential, and the IDE has no way
-        // to take one from us. Keep it here and hand the IDE a loopback address
-        // that needs none, which is the arrangement a local model already uses.
-        ide::Proxy proxy;
-        std::string reachable = endpoint.base_url;
-        if (!endpoint.api_key.empty()) {
-            if (!ide::StartProxy(endpoint, model, ide::kProviderPort, &proxy, verbose)) {
-                harness::Release(endpoint);
-                return 1;
-            }
-            reachable = proxy.base_url;
-        }
-
-        std::string failure;
-        // The proxy holds a per-session secret and rejects a chat request that
-        // does not present it, so the IDE is given it as the provider key. A
-        // direct (keyless) endpoint leaves proxy.auth_token empty, which is the
-        // right value there too.
-        if (!ide::ApplyProvider(*editor.jetbrains, reachable, proxy.auth_token, model, &failure)) {
-            out::error_line(failure);
-            ide::StopProxy(&proxy);
-            harness::Release(endpoint);
-            return 1;
-        }
-        out::status_line(std::string(editor.id) + " will talk to " + model + " through " + reachable);
-        // A second instance, never the running one: whatever the reader has open
-        // in it — unsaved buffers, a debug session, terminal state — is not ours
-        // to close because they named a model.
-        //
-        // Not `-W` here, unlike the Anthropic paths. The IDE reads the provider
-        // settings at startup, so a second instance can still be handed off to
-        // the copy already running by the IntelliJ platform's own single-instance
-        // logic; `-W` would then return at once and pull the endpoint out from
-        // under a live IDE. Waiting on the launcher process covers both.
-        std::vector<std::string> open_args{"-n", "-a", bundle};
-        if (!args.empty()) {
-            open_args.push_back("--args");
-            open_args.insert(open_args.end(), args.begin(), args.end());
-        }
-        const int status = harness::Launch("open", {}, open_args);
-        if (status == 0) {
-            AwaitProcess(editor.jetbrains->launcher, true, 60);
-            out::status_line("serving " + model + " until " + std::string(editor.id) + " quits");
-            AwaitProcess(editor.jetbrains->launcher, false, 0);
-        }
-        // The settings stay written on the way out. Nothing in them moves
-        // between runs, so the configuration the reader sat through once is
-        // never asked for again.
-        ide::StopProxy(&proxy);
-        harness::Release(endpoint);
-        return status;
     }
 
     // Claude Desktop only lists gateway models it can map to an Anthropic
@@ -610,8 +504,7 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
                             "a model on this machine, or one served upstream");
         command->add_flag("--serve", *serve,
                           "hold the endpoint open and print it, instead of launching");
-        if (editor.wiring == Wiring::ClaudeProfile ||
-            editor.wiring == Wiring::JetBrainsProvider) {
+        if (editor.wiring == Wiring::ClaudeProfile) {
             command->add_flag("--restore", *restore,
                               "undo what we configured and launch nothing");
         }

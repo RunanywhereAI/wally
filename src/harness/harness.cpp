@@ -42,10 +42,7 @@ namespace {
 /// it straight back. There is a race between closing and the server binding,
 /// but the alternative is a fixed port that collides with a second wally.
 ///
-/// `preferred` asks for one particular port and settles for any free one when
-/// it is taken. An integration that writes the port into a config file wants
-/// that: the file keeps working between runs instead of naming a dead port.
-int FreePort(int preferred) {
+int FreePort() {
 #if defined(_WIN32)
     // Winsock has to be initialised before any socket call, and the server that
     // would otherwise do it has not started yet. The count is per-process and
@@ -72,7 +69,7 @@ int FreePort(int preferred) {
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    address.sin_port = htons(static_cast<uint16_t>(preferred));
+    address.sin_port = 0;
     int port = 0;
     if (bind(sock, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
         wally_socklen_t length = static_cast<wally_socklen_t>(sizeof(address));
@@ -85,9 +82,6 @@ int FreePort(int preferred) {
 #else
     close(sock);
 #endif
-    if (port == 0 && preferred != 0) {
-        return FreePort(0);
-    }
     return port;
 }
 
@@ -149,6 +143,12 @@ void UnsetConfigVariable() {
 std::string InstallHint(const std::string& tool) {
     if (tool == "opencode") {
         return "install it with `npm i -g opencode-ai`, then run this again";
+    }
+    if (tool == "openclaw") {
+        return "install it with `npm i -g openclaw`, then run this again";
+    }
+    if (tool == "dsh") {
+        return "install it with `npm i -g @deepseek-ai/dsh`, then run this again";
     }
     return "install " + tool + " and put it on PATH, then run this again";
 }
@@ -302,7 +302,7 @@ bool ModelIdIsSafe(const std::string& id) {
         }
         // `/` and `\` never appear in a real id — LocalModels() yields a bare
         // directory name — and `< > " ' &` are exactly what an unescaped XML
-        // attribute (ide::jetbrains_profile's ModelsXML) cannot survive.
+        // attribute or a shell word cannot survive.
         if (byte == '<' || byte == '>' || byte == '"' || byte == '\'' || byte == '&' ||
             byte == '/' || byte == '\\') {
             return false;
@@ -363,7 +363,7 @@ bool VerifyCloudSession(const account::ConsoleClient& console, account::Credenti
     return true;
 }
 
-bool Resolve(const std::string& model, Endpoint* endpoint, int preferred_port) {
+bool Resolve(const std::string& model, Endpoint* endpoint) {
     if (endpoint == nullptr || model.empty()) {
         return false;
     }
@@ -408,7 +408,7 @@ bool Resolve(const std::string& model, Endpoint* endpoint, int preferred_port) {
             out::status_line("use a GGUF model here, or point at an upstream one");
             return false;
         }
-        const int port = FreePort(preferred_port);
+        const int port = FreePort();
         if (port == 0) {
             out::error_line("could not find a free port for the local server");
             return false;

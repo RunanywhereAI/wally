@@ -59,9 +59,13 @@ skill_target_dirs() {
 
 # --- arguments --------------------------------------------------------------
 NIGHTLY=0
+# The version the caller already has, passed by `wally update` so the script can
+# tell it apart from a fresh install and skip the download when nothing is newer.
+CURRENT_VERSION=""
 for arg in "$@"; do
     case "$arg" in
         nightly|--nightly) NIGHTLY=1 ;;
+        --version=*) CURRENT_VERSION="${arg#--version=}" ;;
         # Debug-only: print the resolved skill targets and exit before any
         # network work. Exercised by scripts/test/test-install-skill-dirs.sh.
         --print-skill-dirs) skill_target_dirs; exit 0 ;;
@@ -85,6 +89,19 @@ VERSION=$(printf '%s\n' "$latest" \
     | sed 's/.*"v\([^"]*\)".*/\1/')
 [ -n "$VERSION" ] || fail "Could not determine latest release version. Check your internet connection."
 ok "v${VERSION}"
+
+# An update check: the caller told us its version. If nothing newer is out,
+# there is nothing to do -- say so and stop before downloading anything. The
+# version-sorted higher of the two decides, so a build already ahead of the
+# latest release (a dev build) is left alone rather than downgraded.
+if [ -n "$CURRENT_VERSION" ]; then
+    newest=$(printf '%s\n%s\n' "$CURRENT_VERSION" "$VERSION" | sort -V | tail -n1)
+    if [ "$CURRENT_VERSION" = "$VERSION" ] || [ "$newest" = "$CURRENT_VERSION" ]; then
+        ok "You already have the latest version (v${CURRENT_VERSION}) installed on this machine."
+        exit 0
+    fi
+    printf '      updating v%s → v%s\n' "$CURRENT_VERSION" "$VERSION"
+fi
 
 os=$(uname -s)
 arch=$(uname -m)
