@@ -236,6 +236,17 @@ TestResult test_resolve_home_precedence() {
       result.details = "expected C:/wally-local/RunAnywhere, got " + home;
       return result;
     }
+  }
+  {
+    // A real LOCALAPPDATA is backslash-separated, and the SDK's default base
+    // dir appends "/RunAnywhere" to it as-is.
+    EnvVar env("RUNANYWHERE_HOME", nullptr);
+    EnvVar local("LOCALAPPDATA", "C:\\wally-local");
+    const std::string home = wally::paths::resolve_home("");
+    if (home != "C:/wally-local/RunAnywhere") {
+      result.details = "expected C:/wally-local/RunAnywhere, got " + home;
+      return result;
+    }
 #else
     EnvVar xdg("XDG_DATA_HOME", "/xdg-data");
     const std::string home = wally::paths::resolve_home("");
