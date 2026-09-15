@@ -1,5 +1,7 @@
 #include "anthropic/translate.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <string>
 #include <utility>
 
@@ -210,6 +212,13 @@ std::string Event(const std::string& name, const Json& data) {
     return "event: " + name + "\ndata: " + data.dump() + "\n\n";
 }
 
+/// ~4 characters per token — the standard rule of thumb for a rough English
+/// count, good enough for a fallback nobody should ever see a real endpoint's
+/// number overwrite in the common case.
+int EstimateTokensFromChars(std::size_t chars) {
+    return chars == 0 ? 0 : static_cast<int>((chars + 3) / 4);
+}
+
 }  // namespace
 
 Json RequestToOpenAI(const Json& anthropic, const std::string& model) {
@@ -303,6 +312,19 @@ Json RequestToOpenAI(const Json& anthropic, const std::string& model) {
         }
     }
     return openai;
+}
+
+int EstimateRequestTokens(const Json& anthropic) {
+    std::string text = anthropic.contains("system") ? FlattenContent(anthropic["system"]) : std::string();
+    if (anthropic.contains("messages") && anthropic["messages"].is_array()) {
+        for (const Json& message : anthropic["messages"]) {
+            if (!message.is_object()) {
+                continue;
+            }
+            text += FlattenContent(message.contains("content") ? message["content"] : Json());
+        }
+    }
+    return EstimateTokensFromChars(text.size());
 }
 
 Json ResponseToAnthropic(const Json& openai, const std::string& model) {
@@ -405,7 +427,14 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
                                 {"content", Json::array()},
                                 {"stop_reason", nullptr},
                                 {"stop_sequence", nullptr},
-                                {"usage", Json{{"input_tokens", 0}, {"output_tokens", 0}}}};
+                                // input_tokens is an estimate, not a placeholder zero: the
+                                // real count only arrives on a later chunk (sometimes the
+                                // very last one), and a wrapped tool that reads usage once
+                                // here and never again would otherwise carry a hard zero for
+                                // the whole turn. output_tokens is genuinely 0 — nothing has
+                                // been generated yet.
+                                {"usage", Json{{"input_tokens", state->input_estimate},
+                                              {"output_tokens", 0}}}};
         out += Event("message_start", start);
     }
 
@@ -479,9 +508,42 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
                 pending.name = function["name"].get<std::string>();
             }
             if (function.contains("arguments") && function["arguments"].is_string()) {
-                pending.arguments += function["arguments"].get<std::string>();
+                const std::string piece = function["arguments"].get<std::string>();
+                pending.arguments += piece;
+                state->output_chars += static_cast<int>(piece.size());
             }
         }
+    }
+
+    // Reasoning models (glm-5.3-flash among them) stream their thinking as
+    // `reasoning_content`, separate from and usually well before `content` —
+    // curled directly against the console, a throwaway max_tokens spent 199
+    // of 200 completion_tokens here before ever reaching answer text. Mapped
+    // to Anthropic's own `thinking` content block, the same shape Claude
+    // Code and Desktop already render for extended thinking. There is no
+    // `signature` to carry: that field authenticates Anthropic's own
+    // extended-thinking output for a later tool-use round trip, and an
+    // OpenAI-shaped endpoint never produces one — sending a fabricated value
+    // would claim a guarantee nobody backed, so it goes out empty instead.
+    const std::string thinking = delta.contains("reasoning_content") &&
+                                         delta["reasoning_content"].is_string()
+                                     ? delta["reasoning_content"].get<std::string>()
+                                     : std::string();
+    if (!thinking.empty()) {
+        state->output_chars += static_cast<int>(thinking.size());
+        if (!state->thinking_open) {
+            state->thinking_open = true;
+            state->thinking_index = state->next_index++;
+            out += Event("content_block_start",
+                         Json{{"type", "content_block_start"},
+                              {"index", state->thinking_index},
+                              {"content_block",
+                               Json{{"type", "thinking"}, {"thinking", ""}, {"signature", ""}}}});
+        }
+        out += Event("content_block_delta",
+                     Json{{"type", "content_block_delta"},
+                          {"index", state->thinking_index},
+                          {"delta", Json{{"type", "thinking_delta"}, {"thinking", thinking}}}});
     }
 
     // content is null on the chunk that only carries a finish reason.
@@ -491,20 +553,22 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
     if (text.empty()) {
         return out;
     }
+    state->output_chars += static_cast<int>(text.size());
 
     // The block opens on the first token rather than up front: a stream that
     // only ever carries a finish reason should not announce a text block that
     // never gets one.
     if (!state->block_open) {
         state->block_open = true;
+        state->text_index = state->next_index++;
         out += Event("content_block_start",
                      Json{{"type", "content_block_start"},
-                          {"index", 0},
+                          {"index", state->text_index},
                           {"content_block", Json{{"type", "text"}, {"text", ""}}}});
     }
     out += Event("content_block_delta",
                  Json{{"type", "content_block_delta"},
-                      {"index", 0},
+                      {"index", state->text_index},
                       {"delta", Json{{"type", "text_delta"}, {"text", text}}}});
     return out;
 }
@@ -514,14 +578,23 @@ std::string StreamCloseToAnthropic(StreamState* state) {
         return {};
     }
     std::string out;
-    // Blocks are numbered in the order they are written, and the text — if the
-    // turn had any — is always the one that came first.
-    int index = 0;
+    // Blocks are numbered in the order they first opened live (thinking,
+    // then text — glm-5.3-flash's own ordering, and the natural one: an
+    // answer follows the reasoning behind it), and tool_use blocks, decided
+    // only once the stream ends, take whatever indices are left.
+    if (state->thinking_open) {
+        state->thinking_open = false;
+        // No signature_delta: there was never a signature to carry (see
+        // StreamChunkToAnthropic), so there is nothing to close it with.
+        out += Event("content_block_stop",
+                     Json{{"type", "content_block_stop"}, {"index", state->thinking_index}});
+    }
     if (state->block_open) {
         state->block_open = false;
-        out += Event("content_block_stop", Json{{"type", "content_block_stop"}, {"index", 0}});
-        index = 1;
+        out += Event("content_block_stop",
+                     Json{{"type", "content_block_stop"}, {"index", state->text_index}});
     }
+    int index = state->next_index;
     bool emitted_tool_block = false;
     for (const auto& entry : state->tool_calls) {
         const StreamState::ToolCall& call = entry.second;
@@ -559,17 +632,29 @@ std::string StreamCloseToAnthropic(StreamState* state) {
     const std::string stop = StopWithTools(
         state->stop_reason.empty() ? std::string("end_turn") : state->stop_reason,
         emitted_tool_block);
-    // `input_tokens` too, not just output. message_start had to emit 0 (the
-    // upstream reports prompt_tokens only at the end of the stream), so this
-    // final usage is the one place the real prompt count reaches the client.
-    // Without it a wrapped tool's context gauge reads 0 forever and its
-    // auto-compaction never fires — no context-window setting can rescue a
-    // numerator that is always zero.
+    // `input_tokens` too, not just output. message_start could only carry an
+    // estimate (the upstream reports prompt_tokens on a later chunk, often
+    // the very last one), so this final usage is the one place the real
+    // prompt count reaches the client. Without it a wrapped tool's context
+    // gauge reads 0 forever and its auto-compaction never fires — no
+    // context-window setting can rescue a numerator that is always zero.
+    //
+    // The endpoint's own count wins whenever it sent one (state->*_tokens is
+    // still 0 only when it never did — see EstimateRequestTokens and
+    // output_chars). A stream that finished without ever reporting usage is
+    // not the same claim as "this turn cost nothing": a shown 0 reads as
+    // fact, so it falls back to the same character estimate rather than
+    // assert a number nobody actually measured.
+    const int input_final = state->input_tokens > 0 ? state->input_tokens : state->input_estimate;
+    const int output_final = state->output_tokens > 0
+                                 ? state->output_tokens
+                                 : EstimateTokensFromChars(
+                                       static_cast<std::size_t>(std::max(0, state->output_chars)));
     out += Event("message_delta",
                  Json{{"type", "message_delta"},
                       {"delta", Json{{"stop_reason", stop}, {"stop_sequence", nullptr}}},
-                      {"usage", Json{{"input_tokens", state->input_tokens},
-                                     {"output_tokens", state->output_tokens}}}});
+                      {"usage", Json{{"input_tokens", input_final},
+                                     {"output_tokens", output_final}}}});
     out += Event("message_stop", Json{{"type", "message_stop"}});
     return out;
 }
