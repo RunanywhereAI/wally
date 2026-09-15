@@ -12,6 +12,7 @@
 set(WALLY_SDK_KIT "" CACHE PATH "Path to a staged RunAnywhere C++ desktop kit")
 set(WALLY_SDK_DIR "" CACHE PATH "Deprecated alias for WALLY_SDK_KIT (kit prefix, not source)")
 set(WALLY_SDK_VERSION "" CACHE STRING "EXACT find_package version; default from cmake/sdk-pin.cmake")
+option(WALLY_AUTO_FETCH_KIT "Download the pinned kit into .deps/kit when none is on CMAKE_PREFIX_PATH" ON)
 
 if(WALLY_SDK_DIR AND NOT WALLY_SDK_KIT)
     set(WALLY_SDK_KIT "${WALLY_SDK_DIR}")
@@ -44,7 +45,50 @@ if(DEFINED ENV{RUNANYWHERE_ROOT} AND NOT WALLY_SDK_KIT)
     list(PREPEND CMAKE_PREFIX_PATH "$ENV{RUNANYWHERE_ROOT}")
 endif()
 
-find_package(RunAnywhere ${WALLY_SDK_VERSION} EXACT REQUIRED CONFIG)
+# An IDE opening this tree for the first time runs a bare `cmake -S . -B ...`
+# with no kit on CMAKE_PREFIX_PATH, so find_package would hard-fail before the
+# person ever saw a build. Fetch the pinned kit into the gitignored .deps/kit
+# instead. This is the same scripts/build/fetch-kit.sh CI runs -- pinned version,
+# checksum verified -- never a build from SDK source.
+find_package(RunAnywhere ${WALLY_SDK_VERSION} EXACT QUIET CONFIG)
+
+if(NOT RunAnywhere_FOUND AND WALLY_AUTO_FETCH_KIT)
+    if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+        set(_wally_kit_platform "macos-arm64")
+    elseif(WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
+        set(_wally_kit_platform "windows-arm64")
+    elseif(WIN32)
+        set(_wally_kit_platform "windows-x64")
+    elseif(UNIX AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        set(_wally_kit_platform "linux-x64")
+    endif()
+
+    find_program(WALLY_BASH_EXECUTABLE NAMES bash)
+    if(_wally_kit_platform AND WALLY_BASH_EXECUTABLE)
+        set(_wally_auto_kit "${CMAKE_SOURCE_DIR}/.deps/kit")
+        message(STATUS
+            "wally: no RunAnywhere kit on CMAKE_PREFIX_PATH; fetching pinned "
+            "${WALLY_SDK_VERSION} (${_wally_kit_platform}) into .deps/kit")
+        execute_process(
+            COMMAND "${WALLY_BASH_EXECUTABLE}"
+                    "${CMAKE_SOURCE_DIR}/scripts/build/fetch-kit.sh"
+                    "${_wally_kit_platform}" "${_wally_auto_kit}"
+            RESULT_VARIABLE _wally_fetch_result)
+        if(_wally_fetch_result EQUAL 0)
+            list(PREPEND CMAKE_PREFIX_PATH "${_wally_auto_kit}")
+            find_package(RunAnywhere ${WALLY_SDK_VERSION} EXACT QUIET CONFIG)
+        else()
+            message(WARNING
+                "wally: fetch-kit.sh failed (${_wally_fetch_result}). It needs the "
+                "GitHub CLI signed in: `gh auth login`. Or pass a kit yourself with "
+                "-DWALLY_SDK_KIT=<prefix>.")
+        endif()
+    endif()
+endif()
+
+if(NOT RunAnywhere_FOUND)
+    find_package(RunAnywhere ${WALLY_SDK_VERSION} EXACT REQUIRED CONFIG)
+endif()
 
 # Proto is the SOT across the two repos. The kit stamps SCHEMA_LOCK into
 # find_package vars; this pin must match. Do not run protoc in WALLY to "fix"
