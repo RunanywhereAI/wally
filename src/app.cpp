@@ -225,19 +225,34 @@ namespace {
 /// Only our own profile: `GatewayApplied()` is false for a gateway somebody
 /// else configured, and for the run that is deliberately re-applying ours.
 void RestoreStaleDesktopGateway(int argc, char** argv) {
+    // Runs before CLI11 parses, so the invoked subcommand is read off argv by
+    // hand: the first token that is neither a root option nor a root option's
+    // value. Only `--home` takes a value; the rest are flags. Everything after
+    // that first token belongs to the subcommand, so a `claude-desktop` among
+    // another agent's forwarded arguments (`wally opencode ... claude-desktop`)
+    // is not this command being invoked and must not skip the heal. `--quiet`,
+    // a root flag, is read the same way as `--no-color` above; under it the
+    // heal still happens and only the status line is held back.
+    std::string subcommand;
     bool quiet = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        if (arg == "claude-desktop") {
-            return;
+        if (arg == "--home") {
+            ++i;  // its value, not a subcommand
+            continue;
         }
-        // This runs before CLI11 parses the root flags, so `--quiet` is read
-        // straight off argv, the same way `--no-color` is above. Under it the
-        // healing still happens; only the status line is held back, because
-        // quiet promises errors only.
         if (arg == "-q" || arg == "--quiet") {
             quiet = true;
+            continue;
         }
+        if (!arg.empty() && arg.front() == '-') {
+            continue;  // any other root flag
+        }
+        subcommand = arg;
+        break;
+    }
+    if (subcommand == "claude-desktop") {
+        return;
     }
     if (!desktop::GatewayApplied()) {
         return;

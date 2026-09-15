@@ -314,17 +314,46 @@ Json RequestToOpenAI(const Json& anthropic, const std::string& model) {
     return openai;
 }
 
+// Characters a content value contributes to the request estimate, counting what
+// actually crosses the wire: text blocks, a tool_result's nested content, and a
+// tool_use's serialized input. FlattenContent keeps only text (it produces what
+// the model reads), so it undercounts a coding turn where tool results and call
+// arguments carry the bulk — file contents, command output, edit payloads.
+std::size_t EstimateContentChars(const Json& content) {
+    if (content.is_string()) {
+        return content.get<std::string>().size();
+    }
+    if (!content.is_array()) {
+        return 0;
+    }
+    std::size_t chars = 0;
+    for (const Json& block : content) {
+        if (!block.is_object()) {
+            continue;
+        }
+        const std::string type = Field(block, "type");
+        if (type == "text") {
+            chars += Field(block, "text").size();
+        } else if (type == "tool_result" && block.contains("content")) {
+            chars += EstimateContentChars(block["content"]);  // string, or array of blocks
+        } else if (type == "tool_use" && block.contains("input")) {
+            chars += block["input"].dump().size();
+        }
+    }
+    return chars;
+}
+
 int EstimateRequestTokens(const Json& anthropic) {
-    std::string text = anthropic.contains("system") ? FlattenContent(anthropic["system"]) : std::string();
+    std::size_t chars = anthropic.contains("system") ? EstimateContentChars(anthropic["system"]) : 0;
     if (anthropic.contains("messages") && anthropic["messages"].is_array()) {
         for (const Json& message : anthropic["messages"]) {
             if (!message.is_object()) {
                 continue;
             }
-            text += FlattenContent(message.contains("content") ? message["content"] : Json());
+            chars += EstimateContentChars(message.contains("content") ? message["content"] : Json());
         }
     }
-    return EstimateTokensFromChars(text.size());
+    return EstimateTokensFromChars(chars);
 }
 
 Json ResponseToAnthropic(const Json& openai, const std::string& model) {

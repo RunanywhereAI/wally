@@ -2665,6 +2665,32 @@ TestResult test_estimate_request_tokens() {
     result.details = "expected 5 estimated tokens for 20 characters, got " + std::to_string(got);
     return result;
   }
+
+  // A coding turn's bulk is tool results and call arguments, not top-level
+  // text. A tool_result with 40 characters of nested content and a tool_use
+  // whose serialized input is 20 characters must both reach the estimate, or a
+  // request built almost entirely of them looks nearly free and compaction
+  // fires too late. 60 characters -> 15 tokens; counting only the empty
+  // top-level text would give 0.
+  const nlohmann::json tools = nlohmann::json::parse(R"({
+    "messages": [
+      {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1",
+         "content": [{"type": "text", "text": "0123456789012345678901234567890123456789"}]}
+      ]},
+      {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t2", "name": "edit", "input": {"path": "0123456789"}}
+      ]}
+    ]
+  })");
+  // tool_result content is 40 chars; the tool_use input serializes to
+  // {"path":"0123456789"} = 21 chars. 61 -> 15 tokens.
+  const int with_tools = tr::EstimateRequestTokens(tools);
+  if (with_tools < 14) {
+    result.details = "tool_result content and tool_use input must reach the estimate; got " +
+                     std::to_string(with_tools);
+    return result;
+  }
   result.passed = true;
   return result;
 }
