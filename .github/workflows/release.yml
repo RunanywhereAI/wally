@@ -1,5 +1,13 @@
 name: Release
 
+# Builds prod + dev on-device bottles for macOS, Linux, and Windows and cuts a
+# GitHub Release. macOS carries GGUF (cgo rac_server) + MLX (Swift wally-mlx);
+# Linux and Windows carry GGUF only (MLX is Apple-only). dev and prod differ
+# only by the -dev suffix and the baked console endpoints.
+#
+# The C++ kit is public: RunanywhereAI/runanywhere-sdks, tag cpp-desktop-v<ver>,
+# fetched anonymously with the default github.token (no PAT).
+
 on:
   push:
     tags:
@@ -8,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g. 0.5.0 — no leading v)'
+        description: 'Version to release (e.g. 0.6.0 — no leading v)'
         required: true
 
 permissions:
@@ -16,17 +24,13 @@ permissions:
 
 env:
   WALLY_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+  # C++ desktop kit pin. Bump together with the on-device build recipe.
+  KIT_VERSION: '0.20.37'
 
-# Every platform builds two bottles from one kit: `prod` (empty bake -> the
-# production console defaults in credentials.cpp) and `dev` (dev console
-# endpoints baked from the WALLY_DEV_* repo variables, so a dev build targets
-# the dev backend with no env vars). The bake reaches the configure step as
-# environment only — never on the command line, never in committed source. The
-# configure→build→package sequence lives in .github/actions/build-wally; e2e
-# runs on the binary it produced, so the bottle is built exactly once.
 jobs:
   macos:
-    # SDK Package.swift is swift-tools-version 6.2 (Xcode 26).
+    # runanywhere-swift's Package.swift is swift-tools 6.x; macos-26 (Xcode 26 /
+    # Swift 6.2) resolves it. macos-15 (Swift 6.1) cannot.
     runs-on: macos-26
     timeout-minutes: 90
     strategy:
@@ -34,183 +38,39 @@ jobs:
       matrix:
         variant: [prod, dev]
     env:
-      WALLY_SDK_SWIFT_PATH: ${{ github.workspace }}/.deps/runanywhere-sdks
       WALLY_BAKED_CONSOLE_API_URL: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_API_URL || '' }}
       WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_WEB_ORIGIN || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Checkout SDK Swift tree (MLX runtime)
-        uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          persist-credentials: false
-          repository: RunanywhereAI/runanywhere-sdks
-          ref: v0.20.31
-          path: .deps/runanywhere-sdks
-      - name: Install ninja
-        run: brew install ninja
-      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
-        with:
-          key: ccache-release-macos-arm64
-      - name: Cache kit
-        id: kit
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: kit
-          key: kit-macos-arm64-${{ hashFiles('versions.toml') }}
-      - name: Download C++ desktop kit
-        if: steps.kit.outputs.cache-hit != 'true'
+          go-version-file: go.mod
+      - name: httplib runtime deps (rac_server links brotli/zstd/openssl directly)
+        run: brew install brotli zstd openssl@3
+      - name: Fetch C++ kit (public, no token)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          bash scripts/build/fetch-kit.sh macos-arm64 "${GITHUB_WORKSPACE}/kit"
-      - uses: ./.github/actions/build-wally
-        with:
-          platform: macos-arm64
-          kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
-          package: 'true'
-      - name: Product e2e
+        run: bash scripts/ci/fetch-kit.sh macos-arm64 "$KIT_VERSION" "$GITHUB_WORKSPACE/kit"
+      - name: Build on-device bottle (${{ matrix.variant }})
         env:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
-        run: bash scripts/test/e2e.sh ./build/wally
+        run: |
+          ver="${WALLY_VERSION#v}"
+          bash scripts/build-ondevice.sh -tag "$ver"
+          WALLY_VERSION="$ver" bash scripts/package.sh build macos-arm64 "${{ matrix.variant }}"
       - name: Verify archive
         run: |
-          VERSION="${WALLY_VERSION#v}"
+          ver="${WALLY_VERSION#v}"
           suffix=""; [ "${{ matrix.variant }}" = dev ] && suffix="-dev"
           python3 scripts/release/verify-release-assets.py \
-            "dist/wally-${VERSION}-macos-arm64${suffix}.tar.gz" \
-            "dist/wally-${VERSION}-macos-arm64${suffix}.tar.gz.sha256"
+            "dist/wally-${ver}-macos-arm64${suffix}.tar.gz" \
+            "dist/wally-${ver}-macos-arm64${suffix}.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: wally-macos-arm64-${{ matrix.variant }}
           path: dist/wally-*-macos-arm64*.tar.gz*
-
-  windows-arm64:
-    runs-on: windows-11-arm
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [prod, dev]
-    env:
-      WALLY_BAKED_CONSOLE_API_URL: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_API_URL || '' }}
-      WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_WEB_ORIGIN || '' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: arm64
-      - uses: seanmiddleditch/gha-setup-ninja@master
-      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
-        with:
-          key: ccache-release-windows-arm64
-          variant: sccache
-      - name: Cache kit
-        id: kit
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: kit
-          key: kit-windows-arm64-${{ hashFiles('versions.toml') }}
-      - name: Download C++ desktop kit
-        if: steps.kit.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/build/fetch-kit.sh windows-arm64 "${GITHUB_WORKSPACE}/kit"
-      - uses: ./.github/actions/build-wally
-        with:
-          platform: windows-arm64
-          kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
-          package: 'true'
-      - name: Product e2e
-        shell: bash
-        env:
-          WALLY_SDK_KIT: ${{ github.workspace }}/kit
-        run: bash scripts/test/e2e.sh ./build/wally.exe
-      - name: Verify archive
-        shell: bash
-        run: |
-          ver="${WALLY_VERSION#v}"
-          suffix=""; [ "${{ matrix.variant }}" = dev ] && suffix="-dev"
-          python scripts/release/verify-release-assets.py \
-            "dist/wally-$ver-windows-arm64$suffix.zip" \
-            "dist/wally-$ver-windows-arm64$suffix.zip.sha256"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wally-windows-arm64-${{ matrix.variant }}
-          path: |
-            dist/*.zip
-            dist/*.zip.sha256
-          if-no-files-found: error
-
-  windows:
-    runs-on: windows-2022
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [prod, dev]
-    env:
-      WALLY_BAKED_CONSOLE_API_URL: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_API_URL || '' }}
-      WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_WEB_ORIGIN || '' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: ilammy/msvc-dev-cmd@v1
-      - uses: seanmiddleditch/gha-setup-ninja@master
-      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
-        with:
-          key: ccache-release-windows-x64
-          variant: sccache
-      - name: Cache kit
-        id: kit
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: kit
-          key: kit-windows-x64-${{ hashFiles('versions.toml') }}
-      - name: Download C++ desktop kit
-        if: steps.kit.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash scripts/build/fetch-kit.sh windows-x64 "${GITHUB_WORKSPACE}/kit"
-      - uses: ./.github/actions/build-wally
-        with:
-          platform: windows-x64
-          kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
-          package: 'true'
-      - name: Product e2e
-        shell: bash
-        env:
-          WALLY_SDK_KIT: ${{ github.workspace }}/kit
-        run: bash scripts/test/e2e.sh ./build/wally.exe
-      - name: Verify archive
-        shell: bash
-        run: |
-          ver="${WALLY_VERSION#v}"
-          suffix=""; [ "${{ matrix.variant }}" = dev ] && suffix="-dev"
-          python scripts/release/verify-release-assets.py \
-            "dist/wally-$ver-windows-x86_64$suffix.zip" \
-            "dist/wally-$ver-windows-x86_64$suffix.zip.sha256"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wally-windows-x64-${{ matrix.variant }}
-          path: |
-            dist/*.zip
-            dist/*.zip.sha256
-          if-no-files-found: error
 
   linux:
     runs-on: ubuntu-24.04
@@ -226,50 +86,80 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Install build deps
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build deps (rac_server's httplib extras + rpath tool)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev
-      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
-        with:
-          key: ccache-release-linux-x64
-      - name: Cache kit
-        id: kit
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: kit
-          key: kit-linux-x64-${{ hashFiles('versions.toml') }}
-      - name: Download C++ desktop kit
-        if: steps.kit.outputs.cache-hit != 'true'
+          sudo apt-get install -y libcurl4-openssl-dev libbz2-dev libbrotli-dev \
+            libzstd-dev libssl-dev zlib1g-dev patchelf
+      - name: Fetch C++ kit (public, no token)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          bash scripts/build/fetch-kit.sh linux-x64 "${GITHUB_WORKSPACE}/kit"
-      - uses: ./.github/actions/build-wally
-        with:
-          platform: linux-x64
-          kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
-          package: 'true'
-      - name: Product e2e
+        run: bash scripts/ci/fetch-kit.sh linux-x64 "$KIT_VERSION" "$GITHUB_WORKSPACE/kit"
+      - name: Build on-device bottle (${{ matrix.variant }})
         env:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
-        run: bash scripts/test/e2e.sh ./build/wally
+        run: |
+          ver="${WALLY_VERSION#v}"
+          bash scripts/build-ondevice.sh -tag "$ver"
+          WALLY_VERSION="$ver" bash scripts/package.sh build linux-x86_64 "${{ matrix.variant }}"
       - name: Verify archive
         run: |
-          VERSION="${WALLY_VERSION#v}"
+          ver="${WALLY_VERSION#v}"
           suffix=""; [ "${{ matrix.variant }}" = dev ] && suffix="-dev"
           python3 scripts/release/verify-release-assets.py \
-            "dist/wally-${VERSION}-linux-x86_64${suffix}.tar.gz" \
-            "dist/wally-${VERSION}-linux-x86_64${suffix}.tar.gz.sha256"
+            "dist/wally-${ver}-linux-x86_64${suffix}.tar.gz" \
+            "dist/wally-${ver}-linux-x86_64${suffix}.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: wally-linux-x86_64-${{ matrix.variant }}
           path: dist/wally-*-linux-x86_64*.tar.gz*
 
+  # Windows on-device (GGUF) links the kit's static libs through cgo. The kit
+  # is MSVC-built, so the toolchain here is the piece to iterate on in CI; the
+  # job is non-blocking (continue-on-error) so a mac+linux release still cuts
+  # while Windows is brought up.
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [prod, dev]
+    env:
+      WALLY_BAKED_CONSOLE_API_URL: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_API_URL || '' }}
+      WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_WEB_ORIGIN || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Fetch C++ kit (public, no token)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/fetch-kit.sh windows-x64 "$KIT_VERSION" "$GITHUB_WORKSPACE/kit"
+      - name: Build on-device bottle (${{ matrix.variant }})
+        shell: bash
+        env:
+          WALLY_SDK_KIT: ${{ github.workspace }}/kit
+        run: |
+          ver="${WALLY_VERSION#v}"
+          bash scripts/build-ondevice.sh -tag "$ver"
+          pwsh -File scripts/package-windows.ps1 -BuildDir build -Version "$ver" -Channel "${{ matrix.variant }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wally-windows-x86_64-${{ matrix.variant }}
+          path: dist/wally-*-windows-x86_64*.zip*
+          if-no-files-found: warn
+
   publish:
-    needs: [macos, windows, windows-arm64, linux]
+    needs: [macos, linux, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -279,54 +169,32 @@ jobs:
         with:
           path: artifacts
           merge-multiple: true
-      - name: Verify release archives
+      - name: Verify present archives
         run: |
           set -euo pipefail
-          VERSION="${WALLY_VERSION#v}"
-          # Both bottles of every platform: prod (no suffix) and dev (-dev).
-          for suffix in "" "-dev"; do
-            python3 scripts/release/verify-release-assets.py \
-              "artifacts/wally-${VERSION}-macos-arm64${suffix}.tar.gz" \
-              "artifacts/wally-${VERSION}-macos-arm64${suffix}.tar.gz.sha256"
-            python3 scripts/release/verify-release-assets.py \
-              "artifacts/wally-${VERSION}-windows-x86_64${suffix}.zip" \
-              "artifacts/wally-${VERSION}-windows-x86_64${suffix}.zip.sha256"
-            python3 scripts/release/verify-release-assets.py \
-              "artifacts/wally-${VERSION}-windows-arm64${suffix}.zip" \
-              "artifacts/wally-${VERSION}-windows-arm64${suffix}.zip.sha256"
-            python3 scripts/release/verify-release-assets.py \
-              "artifacts/wally-${VERSION}-linux-x86_64${suffix}.tar.gz" \
-              "artifacts/wally-${VERSION}-linux-x86_64${suffix}.tar.gz.sha256"
+          shopt -s nullglob
+          found=0
+          for f in artifacts/wally-*.tar.gz artifacts/wally-*.zip; do
+            python3 scripts/release/verify-release-assets.py "$f" "$f.sha256"
+            found=1
           done
-      - name: Generate Homebrew formula update
+          [ "$found" = 1 ] || { echo "no release archives were produced" >&2; exit 1; }
+      - name: Stamp Homebrew formula from the macOS prod bottle
         run: |
           set -euo pipefail
-          VERSION="${WALLY_VERSION#v}"
-          # Homebrew ships the production bottle; the dev bottle is not tapped.
-          sidecar="artifacts/wally-${VERSION}-macos-arm64.tar.gz.sha256"
-          digest=$(awk 'NF == 2 { print $1 }' "$sidecar")
-          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-          python3 scripts/release/stamp-formula.py "$VERSION" "macos-arm64=${digest}"
-          ruby -c Formula/wally.rb
-          mkdir -p release-metadata
-          cp Formula/wally.rb release-metadata/wally.rb
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wally-homebrew-formula
-          path: release-metadata/wally.rb
-          if-no-files-found: error
-      - name: Stage and checksum the installers
-        # Publish the installers themselves plus their SHA-256 beside the
-        # bottles, so a cautious user can verify the script before running it:
-        #   curl -fsSLO .../releases/download/v<ver>/install.sh
-        #   curl -fsSLO .../releases/download/v<ver>/install.sh.sha256
-        #   shasum -a 256 -c install.sh.sha256 && sh install.sh
-        # Computed from the tagged installers, so the pair always matches.
+          ver="${WALLY_VERSION#v}"
+          sidecar="artifacts/wally-${ver}-macos-arm64.tar.gz.sha256"
+          if [ -f "$sidecar" ]; then
+            digest=$(awk 'NF == 2 { print $1 }' "$sidecar")
+            python3 scripts/release/stamp-formula.py "$ver" "macos-arm64=${digest}"
+            ruby -c Formula/wally.rb
+            mkdir -p artifacts && cp Formula/wally.rb artifacts/wally.rb
+          fi
+      - name: Stage installers + checksums
         run: |
           set -euo pipefail
-          mkdir -p artifacts
           for f in install.sh install.ps1; do
-            [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
+            [ -f "$f" ] || continue
             cp "$f" "artifacts/$f"
             ( cd artifacts && shasum -a 256 "$f" > "${f}.sha256" )
           done
@@ -340,11 +208,12 @@ jobs:
             artifacts/wally-*.tar.gz.sha256
             artifacts/wally-*.zip
             artifacts/wally-*.zip.sha256
+            artifacts/wally.rb
             artifacts/install.sh
             artifacts/install.sh.sha256
             artifacts/install.ps1
             artifacts/install.ps1.sha256
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
