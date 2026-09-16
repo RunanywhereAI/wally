@@ -7,7 +7,7 @@
 
 [product]
 # wally's own release version; git tag is v<version> (auto-tag.yml reads it here).
-version = "0.5.6"
+version = "0.5.7"
 
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.
