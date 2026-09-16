@@ -543,6 +543,16 @@ TestResult test_agent_table_rows_are_usable_subcommands() {
             return result;
         }
     }
+    // DeepSeek Harness is an npx tool, not a global binary: its executable must
+    // be npx so a person who followed the documented `npx @deepseek-ai/dsh`
+    // route is not told a nonexistent `dsh` is missing.
+    for (int index = 0; index < wally::harness::kAgentCount; ++index) {
+        if (std::string(wally::harness::kAgents[index].id) == "deepseek" &&
+            std::string(wally::harness::kAgents[index].command) != "npx") {
+            result.details = "deepseek must launch through npx, not a global binary";
+            return result;
+        }
+    }
     result.passed = true;
     return result;
 }

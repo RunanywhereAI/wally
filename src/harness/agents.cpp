@@ -306,10 +306,13 @@ const Agent kAgents[] = {
      Agent::Handoff::CustomEndpointEnvironment, "--tui"},
     {"openclaw", "openclaw", "open OpenClaw against a model", Agent::Handoff::ConfigFile,
      "tui --local"},
-    // No default arguments: this row picks its own profile below, and a `web`
-    // default would arrive here as the person's first positional — which is to
-    // say, as a prompt.
-    {"deepseek", "dsh", "open DeepSeek Harness against a model", Agent::Handoff::PatchOverlay, ""},
+    // Runs through npx, not a global binary: DeepSeek Harness documents only
+    // `npx @deepseek-ai/dsh`, its npm `latest` is a prerelease, and there is no
+    // global-install story — so `dsh` on PATH is not a thing to expect. The
+    // command is `npx`; the package is prepended to the argv below. No default
+    // arguments: this row picks its own profile, and a `web` default would
+    // arrive as the person's first positional, i.e. a prompt.
+    {"deepseek", "npx", "open DeepSeek Harness against a model", Agent::Handoff::PatchOverlay, ""},
 };
 
 const int kAgentCount = static_cast<int>(sizeof(kAgents) / sizeof(kAgents[0]));
@@ -497,6 +500,14 @@ int LaunchAgent(const Agent& agent, const std::string& model,
         return Launch(agent.command, "", args);
     }
 
+    // Refuse before any network or server work when the tool is not there: a
+    // person who has not installed it should see the install line, not a cloud
+    // session verified and a "will talk to ..." line for a launch that cannot
+    // happen. 127 is the shell's own "command not found".
+    if (!CheckInstalled(agent.command)) {
+        return 127;
+    }
+
     Endpoint endpoint;
     if (!Resolve(model, &endpoint)) {
         return 1;
@@ -638,6 +649,9 @@ int LaunchAgent(const Agent& agent, const std::string& model,
                 out::status_line("opening the dsh web ui; pass a prompt to run headless instead");
             }
             launch.insert(launch.end(), child_args.begin(), child_args.end());
+            // `npx @deepseek-ai/dsh <args>`: -y so a first run installs without
+            // a prompt, and npx uses a global install when one is present.
+            launch.insert(launch.begin(), {"-y", "@deepseek-ai/dsh"});
             out::status_line(std::string(agent.id) + " will talk to " + model + " through " +
                              endpoint.base_url);
             status = Launch(agent.command, "", launch);

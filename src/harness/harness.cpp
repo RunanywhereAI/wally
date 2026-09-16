@@ -140,15 +140,28 @@ void UnsetConfigVariable() {
 
 /// How you get a harness we do not ship. Kept beside the spawn so a missing
 /// tool answers the only question the person actually has.
+// The install line each tool actually documents. Wrong here is worse than
+// silent: a person pastes it and it fails. Verified against each tool's own
+// README, not guessed.
 std::string InstallHint(const std::string& tool) {
     if (tool == "opencode") {
-        return "install it with `npm i -g opencode-ai`, then run this again";
+        return "install it with `curl -fsSL https://opencode.ai/install | bash`, then run this "
+               "again";
     }
     if (tool == "openclaw") {
         return "install it with `npm i -g openclaw`, then run this again";
     }
-    if (tool == "dsh") {
-        return "install it with `npm i -g @deepseek-ai/dsh`, then run this again";
+    if (tool == "hermes") {
+        return "install it with `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | "
+               "bash`, then run this again";
+    }
+    if (tool == "claude") {
+        return "install it with `npm i -g @anthropic-ai/claude-code`, then run this again";
+    }
+    // DeepSeek Harness runs through npx (`npx @deepseek-ai/dsh`), so the missing
+    // dependency is Node.js, which is what carries npx.
+    if (tool == "npx") {
+        return "install Node.js (which includes npx) from https://nodejs.org/, then run this again";
     }
     return "install " + tool + " and put it on PATH, then run this again";
 }
@@ -198,14 +211,11 @@ bool OnPath(const std::string& tool) {
     }
     return false;
 }
-
 int Spawn(const std::string& tool, const std::vector<std::string>& args) {
     // Checked before the fork, not after: a failed exec happens in the child,
     // where the only thing it can report back is the exit code a shell uses
     // for "command not found" — so without this the person sees nothing at all.
-    if (!OnPath(tool)) {
-        out::status_line(tool + " is not installed on this machine");
-        out::status_line(InstallHint(tool));
+    if (!CheckInstalled(tool)) {
         return 127;
     }
 
@@ -291,6 +301,15 @@ bool RefreshSession(const account::ConsoleClient& console, account::Credentials*
 }
 
 }  // namespace
+
+bool CheckInstalled(const std::string& tool) {
+    if (OnPath(tool)) {
+        return true;
+    }
+    out::status_line(tool + " is not installed on this machine");
+    out::status_line(InstallHint(tool));
+    return false;
+}
 
 bool ModelIdIsSafe(const std::string& id) {
     if (id.empty() || id.size() > 512) {

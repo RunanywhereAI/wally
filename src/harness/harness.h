@@ -35,6 +35,12 @@ struct Endpoint {
 /// directory name). Exposed so the contract can be tested directly.
 bool ModelIdIsSafe(const std::string& id);
 
+/// Whether `tool` is on PATH. When it is not, prints a two-line message naming
+/// the tool and the install command it actually documents, and returns false —
+/// so a caller can refuse before doing any network or server work. Exposed for
+/// that early check; the spawn path uses it too.
+bool CheckInstalled(const std::string& tool);
+
 /// Confirms a cloud session is real before it is used to route a live editor
 /// or agent session: refreshes an expired token first (the same dance `wally
 /// usage` uses), then calls the console's identity endpoint the way `wally

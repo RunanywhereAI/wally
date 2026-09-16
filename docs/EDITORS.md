@@ -23,7 +23,7 @@ tool starts the way you already have it configured, and wally wires nothing.
 | `claude-desktop` | a gateway profile in Claude Desktop's third party mode, covering the chat and Cowork tabs |
 | `hermes` | `CUSTOM_BASE_URL`, `HERMES_INFERENCE_PROVIDER=custom`, the model in `HERMES_INFERENCE_MODEL`, and the key under the name its host gates on |
 | `openclaw` | your own `openclaw.json` plus one provider, written for the run and named by `OPENCLAW_CONFIG_PATH` |
-| `deepseek` | a `--patch` overlay on the argv, pointing dsh at a settings document wally wrote; nothing enters `$DSH_HOME` |
+| `deepseek` | run through `npx @deepseek-ai/dsh` (needs Node.js) with a `--patch` overlay pointing it at a settings document wally wrote; nothing enters `$DSH_HOME` |
 
 Two flags go with `-m`. `--serve` holds the endpoint open and prints it instead
 of launching anything, which is how a tool nobody has taught wally about gets

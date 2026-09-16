@@ -39,6 +39,11 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
     opencode->add_option("args", *rest, "passed through to opencode")->allow_extra_args();
     opencode->prefix_command();
     opencode->callback([model, rest, cloud] {
+        // Refuse before resolving a model or verifying the cloud session when
+        // opencode is not installed.
+        if (!harness::CheckInstalled("opencode")) {
+            fail(127);
+        }
         const std::string effective = ResolveDefaultModel(*model);
         if (*cloud) {
             if (effective.empty()) {
