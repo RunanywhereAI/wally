@@ -23,6 +23,13 @@ using Json = nlohmann::json;
 /// its own model ids and the endpoint behind us has never heard of them.
 Json RequestToOpenAI(const Json& anthropic, const std::string& model);
 
+/// A rough token count for the system prompt and every message in `anthropic`,
+/// for StreamState::input_estimate: ~4 characters per token, the same rule of
+/// thumb the provider docs themselves use for back-of-envelope sizing. Never a
+/// substitute for a real count the endpoint reports — only what message_start
+/// has to show before one exists.
+int EstimateRequestTokens(const Json& anthropic);
+
 /// OpenAI chat completion -> a whole Anthropic message.
 Json ResponseToAnthropic(const Json& openai, const std::string& model);
 
@@ -43,7 +50,14 @@ struct StreamState {
     };
 
     bool opened = false;
+    /// A text content block is currently open (assigned text_index).
     bool block_open = false;
+    /// The text block claims index 0 the first time content arrives; a tool_use
+    /// block deferred to StreamCloseToAnthropic takes whatever follows. -1 until
+    /// assigned.
+    int text_index = -1;
+    /// The next index StreamCloseToAnthropic hands to a tool_use block.
+    int next_index = 0;
     /// Set once the endpoint has reported a failure, after which the closing
     /// events would be describing a turn that never happened.
     bool failed = false;
@@ -52,6 +66,22 @@ struct StreamState {
     std::string stop_reason;
     int input_tokens = 0;
     int output_tokens = 0;
+    /// A rough stand-in for input_tokens, set by the caller before the first
+    /// chunk arrives (see EstimateRequestTokens). message_start goes out
+    /// before the upstream has said anything about usage — an OpenAI-shaped
+    /// endpoint only attaches it to a later chunk, sometimes the very last
+    /// one — so 0 there was never "no input", only "not yet known". A wrapped
+    /// tool that reads usage once at message_start and never again would
+    /// otherwise see a hard zero for the whole turn.
+    int input_estimate = 0;
+    /// Characters of assistant text, thinking, and tool-call arguments
+    /// written so far, the same fallback basis for output_tokens if the
+    /// endpoint's stream ends without ever reporting completion_tokens. A
+    /// reasoning model can spend its whole budget on thinking before any
+    /// answer text exists (glm-5.3-flash measured: 199 of 200 tokens on a
+    /// throwaway `max_tokens`), so leaving thinking out of this count is what
+    /// made the fallback read 0 on a turn that plainly cost something.
+    int output_chars = 0;
 
     /// The calls so far, in the order they were first seen, which is the order
     /// they are written out in.

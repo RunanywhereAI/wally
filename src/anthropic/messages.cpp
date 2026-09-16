@@ -177,16 +177,22 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
     auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
     auto api_key = std::make_shared<std::string>(runtime.api_key);
     auto model = std::make_shared<std::string>(runtime.model);
+    // Computed once, up front: the request itself is what message_start's
+    // usage estimate is built from, and it has to be ready before the first
+    // upstream chunk arrives.
+    const int input_estimate = translate::EstimateRequestTokens(request);
 
     response.set_chunked_content_provider(
         "text/event-stream",
-        [upstream, origin, path, api_key, model](size_t /*offset*/, httplib::DataSink& sink) {
+        [upstream, origin, path, api_key, model, input_estimate](size_t /*offset*/,
+                                                                 httplib::DataSink& sink) {
             httplib::Client client(*origin);
             client.set_read_timeout(600, 0);
             ApplyAuth(client, *api_key);
 
             translate::StreamState state;
             state.model = *model;
+            state.input_estimate = input_estimate;
             std::string pending;
             // The upstream status is only known once Post returns, so the start
             // of the body is kept regardless. On a non-2xx reply that is the

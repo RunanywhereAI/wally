@@ -55,8 +55,8 @@ wally usage                 # credit left and recent spend
 ```
 
 Hosted models today are `glm-5.3-flash`, `qwen3.8-27b` and `gemma-4`. The same
-commands work with a model on your machine, and `claude-desktop`, `clion` and
-`rustrover` are wired the same way.
+commands work with a model on your machine, and `claude-desktop`, `hermes` and
+`openclaw` are wired the same way.
 
 ## Commands you'll use
 
@@ -68,6 +68,7 @@ commands work with a model on your machine, and `claude-desktop`, `clion` and
 | `wally serve` | OpenAI-compatible API |
 | `wally login` / `wally usage` | sign in, check credit |
 | `wally opencode` / `wally claude-code` | start a coding agent on a model |
+| `wally update` | update wally to the latest release |
 
 `wally --help` and `wally <command> --help` cover the rest, including vision,
 speech, embeddings and image generation.
