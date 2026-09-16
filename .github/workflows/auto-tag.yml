@@ -1,8 +1,9 @@
 name: Auto-Tag Release
 
 # When a PR is merged to main with release:patch|minor|major, tag v<version>
-# from CMakeLists.txt and dispatch release.yml. Tag pushes with GITHUB_TOKEN
-# do not trigger other workflows, so the dispatch is required.
+# from version/version.go (the single source of truth) and dispatch
+# release.yml. Tag pushes with GITHUB_TOKEN do not trigger other workflows, so
+# the dispatch is required.
 
 on:
   pull_request:
@@ -57,14 +58,14 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Read version from versions.toml
+      - name: Read version from version/version.go
         if: steps.label.outputs.should-release == 'true'
         id: version
         run: |
           set -euo pipefail
-          REVIEWED=$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' versions.toml | head -1)
+          REVIEWED=$(sed -nE 's/.*Version[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+).*"/\1/p' version/version.go | head -1)
           if [ -z "$REVIEWED" ]; then
-            echo "::error::Could not read the product version from versions.toml"
+            echo "::error::Could not read the product version from version/version.go"
             exit 1
           fi
           echo "Reviewed version: $REVIEWED"
