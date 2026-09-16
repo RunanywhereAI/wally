@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -174,6 +175,9 @@ func TestModelsRmWithoutConfirmationKeepsModel(t *testing.T) {
 }
 
 func TestModelsPullRunsConfiguredScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the pull-model.sh seam is a unix shell script; isExecutableFile keys off the +x bit")
+	}
 	home := t.TempDir()
 	t.Setenv("RUNANYWHERE_HOME", home)
 

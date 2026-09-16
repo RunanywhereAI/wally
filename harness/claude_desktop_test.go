@@ -12,6 +12,12 @@ import (
 )
 
 func TestApplyThenRestoreClaudeDesktopGatewayRoundTrips(t *testing.T) {
+	// The Claude Desktop harness targets the macOS "Library/Application
+	// Support" layout (it rejects non-darwin at Wire); this round-trip exercises
+	// those paths, which do not resolve on Windows.
+	if runtime.GOOS == "windows" {
+		t.Skip("Claude Desktop gateway apply/restore is darwin-only")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 

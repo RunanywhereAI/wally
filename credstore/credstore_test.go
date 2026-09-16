@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -121,8 +122,12 @@ func TestStore_FileFallbackRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected %s to exist: %v", p, err)
 		}
-		if perm := info.Mode().Perm(); perm != 0o600 {
-			t.Fatalf("%s has permissions %v, want 0600", p, perm)
+		// Windows has no POSIX mode bits; os.Chmod cannot produce 0600 there,
+		// so the 0600 guarantee (and this assertion) is unix-only.
+		if runtime.GOOS != "windows" {
+			if perm := info.Mode().Perm(); perm != 0o600 {
+				t.Fatalf("%s has permissions %v, want 0600", p, perm)
+			}
 		}
 	}
 
