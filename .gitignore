@@ -1,8 +1,13 @@
 # Go build output
 /wally
 /wally.exe
+/build/
 *.test
 *.out
+
+# Swift helper (wally-mlx) build output
+/swift/.build/
+/swift/.swiftpm/
 
 # Local env and scratch
 .env
@@ -11,3 +16,6 @@
 # Editor / local
 .idea/
 .deps/
+/.claude/plans/
+/.claude/facts/
+/.claude/research/
