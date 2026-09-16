@@ -28,8 +28,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -151,9 +149,9 @@ type racServerEngine struct {
 	modelID string
 	port    int
 
-	// MLX runs out of process: rac_server is GGUF-only, so an MLX model is
-	// served by the wally-mlx Swift helper, spawned here and proxied to.
-	mlxCmd     *exec.Cmd
+	// MLX runs in-process: rac_server is GGUF-only, so an MLX model is served
+	// by the linked Swift MLX runtime over a local port (engine_mlx_darwin.go).
+	// One model is loaded for the process lifetime.
 	mlxModelID string
 	mlxPort    int
 }
@@ -226,7 +224,9 @@ func (e *racServerEngine) Start(m InstalledModel) (Endpoint, error) {
 func (e *racServerEngine) Stop() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.stopMLXLocked()
+	// The in-process MLX server has no stop: it is a blocking accept loop with
+	// a loaded model, torn down only when the process exits. Stopping the GGUF
+	// rac_server is all there is to do here.
 	if !racServerRunning() {
 		return nil
 	}
@@ -237,80 +237,14 @@ func (e *racServerEngine) Stop() error {
 	return nil
 }
 
-// startMLX spawns the wally-mlx helper for an MLX model and returns its local
-// endpoint once it is serving. rac_server cannot load MLX; the helper does the
-// direct-generate path in Swift with the MLX runtime.
-func (e *racServerEngine) startMLX(m InstalledModel) (Endpoint, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if e.mlxCmd != nil {
-		if e.mlxModelID == m.ID {
-			return e.mlxEndpoint(), nil
-		}
-		e.stopMLXLocked()
-	}
-
-	helper := mlxHelperPath()
-	if helper == "" {
-		return Endpoint{}, fmt.Errorf("the wally-mlx helper is not installed next to wally; MLX inference is unavailable")
-	}
-	port, err := freePort()
-	if err != nil {
-		return Endpoint{}, fmt.Errorf("pick mlx port: %w", err)
-	}
-
-	cmd := exec.Command(helper, m.ID, strconv.Itoa(port))
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return Endpoint{}, fmt.Errorf("start wally-mlx: %w", err)
-	}
-	if err := waitMLXReady(port, 180*time.Second); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return Endpoint{}, fmt.Errorf("wally-mlx did not become ready for %s: %w", m.ID, err)
-	}
-
-	e.mlxCmd = cmd
-	e.mlxModelID = m.ID
-	e.mlxPort = port
-	return e.mlxEndpoint(), nil
-}
-
-func (e *racServerEngine) stopMLXLocked() {
-	if e.mlxCmd != nil && e.mlxCmd.Process != nil {
-		_ = e.mlxCmd.Process.Kill()
-		_ = e.mlxCmd.Wait()
-	}
-	e.mlxCmd = nil
-	e.mlxModelID = ""
-}
-
+// mlxEndpoint is the local address the in-process MLX server listens on (see
+// engine_mlx_darwin.go); the daemon proxies to it like any other endpoint.
 func (e *racServerEngine) mlxEndpoint() Endpoint {
 	return Endpoint{
 		BaseURL: "http://127.0.0.1:" + strconv.Itoa(e.mlxPort) + "/v1",
 		APIKey:  "",
 		Local:   true,
 	}
-}
-
-// mlxHelperPath finds the wally-mlx binary: WALLY_MLX_HELPER, then beside the
-// wally executable (where the installer puts it with its Metal bundles), then a
-// dev build/ fallback. Empty when none exists.
-func mlxHelperPath() string {
-	if p := os.Getenv("WALLY_MLX_HELPER"); p != "" {
-		return p
-	}
-	if exe, err := os.Executable(); err == nil {
-		cand := filepath.Join(filepath.Dir(exe), "wally-mlx")
-		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
-			return cand
-		}
-	}
-	if fi, err := os.Stat("build/wally-mlx"); err == nil && !fi.IsDir() {
-		return "build/wally-mlx"
-	}
-	return ""
 }
 
 func waitMLXReady(port int, timeout time.Duration) error {

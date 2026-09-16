@@ -52,16 +52,15 @@ let package = Package(
         .package(url: "https://github.com/RunanywhereAI/runanywhere-swift.git", exact: "0.20.25")
     ],
     targets: [
-        .target(
-            name: "CWallyRACBootstrap",
-            cSettings: [
-                .unsafeFlags(["-I", kitInclude])
-            ]
-        ),
+        .target(name: "CWallyGo"),
+        // The single Apple binary: registers MLX in-process, then hands off to
+        // the Go CLI (wally_run_main) linked in via OTHER_LDFLAGS
+        // (scripts/build-app.sh). server.swift + MLXServe.swift serve MLX
+        // in-process for the Go engine, no subprocess.
         .executableTarget(
-            name: "wally-mlx",
+            name: "wally-app",
             dependencies: [
-                "CWallyRACBootstrap",
+                "CWallyGo",
                 .product(name: "RunAnywhere", package: "runanywhere-swift"),
                 .product(name: "RunAnywhereMLX", package: "runanywhere-swift"),
             ],
