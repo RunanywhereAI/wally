@@ -44,15 +44,33 @@ fi
 
 # The kit's own explicit link-order list: every
 # ${RunAnywhere_LIBRARY_DIR}/lib*.a token in the config, in the order CMake
-# would emit them.
-extra_archives="$(
+# would emit them. Filtered to archives that actually exist on this platform
+# (Linux ships onnxruntime as a .so, not a .a) and, off Apple, stripped of the
+# ONNX/Sherpa/CoreML stack: the CLI serves only GGUF there, so those engines
+# and their heavy deps (onnxruntime, sherpa, kaldi, piper, ...) are dead weight
+# that only drags in link dependencies the GGUF path never needs.
+non_gguf='onnx|sherpa|kaldi|coreml|piper|espeak|ssentencepiece|kissfft|fst|fbank|ucd'
+keep_archive() {
+  [[ -e "$1" ]] || return 1
+  if [[ "$os" != darwin ]]; then
+    echo "$(basename "$1")" | grep -qiE "$non_gguf" && return 1
+  fi
+  return 0
+}
+
+extra_archives_raw="$(
   grep -o '\${RunAnywhere_LIBRARY_DIR}/[A-Za-z0-9_+.-]*\.a' "$cmake_config" \
     | sed "s#\${RunAnywhere_LIBRARY_DIR}#$lib#" \
     | awk '!seen[$0]++'
 )"
+extra_archives=""
+while IFS= read -r a; do
+  [[ -n "$a" ]] || continue
+  keep_archive "$a" && extra_archives="$extra_archives $a"
+done <<<"$extra_archives_raw"
 
 ldflags="-L$lib $lib/librac_server.a $lib/librac_commons.a"
-ldflags="$ldflags $(echo "$extra_archives" | tr '\n' ' ')"
+ldflags="$ldflags $extra_archives"
 
 # rac_backend_* archives (llamacpp, mlx, onnx, sherpa in this kit) register via
 # a ctor and get dropped by a normal static link unless whole-archived. The
@@ -65,6 +83,10 @@ for f in "$lib"/librac_backend_*.a; do
   case "$(basename "$f")" in
     *neurt*|*qhexrt*) continue ;;
   esac
+  # Off Apple, only the GGUF (llamacpp) backend is served.
+  if [[ "$os" != darwin ]]; then
+    echo "$(basename "$f")" | grep -qiE "$non_gguf" && continue
+  fi
   backends+=("$f")
 done
 

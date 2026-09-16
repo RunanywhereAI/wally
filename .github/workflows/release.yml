@@ -77,6 +77,9 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # GGUF-only cgo build; non-blocking so a verified macOS release still cuts
+    # while the Linux link recipe is iterated in CI.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

@@ -13,6 +13,10 @@ platform="${1:?usage: fetch-kit.sh <platform> <version> <dest>}"
 version="${2:?usage: fetch-kit.sh <platform> <version> <dest>}"
 dest="${3:?usage: fetch-kit.sh <platform> <version> <dest>}"
 
+# Windows runners hand a backslash path (D:\a\wally\wally); bash mkdir/tar treat
+# backslashes as escapes, so normalize to forward slashes.
+dest="${dest//\\//}"
+
 asset="RunAnywhere-cpp-desktop-${platform}-v${version}.tar.gz"
 tmp="$(mktemp -d)"
 
