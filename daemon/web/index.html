@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wally dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f9f8;
+    --surface: #ffffff;
+    --border: #dde6e4;
+    --text: #182422;
+    --text-muted: #5b6b68;
+    --accent: #0f766e;
+    --accent-soft: #e4f3f1;
+    --ok: #1a7f4e;
+    --ok-soft: #e4f5ec;
+    --warn: #9a5b12;
+    --warn-soft: #fbf0e2;
+    --method-get: #1a7f4e;
+    --method-get-soft: #e4f5ec;
+    --method-post: #0f766e;
+    --method-post-soft: #e4f3f1;
+    --code-bg: #101615;
+    --code-text: #e7eceb;
+    --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101615;
+      --surface: #151f1d;
+      --border: #253330;
+      --text: #e7eceb;
+      --text-muted: #93a4a0;
+      --accent: #2dd4bf;
+      --accent-soft: #12302c;
+      --ok: #4ade80;
+      --ok-soft: #12301f;
+      --warn: #fbbf24;
+      --warn-soft: #322408;
+      --method-get: #4ade80;
+      --method-get-soft: #12301f;
+      --method-post: #2dd4bf;
+      --method-post-soft: #12302c;
+      --code-bg: #0a0f0e;
+      --code-text: #e7eceb;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+  }
+  header {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 28px 16px 0;
+  }
+  header h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  header p {
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 62ch;
+  }
+  header code {
+    font-family: var(--font-mono);
+  }
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-top: 20px;
+  }
+  section > h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+  }
+  section > p.lede {
+    color: var(--text-muted);
+    margin: -6px 0 16px;
+    max-width: 62ch;
+  }
+  .status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px 20px;
+  }
+  .status-item dt {
+    color: var(--text-muted);
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin: 0 0 3px;
+  }
+  .status-item dd {
+    margin: 0;
+    font-weight: 500;
+    font-size: 15px;
+  }
+  code {
+    font-family: var(--font-mono);
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .badge-ok {
+    background: var(--ok-soft);
+    color: var(--ok);
+  }
+  .badge-warn {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+  .note {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0;
+  }
+  .error-banner {
+    border: 1px solid var(--warn);
+    background: var(--warn-soft);
+    color: var(--warn);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 14px;
+    margin-top: 20px;
+  }
+
+  /* Endpoint cards */
+  .endpoint {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .endpoint + .endpoint {
+    margin-top: 16px;
+  }
+  .endpoint-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .method {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .method-get {
+    background: var(--method-get-soft);
+    color: var(--method-get);
+  }
+  .method-post {
+    background: var(--method-post-soft);
+    color: var(--method-post);
+  }
+  .endpoint-path {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 500;
+  }
+  .endpoint-purpose {
+    color: var(--text-muted);
+    margin: 6px 0 0;
+    font-size: 14px;
+  }
+  .endpoint-block {
+    margin-top: 14px;
+  }
+  .endpoint-block h4 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    margin: 0 0 6px;
+  }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-text);
+    border-radius: 6px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    margin: 0;
+  }
+  pre code {
+    background: none;
+    color: inherit;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre;
+  }
+  .stream-note {
+    display: block;
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .stream-note code {
+    font-size: 12px;
+  }
+  .toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .toc a {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .toc a:hover {
+    text-decoration: underline;
+  }
+  footer {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 16px 40px;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  @media (max-width: 480px) {
+    body { font-size: 14px; }
+    section { padding: 16px; }
+    .endpoint { padding: 14px; }
+    pre code { font-size: 12.5px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Wally dashboard</h1>
+  <p>API reference for <code>wally serve</code>, the local OpenAI and Anthropic compatible
+  server this machine runs on <code>127.0.0.1:11500</code>. Point a harness, an SDK, or curl
+  at it directly, no cloud round trip required for what is installed on this machine.</p>
+</header>
+<main>
+  <div id="error-slot"></div>
+
+  <section id="status-section">
+    <h2>Status</h2>
+    <dl class="status-grid">
+      <div class="status-item">
+        <dt>Build channel</dt>
+        <dd id="status-channel">-</dd>
+      </div>
+      <div class="status-item">
+        <dt>On-device inference</dt>
+        <dd id="status-ondevice">-</dd>
+      </div>
+      <div class="status-item">
+        <dt>Models available</dt>
+        <dd id="status-models">-</dd>
+      </div>
+      <div class="status-item">
+        <dt>Harnesses installed</dt>
+        <dd id="status-harnesses">-</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section id="reference-section">
+    <h2>Endpoints</h2>
+    <p class="lede">Every route this server answers. Request and response bodies below are
+    the exact JSON shapes the server reads and writes.</p>
+    <ul class="toc">
+      <li><a href="#get-healthz">GET /healthz</a></li>
+      <li><a href="#get-v1-models">GET /v1/models</a></li>
+      <li><a href="#post-v1-chat-completions">POST /v1/chat/completions</a></li>
+      <li><a href="#post-v1-completions">POST /v1/completions</a></li>
+      <li><a href="#post-v1-embeddings">POST /v1/embeddings</a></li>
+      <li><a href="#post-v1-messages">POST /v1/messages</a></li>
+    </ul>
+
+    <div class="endpoint" id="get-healthz" style="margin-top:20px;">
+      <div class="endpoint-head">
+        <span class="method method-get">GET</span>
+        <span class="endpoint-path">/healthz</span>
+      </div>
+      <p class="endpoint-purpose">Liveness check. Returns 200 with the body <code>ok</code>
+      once the daemon is up; nothing else calls out or touches a model.</p>
+      <div class="endpoint-block">
+        <h4>curl</h4>
+        <pre><code>curl -s http://127.0.0.1:11500/healthz</code></pre>
+      </div>
+    </div>
+
+    <div class="endpoint" id="get-v1-models">
+      <div class="endpoint-head">
+        <span class="method method-get">GET</span>
+        <span class="endpoint-path">/v1/models</span>
+      </div>
+      <p class="endpoint-purpose">Lists every model a request on this daemon can resolve:
+      the cached cloud catalog plus whatever is installed on-device. No upstream call.</p>
+      <div class="endpoint-block">
+        <h4>Response</h4>
+        <pre><code>{
+  "object": "list",
+  "data": [
+    { "id": "&lt;model-id&gt;", "object": "model", "owned_by": "wally" }
+  ]
+}</code></pre>
+      </div>
+      <div class="endpoint-block">
+        <h4>curl</h4>
+        <pre><code>curl -s http://127.0.0.1:11500/v1/models</code></pre>
+      </div>
+    </div>
+
+    <div class="endpoint" id="post-v1-chat-completions">
+      <div class="endpoint-head">
+        <span class="method method-post">POST</span>
+        <span class="endpoint-path">/v1/chat/completions</span>
+      </div>
+      <p class="endpoint-purpose">OpenAI-compatible chat completions. The server resolves
+      <code>model</code> to a cloud or on-device endpoint and proxies the request there.</p>
+      <div class="endpoint-block">
+        <h4>Request body</h4>
+        <pre><code>{
+  "model": "&lt;model-id&gt;",
+  "messages": [
+    { "role": "user", "content": "hello" }
+  ],
+  "stream": false
+}</code></pre>
+      </div>
+      <div class="endpoint-block">
+        <h4>Response</h4>
+        <pre><code>{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "choices": [
+    { "index": 0, "message": { "role": "assistant", "content": "..." }, "finish_reason": "stop" }
+  ],
+  "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }
+}</code></pre>
+        <span class="stream-note">With <code>"stream": true</code>, the response is
+        <code>text/event-stream</code>: a series of <code>data: {...}</code> chunk events,
+        closed by <code>data: [DONE]</code>.</span>
+      </div>
+      <div class="endpoint-block">
+        <h4>curl</h4>
+        <pre><code>curl -s http://127.0.0.1:11500/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "&lt;model-id&gt;",
+    "messages": [{ "role": "user", "content": "hello" }]
+  }'</code></pre>
+      </div>
+    </div>
+
+    <div class="endpoint" id="post-v1-completions">
+      <div class="endpoint-head">
+        <span class="method method-post">POST</span>
+        <span class="endpoint-path">/v1/completions</span>
+      </div>
+      <p class="endpoint-purpose">The legacy OpenAI text completion shape, for a tool that
+      has not moved to chat completions. Same resolve-and-proxy path as chat completions.</p>
+      <div class="endpoint-block">
+        <h4>Request body</h4>
+        <pre><code>{
+  "model": "&lt;model-id&gt;",
+  "prompt": "hello",
+  "stream": false
+}</code></pre>
+      </div>
+      <div class="endpoint-block">
+        <h4>Response</h4>
+        <pre><code>{
+  "id": "cmpl-...",
+  "object": "text_completion",
+  "choices": [
+    { "index": 0, "text": "...", "finish_reason": "stop" }
+  ],
+  "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }
+}</code></pre>
+        <span class="stream-note">With <code>"stream": true</code>, the response is
+        <code>text/event-stream</code> chunks, the same shape as chat completions.</span>
+      </div>
+      <div class="endpoint-block">
+        <h4>curl</h4>
+        <pre><code>curl -s http://127.0.0.1:11500/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "&lt;model-id&gt;",
+    "prompt": "hello"
+  }'</code></pre>
+      </div>
+    </div>
+
+    <div class="endpoint" id="post-v1-embeddings">
+      <div class="endpoint-head">
+        <span class="method method-post">POST</span>
+        <span class="endpoint-path">/v1/embeddings</span>
+      </div>
+      <p class="endpoint-purpose">OpenAI-compatible embeddings. Resolves <code>model</code>
+      the same way as the completion routes and proxies to that endpoint's embeddings path.</p>
+      <div class="endpoint-block">
+        <h4>Request body</h4>
+        <pre><code>{
+  "model": "&lt;model-id&gt;",
+  "input": "hello"
+}</code></pre>
+      </div>
+      <div class="endpoint-block">
+        <h4>Response</h4>
+        <pre><code>{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.0, 0.0] }
+  ],
+  "model": "&lt;model-id&gt;",
+  "usage": { "prompt_tokens": 0, "total_tokens": 0 }
+}</code></pre>
+      </div>
+      <div class="endpoint-block">
+        <h4>curl</h4>
+        <pre><code>curl -s http://127.0.0.1:11500/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "&lt;model-id&gt;",
+    "input": "hello"
+  }'</code></pre>
+      </div>
+    </div>
+
+    <div class="endpoint" id="post-v1-messages">
+      <div class="endpoint-head">
+        <span class="method method-post">POST</span>
+        <span class="endpoint-path">/v1/messages</span>
+      </div>
+      <p class="endpoint-purpose">Anthropic-shaped Messages. The server translates the
+      request to OpenAI, proxies it to the resolved endpoint, then translates the response
+      (or, for a stream, each event) back to Anthropic's shape.</p>
+      <div class="endpoint-block">
+        <h4>Request body</h4>
+        <pre><code>{
+  "model": "&lt;model-id&gt;",
+  "max_tokens": 256,
+  "messages": [
+    { "role": "user", "content": "hello" }
+  ],
+  "stream": false
+}</code></pre>
+      </div>
+      <div class="endpoint-block">
+        <h4>Response</h4>
+        <pre><code>{
+  "id": "msg_...",
+  "type": "message",
+  "role": "assistant",
+  "content": [{ "type": "text", "text": "..." }],
+  "stop_reason": "end_turn",
+  "usage": { "input_tokens": 0, "output_tokens": 0 }
+}</code></pre>
+        <span class="stream-note">With <code>"stream": true</code>, the response is
+        <code>text/event-stream</code>: Anthropic's own event sequence
+        (<code>message_start</code>, <code>content_block_delta</code>, ...,
+        <code>message_stop</code>), translated chunk by chunk as the upstream streams.</span>
+      </div>
+      <div class="endpoint-block">
+        <h4>curl</h4>
+        <pre><code>curl -s http://127.0.0.1:11500/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "&lt;model-id&gt;",
+    "max_tokens": 256,
+    "messages": [{ "role": "user", "content": "hello" }]
+  }'</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="errors-section">
+    <h2>Errors</h2>
+    <p class="lede">A request for a model this daemon cannot resolve fails before any
+    upstream call, in the error shape of whichever route you called.</p>
+    <div class="endpoint-block">
+      <h4>OpenAI-shaped routes (chat completions, completions, embeddings, models)</h4>
+      <pre><code>{ "error": { "message": "...", "type": "wally_error" } }</code></pre>
+    </div>
+    <div class="endpoint-block">
+      <h4>/v1/messages</h4>
+      <pre><code>{ "type": "error", "error": { "type": "...", "message": "..." } }</code></pre>
+    </div>
+    <p class="note" style="margin-top:12px;">Not signed in and no matching on-device model
+    returns 401 with a hint to run <code>wally login</code>. A model that names an on-device
+    engine this build has not linked in returns 501.</p>
+  </section>
+</main>
+<footer>
+  This page is served at <code>GET /</code>; its status panel reads <code>GET /status</code>.
+  Neither carries a console URL or a credential, only the build channel and local counts.
+</footer>
+<script>
+(function () {
+  "use strict";
+
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function renderStatus(status) {
+    document.getElementById("status-channel").textContent = status.channel;
+    document.getElementById("status-ondevice").textContent = status.on_device_enabled ? "Enabled" : "Not enabled";
+
+    var cloudCount = (status.cloud_models || []).length;
+    var onDeviceCount = (status.on_device_models || []).length;
+    document.getElementById("status-models").textContent =
+      cloudCount + " cloud, " + onDeviceCount + " on-device";
+
+    var harnesses = status.harnesses || [];
+    var installedCount = harnesses.filter(function (h) { return h.installed; }).length;
+    document.getElementById("status-harnesses").textContent =
+      installedCount + " of " + harnesses.length;
+  }
+
+  function showError(message) {
+    var slot = document.getElementById("error-slot");
+    slot.innerHTML = '<div class="error-banner">' + escapeHTML(message) + "</div>";
+  }
+
+  function load() {
+    fetch("/status", { headers: { Accept: "application/json" } })
+      .then(function (resp) {
+        if (!resp.ok) {
+          throw new Error("status endpoint returned " + resp.status);
+        }
+        return resp.json();
+      })
+      .then(renderStatus)
+      .catch(function (err) {
+        showError("Could not load status from the daemon: " + err.message);
+      });
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

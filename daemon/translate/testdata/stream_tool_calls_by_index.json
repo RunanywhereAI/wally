@@ -1,0 +1,10 @@
+[
+  {"id": "chatcmpl-tools-1", "choices": [{"index": 0, "delta": {"role": "assistant"}}]},
+  {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_A", "function": {"name": "get_weather", "arguments": ""}}]}}]},
+  {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 1, "id": "call_B", "function": {"name": "get_time", "arguments": ""}}]}}]},
+  {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"city\""}}]}}]},
+  {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 1, "function": {"arguments": "{\"tz\":\"UTC\"}"}}]}}]},
+  {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": ":\"NYC\"}"}}]}}]},
+  {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+  {"choices": [], "usage": {"prompt_tokens": 40, "completion_tokens": 9}}
+]

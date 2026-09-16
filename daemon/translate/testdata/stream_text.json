@@ -1,0 +1,7 @@
+[
+  {"id": "chatcmpl-text-1", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]},
+  {"choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": null}]},
+  {"choices": [{"index": 0, "delta": {"content": ", world"}, "finish_reason": null}]},
+  {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+  {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 3}}
+]

@@ -1,0 +1,4 @@
+[
+  {"id": "chatcmpl-byid-1", "choices": [{"index": 0, "delta": {"tool_calls": [{"id": "call_X", "function": {"name": "lookup", "arguments": "{\"q\":\"cats\"}"}}]}}]},
+  {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
+]

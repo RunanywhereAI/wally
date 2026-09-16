@@ -1,0 +1,7 @@
+[
+  {"id": "chatcmpl-glm-1", "choices": [{"index": 0, "delta": {"role": "assistant"}}]},
+  {"choices": [{"index": 0, "delta": {"reasoning_content": "The user wants 2 plus 2. Let me verify: 2+2 equals 4."}}]},
+  {"choices": [{"index": 0, "delta": {"reasoning_content": " Confirmed: 4."}}]},
+  {"choices": [{"index": 0, "delta": {"content": "4"}}]},
+  {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 18, "completion_tokens": 47}}
+]
