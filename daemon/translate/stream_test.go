@@ -363,3 +363,44 @@ func TestNewStreamStateMessageID(t *testing.T) {
 		}
 	})
 }
+
+func TestStreamPartialToolArgumentsSuppressed(t *testing.T) {
+	s := NewStreamState("m", "msg_1", 5)
+	runChunks(t, s, [][]byte{
+		[]byte(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_A","function":{"name":"run","arguments":"{\"path\":\"/et"}}]}}]}`),
+		[]byte(`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`),
+	})
+	events := parseSSE(t, s.Close())
+	for _, e := range events {
+		if e.name == "content_block_start" {
+			t.Fatalf("a tool_use block was exposed for incomplete JSON arguments: %v", e.data)
+		}
+	}
+	names := eventNames(events)
+	want := []string{"message_delta", "message_stop"}
+	if len(names) != len(want) || names[0] != want[0] || names[1] != want[1] {
+		t.Fatalf("close events = %v, want %v (no tool block)", names, want)
+	}
+}
+
+func TestStreamComplete(t *testing.T) {
+	s := NewStreamState("m", "msg_1", 5)
+	if s.Complete(true) {
+		t.Fatal("no finish_reason seen yet, so [DONE] alone is not complete")
+	}
+	if _, err := s.Chunk([]byte(`{"choices":[{"delta":{"content":"hi"}}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if s.Complete(true) {
+		t.Fatal("still no finish_reason, so incomplete")
+	}
+	if _, err := s.Chunk([]byte(`{"choices":[{"delta":{},"finish_reason":"stop"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Complete(true) {
+		t.Fatal("finish_reason and [DONE] present, so complete")
+	}
+	if s.Complete(false) {
+		t.Fatal("finish_reason but no [DONE], so incomplete")
+	}
+}

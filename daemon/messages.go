@@ -75,6 +75,11 @@ func (rt *Router) messages(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(resp.Body)
 		typ, msg := translate.UpstreamFailure(resp.StatusCode, errBody)
+		// A rate-limited or overloaded upstream says how long to wait; dropping
+		// it makes the client guess and back off wrong.
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			w.Header().Set("Retry-After", ra)
+		}
 		writeAnthropicError(w, resp.StatusCode, typ, msg)
 		return
 	}
@@ -107,12 +112,14 @@ func (rt *Router) streamMessages(w http.ResponseWriter, body io.Reader, model st
 
 	state := translate.NewStreamState(model, newMessageID(), translate.EstimateRequestTokens(anthropicReq))
 
+	sawDone := false
 	reader := bufio.NewReaderSize(body, 1<<20)
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if trimmed := bytes.TrimSpace(line); bytes.HasPrefix(trimmed, []byte("data:")) {
 			payload := bytes.TrimSpace(trimmed[len("data:"):])
 			if string(payload) == "[DONE]" {
+				sawDone = true
 				break
 			}
 			sse, err := state.Chunk(payload)
@@ -137,6 +144,16 @@ func (rt *Router) streamMessages(w http.ResponseWriter, body io.Reader, model st
 		if readErr != nil {
 			break
 		}
+	}
+	// A finished OpenAI stream ends with a finish_reason and then [DONE].
+	// Reaching here without both means the upstream was cut off mid-turn:
+	// closing cleanly would sign a truncated answer off as a successful
+	// end_turn, and would flush any half-built tool call as an executable
+	// tool_use. Report the truncation instead and let Close stay silent.
+	if !state.Failed() && !state.Complete(sawDone) {
+		state.Fail()
+		io.WriteString(w, translate.ErrorEvent("api_error", "the model stream ended before it finished"))
+		rc.Flush()
 	}
 	io.WriteString(w, state.Close())
 	rc.Flush()

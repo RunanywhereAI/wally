@@ -124,6 +124,11 @@ func (rt *Router) proxyOpenAI(w http.ResponseWriter, r *http.Request, path strin
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
+	// Pass through the upstream's cooldown on a rate-limit / overload, so the
+	// client backs off for the time the endpoint actually asked for.
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		w.Header().Set("Retry-After", ra)
+	}
 	w.WriteHeader(resp.StatusCode)
 	streamCopy(w, resp.Body)
 }

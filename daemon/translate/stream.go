@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // toolCall is a call being assembled from the stream. OpenAI spreads one
@@ -37,6 +38,10 @@ type StreamState struct {
 	// Set once the endpoint has reported a failure, after which the closing
 	// events would be describing a turn that never happened.
 	failed bool
+	// Set once any chunk carried a finish_reason. A finished OpenAI stream
+	// always reports one; its absence at end-of-stream means the upstream was
+	// cut off mid-turn (see Complete).
+	sawFinish bool
 
 	stopReason   string
 	inputTokens  int
@@ -144,6 +149,7 @@ func (s *StreamState) Chunk(openaiChunk []byte) (string, error) {
 	}
 
 	if choice.FinishReason != "" {
+		s.sawFinish = true
 		s.stopReason = stopReason(choice.FinishReason)
 	}
 	if chunk.Usage != nil {
@@ -209,6 +215,23 @@ func (s *StreamState) Chunk(openaiChunk []byte) (string, error) {
 	return out, nil
 }
 
+// completeToolArguments returns the tool-call arguments to expose and whether
+// they are safe to. Empty arguments are a valid no-argument call ("{}"); any
+// non-empty value must parse as a complete JSON object, so a fragment left by
+// a stream that ended mid-arguments is rejected rather than surfaced as an
+// executable tool_use.
+func completeToolArguments(args string) (string, bool) {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return "{}", true
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+		return "", false
+	}
+	return trimmed, true
+}
+
 // mergeToolCallDelta reconciles one OpenAI tool-call fragment into the slot
 // it belongs to, by index when the endpoint numbers calls and by id when it
 // does not.
@@ -270,6 +293,22 @@ func (s *StreamState) Fail() {
 	s.failed = true
 }
 
+// Failed reports whether the turn has already been marked failed, so a caller
+// does not report a second, redundant stream error over one Chunk already
+// surfaced.
+func (s *StreamState) Failed() bool {
+	return s.failed
+}
+
+// Complete reports whether the stream ended the way a finished OpenAI stream
+// does: a recognized finish_reason on some chunk (sawFinish) and the final
+// [DONE] marker the caller passes as sawDone. Anything short of both is a
+// stream cut off mid-turn, which must not close as a successful message_stop
+// nor flush buffered tool calls.
+func (s *StreamState) Complete(sawDone bool) bool {
+	return sawDone && s.sawFinish
+}
+
 // Close returns the closing events once the upstream stream ends, or "" when
 // nothing ever opened or the turn already failed.
 func (s *StreamState) Close() string {
@@ -303,6 +342,14 @@ func (s *StreamState) Close() string {
 		if call.name == "" {
 			continue
 		}
+		// Its arguments must be a complete JSON object before the block is
+		// exposed. A stream cut off mid-arguments leaves a fragment like
+		// `{"path":"/et` here; handing that to the client as an executable
+		// tool_use is exactly what a coding agent would then run half-built.
+		partialJSON, ok := completeToolArguments(call.arguments)
+		if !ok {
+			continue
+		}
 		emittedToolBlock = true
 		// The client matches a result back to its call by this id, so a
 		// call the endpoint never named still needs one it can quote.
@@ -320,10 +367,6 @@ func (s *StreamState) Close() string {
 				Input: json.RawMessage("{}"),
 			},
 		})
-		partialJSON := call.arguments
-		if partialJSON == "" {
-			partialJSON = "{}"
-		}
 		out += event("content_block_delta", contentBlockDeltaEvent{
 			Type:  "content_block_delta",
 			Index: index,

@@ -140,3 +140,30 @@ func TestMessagesGatewayPathModelOverridesBody(t *testing.T) {
 		t.Errorf("path model did not override the body model; upstream got: %s", upstreamBody)
 	}
 }
+
+func TestMessagesStreamTruncatedSurfacesError(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Partial answer, then the connection just ends: no finish_reason, no [DONE].
+		io.WriteString(w, "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"half\"}}]}\n\n")
+	}))
+	defer upstream.Close()
+
+	d := newTestDaemon(NewRouter(stubSession{base: upstream.URL, token: "sk-test"}))
+	defer d.Close()
+
+	req := `{"model":"cloud-x","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(d.URL+"/v1/messages", "application/json", strings.NewReader(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	s := string(out)
+	if !strings.Contains(s, "event: error") && !strings.Contains(s, "\"error\"") {
+		t.Errorf("truncated stream did not surface an error:\n%s", s)
+	}
+	if strings.Contains(s, "message_stop") {
+		t.Errorf("truncated stream was closed as a successful message_stop:\n%s", s)
+	}
+}
