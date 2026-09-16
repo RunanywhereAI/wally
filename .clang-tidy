@@ -1,5 +1,0 @@
-# Same bar as the SDK C++ core. Vendored CLI11/linenoise are excluded in CI.
-Checks: 'clang-diagnostic-*,clang-analyzer-*,-clang-analyzer-optin.*,bugprone-*,-bugprone-easily-swappable-parameters,performance-*,modernize-use-override,readability-inconsistent-declaration-parameter-name'
-WarningsAsErrors: '*'
-HeaderFilterRegex: 'src/|include/'
-FormatStyle: file
