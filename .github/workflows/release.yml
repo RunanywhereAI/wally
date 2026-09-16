@@ -53,12 +53,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/fetch-kit.sh macos-arm64 "$KIT_VERSION" "$GITHUB_WORKSPACE/kit"
-      - name: Build on-device bottle (${{ matrix.variant }})
+      - name: Build single on-device binary (${{ matrix.variant }})
         env:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
         run: |
           ver="${WALLY_VERSION#v}"
-          bash scripts/build-ondevice.sh -tag "$ver"
+          # build-app.sh links the Go CLI + C++ kit + Swift MLX runtime into one
+          # executable (MLX in-process, no wally-mlx subprocess).
+          bash scripts/build-app.sh -tag "$ver"
           WALLY_VERSION="$ver" bash scripts/package.sh build macos-arm64 "${{ matrix.variant }}"
       - name: Verify archive
         run: |

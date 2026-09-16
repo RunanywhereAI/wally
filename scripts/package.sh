@@ -49,18 +49,17 @@ cp "${BIN}" "${STAGE}/bin/wally"
 chmod +x "${STAGE}/bin/wally"
 [[ -f "${ROOT}/README.md" ]] && cp "${ROOT}/README.md" "${STAGE}/README.md"
 
-# macOS: the Swift MLX host and its Metal bundles ride beside the binary.
+# macOS: the single binary carries MLX in-process (scripts/build-app.sh); only
+# its Metal shader bundles ride beside it, since mlx-swift resolves shaders from
+# a bundle next to the executable.
 if [[ "$(uname -s)" == Darwin ]]; then
-  [[ -x "${BUILD}/wally-mlx" ]] || { echo "package: macOS bottle needs ${BUILD}/wally-mlx (scripts/build-mlx.sh)" >&2; exit 1; }
-  cp "${BUILD}/wally-mlx" "${STAGE}/bin/wally-mlx"
-  chmod +x "${STAGE}/bin/wally-mlx"
   shopt -s nullglob
   for bundle in "${BUILD}"/*.bundle; do
     cp -R "${bundle}" "${STAGE}/bin/"
   done
   shopt -u nullglob
   if [[ ! -d "${STAGE}/bin/mlx-swift_Cmlx.bundle" ]]; then
-    echo "package: macOS bottle needs mlx-swift_Cmlx.bundle (Metal shaders)" >&2
+    echo "package: macOS bottle needs mlx-swift_Cmlx.bundle beside wally (Metal shaders); run scripts/build-app.sh" >&2
     exit 1
   fi
 fi
