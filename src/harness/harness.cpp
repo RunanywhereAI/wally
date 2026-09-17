@@ -393,6 +393,7 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
 
     std::string base_url;
     std::string api_key;
+    std::string console_url;
     bool serving = false;
 
     const LocalModel* local = nullptr;
@@ -501,11 +502,13 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
         }
         base_url = credentials.console_url + "/v1";
         api_key = credentials.access_token;
+        console_url = credentials.console_url;
         out::status_line("using " + model + (email.empty() ? "" : " as " + email));
     }
 
     endpoint->base_url = base_url;
     endpoint->api_key = api_key;
+    endpoint->console_url = console_url;
     endpoint->serving = serving;
     return true;
 }

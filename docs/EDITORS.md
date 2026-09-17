@@ -66,6 +66,29 @@ so OpenClaw would run its wizard on every launch. wally also pins
 `OPENCLAW_STATE_DIR` to where your state already lives, because OpenClaw
 otherwise takes the state directory from the config file's own folder.
 
+The translator keeps its connections to the model endpoint open between
+requests, one per stream in flight, so a turn does not start with a new TLS
+handshake — against the hosted endpoint that handshake was measured at about
+half a second, and an agent makes several requests per turn. A connection that
+sat idle long enough for the far side to drop it (a long build, a walk away
+from the desk) is tried once more on a fresh one, only when nothing had come
+back yet; a request that has started answering is never repeated. So the first
+request after a long pause pays one handshake, and the rest of the session does
+not.
+
+When the tool stops listening part-way through an answer — Esc in Claude Code,
+the app quitting — the translator notices within a tenth of a second rather
+than at the next chunk it fails to deliver, and asks the console to stop that
+request by name, so the model stops generating an answer nobody will read and
+the session stops paying for it. The name is the request id the endpoint sends
+with its first token, so a request abandoned while the model is still reading
+the prompt is stopped the moment that first token arrives, and nothing after it
+is passed on. When the tool quits, `wally` sends any cancel still queued before
+it returns. Each cancel is a line in `shim.log` under the state directory
+(`~/.local/state/runanywhere/`, or `$XDG_STATE_HOME/runanywhere/`) — never the
+tool's terminal. A local model needs none of this: the dropped connection is
+enough.
+
 ## Hosted models
 
 A model you have not downloaded can still answer, if the console serves it:

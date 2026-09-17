@@ -17,13 +17,14 @@
 namespace wally::account::contract {
 
 // SHA-256 of contracts/wally-cli-v1.openapi.json this header was built from.
-inline constexpr char kContractSha256[] = "db39bcceea58bd09380f4175089adc378da56b436247f68784d360ae5a27a0f0";
+inline constexpr char kContractSha256[] = "40512a48d9a94d093ce5d9da9c9fc7984fabd90bb9bc61b2814fb58fc685e85f";
 
 enum class ApiErrorCode {
     kInvalidRequest,
     kUnauthorized,
     kForbidden,
     kNotFound,
+    kMethodNotAllowed,
     kConflict,
     kGone,
     kPayloadTooLarge,
@@ -33,6 +34,7 @@ enum class ApiErrorCode {
     kServiceUnavailable,
     kTimeout,
     kBadRequest,
+    kControlPlaneOverloaded,
     kExpiredApiKey,
     kGatewayUnavailable,
     kIdempotencyKeyReused,
@@ -59,6 +61,7 @@ inline void from_json(const nlohmann::json& j, ApiErrorCode& value) {
     if (raw == "unauthorized") { value = ApiErrorCode::kUnauthorized; return; }
     if (raw == "forbidden") { value = ApiErrorCode::kForbidden; return; }
     if (raw == "not_found") { value = ApiErrorCode::kNotFound; return; }
+    if (raw == "method_not_allowed") { value = ApiErrorCode::kMethodNotAllowed; return; }
     if (raw == "conflict") { value = ApiErrorCode::kConflict; return; }
     if (raw == "gone") { value = ApiErrorCode::kGone; return; }
     if (raw == "payload_too_large") { value = ApiErrorCode::kPayloadTooLarge; return; }
@@ -68,6 +71,7 @@ inline void from_json(const nlohmann::json& j, ApiErrorCode& value) {
     if (raw == "service_unavailable") { value = ApiErrorCode::kServiceUnavailable; return; }
     if (raw == "timeout") { value = ApiErrorCode::kTimeout; return; }
     if (raw == "bad_request") { value = ApiErrorCode::kBadRequest; return; }
+    if (raw == "control_plane_overloaded") { value = ApiErrorCode::kControlPlaneOverloaded; return; }
     if (raw == "expired_api_key") { value = ApiErrorCode::kExpiredApiKey; return; }
     if (raw == "gateway_unavailable") { value = ApiErrorCode::kGatewayUnavailable; return; }
     if (raw == "idempotency_key_reused") { value = ApiErrorCode::kIdempotencyKeyReused; return; }
@@ -95,6 +99,7 @@ inline void to_json(nlohmann::json& j, const ApiErrorCode& value) {
         case ApiErrorCode::kUnauthorized: j = "unauthorized"; return;
         case ApiErrorCode::kForbidden: j = "forbidden"; return;
         case ApiErrorCode::kNotFound: j = "not_found"; return;
+        case ApiErrorCode::kMethodNotAllowed: j = "method_not_allowed"; return;
         case ApiErrorCode::kConflict: j = "conflict"; return;
         case ApiErrorCode::kGone: j = "gone"; return;
         case ApiErrorCode::kPayloadTooLarge: j = "payload_too_large"; return;
@@ -104,6 +109,7 @@ inline void to_json(nlohmann::json& j, const ApiErrorCode& value) {
         case ApiErrorCode::kServiceUnavailable: j = "service_unavailable"; return;
         case ApiErrorCode::kTimeout: j = "timeout"; return;
         case ApiErrorCode::kBadRequest: j = "bad_request"; return;
+        case ApiErrorCode::kControlPlaneOverloaded: j = "control_plane_overloaded"; return;
         case ApiErrorCode::kExpiredApiKey: j = "expired_api_key"; return;
         case ApiErrorCode::kGatewayUnavailable: j = "gateway_unavailable"; return;
         case ApiErrorCode::kIdempotencyKeyReused: j = "idempotency_key_reused"; return;
@@ -173,6 +179,143 @@ inline void to_json(nlohmann::json& j, const CliUsageWindowLabel& value) {
     switch (value) {
         case CliUsageWindowLabel::k1h: j = "1h"; return;
         case CliUsageWindowLabel::k24h: j = "24h"; return;
+    }
+}
+
+enum class ErrorCode {
+    kBadRequest,
+    kNotFound,
+    kPayloadTooLarge,
+    kUnprocessable,
+    kInvalidApiKey,
+    kExpiredApiKey,
+    kRevokedApiKey,
+    kInsufficientCredit,
+    kAccountFrozen,
+    kModelNotEntitled,
+    kNotInCohort,
+    kUserRateLimited,
+    kRequestCancelled,
+    kQuotaExceeded,
+    kCapacityExceeded,
+    kIdempotencyKeyReused,
+    kUnsupportedEndpoint,
+    kProxyRetired,
+    kGatewayUnavailable,
+    kControlPlaneOverloaded,
+    kCreditGateUnavailable,
+    kUpstreamContractViolation,
+    kUnattributedKey,
+    kInternal,
+    kBadGateway,
+    kDraining,
+    kSpoolUnhealthy,
+    kCold,
+    kTimeout,
+};
+
+inline void from_json(const nlohmann::json& j, ErrorCode& value) {
+    const std::string raw = j.get<std::string>();
+    if (raw == "bad_request") { value = ErrorCode::kBadRequest; return; }
+    if (raw == "not_found") { value = ErrorCode::kNotFound; return; }
+    if (raw == "payload_too_large") { value = ErrorCode::kPayloadTooLarge; return; }
+    if (raw == "unprocessable") { value = ErrorCode::kUnprocessable; return; }
+    if (raw == "invalid_api_key") { value = ErrorCode::kInvalidApiKey; return; }
+    if (raw == "expired_api_key") { value = ErrorCode::kExpiredApiKey; return; }
+    if (raw == "revoked_api_key") { value = ErrorCode::kRevokedApiKey; return; }
+    if (raw == "insufficient_credit") { value = ErrorCode::kInsufficientCredit; return; }
+    if (raw == "account_frozen") { value = ErrorCode::kAccountFrozen; return; }
+    if (raw == "model_not_entitled") { value = ErrorCode::kModelNotEntitled; return; }
+    if (raw == "not_in_cohort") { value = ErrorCode::kNotInCohort; return; }
+    if (raw == "user_rate_limited") { value = ErrorCode::kUserRateLimited; return; }
+    if (raw == "request_cancelled") { value = ErrorCode::kRequestCancelled; return; }
+    if (raw == "quota_exceeded") { value = ErrorCode::kQuotaExceeded; return; }
+    if (raw == "capacity_exceeded") { value = ErrorCode::kCapacityExceeded; return; }
+    if (raw == "idempotency_key_reused") { value = ErrorCode::kIdempotencyKeyReused; return; }
+    if (raw == "unsupported_endpoint") { value = ErrorCode::kUnsupportedEndpoint; return; }
+    if (raw == "proxy_retired") { value = ErrorCode::kProxyRetired; return; }
+    if (raw == "gateway_unavailable") { value = ErrorCode::kGatewayUnavailable; return; }
+    if (raw == "control_plane_overloaded") { value = ErrorCode::kControlPlaneOverloaded; return; }
+    if (raw == "credit_gate_unavailable") { value = ErrorCode::kCreditGateUnavailable; return; }
+    if (raw == "upstream_contract_violation") { value = ErrorCode::kUpstreamContractViolation; return; }
+    if (raw == "unattributed_key") { value = ErrorCode::kUnattributedKey; return; }
+    if (raw == "internal") { value = ErrorCode::kInternal; return; }
+    if (raw == "bad_gateway") { value = ErrorCode::kBadGateway; return; }
+    if (raw == "draining") { value = ErrorCode::kDraining; return; }
+    if (raw == "spool_unhealthy") { value = ErrorCode::kSpoolUnhealthy; return; }
+    if (raw == "cold") { value = ErrorCode::kCold; return; }
+    if (raw == "timeout") { value = ErrorCode::kTimeout; return; }
+    throw nlohmann::json::type_error::create(302, "unknown ErrorCode: " + raw, &j);
+}
+
+inline void to_json(nlohmann::json& j, const ErrorCode& value) {
+    switch (value) {
+        case ErrorCode::kBadRequest: j = "bad_request"; return;
+        case ErrorCode::kNotFound: j = "not_found"; return;
+        case ErrorCode::kPayloadTooLarge: j = "payload_too_large"; return;
+        case ErrorCode::kUnprocessable: j = "unprocessable"; return;
+        case ErrorCode::kInvalidApiKey: j = "invalid_api_key"; return;
+        case ErrorCode::kExpiredApiKey: j = "expired_api_key"; return;
+        case ErrorCode::kRevokedApiKey: j = "revoked_api_key"; return;
+        case ErrorCode::kInsufficientCredit: j = "insufficient_credit"; return;
+        case ErrorCode::kAccountFrozen: j = "account_frozen"; return;
+        case ErrorCode::kModelNotEntitled: j = "model_not_entitled"; return;
+        case ErrorCode::kNotInCohort: j = "not_in_cohort"; return;
+        case ErrorCode::kUserRateLimited: j = "user_rate_limited"; return;
+        case ErrorCode::kRequestCancelled: j = "request_cancelled"; return;
+        case ErrorCode::kQuotaExceeded: j = "quota_exceeded"; return;
+        case ErrorCode::kCapacityExceeded: j = "capacity_exceeded"; return;
+        case ErrorCode::kIdempotencyKeyReused: j = "idempotency_key_reused"; return;
+        case ErrorCode::kUnsupportedEndpoint: j = "unsupported_endpoint"; return;
+        case ErrorCode::kProxyRetired: j = "proxy_retired"; return;
+        case ErrorCode::kGatewayUnavailable: j = "gateway_unavailable"; return;
+        case ErrorCode::kControlPlaneOverloaded: j = "control_plane_overloaded"; return;
+        case ErrorCode::kCreditGateUnavailable: j = "credit_gate_unavailable"; return;
+        case ErrorCode::kUpstreamContractViolation: j = "upstream_contract_violation"; return;
+        case ErrorCode::kUnattributedKey: j = "unattributed_key"; return;
+        case ErrorCode::kInternal: j = "internal"; return;
+        case ErrorCode::kBadGateway: j = "bad_gateway"; return;
+        case ErrorCode::kDraining: j = "draining"; return;
+        case ErrorCode::kSpoolUnhealthy: j = "spool_unhealthy"; return;
+        case ErrorCode::kCold: j = "cold"; return;
+        case ErrorCode::kTimeout: j = "timeout"; return;
+    }
+}
+
+enum class ErrorType {
+    kInvalidRequestError,
+    kAuthenticationError,
+    kPermissionError,
+    kRateLimitError,
+    kQuota,
+    kCapacity,
+    kServerError,
+    kTimeout,
+};
+
+inline void from_json(const nlohmann::json& j, ErrorType& value) {
+    const std::string raw = j.get<std::string>();
+    if (raw == "invalid_request_error") { value = ErrorType::kInvalidRequestError; return; }
+    if (raw == "authentication_error") { value = ErrorType::kAuthenticationError; return; }
+    if (raw == "permission_error") { value = ErrorType::kPermissionError; return; }
+    if (raw == "rate_limit_error") { value = ErrorType::kRateLimitError; return; }
+    if (raw == "quota") { value = ErrorType::kQuota; return; }
+    if (raw == "capacity") { value = ErrorType::kCapacity; return; }
+    if (raw == "server_error") { value = ErrorType::kServerError; return; }
+    if (raw == "timeout") { value = ErrorType::kTimeout; return; }
+    throw nlohmann::json::type_error::create(302, "unknown ErrorType: " + raw, &j);
+}
+
+inline void to_json(nlohmann::json& j, const ErrorType& value) {
+    switch (value) {
+        case ErrorType::kInvalidRequestError: j = "invalid_request_error"; return;
+        case ErrorType::kAuthenticationError: j = "authentication_error"; return;
+        case ErrorType::kPermissionError: j = "permission_error"; return;
+        case ErrorType::kRateLimitError: j = "rate_limit_error"; return;
+        case ErrorType::kQuota: j = "quota"; return;
+        case ErrorType::kCapacity: j = "capacity"; return;
+        case ErrorType::kServerError: j = "server_error"; return;
+        case ErrorType::kTimeout: j = "timeout"; return;
     }
 }
 
@@ -290,6 +433,30 @@ inline void to_json(nlohmann::json& j, const ApiError& value) {
     j = nlohmann::json::object();
     j["code"] = value.code;
     j["message"] = value.message;
+}
+
+struct CancelRequestResponse {
+    std::string request_id;
+    std::string status;
+};
+
+inline void from_json(const nlohmann::json& j, CancelRequestResponse& value) {
+    if (j.contains("request_id") && !j.at("request_id").is_null()) {
+        value.request_id = j.at("request_id").get<std::string>();
+    } else {
+        value.request_id = std::string{};
+    }
+    if (j.contains("status") && !j.at("status").is_null()) {
+        value.status = j.at("status").get<std::string>();
+    } else {
+        value.status = std::string{};
+    }
+}
+
+inline void to_json(nlohmann::json& j, const CancelRequestResponse& value) {
+    j = nlohmann::json::object();
+    j["request_id"] = value.request_id;
+    j["status"] = value.status;
 }
 
 struct CatalogModelResponse {
@@ -999,6 +1166,65 @@ inline void to_json(nlohmann::json& j, const ModelList& value) {
     j = nlohmann::json::object();
     j["data"] = value.data;
     j["object"] = value.object;
+}
+
+struct OpenAIErrorDetail {
+    std::optional<ErrorCode> code;
+    std::string message;
+    std::optional<std::string> param;
+    ErrorType type;
+};
+
+inline void from_json(const nlohmann::json& j, OpenAIErrorDetail& value) {
+    if (j.contains("code") && !j.at("code").is_null()) {
+        value.code = j.at("code").get<ErrorCode>();
+    } else {
+        value.code = std::nullopt;
+    }
+    if (j.contains("message") && !j.at("message").is_null()) {
+        value.message = j.at("message").get<std::string>();
+    } else {
+        value.message = std::string{};
+    }
+    if (j.contains("param") && !j.at("param").is_null()) {
+        value.param = j.at("param").get<std::string>();
+    } else {
+        value.param = std::nullopt;
+    }
+    if (j.contains("type") && !j.at("type").is_null()) {
+        value.type = j.at("type").get<ErrorType>();
+    } else {
+        value.type = ErrorType{};
+    }
+}
+
+inline void to_json(nlohmann::json& j, const OpenAIErrorDetail& value) {
+    j = nlohmann::json::object();
+    if (value.code.has_value()) {
+        j["code"] = *value.code;
+    }
+    j["message"] = value.message;
+    if (value.param.has_value()) {
+        j["param"] = *value.param;
+    }
+    j["type"] = value.type;
+}
+
+struct OpenAIError {
+    OpenAIErrorDetail error;
+};
+
+inline void from_json(const nlohmann::json& j, OpenAIError& value) {
+    if (j.contains("error") && !j.at("error").is_null()) {
+        value.error = j.at("error").get<OpenAIErrorDetail>();
+    } else {
+        value.error = OpenAIErrorDetail{};
+    }
+}
+
+inline void to_json(nlohmann::json& j, const OpenAIError& value) {
+    j = nlohmann::json::object();
+    j["error"] = value.error;
 }
 
 struct PollResponse {
