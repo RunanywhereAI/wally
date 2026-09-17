@@ -99,6 +99,39 @@ Json ToolsToOpenAI(const Json& tools) {
     return out;
 }
 
+/// A server-side web-search tool the request advertised but this endpoint
+/// cannot run. Anthropic's `web_search` is server-side — it carries no
+/// `input_schema` — so `ToolsToOpenAI` drops it, leaving the model a capability
+/// the client named with nothing behind it. Detected here so the caller can
+/// tell the model plainly rather than let it narrate a search it never made.
+bool CarriesUnrunnableWebSearch(const Json& tools) {
+    if (!tools.is_array()) {
+        return false;
+    }
+    for (const Json& tool : tools) {
+        if (!tool.is_object() || tool.contains("input_schema")) {
+            continue;
+        }
+        const std::string name = Field(tool, "name");
+        const std::string type = Field(tool, "type");
+        if (name == "web_search" || type.rfind("web_search", 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Folded into the system prompt when the client advertised web search but
+/// nothing here can run it, so the model answers from its own knowledge instead
+/// of pretending to search. We have no search backend to point it at, so the
+/// honest move is to tell the model the capability is absent rather than let it
+/// narrate a search that never happened.
+constexpr const char* kWebSearchUnavailableNote =
+    "Web search and browsing are unavailable in this environment: no search tool "
+    "is connected. Do not call a web search tool or claim to have searched the "
+    "web. Answer from your own knowledge; if a task needs current information you "
+    "cannot access, say so plainly.";
+
 /// Anthropic's tool_choice, in OpenAI's vocabulary. Null when it says something
 /// OpenAI has no way to express.
 Json ToolChoiceToOpenAI(const Json& choice) {
@@ -261,6 +294,10 @@ Json RequestToOpenAI(const Json& anthropic, const std::string& model) {
             }
             system += system.empty() ? text : "\n\n" + text;
         }
+    }
+    if (anthropic.contains("tools") && CarriesUnrunnableWebSearch(anthropic["tools"])) {
+        system += system.empty() ? kWebSearchUnavailableNote
+                                  : std::string("\n\n") + kWebSearchUnavailableNote;
     }
     if (!system.empty()) {
         messages.push_back({{"role", "system"}, {"content", system}});
