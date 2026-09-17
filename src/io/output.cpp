@@ -3,6 +3,13 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "rac/core/rac_error.h"
 
@@ -173,7 +180,23 @@ void status_line(const std::string& line) {
 }
 
 void error_line(const std::string& message) {
-    std::fprintf(stderr, "error: %s\n", message.c_str());
+    // One error shape everywhere: a red "Error:" then the message. Colour is
+    // dropped under NO_COLOR or when stderr is not a terminal (pipes, CI logs).
+    static const bool color = [] {
+        if (const char* nc = std::getenv("NO_COLOR"); nc != nullptr && nc[0] != '\0') {
+            return false;
+        }
+#if defined(_WIN32)
+        return _isatty(_fileno(stderr)) != 0;
+#else
+        return isatty(fileno(stderr)) != 0;
+#endif
+    }();
+    if (color) {
+        std::fprintf(stderr, "\033[1;31mError:\033[0m %s\n", message.c_str());
+    } else {
+        std::fprintf(stderr, "Error: %s\n", message.c_str());
+    }
 }
 
 std::string describe_result(rac_result_t result) {

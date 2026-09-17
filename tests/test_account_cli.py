@@ -127,6 +127,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.requests.append(("GET", self.path, self.headers.get("Authorization"), None))
         if self.path == "/v1/me":
             self.reply(200, {"email": EMAIL})
+        elif self.path == "/v1/models":
+            # Login primes the model cache from here; a minimal catalog is enough.
+            self.reply(200, {"data": [{"id": "glm-5.3-flash"}]})
         elif self.path.startswith("/v1/cli/usage"):
             body = dict(USAGE_BODY)
             if not self.serves_windows:
@@ -181,11 +184,14 @@ def main():
                 raise AssertionError("login did not print the approval code and URL")
 
             files = list(pathlib.Path(profile).iterdir())
-            if len(files) != 1:
+            # login also primes models.json (a non-secret cache); the credential
+            # is the secret one whose mode must be 0600.
+            credentials = [f for f in files if f.name in ("credentials.json", "credentials.dat")]
+            if len(credentials) != 1:
                 raise AssertionError("login did not create exactly one session file")
             if os.name != "nt":
                 directory_mode = stat.S_IMODE(os.stat(profile).st_mode)
-                file_mode = stat.S_IMODE(os.stat(files[0]).st_mode)
+                file_mode = stat.S_IMODE(os.stat(credentials[0]).st_mode)
                 if directory_mode != 0o700 or file_mode != 0o600:
                     raise AssertionError(
                         f"unsafe credential modes: {directory_mode:o}/{file_mode:o}"
@@ -256,6 +262,7 @@ def main():
         expected = [
             ("POST", "/auth/cli/start", None),
             ("POST", "/auth/cli/poll", None),
+            ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),
             # One read per invocation. The windows are totalled server-side, so
             # `days` and `limit` are held at the minimum the route accepts —

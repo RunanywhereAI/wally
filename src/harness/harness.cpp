@@ -29,6 +29,8 @@ using wally_socklen_t = socklen_t;
 #endif
 
 #include "account/credentials.h"
+#include "account/model_cache.h"
+#include "cli_formatter.h"
 #include "commands/commands.h"
 #include "io/output.h"
 #include "bootstrap.h"
@@ -159,8 +161,8 @@ std::string InstallHint(const std::string& tool) {
         return "install it with `curl -fsSL https://claude.ai/install.sh | bash`, then run this again";
     }
     if (tool == "hermes") {
-        return "install it with `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`, "
-               "then run this again";
+        return "install it with `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash "
+               "-s -- --skip-setup`, then run this again";
     }
     return "install " + tool + " and put it on PATH, then run this again";
 }
@@ -458,9 +460,20 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
             return false;
         }
         if (!credentials.signed_in()) {
-            out::error_line(model + " is not on this machine, and you are not signed in");
-            out::status_line("run `wally login`, or `wally pull " + model + "` to run it here");
+            ReportNotSignedIn();
             return false;
+        }
+        // Keep the catalog fresh for next time without blocking this launch, and
+        // catch a mistyped hosted id from the cache. Local models already took
+        // the branch above; fail open when the cache is empty (offline / never
+        // refreshed) so a launch is never blocked for lack of a network call.
+        account::RefreshModelCacheIfStale(account::kModelCacheTtlSeconds);
+        if (account::CacheHasModels() && !account::ModelIsCached(model)) {
+            // Not in the cache: it may just be stale. Refresh live and retry, so
+            // a valid new model launches instead of being wrongly rejected.
+            if (!RefreshAndRecheckModel(credentials, model)) {
+                return false;
+            }
         }
         // signed_in() only proves a token is present, not that it is real: a
         // hand-written credentials.json satisfies it with any non-empty
@@ -474,9 +487,7 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
         bool unverified = false;
         if (!VerifyCloudSession(console, &credentials, &email, &verify_error, &unverified)) {
             if (!unverified) {
-                out::error_line("cannot use " + model + ": " + verify_error);
-                out::status_line("run `wally login`, or `wally pull " + model +
-                                 "` to run it here");
+                ReportCloudSessionInvalid(model);
                 return false;
             }
             // The console could not be ASKED - it is rate limiting or down.
@@ -514,6 +525,50 @@ bool EnsureInstalled(const std::string& tool) {
     out::error_line(tool + " is not installed on this machine");
     out::status_line(InstallHint(tool));
     return false;
+}
+
+void ReportCloudSessionInvalid(const std::string& model) {
+    // Stderr, on its own line: a red "Error:" a person cannot miss, and the
+    // action `wally login` highlighted so the fix stands out. Color is dropped
+    // under NO_COLOR or when stderr is not a terminal.
+    const cli_color::Palette pal = cli_color::make_palette(color_output_enabled(false));
+    out::status_line(std::string(pal.red) + "Error:" + pal.reset + " You cannot use " + model +
+                     ", your cloud session is no longer valid, do: " + pal.bold_cyan + "wally login" +
+                     pal.reset + " and try again");
+}
+
+void ReportNotSignedIn() {
+    const cli_color::Palette pal = cli_color::make_palette(color_output_enabled(false));
+    out::status_line(std::string(pal.red) + "Error:" + pal.reset +
+                     " You are not logged in, log in with " + pal.bold_cyan + "wally login" +
+                     pal.reset);
+}
+
+bool RefreshAndRecheckModel(const account::Credentials& credentials, const std::string& model) {
+    const cli_color::Palette pal = cli_color::make_palette(color_output_enabled(false));
+    out::status_line("could not find '" + model + "' in the catalog");
+    out::status_line(std::string(pal.blue) + "fetching the latest catalog..." + pal.reset);
+    bool busy = false;
+    if (!account::RefreshModelCacheNow(credentials, &busy)) {
+        out::status_line(std::string(pal.red) + "Error:" + pal.reset +
+                         " sorry, the server is busy, try again after some time");
+        return false;
+    }
+    out::status_line(std::string(pal.green) + "catalog updated, checking your model" + pal.reset);
+    if (!account::ModelIsCached(model)) {
+        out::error_line("unknown model '" + model + "'");
+        // The cache is fresh (just refreshed), so this list is accurate.
+        const std::vector<std::string> available = account::CachedModelIds();
+        if (!available.empty()) {
+            out::status_line("available models:");
+            for (const std::string& id : available) {
+                out::status_line("  " + id);
+            }
+        }
+        return false;
+    }
+    out::status_line(std::string(pal.blue) + "found the model, launching the harness" + pal.reset);
+    return true;
 }
 
 int Launch(const std::string& tool, const std::string& model,

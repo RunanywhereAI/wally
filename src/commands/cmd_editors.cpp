@@ -11,6 +11,8 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "anthropic/messages.h"
 #include "commands/editor_env.h"
 #include "commands/commands.h"
@@ -240,6 +242,26 @@ std::string PrepareClaudeConfigDir() {
     }
     if (!og_json.empty() && fs::exists(og_json, ec)) {
         fs::copy_file(og_json, ours / ".claude.json", fs::copy_options::overwrite_existing, ec);
+    }
+
+    // Mark onboarding done so a first-ever Claude Code launch skips its setup
+    // wizard — the gateway and auth are already wired. Patch the seeded file, or
+    // write a minimal one when the reader has no ~/.claude.json of their own.
+    {
+        const fs::path claude_json = ours / ".claude.json";
+        nlohmann::json doc = nlohmann::json::object();
+        std::ifstream in(claude_json, std::ios::binary);
+        if (in.good()) {
+            nlohmann::json parsed = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/false);
+            if (parsed.is_object()) {
+                doc = std::move(parsed);
+            }
+        }
+        doc["hasCompletedOnboarding"] = true;
+        std::ofstream out(claude_json, std::ios::binary | std::ios::trunc);
+        if (out.good()) {
+            out << doc.dump(2) << '\n';
+        }
     }
 
     return ours_str;

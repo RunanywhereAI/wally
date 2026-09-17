@@ -72,6 +72,7 @@ set(WALLY_SOURCES
     src/commands/cmd_usage.cpp
     src/account/console.cpp
     src/account/credentials.cpp
+    src/account/model_cache.cpp
     src/anthropic/messages.cpp
     src/anthropic/translate.cpp
     src/desktop/claude_profile.cpp

@@ -31,6 +31,8 @@ struct Palette {
     const char* bold = "";
     const char* bold_cyan = "";
     const char* blue = "";
+    const char* red = "";
+    const char* green = "";
     const char* reset = "";
 };
 

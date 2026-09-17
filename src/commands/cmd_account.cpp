@@ -20,6 +20,7 @@
 #include "account/baked_endpoints.h"
 #include "account/console.h"
 #include "account/credentials.h"
+#include "account/model_cache.h"
 #include "commands/commands.h"
 #include "io/output.h"
 
@@ -283,6 +284,9 @@ int Login(const std::string& requested_console, bool open_browser) {
                     out::error_line(failure);
                     return 1;
                 }
+                // Prime the model catalog cache while the token is freshest, so
+                // a later harness launch can validate a -m offline.
+                account::RefreshModelCache(credentials);
                 const std::string identity =
                     credentials.email.empty() ? "your account" : credentials.email;
                 out::status_line("signed in as " + identity);
@@ -314,6 +318,7 @@ int Logout() {
         out::error_line(clear_failure);
         return 1;
     }
+    account::ClearModelCache();
     out::status_line("signed out on this machine");
     if (!revoked) {
         out::error_line(revoke_failure + "; the local session was removed");

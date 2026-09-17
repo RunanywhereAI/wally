@@ -73,6 +73,24 @@ void Release(const Endpoint& endpoint);
 /// else, which is the only thing a person without the tool needs to see.
 bool EnsureInstalled(const std::string& tool);
 
+/// Prints the one shared "cloud session is no longer valid" error, in red, that
+/// every harness shows when a hosted `model` cannot be used because the session
+/// failed verification. One phrasing, one place, so it reads the same whichever
+/// harness a person launched.
+void ReportCloudSessionInvalid(const std::string& model);
+
+/// The one shared "you are not signed in" error, in red with `wally login`
+/// highlighted, for when no session is stored at all (as opposed to an expired
+/// one). Same look as ReportCloudSessionInvalid.
+void ReportNotSignedIn();
+
+/// Recovery for a `-m <model>` that is not in the cached catalog: refresh the
+/// catalog live (with coloured progress the reader can follow), then re-check.
+/// Returns true when the model is now known so the caller can go on and launch
+/// it, false to stop — the console was busy, or the model is genuinely unknown,
+/// and the message is already printed.
+bool RefreshAndRecheckModel(const account::Credentials& credentials, const std::string& model);
+
 /// Runs `tool` against `model`, forwarding `args` to it, and returns the tool's
 /// exit code. Blocks until the tool exits, then stops anything it started.
 ///

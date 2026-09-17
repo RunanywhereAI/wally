@@ -60,7 +60,7 @@ void result_line(const std::string& line);
 /** Print a status/notice line to stderr (newline appended). */
 void status_line(const std::string& line);
 
-/** Print an error to stderr as "error: <message>". */
+/** Print an error to stderr as "Error: <message>" (a red "Error:" on a TTY). */
 void error_line(const std::string& message);
 
 /** Human message for a rac_result_t (falls back to the numeric code). */
