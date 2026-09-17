@@ -158,13 +158,53 @@ std::string InstallHint(const std::string& tool) {
         return "install it with `npm i -g @deepseek-ai/dsh`, then run this again";
     }
     if (tool == "claude") {
+#if defined(_WIN32)
+        return "install it with `irm https://claude.ai/install.ps1 | iex` in PowerShell, then run "
+               "this again";
+#else
         return "install it with `curl -fsSL https://claude.ai/install.sh | bash`, then run this again";
+#endif
     }
     if (tool == "hermes") {
+#if defined(_WIN32)
+        return "install it with `iex (irm "
+               "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`"
+               " in PowerShell, then run this again";
+#else
         return "install it with `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash "
                "-s -- --skip-setup`, then run this again";
+#endif
     }
     return "install " + tool + " and put it on PATH, then run this again";
+}
+
+#if defined(_WIN32)
+constexpr char kPathSeparator = ';';
+#else
+constexpr char kPathSeparator = ':';
+#endif
+
+/// The file names a launchable `tool` can take in a directory. Windows carries
+/// the extension in the name (an npm shim is `tool.cmd`, a native build
+/// `tool.exe`); POSIX has just the bare name.
+std::vector<std::string> ExecutableNames(const std::string& tool) {
+#if defined(_WIN32)
+    return {tool + ".exe", tool + ".cmd", tool + ".bat", tool};
+#else
+    return {tool};
+#endif
+}
+
+bool DirHasTool(const std::filesystem::path& dir, const std::string& tool) {
+    for (const std::string& name : ExecutableNames(tool)) {
+        std::error_code ec;
+        const std::filesystem::path candidate = dir / name;
+        if (std::filesystem::is_regular_file(candidate, ec) ||
+            std::filesystem::is_symlink(candidate, ec)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool OnPath(const std::string& tool) {
@@ -172,17 +212,10 @@ bool OnPath(const std::string& tool) {
     if (path == nullptr) {
         return false;
     }
-#if defined(_WIN32)
-    constexpr char kSeparator = ';';
-    const std::vector<std::string> suffixes = {".exe", ".cmd", ".bat", ""};
-#else
-    constexpr char kSeparator = ':';
-    const std::vector<std::string> suffixes = {""};
-#endif
     const std::string haystack(path);
     std::size_t at = 0;
     while (at <= haystack.size()) {
-        const std::size_t end = haystack.find(kSeparator, at);
+        const std::size_t end = haystack.find(kPathSeparator, at);
         std::string dir =
             haystack.substr(at, end == std::string::npos ? std::string::npos : end - at);
 #if !defined(_WIN32)
@@ -194,16 +227,8 @@ bool OnPath(const std::string& tool) {
             dir = ".";
         }
 #endif
-        if (!dir.empty()) {
-            for (const std::string& suffix : suffixes) {
-                std::error_code ec;
-                const std::filesystem::path candidate =
-                    std::filesystem::path(dir) / (tool + suffix);
-                if (std::filesystem::is_regular_file(candidate, ec) ||
-                    std::filesystem::is_symlink(candidate, ec)) {
-                    return true;
-                }
-            }
+        if (!dir.empty() && DirHasTool(dir, tool)) {
+            return true;
         }
         if (end == std::string::npos) {
             break;
@@ -211,6 +236,60 @@ bool OnPath(const std::string& tool) {
         at = end + 1;
     }
     return false;
+}
+
+/// Per-user install locations a fresh harness install lands in before the shell
+/// has picked it up on PATH: npm's global bin, the native installers' own bin,
+/// and on Windows the AppData npm shims. Probed so a just-installed tool is not
+/// wrongly reported missing before its bin directory reaches PATH.
+std::vector<std::filesystem::path> CommonInstallDirs() {
+    std::vector<std::filesystem::path> dirs;
+#if defined(_WIN32)
+    if (const char* appdata = std::getenv("APPDATA"); appdata != nullptr && *appdata != 0) {
+        dirs.emplace_back(std::filesystem::path(appdata) / "npm");
+    }
+    if (const char* local = std::getenv("LOCALAPPDATA"); local != nullptr && *local != 0) {
+        dirs.emplace_back(std::filesystem::path(local) / "npm");
+        dirs.emplace_back(std::filesystem::path(local) / "hermes" / "bin");
+    }
+    if (const char* profile = std::getenv("USERPROFILE"); profile != nullptr && *profile != 0) {
+        dirs.emplace_back(std::filesystem::path(profile) / ".local" / "bin");
+    }
+#else
+    if (const char* home = std::getenv("HOME"); home != nullptr && *home != 0) {
+        dirs.emplace_back(std::filesystem::path(home) / ".local" / "bin");
+        dirs.emplace_back(std::filesystem::path(home) / ".npm-global" / "bin");
+    }
+#endif
+    return dirs;
+}
+
+/// The common install dir that holds `tool`, or empty when none does. This only
+/// answers the "installed but not yet on PATH" case; a tool already on PATH is
+/// OnPath's job.
+std::filesystem::path LocateOffPath(const std::string& tool) {
+    for (const std::filesystem::path& dir : CommonInstallDirs()) {
+        if (DirHasTool(dir, tool)) {
+            return dir;
+        }
+    }
+    return {};
+}
+
+/// Puts `dir` first on this process's PATH so the launch below can exec a tool
+/// found off PATH. The child inherits the change; nothing outside wally sees it.
+void PrependToPath(const std::filesystem::path& dir) {
+    const char* existing = std::getenv("PATH");
+    std::string updated = dir.string();
+    if (existing != nullptr && *existing != 0) {
+        updated += kPathSeparator;
+        updated += existing;
+    }
+#if defined(_WIN32)
+    static_cast<void>(_putenv_s("PATH", updated.c_str()));
+#else
+    static_cast<void>(setenv("PATH", updated.c_str(), 1));
+#endif
 }
 
 int Spawn(const std::string& tool, const std::vector<std::string>& args) {
@@ -393,6 +472,7 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
 
     std::string base_url;
     std::string api_key;
+    std::string console_url;
     bool serving = false;
 
     const LocalModel* local = nullptr;
@@ -501,11 +581,13 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
         }
         base_url = credentials.console_url + "/v1";
         api_key = credentials.access_token;
+        console_url = credentials.console_url;
         out::status_line("using " + model + (email.empty() ? "" : " as " + email));
     }
 
     endpoint->base_url = base_url;
     endpoint->api_key = api_key;
+    endpoint->console_url = console_url;
     endpoint->serving = serving;
     return true;
 }
@@ -520,6 +602,15 @@ void Release(const Endpoint& endpoint) {
 
 bool EnsureInstalled(const std::string& tool) {
     if (OnPath(tool)) {
+        return true;
+    }
+    // Not on PATH, but a fresh install often sits in a well-known bin the shell
+    // has not picked up yet (a just-run `npm i -g`, or a Windows AppData shim).
+    // If it does, put that directory on PATH for this run so the launch can exec
+    // it, rather than telling the person to install what is already there.
+    const std::filesystem::path dir = LocateOffPath(tool);
+    if (!dir.empty()) {
+        PrependToPath(dir);
         return true;
     }
     out::error_line(tool + " is not installed on this machine");
