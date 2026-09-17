@@ -130,8 +130,15 @@ curl -fSL "$dl" "$URL" -o "${tmp}/${ASSET}" || fail "Download failed: ${URL}"
 curl -fsSL "${URL}.sha256" -o "${tmp}/${ASSET}.sha256" || fail "Could not download the checksum for ${ASSET}"
 # The sidecar is `<sha>  <filename>`; verify from inside tmp so the name resolves.
 expected_sha="$(awk 'NF == 2 { print $1 }' "${tmp}/${ASSET}.sha256" | head -1)"
-( cd "$tmp" && shasum -a 256 -c "${ASSET}.sha256" >/dev/null 2>&1 ) \
-    || fail "Checksum verification failed for ${ASSET}. Do not use the download."
+( cd "$tmp" && {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 -c "${ASSET}.sha256"
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -c "${ASSET}.sha256"
+    else
+        fail "Neither shasum nor sha256sum found on system to verify archive."
+    fi
+} >/dev/null 2>&1 ) || fail "Checksum verification failed for ${ASSET}. Do not use the download."
 ok "sha256 $(printf '%.16s' "$expected_sha")… verified"
 
 step "Installing to ${LIB_DIR}"

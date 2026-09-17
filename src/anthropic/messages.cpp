@@ -1,27 +1,58 @@
 #include "anthropic/messages.h"
 
+#include <httplib.h>
+
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
 #include <thread>
 
-#include <httplib.h>
-#include <nlohmann/json.hpp>
-
+#include "account/cancel_worker.h"
 #include "anthropic/translate.h"
 #include "config/cli_paths.h"
 #include "io/output.h"
 #include "net/loopback_auth.h"
+#include "net/upstream_call.h"
+#include "net/upstream_pool.h"
 
 namespace wally::anthropic {
 namespace {
 
 using Json = nlohmann::json;
+
+/// One timestamped line into shim.log; the error logger below and the abandon
+/// path share it. Never the editor's terminal, which the wrapped tool owns.
+void ShimLog(const std::string& line) {
+    const std::string dir = paths::state_dir();
+    if (dir.empty()) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    std::ofstream log(dir + "/shim.log", std::ios::app);
+    if (!log.good()) {
+        return;
+    }
+    const std::time_t now = std::time(nullptr);
+    std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &now);
+#else
+    gmtime_r(&now, &utc);
+#endif
+    char when[32] = {0};
+    std::strftime(when, sizeof(when), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    log << when << ' ' << line << '\n';
+}
 
 /// Appends one line about a failed upstream call to a log file, best effort.
 ///
@@ -93,6 +124,17 @@ struct Runtime {
     // processes out.
     std::string local_token;
     bool verbose = false;
+    // Upstream connections, kept open across requests (#80). Shared, not owned:
+    // a streaming worker can still be running its request after Stop(), and the
+    // lease it holds keeps the pool alive until it is done.
+    std::shared_ptr<wally::net::UpstreamPool> pool;
+    // Where a request the editor abandoned is cancelled by name (#81): the
+    // session's control plane, or nothing for a local server. `stopping` tells
+    // an in-flight watch to stop waiting for an id; the worker sends the cancels
+    // off the request path, and Stop() drains it.
+    std::string console_url;
+    std::atomic<bool> stopping{false};
+    std::unique_ptr<wally::account::CancelWorker> cancels;
 };
 
 // The token the wrapped tool presents, read from either header Claude Code may
@@ -112,28 +154,105 @@ std::string PresentedToken(const httplib::Request& request) {
 
 std::unique_ptr<Runtime> g_runtime;
 
-void ApplyAuth(httplib::Client& client, const std::string& api_key) {
-    if (!api_key.empty()) {
-        client.set_bearer_token_auth(api_key);
+/// What the abandon path does once the id is known (or known to be
+/// unknowable): a shim.log line the person can find, and the cancel itself
+/// through the worker -- never on this thread, which is the upstream watch or
+/// the response handler.
+void OnAbandoned(Runtime& runtime, bool streaming, const std::string& request_id, int status,
+                 bool during_prefill) {
+    std::string line = "abandoned during=" + std::string(during_prefill ? "prefill" : "stream") +
+                       " id=" + (request_id.empty() ? std::string("unknown") : request_id) +
+                       " status=" + std::to_string(status) + " stream=" + (streaming ? "1" : "0");
+    if (request_id.empty()) {
+        ShimLog(line + " cancel=none(no-id)");
+        return;
     }
+    if (!runtime.cancels) {
+        // No worker: a local server, which has no console to tell.
+        ShimLog(line + " cancel=skipped(local)");
+        return;
+    }
+    ShimLog(line + " cancel=queued");
+    runtime.cancels->Enqueue(request_id);
 }
 
-void HandleNonStreaming(Runtime& runtime, const Json& request, httplib::Response& response) {
-    httplib::Client client(runtime.origin);
-    client.set_read_timeout(600, 0);
-    ApplyAuth(client, runtime.api_key);
+/// Sends `body` upstream on a pooled connection (#80), watching the editor the
+/// whole time (#81), and once more on a fresh connection if the first went out
+/// on a stale keep-alive (see RetryOnFreshConnection) -- never after the editor
+/// left: the stop that ended an abandoned call looks exactly like a stale
+/// connection to that rule, and re-sending the prompt for a reader that is gone
+/// is the waste this exists to end. `on_headers`, when set, receives the
+/// upstream response headers before any body byte, so a streaming caller can
+/// preserve a pre-stream failure status instead of a blind 200 (#83).
+wally::net::WatchedResult PostUpstream(Runtime& runtime, bool streaming, const std::string& path,
+                                       const std::string& body,
+                                       const httplib::ContentReceiver& receiver,
+                                       std::function<bool()> reader_gone,
+                                       std::function<void(const httplib::Response&)> on_headers = {}) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        wally::net::UpstreamLease lease = runtime.pool->acquire(runtime.api_key);
+        if (runtime.verbose) {
+            out::status_line(std::string("anthropic: upstream connection ") +
+                             (lease.reused() ? "reused" : "fresh"));
+        }
+        wally::net::WatchedCall call;
+        call.path = path;
+        call.body = body;
+        call.receiver = receiver;
+        call.reader_gone = reader_gone;
+        call.on_headers = on_headers;
+        call.stopping = [&runtime] { return runtime.stopping.load(); };
+        call.on_abandoned = [&runtime, streaming](const std::string& id, int status,
+                                                  bool during_prefill) {
+            OnAbandoned(runtime, streaming, id, status, during_prefill);
+        };
+        wally::net::WatchedResult result = wally::net::PostWatched(lease, call);
+        if (result.reply) {
+            // A complete reply, whatever its status, leaves the connection
+            // clean; the lease goes back to the pool when it is destroyed.
+            return result;
+        }
+        // No reply: the socket is in no state to reuse.
+        lease.discard();
+        if (result.abandoned) {
+            if (runtime.verbose) {
+                out::status_line("anthropic: the editor left; upstream request dropped");
+            }
+            return result;
+        }
+        if (attempt == 0 && wally::net::RetryOnFreshConnection(result.reply.error(), false,
+                                                               result.received_any, lease.reused())) {
+            if (runtime.verbose) {
+                out::status_line("anthropic: upstream connection was stale; retrying once on a "
+                                 "fresh one");
+            }
+            continue;
+        }
+        return result;
+    }
+    return wally::net::WatchedResult{};
+}
 
+void HandleNonStreaming(Runtime& runtime, const httplib::Request& editor, const Json& request,
+                        httplib::Response& response) {
     const Json upstream = translate::RequestToOpenAI(request, runtime.model);
-    const httplib::Result reply =
-        client.Post(runtime.prefix + "/chat/completions", upstream.dump(), "application/json");
+    const wally::net::WatchedResult result =
+        PostUpstream(runtime, false, runtime.prefix + "/chat/completions", upstream.dump(), nullptr,
+                     editor.is_connection_closed);
+    const httplib::Result& reply = result.reply;
+    if (result.abandoned) {
+        // Nobody is reading; whatever is written here goes nowhere.
+        response.status = 499;
+        return;
+    }
     if (!reply || reply->status < 200 || reply->status >= 300) {
         const int status = reply ? reply->status : 0;
         const std::string body = reply ? reply->body : std::string();
         LogUpstreamError(runtime.model, false, status, body);
         response.status = reply ? reply->status : 502;
-        // A 429 from the hosted API carries a Retry-After the wrapped tool
-        // should honor; httplib drops upstream headers unless we copy them.
-        if (reply && reply->status == 429 && reply->has_header("Retry-After")) {
+        // A 429 or 503 from the hosted API carries a Retry-After the wrapped
+        // tool should honor; httplib drops upstream headers unless we copy them.
+        if (reply && reply->has_header("Retry-After")) {
             response.set_header("Retry-After", reply->get_header_value("Retry-After"));
         }
         std::string type;
@@ -168,106 +287,253 @@ void HandleNonStreaming(Runtime& runtime, const Json& request, httplib::Response
                          "application/json");
 }
 
-void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& response) {
-    // The upstream body is built here rather than in the sink: the sink runs
-    // after this function returns, and everything it touches has to outlive it.
+/// Carries an upstream stream from the worker thread that runs the upstream
+/// call to the sink that writes to the editor.
+///
+/// A worker is needed because the upstream status is only known once its
+/// headers arrive, and the pre-stream decision (commit a 200 event-stream, or
+/// answer a 429/503 as a normal reply, #83) has to be made before the sink is
+/// installed. The worker peeks the headers and hands whole transport chunks
+/// across a single slot, which bounds read-ahead and keeps backpressure on a
+/// long stream.
+struct StreamPipe {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::thread worker;
+    bool headers_ready = false;
+    bool finished = false;
+    bool stopped = false;
+    bool successful = false;
+    bool abandoned = false;
+    int status = 0;
+    std::string retry_after;
+    std::string chunk;
+    std::string error_body;
+
+    ~StreamPipe() {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            stopped = true;
+            changed.notify_all();
+        }
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+
+    bool Read(std::string* next) {
+        std::unique_lock<std::mutex> lock(mutex);
+        changed.wait(lock, [&] { return !chunk.empty() || finished; });
+        if (chunk.empty()) {
+            return false;
+        }
+        *next = std::move(chunk);
+        chunk.clear();
+        changed.notify_all();
+        return true;
+    }
+};
+
+void HandleStreaming(Runtime& runtime, const httplib::Request& editor, const Json& request,
+                     httplib::Response& response) {
+    // The upstream body is built here rather than in the worker: the worker
+    // outlives this function, and everything it touches has to outlive it too.
     auto upstream = std::make_shared<std::string>(
         translate::RequestToOpenAI(request, runtime.model).dump());
-    auto origin = std::make_shared<std::string>(runtime.origin);
     auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
-    auto api_key = std::make_shared<std::string>(runtime.api_key);
     auto model = std::make_shared<std::string>(runtime.model);
-    // Computed once, up front: the request itself is what message_start's
-    // usage estimate is built from, and it has to be ready before the first
-    // upstream chunk arrives.
+    // Computed once, up front: message_start's usage estimate is built from the
+    // request and must be ready before the first upstream chunk arrives.
     const int input_estimate = translate::EstimateRequestTokens(request);
+    // The Runtime outlives every worker: Stop() sets `stopping`, stops the
+    // server and joins its thread before the Runtime is destroyed, and the pool
+    // is shared besides.
+    Runtime* owner = &runtime;
+    // The editor's socket, peeked by the upstream watch: a copy of the request's
+    // own closure, which captures the fd by value.
+    std::function<bool()> reader_gone = editor.is_connection_closed;
+
+    auto pipe = std::make_shared<StreamPipe>();
+    StreamPipe* transfer = pipe.get();
+    transfer->worker = std::thread([transfer, owner, upstream, path, reader_gone] {
+        try {
+            const wally::net::WatchedResult result = PostUpstream(
+                *owner, true, *path, *upstream,
+                [&](const char* data, size_t length) {
+                    std::unique_lock<std::mutex> lock(transfer->mutex);
+                    if (transfer->status < 200 || transfer->status >= 300) {
+                        // A non-2xx body is the error body, kept bounded so a
+                        // real (2xx) stream of any size costs only these few KB.
+                        constexpr size_t cap = 8192;
+                        if (transfer->error_body.size() < cap) {
+                            transfer->error_body.append(
+                                data, std::min(length, cap - transfer->error_body.size()));
+                        }
+                        return !transfer->stopped;
+                    }
+                    // Backpressure: hold the next transport chunk until the sink
+                    // has taken the last one.
+                    transfer->changed.wait(
+                        lock, [&] { return transfer->chunk.empty() || transfer->stopped; });
+                    if (transfer->stopped) {
+                        return false;
+                    }
+                    transfer->chunk.assign(data, length);
+                    transfer->changed.notify_all();
+                    return true;
+                },
+                reader_gone,
+                [&](const httplib::Response& headers) {
+                    std::lock_guard<std::mutex> lock(transfer->mutex);
+                    transfer->status = headers.status;
+                    transfer->retry_after = headers.get_header_value("Retry-After");
+                    transfer->headers_ready = true;
+                    transfer->changed.notify_all();
+                });
+            std::lock_guard<std::mutex> lock(transfer->mutex);
+            transfer->successful =
+                result.reply && result.reply->status >= 200 && result.reply->status < 300;
+            transfer->abandoned = result.abandoned;
+            transfer->finished = true;
+            transfer->changed.notify_all();
+        } catch (const std::exception&) {
+            std::lock_guard<std::mutex> lock(transfer->mutex);
+            transfer->finished = true;
+            transfer->changed.notify_all();
+        }
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(pipe->mutex);
+        pipe->changed.wait(lock, [&] { return pipe->headers_ready || pipe->finished; });
+        if (pipe->status < 200 || pipe->status >= 300) {
+            // Pre-stream failure: known before the sink is committed, so it can
+            // be answered as a normal reply that keeps the status and any
+            // Retry-After (#83), rather than a 200 stream carrying an error.
+            pipe->changed.wait(lock, [&] { return pipe->finished; });
+            if (pipe->abandoned) {
+                response.status = 499;
+                return;
+            }
+            response.status = pipe->status ? pipe->status : 502;
+            if (!pipe->retry_after.empty()) {
+                response.set_header("Retry-After", pipe->retry_after);
+            }
+            std::string type;
+            std::string message;
+            translate::UpstreamFailure(pipe->status, pipe->error_body, &type, &message);
+            LogUpstreamError(*model, true, pipe->status, pipe->error_body);
+            response.set_content(translate::ErrorBody(type, message), "application/json");
+            return;
+        }
+    }
 
     response.set_chunked_content_provider(
         "text/event-stream",
-        [upstream, origin, path, api_key, model, input_estimate](size_t /*offset*/,
-                                                                 httplib::DataSink& sink) {
-            httplib::Client client(*origin);
-            client.set_read_timeout(600, 0);
-            ApplyAuth(client, *api_key);
-
+        [pipe, model, input_estimate](size_t /*offset*/, httplib::DataSink& sink) {
             translate::StreamState state;
             state.model = *model;
             state.input_estimate = input_estimate;
             std::string pending;
-            // The upstream status is only known once Post returns, so the start
-            // of the body is kept regardless. On a non-2xx reply that is the
-            // error body, which would otherwise be fed to the SSE frame parser
-            // and silently dropped; capped so a real (2xx) stream of any size
-            // costs only these few KB.
-            std::string error_body;
-            constexpr size_t kErrorBodyCap = 8192;
+            std::string payload;
+            bool has_data = false;
+            bool saw_done = false;
 
-            const httplib::Result reply = client.Post(
-                *path, httplib::Headers(), *upstream, "application/json",
-                [&](const char* data, size_t length) {
-                    if (error_body.size() < kErrorBodyCap) {
-                        error_body.append(data,
-                                          std::min(length, kErrorBodyCap - error_body.size()));
+            auto receive = [&](const char* data, size_t length) {
+                pending.append(data, length);
+                // Consume complete lines across arbitrary transport chunks.
+                // CRLF and multi-line data fields are valid SSE too.
+                size_t split = 0;
+                while ((split = pending.find('\n')) != std::string::npos) {
+                    std::string line = pending.substr(0, split);
+                    pending.erase(0, split + 1);
+                    if (!line.empty() && line.back() == '\r') {
+                        line.pop_back();
                     }
-                    pending.append(data, length);
-                    // SSE frames are separated by a blank line, and a chunk can
-                    // split one in half, so only whole frames are consumed.
-                    size_t split = 0;
-                    while ((split = pending.find("\n\n")) != std::string::npos) {
-                        const std::string frame = pending.substr(0, split);
-                        pending.erase(0, split + 2);
-                        const size_t field = frame.find("data:");
-                        if (field == std::string::npos) {
-                            continue;
+                    if (!line.empty()) {
+                        if (line == "data" || line.rfind("data:", 0) == 0) {
+                            std::string value = line == "data" ? "" : line.substr(5);
+                            if (!value.empty() && value.front() == ' ') {
+                                value.erase(0, 1);
+                            }
+                            if (has_data) {
+                                payload += '\n';
+                            }
+                            payload += value;
+                            has_data = true;
                         }
-                        std::string payload = frame.substr(field + 5);
-                        while (!payload.empty() && (payload.front() == ' ' || payload.front() == '\r')) {
-                            payload.erase(payload.begin());
-                        }
-                        if (payload == "[DONE]") {
-                            continue;
-                        }
-                        Json chunk;
+                        continue;
+                    }
+                    if (!has_data) {
+                        continue;  // comments/keepalives
+                    }
+                    has_data = false;
+                    std::string events;
+                    if (saw_done) {
+                        events = translate::StreamErrorToAnthropic(
+                            &state, "the model endpoint sent data after [DONE]");
+                    } else if (payload == "[DONE]") {
+                        saw_done = true;
+                    } else {
                         try {
-                            chunk = Json::parse(payload);
-                        } catch (const Json::exception&) {
-                            continue;
-                        }
-                        std::string events;
-                        try {
-                            events = translate::StreamChunkToAnthropic(chunk, &state);
+                            events =
+                                translate::StreamChunkToAnthropic(Json::parse(payload), &state);
                         } catch (const std::exception&) {
-                            // A chunk in a shape the mapping did not expect is
-                            // a chunk to skip, not a reason to kill the run.
-                            continue;
-                        }
-                        if (!events.empty() && !sink.write(events.data(), events.size())) {
-                            return false;
+                            events = translate::StreamErrorToAnthropic(
+                                &state, "the model endpoint sent a malformed stream frame");
                         }
                     }
-                    return true;
-                });
+                    payload.clear();
+                    if (!events.empty() && !sink.write(events.data(), events.size())) {
+                        return false;
+                    }
+                }
+                return true;
+            };
 
-            if (!reply || reply->status < 200 || reply->status >= 300) {
-                const int status = reply ? reply->status : 0;
-                LogUpstreamError(*model, true, status, error_body);
+            std::string bytes;
+            while (pipe->Read(&bytes)) {
+                if (!receive(bytes.data(), bytes.size())) {
+                    return false;
+                }
+            }
+
+            if (pipe->abandoned) {
+                // The editor is gone; the cancel is on its way (or was named as
+                // impossible). Nothing written here reaches anyone.
+                sink.done();
+                return false;
+            }
+            if (!pipe->successful) {
+                const int status = 0;
+                LogUpstreamError(*model, true, status, pipe->error_body);
                 std::string type;
                 std::string message;
-                translate::UpstreamFailure(status, error_body, &type, &message);
-                const std::string body =
-                    "event: error\ndata: " + translate::ErrorBody(type, message) + "\n\n";
-                sink.write(body.data(), body.size());
+                translate::UpstreamFailure(status, pipe->error_body, &type, &message);
+                const std::string body = translate::StreamErrorToAnthropic(&state, message);
+                if (!body.empty()) {
+                    sink.write(body.data(), body.size());
+                }
                 sink.done();
                 return false;
             }
             try {
-                const std::string closing = translate::StreamCloseToAnthropic(&state);
+                // Transport EOF is not inference completion. Our OpenAI upstream
+                // must send a finish reason followed by [DONE]; anything else is
+                // an incomplete stream and must not read as a clean turn (#84).
+                const std::string closing = (!saw_done || has_data || !pending.empty())
+                    ? translate::StreamErrorToAnthropic(
+                          &state, "the model endpoint ended an incomplete stream before [DONE]")
+                    : translate::StreamCloseToAnthropic(&state);
                 if (!closing.empty()) {
                     sink.write(closing.data(), closing.size());
                 }
             } catch (const std::exception&) {
-                // Nothing useful left to say; ending the stream cleanly beats
-                // aborting the process holding the reader's editor open.
+                const std::string error = translate::StreamErrorToAnthropic(
+                    &state, "the model endpoint returned an invalid stream completion");
+                if (!error.empty()) {
+                    sink.write(error.data(), error.size());
+                }
             }
             sink.done();
             return true;
@@ -276,8 +542,8 @@ void HandleStreaming(Runtime& runtime, const Json& request, httplib::Response& r
 
 }  // namespace
 
-bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* shim,
-           bool verbose, const std::string& advertised) {
+bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* shim, bool verbose,
+           const std::string& advertised) {
     if (shim == nullptr) {
         return false;
     }
@@ -289,10 +555,29 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
         return false;
     }
     runtime->api_key = upstream.api_key;
+    runtime->console_url = upstream.console_url;
     runtime->model = model;
     runtime->advertised = advertised.empty() ? model : advertised;
     runtime->local_token = wally::net::GenerateLoopbackToken();
     runtime->verbose = verbose;
+    wally::net::UpstreamOptions pool_options;
+    pool_options.origin = runtime->origin;
+    runtime->pool = std::make_shared<wally::net::UpstreamPool>(pool_options);
+    if (!runtime->console_url.empty() && !runtime->api_key.empty()) {
+        // Three seconds per cancel: fire-and-forget, and the bound on how long
+        // an exiting wrapper waits for the last one to go out.
+        const std::string bearer = runtime->api_key;  // fixed for the session
+        runtime->cancels = std::make_unique<wally::account::CancelWorker>(
+            runtime->console_url, [bearer] { return bearer; }, 3000,
+            [](const std::string& id, wally::account::CancelOutcome outcome,
+               const std::string& error) {
+                const char* word = outcome == wally::account::CancelOutcome::Cancelled ? "202"
+                                   : outcome == wally::account::CancelOutcome::NotFound ? "404"
+                                                                                       : "failed";
+                ShimLog("cancel id=" + id + " result=" + word +
+                        (error.empty() ? std::string() : " error=" + error));
+            });
+    }
 
     Runtime* raw = runtime.get();
     raw->server.Post("/v1/messages", [raw](const httplib::Request& request,
@@ -320,9 +605,9 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
         }
         try {
             if (parsed.value("stream", false)) {
-                HandleStreaming(*raw, parsed, response);
+                HandleStreaming(*raw, request, parsed, response);
             } else {
-                HandleNonStreaming(*raw, parsed, response);
+                HandleNonStreaming(*raw, request, parsed, response);
             }
         } catch (const std::exception& error) {
             // httplib does not catch, and an exception leaving here reaches
@@ -413,9 +698,22 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
 
 void Stop(Shim* shim) {
     if (g_runtime) {
+        // Order matters. `stopping` first, so an upstream watch still waiting
+        // for an id (the editor left during prefill) gives up on its next poll
+        // instead of holding the server thread until the first token; then the
+        // server, which joins every handler; then the cancel queue, so the last
+        // abandon's cancel goes out before the process does -- bounded by 3 s
+        // per queued cancel, typically one.
+        g_runtime->stopping.store(true);
         g_runtime->server.stop();
         if (g_runtime->thread.joinable()) {
             g_runtime->thread.join();
+        }
+        if (g_runtime->cancels) {
+            if (g_runtime->cancels->pending() > 0) {
+                out::status_line("telling the model endpoint to stop the abandoned request");
+            }
+            g_runtime->cancels->Stop();
         }
         g_runtime.reset();
     }

@@ -72,7 +72,7 @@ std::string resolve_home(const std::string& override_dir) {
     }
     char buffer[1024] = {};
     if (rac_desktop_default_base_dir(buffer, sizeof(buffer)) == RAC_SUCCESS) {
-        return buffer;
+        return normalize_dir(buffer);
     }
     return {};
 }
