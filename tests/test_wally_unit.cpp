@@ -2443,7 +2443,7 @@ TestResult test_default_model_resolution() {
       result.details = "explicit model should pass through unchanged";
       return result;
     }
-    if (wally::prefs::ResolveModel("") != "glm-5.3-flash") {
+    if (wally::prefs::ResolveModel("") != WALLY_DEFAULT_MODEL_ID) {
       result.details = "empty input with no env/file default should use the built-in model";
       return result;
     }
@@ -2542,7 +2542,7 @@ TestResult test_default_model_store() {
   }
   const wally::prefs::DefaultModel corrupt_effective = wally::prefs::EffectiveDefaultModel();
   if (corrupt_effective.source != wally::prefs::DefaultModelSource::BuiltIn ||
-      corrupt_effective.id != "glm-5.3-flash") {
+      corrupt_effective.id != WALLY_DEFAULT_MODEL_ID) {
     result.details = "a corrupt file should fall through to the built-in default";
     return result;
   }

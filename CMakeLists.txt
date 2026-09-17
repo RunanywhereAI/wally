@@ -205,9 +205,16 @@ else()
     find_package(CURL REQUIRED)
     target_link_libraries(wally_core PRIVATE CURL::libcurl)
 endif()
+# The model a harness launch falls back to when the reader passes no -m and set
+# no default. Set here so the id lives in the build, not the source; a developer
+# overrides it with -DWALLY_DEFAULT_MODEL_ID=<id>, and this is the default when
+# they do not.
+set(WALLY_DEFAULT_MODEL_ID "glm-5.3-flash" CACHE STRING
+    "Default model a harness launch uses when given no -m")
 target_compile_definitions(wally_core PUBLIC
     WALLY_VERSION="${PROJECT_VERSION}"
     WALLY_PINNED_SDK_VERSION="${WALLY_PINNED_SDK_VERSION}"
+    WALLY_DEFAULT_MODEL_ID="${WALLY_DEFAULT_MODEL_ID}"
     RAC_HAVE_PROTOBUF=1
     CLI11_HAS_CODECVT=0)
 wally_define_engine_macros(wally_core)
