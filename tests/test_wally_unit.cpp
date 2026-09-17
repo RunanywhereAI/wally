@@ -18,6 +18,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <limits>
+#include <random>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -39,6 +40,7 @@
 #include "commands/model_labels.h"
 #include "config/cli_paths.h"
 #include "config/preferences.h"
+#include "harness/harness.h"
 #include "io/image_io.h"
 #include "io/output.h"
 #include "io/proto.h"
@@ -2887,6 +2889,112 @@ TestResult test_system_turns_fold_into_the_leading_system_message() {
   return result;
 }
 
+TestResult test_unrunnable_web_search_adds_system_note() {
+  TestResult result;
+  result.test_name = "unrunnable_web_search_adds_system_note";
+  namespace tr = wally::anthropic::translate;
+
+  // Claude Code advertises Anthropic's server-side `web_search` tool (no
+  // input_schema). We have no backend to run it, so the tool is dropped AND the
+  // model is told, in the system prompt, that web search is unavailable — so it
+  // answers from its own knowledge instead of narrating a search it never ran.
+  const nlohmann::json anthropic = nlohmann::json::parse(R"({
+    "model": "glm-5.3-flash",
+    "system": [{"type": "text", "text": "You are Claude Code."}],
+    "messages": [{"role": "user", "content": [{"type": "text", "text": "search the web for java"}]}],
+    "tools": [
+      {"type": "web_search_20250305", "name": "web_search"},
+      {"name": "Read", "input_schema": {"type": "object"}}
+    ]
+  })");
+  const nlohmann::json openai = tr::RequestToOpenAI(anthropic, "glm-5.3-flash");
+
+  const nlohmann::json& messages = openai["messages"];
+  if (messages.empty() || messages[0].value("role", "") != "system") {
+    result.details = "expected a leading system message; got: " + messages.dump().substr(0, 300);
+    return result;
+  }
+  const std::string system = messages[0].value("content", "");
+  if (system.find("You are Claude Code.") == std::string::npos ||
+      system.find("Web search and browsing are unavailable") == std::string::npos) {
+    result.details = "system message must keep the client prompt and add the note; got: " +
+                     system.substr(0, 400);
+    return result;
+  }
+
+  // The server-side web_search tool is not forwarded; the real client tool is.
+  bool web_search_forwarded = false;
+  bool read_forwarded = false;
+  if (openai.contains("tools")) {
+    for (const auto& tool : openai["tools"]) {
+      const std::string name = tool.value("function", nlohmann::json::object()).value("name", "");
+      if (name == "web_search") web_search_forwarded = true;
+      if (name == "Read") read_forwarded = true;
+    }
+  }
+  if (web_search_forwarded || !read_forwarded) {
+    result.expected = "web_search dropped, Read forwarded";
+    result.actual = openai.value("tools", nlohmann::json::array()).dump().substr(0, 300);
+    return result;
+  }
+  result.passed = true;
+  return result;
+}
+
+TestResult test_ensure_installed_finds_tool_off_path() {
+  TestResult result;
+  result.test_name = "ensure_installed_finds_tool_off_path";
+#if defined(_WIN32)
+  // The probe's Windows locations key off APPDATA/LOCALAPPDATA and _putenv_s;
+  // exercised by the Windows CI build. Skip here.
+  result.passed = true;
+  return result;
+#else
+  namespace fs = std::filesystem;
+
+  // A tool installed to ~/.local/bin but not yet on PATH (a fresh `npm i -g`
+  // before a shell restart is the common case) must still count as installed,
+  // and EnsureInstalled must put that dir on PATH so the launch can exec it.
+  const fs::path home = fs::temp_directory_path() /
+      ("wally-hometest-" + std::to_string(std::random_device{}()));
+  const fs::path bin = home / ".local" / "bin";
+  std::error_code ec;
+  fs::create_directories(bin, ec);
+  const std::string tool = "wallyfaketool12345";
+  { std::ofstream f(bin / tool); f << "#!/bin/sh\n"; }
+  fs::permissions(bin / tool, fs::perms::owner_all, ec);
+
+  const char* old_home = std::getenv("HOME");
+  const std::string saved_home = old_home != nullptr ? old_home : "";
+  const char* old_path = std::getenv("PATH");
+  const std::string saved_path = old_path != nullptr ? old_path : "";
+  setenv("HOME", home.c_str(), 1);
+
+  const bool found = wally::harness::EnsureInstalled(tool);
+  const char* new_path = std::getenv("PATH");
+  const bool path_updated = new_path != nullptr && std::string(new_path).find(bin.string()) == 0;
+
+  if (old_home != nullptr) {
+    setenv("HOME", saved_home.c_str(), 1);
+  } else {
+    unsetenv("HOME");
+  }
+  setenv("PATH", saved_path.c_str(), 1);
+  fs::remove_all(home, ec);
+
+  if (!found) {
+    result.details = "EnsureInstalled missed a tool sitting in ~/.local/bin off PATH";
+    return result;
+  }
+  if (!path_updated) {
+    result.details = "the tool's directory was not prepended to PATH for the launch";
+    return result;
+  }
+  result.passed = true;
+  return result;
+#endif
+}
+
 int main(int argc, char **argv) {
   TestSuite suite("wally_unit");
   suite.add("json_escape", test_json_escape);
@@ -2941,5 +3049,9 @@ int main(int argc, char **argv) {
             test_reasoning_content_counts_without_an_unsigned_block);
   suite.add("system_turns_fold_into_the_leading_system_message",
             test_system_turns_fold_into_the_leading_system_message);
+  suite.add("unrunnable_web_search_adds_system_note",
+            test_unrunnable_web_search_adds_system_note);
+  suite.add("ensure_installed_finds_tool_off_path",
+            test_ensure_installed_finds_tool_off_path);
   return suite.run(argc, argv);
 }
