@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -385,6 +386,21 @@ std::vector<std::string> HermesArgv(const std::string& model,
     return argv;
 }
 
+// ISO-8601 UTC "now". OpenClaw treats a non-empty `wizard.lastRunAt` as
+// "onboarding complete", so this is what lets a first run skip its wizard.
+std::string IsoNow() {
+    const std::time_t now = std::time(nullptr);
+    std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &now);
+#else
+    gmtime_r(&now, &utc);
+#endif
+    char buffer[32];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    return buffer;
+}
+
 std::string BuildOpenClawConfig(const std::string& existing, const std::string& model,
                                 const std::string& base_url, const std::string& api_key,
                                 std::int64_t context_window, std::int64_t max_output,
@@ -427,6 +443,9 @@ std::string BuildOpenClawConfig(const std::string& existing, const std::string& 
         {"api", "openai-completions"},
         {"models", nlohmann::json::array({entry})}};
     config["agents"]["defaults"]["model"]["primary"] = std::string(kProviderId) + "/" + model;
+    // Mark onboarding done so a first launch skips OpenClaw's wizard: it goes
+    // straight into the tui against the provider we just wrote, no setup page.
+    config["wizard"]["lastRunAt"] = IsoNow();
     return config.dump();
 }
 

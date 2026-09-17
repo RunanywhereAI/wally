@@ -120,6 +120,9 @@ bool ApplyGateway(const std::string& base_url, const std::string& api_key,
     profile["inferenceGatewayApiKey"] = api_key;
     profile["inferenceGatewayAuthScheme"] = "bearer";
     profile["deploymentDisplayName"] = display_name;
+    // Skip the first-run deployment-mode chooser: the gateway is already wired,
+    // so a fresh install should go straight in rather than open the wizard.
+    profile["disableDeploymentModeChooser"] = true;
     profile["chatTabEnabled"] = true;
     // Cowork reaches plugins and MCP servers over the network, and a profile
     // that does not say so leaves it unable to use them.

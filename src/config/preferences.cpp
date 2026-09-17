@@ -13,6 +13,14 @@
 #include "harness/harness.h"
 #include "io/output.h"
 
+// The built-in default model id, set at build time from the CMake cache variable
+// WALLY_DEFAULT_MODEL_ID (defaults to glm-5.3-flash; override with
+// -DWALLY_DEFAULT_MODEL_ID=<id>). The id lives in the build, not in this file.
+// Empty means a build left it undefined, i.e. no built-in default.
+#ifndef WALLY_DEFAULT_MODEL_ID
+#define WALLY_DEFAULT_MODEL_ID ""
+#endif
+
 namespace wally::prefs {
 namespace {
 
@@ -21,6 +29,11 @@ using Json = nlohmann::json;
 
 constexpr const char* kFileName = "preferences.json";
 constexpr const char* kDefaultModelKey = "default_model";
+
+// The model a harness launch falls back to when the reader passes no -m and set
+// no default (neither the env override nor the file). Its value is whatever the
+// build baked into WALLY_DEFAULT_MODEL_ID above.
+constexpr const char* kBuiltInDefaultModel = WALLY_DEFAULT_MODEL_ID;
 
 std::string EnvValue(const char* name) {
     const char* value = std::getenv(name);
@@ -128,6 +141,9 @@ DefaultModel EffectiveDefaultModel() {
     }
     if (const std::optional<std::string> file = FileDefaultModel()) {
         return {*file, DefaultModelSource::File};
+    }
+    if (kBuiltInDefaultModel[0] != '\0') {
+        return {kBuiltInDefaultModel, DefaultModelSource::BuiltIn};
     }
     return {};
 }
