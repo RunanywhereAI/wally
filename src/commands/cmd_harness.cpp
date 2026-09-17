@@ -22,7 +22,6 @@ void fail(int status) {
 }  // namespace
 
 void register_harness(CLI::App& app, GlobalOptions& options) {
-    static_cast<void>(options);
     // `wally opencode <model>` rather than a flag on `run`: it hands the terminal
     // to another program, which is a different thing to do than talk to a model.
     auto model = std::make_shared<std::string>();
@@ -38,8 +37,14 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
                        "use the signed-in hosted endpoint (never routes local models)");
     opencode->add_option("args", *rest, "passed through to opencode")->allow_extra_args();
     opencode->prefix_command();
-    opencode->callback([model, rest, cloud] {
-        const std::string effective = ResolveDefaultModel(*model);
+    opencode->callback([&options, model, rest, cloud] {
+        // Before resolving a model or printing anything: a person without the
+        // tool should see only that it is missing and how to install it.
+        if (!harness::EnsureInstalled("opencode")) {
+            fail(127);
+            return;
+        }
+        const std::string effective = ResolveDefaultModel(*model, options.no_color);
         if (*cloud) {
             if (effective.empty()) {
                 out::error_line(
@@ -66,8 +71,15 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
         command->add_option("args", *agent_rest, "passed through to the tool")
             ->allow_extra_args();
         command->prefix_command();
-        command->callback([&agent, agent_model, agent_rest] {
-            fail(harness::LaunchAgent(agent, ResolveDefaultModel(*agent_model), *agent_rest));
+        command->callback([&options, &agent, agent_model, agent_rest] {
+            // Same as opencode: check the tool is here before resolving a model
+            // or printing a preamble.
+            if (!harness::EnsureInstalled(agent.command)) {
+                fail(127);
+                return;
+            }
+            fail(harness::LaunchAgent(agent, ResolveDefaultModel(*agent_model, options.no_color),
+                                      *agent_rest));
         });
     }
 }

@@ -21,6 +21,7 @@
 #endif
 
 #include "account/credentials.h"
+#include "account/model_cache.h"
 #include "io/output.h"
 
 namespace wally::harness {
@@ -239,13 +240,22 @@ int LaunchOpenCodeCloud(const std::string& model, const std::vector<std::string>
         return 1;
     }
     if (!credentials.signed_in()) {
-        out::error_line("not signed in - run `wally login`");
+        ReportNotSignedIn();
         return 1;
+    }
+    // Refresh the catalog for next time without blocking, and reject a mistyped
+    // id from the cache. Fail open on an empty cache.
+    account::RefreshModelCacheIfStale(account::kModelCacheTtlSeconds);
+    if (account::CacheHasModels() && !account::ModelIsCached(model)) {
+        // Stale cache: refresh live and retry rather than reject a valid model.
+        if (!RefreshAndRecheckModel(credentials, model)) {
+            return 1;
+        }
     }
     bool unverified = false;
     if (!VerifyCloudSession(console, &credentials, nullptr, &error, &unverified)) {
         if (!unverified) {
-            out::error_line("cannot use the cloud session: " + error);
+            ReportCloudSessionInvalid(model);
             return 1;
         }
         // The console could not be asked right now. That is not a disproof of

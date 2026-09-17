@@ -2,17 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths-ignore:
       - 'Formula/**'
       - '**.md'
   pull_request:
-    # `main` plus the launch branches, because a pull request stacked onto one
-    # of those is still a pull request that has to be green. With `main` alone
-    # the branches filter matches on the PR's base, so retargeting a PR from
-    # `main` to `launch/open-frontier-wally` did not fail CI — it ran no CI at
-    # all, and the PR reported nothing rather than reporting a problem.
-    branches: [main, 'launch/**']
+    # `main` and `dev` plus the launch branches, because a pull request stacked
+    # onto one of those is still a pull request that has to be green. With `main`
+    # alone the branches filter matches on the PR's base, so retargeting a PR
+    # from `main` to `dev` or `launch/open-frontier-wally` did not fail CI — it
+    # ran no CI at all, and the PR reported nothing rather than reporting a
+    # problem.
+    branches: [main, dev, 'launch/**']
 
 permissions:
   contents: read

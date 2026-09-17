@@ -62,6 +62,8 @@ void register_update(CLI::App& app, GlobalOptions& options);
 void register_info(CLI::App& app, GlobalOptions& options);
 void register_about(CLI::App& app, GlobalOptions& options);
 void register_backends(CLI::App& app, GlobalOptions& options);
+void register_help(CLI::App& app, GlobalOptions& options);
+void register_uninstall(CLI::App& app, GlobalOptions& options);
 
 /** One registered engine, folded across every primitive it advertises. */
 struct EngineRow {
@@ -91,10 +93,11 @@ void register_harness(CLI::App& app, GlobalOptions& options);
 void register_default_models(CLI::App& app, GlobalOptions& options);
 
 /// The model a harness launch should use: `explicit_model` when the reader gave
-/// one, otherwise the saved default (see `config/preferences.h`). Prints a
-/// status line when a default fills in for an omitted `-m`, so no launch picks a
-/// model silently. Shared by the harness and editor commands.
-std::string ResolveDefaultModel(const std::string& explicit_model);
+/// one, otherwise the effective default (env, file, then the id compiled into
+/// the binary — see `config/preferences.h`). Prints a blue notice when a default
+/// fills in for an omitted `-m`, so no launch picks a model silently. `no_color`
+/// is the reader's --no-color flag. Shared by the harness and editor commands.
+std::string ResolveDefaultModel(const std::string& explicit_model, bool no_color);
 void register_telemetry(CLI::App& app, GlobalOptions& options);
 
 /**

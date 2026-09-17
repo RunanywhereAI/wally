@@ -2437,14 +2437,19 @@ TestResult test_default_model_resolution() {
 
   {
     EnvVar env_default("WALLY_DEFAULT_MODEL", nullptr);
-    // Fresh: no default anywhere. An explicit model passes through; an empty
-    // one stays empty (the caller keeps its no-model behaviour).
+    // Fresh: no env or file default. An explicit model passes through; an empty
+    // one falls back to the model compiled into the binary.
     if (wally::prefs::ResolveModel("qwen3-0.6b") != "qwen3-0.6b") {
       result.details = "explicit model should pass through unchanged";
       return result;
     }
-    if (!wally::prefs::ResolveModel("").empty()) {
-      result.details = "empty input with no default should stay empty";
+    if (wally::prefs::ResolveModel("") != WALLY_DEFAULT_MODEL_ID) {
+      result.details = "empty input with no env/file default should use the built-in model";
+      return result;
+    }
+    if (wally::prefs::EffectiveDefaultModel().source !=
+        wally::prefs::DefaultModelSource::BuiltIn) {
+      result.details = "no env/file default should resolve to the built-in source";
       return result;
     }
 
@@ -2525,14 +2530,20 @@ TestResult test_default_model_store() {
     return result;
   }
 
-  // A corrupt preferences file degrades to "no default", never a throw.
+  // A corrupt preferences file degrades gracefully, never a throw: no file
+  // default, and the effective default falls through to the built-in.
   {
     std::ofstream corrupt(wally::prefs::PreferencesPath(), std::ios::binary | std::ios::trunc);
     corrupt << "{ this is not json";
   }
-  if (wally::prefs::FileDefaultModel().has_value() ||
-      wally::prefs::EffectiveDefaultModel().set()) {
-    result.details = "a corrupt file should resolve to no default";
+  if (wally::prefs::FileDefaultModel().has_value()) {
+    result.details = "a corrupt file should yield no file default";
+    return result;
+  }
+  const wally::prefs::DefaultModel corrupt_effective = wally::prefs::EffectiveDefaultModel();
+  if (corrupt_effective.source != wally::prefs::DefaultModelSource::BuiltIn ||
+      corrupt_effective.id != WALLY_DEFAULT_MODEL_ID) {
+    result.details = "a corrupt file should fall through to the built-in default";
     return result;
   }
 

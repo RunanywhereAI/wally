@@ -1,5 +1,6 @@
 #include "app.h"
 
+#include <cstdio>
 #include <exception>
 #include <memory>
 #include <set>
@@ -83,6 +84,8 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     commands::register_serve(app, options);
     commands::register_bench(app, options);
     commands::register_backends(app, options);
+    commands::register_help(app, options);
+    commands::register_uninstall(app, options);
     commands::register_info(app, options);
     commands::register_about(app, options);
     commands::register_version(app, options);
@@ -297,8 +300,28 @@ int run(int argc, char** argv) {
     // A `--` before the wrapped tool's own arguments, added for the reader, so
     // `wally claude-code --dangerously-skip-permissions` forwards the flag
     // instead of failing on it. Kept alive for the whole parse below.
-    std::vector<std::string> forwarded =
-        SplitPassthroughArgv(std::vector<std::string>(argv, argv + argc));
+    std::vector<std::string> raw(argv, argv + argc);
+    // `wally help [command]` is a plain-word alias for `--help`, answered here
+    // before the parse. Routing it through app.parse() instead would hand
+    // `wally help opencode` to SplitPassthroughArgv, which inserts a `--` and
+    // forwards the `--help` to the wrapped tool rather than describing the wally
+    // command. Prints to stdout as `--help` does, and reaches shutdown() the
+    // same way the CallForHelp path below does.
+    if (raw.size() >= 2 && raw[1] == "help") {
+        if (raw.size() >= 3 && !raw[2].empty() && raw[2][0] != '-') {
+            try {
+                std::fputs(app.get_subcommand(raw[2])->help().c_str(), stdout);
+                shutdown();
+                return 0;
+            } catch (const CLI::Error&) {
+                // No such command: fall back to the top-level help.
+            }
+        }
+        std::fputs(app.help().c_str(), stdout);
+        shutdown();
+        return 0;
+    }
+    std::vector<std::string> forwarded = SplitPassthroughArgv(raw);
     std::vector<char*> forwarded_argv;
     forwarded_argv.reserve(forwarded.size());
     for (std::string& token : forwarded) {
@@ -309,7 +332,7 @@ int run(int argc, char** argv) {
     try {
         app.parse(static_cast<int>(forwarded_argv.size()), forwarded_argv.data());
         if (app.get_subcommands().empty()) {
-            // Bare `wally` prints help like `ollama` does.
+            // Bare `wally` prints the top-level help.
             out::status_line(app.help());
         }
     } catch (const CLI::CallForHelp& e) {

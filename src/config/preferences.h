@@ -11,7 +11,7 @@
  *   1. an explicit model the reader passed
  *   2. the `WALLY_DEFAULT_MODEL` environment variable (a one-off shell override)
  *   3. `default_model` in the preferences file
- *   4. nothing — the caller keeps its no-model behaviour
+ *   4. the id compiled into the binary, so a build always has a working default
  */
 
 #ifndef WALLY_CONFIG_PREFERENCES_H
@@ -29,9 +29,10 @@ std::string PreferencesPath();
 /// Where the default model came from, so a command can tell the reader which
 /// value is winning and why clearing the file might not change anything.
 enum class DefaultModelSource : std::uint8_t {
-    None,         ///< no default anywhere
+    None,         ///< no default anywhere (only if no built-in id is compiled in)
     Environment,  ///< WALLY_DEFAULT_MODEL is set
     File,         ///< default_model in the preferences file
+    BuiltIn,      ///< the id compiled into the binary
 };
 
 struct DefaultModel {

@@ -103,13 +103,11 @@ int run_show(const GlobalOptions &options, const std::string &ref) {
   if (model.context_length() > 0) {
     out::result_line("context     " + std::to_string(model.context_length()));
   }
-  if (!model.download_url().empty()) {
-    out::result_line("url         " + model.download_url());
-  }
   if (model.has_multi_file()) {
+    // Filenames only; the download URL is provenance that means nothing to the
+    // reader and stays in --json for tooling.
     for (const v1::ModelFileDescriptor &file : model.multi_file().files()) {
-      out::result_line("file        " + file.filename() + "  (" + file.url() +
-                       ")");
+      out::result_line("file        " + file.filename());
     }
   }
   out::result_line("downloaded  " + std::string(downloaded ? "yes" : "no"));

@@ -31,18 +31,6 @@ namespace {
 using Json = nlohmann::json;
 constexpr std::size_t kMaximumResponseBytes = 1024 * 1024;
 
-// The endpoint a call went to is internal detail: an ordinary person reading
-// "could not reach ... at https://inference.runanywhere.ai/api-dev" cannot act
-// on it, and `wally about` already stopped printing it. Name it only when
-// somebody deliberately pointed this binary elsewhere, which is the one case
-// where "which console answered" is the question being asked.
-inline void AppendEndpointIfOverridden(std::string* error, const std::string& url) {
-    const char* override_url = std::getenv("WALLY_CONSOLE_URL");
-    if (error != nullptr && override_url != nullptr && override_url[0] != '\0') {
-        *error += " (" + url + ")";
-    }
-}
-
 #if defined(_WIN32)
 
 constexpr int kConnectTimeoutMs = 10000;
@@ -449,14 +437,10 @@ bool DefaultTransport(const HttpRequest& input, HttpResponse* output, std::strin
         output->body.clear();
         output->headers.clear();
         if (error != nullptr) {
-            // Names the origin actually contacted: with WALLY_CONSOLE_URL unset
-            // that is the production console, and a bare "could not reach the
-            // console" reads as a local dev server nobody pointed us at.
             *error = response.too_large
                          ? std::string("Wally Cloud sent an unexpectedly large response")
                          : std::string(
                                "could not reach Wally Cloud - check your internet connection");
-            AppendEndpointIfOverridden(error, input.url);
         }
         return false;
     }
@@ -497,12 +481,12 @@ void HttpError(const char* operation, const std::string& origin, const HttpRespo
         *error = std::string("Wally Cloud could not complete the ") + operation + " (HTTP " +
                  std::to_string(status) + ")";
     }
-    // The endpoint is worth naming in exactly two cases: the console denies the
-    // route exists (so the wrong console was probably asked), or somebody
-    // deliberately pointed this binary elsewhere. Otherwise it is internal
-    // detail, and `wally about` already stopped printing it.
-    const char* override_url = std::getenv("WALLY_CONSOLE_URL");
-    if (status == 404 || (override_url != nullptr && override_url[0] != '\0')) {
+    // Name the endpoint only when the console denies the route exists, i.e. the
+    // wrong console was probably asked and the origin is the actionable part.
+    // Otherwise it is internal detail a person starting a coding agent cannot act
+    // on. A dev build sets WALLY_CONSOLE_URL, and that must not turn an ordinary
+    // "session expired" into a confusing URL dump.
+    if (status == 404) {
         *error += " (" + origin + ")";
     }
 }
@@ -560,7 +544,6 @@ bool Send(const Transport& transport, HttpRequest request, HttpResponse* respons
     if (!transport(request, response, error)) {
         if (error != nullptr && error->empty()) {
             *error = "could not reach Wally Cloud - check your internet connection";
-            AppendEndpointIfOverridden(error, request.url);
         }
         return false;
     }

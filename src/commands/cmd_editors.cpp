@@ -11,6 +11,8 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "anthropic/messages.h"
 #include "commands/editor_env.h"
 #include "commands/commands.h"
@@ -242,6 +244,26 @@ std::string PrepareClaudeConfigDir() {
         fs::copy_file(og_json, ours / ".claude.json", fs::copy_options::overwrite_existing, ec);
     }
 
+    // Mark onboarding done so a first-ever Claude Code launch skips its setup
+    // wizard — the gateway and auth are already wired. Patch the seeded file, or
+    // write a minimal one when the reader has no ~/.claude.json of their own.
+    {
+        const fs::path claude_json = ours / ".claude.json";
+        nlohmann::json doc = nlohmann::json::object();
+        std::ifstream in(claude_json, std::ios::binary);
+        if (in.good()) {
+            nlohmann::json parsed = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/false);
+            if (parsed.is_object()) {
+                doc = std::move(parsed);
+            }
+        }
+        doc["hasCompletedOnboarding"] = true;
+        std::ofstream out(claude_json, std::ios::binary | std::ios::trunc);
+        if (out.good()) {
+            out << doc.dump(2) << '\n';
+        }
+    }
+
     return ours_str;
 }
 
@@ -299,8 +321,7 @@ int Serve(const std::string& model, bool verbose) {
 
 /// Puts the app back on Anthropic without starting anything.
 ///
-/// The way out when a run was interrupted before it could undo itself, and the
-/// same verb Ollama offers for the same reason.
+/// The way out when a run was interrupted before it could undo itself.
 int Restore(const Editor& editor) {
     std::string failure;
     if (!desktop::RestoreGateway(&failure)) {
@@ -392,7 +413,7 @@ int Run(const Editor& editor, const std::string& model,
         // (rank 3): the token already outranks any key, and setting a key is what
         // makes Claude Code prompt to approve it and warn that claude.ai
         // connectors are off. A stray key in the reader's shell is unset for the
-        // same reason. This mirrors how Ollama wires Claude Code.
+        // same reason.
         const ScopedEnv token("ANTHROPIC_AUTH_TOKEN", shim.auth_token);
         const ScopedUnsetEnv no_key("ANTHROPIC_API_KEY");
         // Its own config dir, seeded from the reader's ~/.claude minus the login,
@@ -519,7 +540,30 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
                 fail(Restore(editor));
                 return;
             }
-            const std::string effective = ResolveDefaultModel(*model);
+            // A missing harness shows only that it is missing and how to get
+            // it, before any model resolution or preamble. --serve holds the
+            // endpoint open without launching the tool, so it needs none present.
+            // Claude Desktop is an app bundle; the rest are CLIs on PATH.
+            const bool needs_tool = !*serve;
+            if (needs_tool && editor.bundle[0] != '\0') {
+#if defined(__APPLE__)
+                if (BundlePath(editor).empty()) {
+                    out::error_line(std::string(editor.id) + " is not installed on this machine");
+                    out::status_line(
+                        "download it from https://claude.ai/download, then run this again");
+                    fail(1);
+                    return;
+                }
+#else
+                out::error_line(std::string(editor.id) + " is a macOS application");
+                fail(1);
+                return;
+#endif
+            } else if (needs_tool && !harness::EnsureInstalled(editor.command)) {
+                fail(127);
+                return;
+            }
+            const std::string effective = ResolveDefaultModel(*model, options.no_color);
             fail(*serve ? Serve(effective, options.verbose)
                         : Run(editor, effective, *rest, options.verbose));
         });
