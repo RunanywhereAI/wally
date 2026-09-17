@@ -14,9 +14,6 @@
 /// A gateway here speaks the Anthropic Messages API, which is exactly what
 /// `wally::anthropic` already serves. So pointing Claude Desktop at a model we
 /// serve is a matter of writing the profile and restarting the app.
-///
-/// Shape learned from ollama/ollama cmd/launch/claude_desktop.go, which drives
-/// the same feature.
 namespace wally::desktop {
 
 /// Writes the gateway profile, marks it applied, and switches both config

@@ -10,17 +10,21 @@
 #include <memory>
 #include <string>
 
+#include "cli_formatter.h"
 #include "config/preferences.h"
 #include "io/output.h"
 
 namespace wally::commands {
 
-std::string ResolveDefaultModel(const std::string& explicit_model) {
+std::string ResolveDefaultModel(const std::string& explicit_model, bool no_color) {
     const std::string effective = prefs::ResolveModel(explicit_model);
     // Announce only when a default filled in for an omitted -m, so the launch
-    // never silently picks a model the reader did not name.
+    // never silently picks a model the reader did not name. Blue, so it reads as
+    // a notice rather than an error or an ordinary status line.
     if (explicit_model.empty() && !effective.empty()) {
-        out::status_line("using default model " + effective);
+        const cli_color::Palette pal = cli_color::make_palette(color_output_enabled(no_color));
+        out::status_line(pal.blue + std::string("model not provided, using default model ") +
+                         effective + pal.reset);
     }
     return effective;
 }
@@ -64,6 +68,9 @@ void register_default_models(CLI::App& app, GlobalOptions& options) {
                 break;
             case prefs::DefaultModelSource::File:
                 out::result_line(current.id);
+                break;
+            case prefs::DefaultModelSource::BuiltIn:
+                out::result_line(current.id + " (built-in default)");
                 break;
             case prefs::DefaultModelSource::None:
                 out::status_line("no default model set; pass one to save it");

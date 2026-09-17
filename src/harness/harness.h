@@ -13,8 +13,8 @@
 /// The harness never learns which it got. It is handed one OpenAI-compatible
 /// base URL and talks to that, exactly as it would to any provider. For a local
 /// model the URL is a server this process starts and stops; for an upstream one
-/// it is the provider's own. That is the same shape Ollama uses, and it is why
-/// a harness needs no plugin to work with us.
+/// it is the provider's own. That standard shape is why a harness needs no
+/// plugin to work with us.
 namespace wally::harness {
 
 /// Where a model can be reached over HTTP, and whether we are serving it.
@@ -66,6 +66,12 @@ bool Resolve(const std::string& model, Endpoint* endpoint);
 
 /// Stops whatever `Resolve` started. Safe on an endpoint it did not serve.
 void Release(const Endpoint& endpoint);
+
+/// True when the CLI `tool` is on PATH. When it is not, prints the clean
+/// "not installed" message and its accurate install command, then returns
+/// false — so a caller can stop before resolving a model or printing anything
+/// else, which is the only thing a person without the tool needs to see.
+bool EnsureInstalled(const std::string& tool);
 
 /// Runs `tool` against `model`, forwarding `args` to it, and returns the tool's
 /// exit code. Blocks until the tool exits, then stops anything it started.

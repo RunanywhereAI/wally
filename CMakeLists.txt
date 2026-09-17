@@ -43,6 +43,7 @@ set(WALLY_SOURCES
     src/commands/cmd_about.cpp
     src/commands/cmd_auth.cpp
     src/commands/cmd_backends.cpp
+    src/commands/cmd_maintenance.cpp
     src/commands/cmd_list.cpp
     src/commands/cmd_lora.cpp
     src/commands/cmd_models.cpp

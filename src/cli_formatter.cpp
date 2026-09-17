@@ -19,12 +19,13 @@ namespace cli_color {
 namespace {
 constexpr const char* kBoldCode = "\033[1m";
 constexpr const char* kBoldCyanCode = "\033[1;36m";
+constexpr const char* kBlueCode = "\033[34m";
 constexpr const char* kResetCode = "\033[0m";
 }  // namespace
 
 Palette make_palette(bool enabled) {
     if (!enabled) return Palette{};
-    return Palette{kBoldCode, kBoldCyanCode, kResetCode};
+    return Palette{kBoldCode, kBoldCyanCode, kBlueCode, kResetCode};
 }
 
 }  // namespace cli_color

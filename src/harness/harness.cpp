@@ -140,15 +140,27 @@ void UnsetConfigVariable() {
 
 /// How you get a harness we do not ship. Kept beside the spawn so a missing
 /// tool answers the only question the person actually has.
+// The real, documented install command for each harness we do not ship, so the
+// person can copy the line and run it. Verified against each tool's own docs:
+// opencode-ai and @deepseek-ai/dsh are npm packages; Claude Code and Hermes ship
+// a native install script (npm for Claude Code is deprecated); OpenClaw's npm
+// package is openclaw@latest.
 std::string InstallHint(const std::string& tool) {
     if (tool == "opencode") {
         return "install it with `npm i -g opencode-ai`, then run this again";
     }
     if (tool == "openclaw") {
-        return "install it with `npm i -g openclaw`, then run this again";
+        return "install it with `npm i -g openclaw@latest`, then run this again";
     }
     if (tool == "dsh") {
         return "install it with `npm i -g @deepseek-ai/dsh`, then run this again";
+    }
+    if (tool == "claude") {
+        return "install it with `curl -fsSL https://claude.ai/install.sh | bash`, then run this again";
+    }
+    if (tool == "hermes") {
+        return "install it with `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`, "
+               "then run this again";
     }
     return "install " + tool + " and put it on PATH, then run this again";
 }
@@ -203,9 +215,7 @@ int Spawn(const std::string& tool, const std::vector<std::string>& args) {
     // Checked before the fork, not after: a failed exec happens in the child,
     // where the only thing it can report back is the exit code a shell uses
     // for "command not found" — so without this the person sees nothing at all.
-    if (!OnPath(tool)) {
-        out::status_line(tool + " is not installed on this machine");
-        out::status_line(InstallHint(tool));
+    if (!EnsureInstalled(tool)) {
         return 127;
     }
 
@@ -495,6 +505,15 @@ void Release(const Endpoint& endpoint) {
         rac_server_stop();
 #endif
     }
+}
+
+bool EnsureInstalled(const std::string& tool) {
+    if (OnPath(tool)) {
+        return true;
+    }
+    out::error_line(tool + " is not installed on this machine");
+    out::status_line(InstallHint(tool));
+    return false;
 }
 
 int Launch(const std::string& tool, const std::string& model,

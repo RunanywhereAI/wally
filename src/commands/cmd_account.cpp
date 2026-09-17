@@ -375,8 +375,8 @@ int WhoAmI(bool as_json) {
     out::result_line(line);
     std::snprintf(line, sizeof(line), "%-14s %s", "session", "active");
     out::result_line(line);
-    std::snprintf(line, sizeof(line), "%-14s %s", "console", credentials.console_url.c_str());
-    out::result_line(line);
+    // The console endpoint is an internal URL that means nothing to the reader,
+    // the same call `wally about` makes; it stays in --json for tooling only.
     return 0;
 }
 

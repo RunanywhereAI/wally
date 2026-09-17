@@ -1,7 +1,7 @@
 /**
  * @file cli_formatter.h
  * @brief Minimal, tasteful color formatter for `--help` (bold headings,
- * bold+cyan command/option names, plain descriptions) -- think `gh`/`ollama`.
+ * bold+cyan command/option names, plain descriptions) -- think `gh`.
  */
 
 #ifndef WALLY_CLI_FORMATTER_H
@@ -30,6 +30,7 @@ namespace cli_color {
 struct Palette {
     const char* bold = "";
     const char* bold_cyan = "";
+    const char* blue = "";
     const char* reset = "";
 };
 

@@ -77,7 +77,7 @@ rac_log_level_t log_level_for(const GlobalOptions &options) {
   if (options.verbose) {
     return RAC_LOG_DEBUG;
   }
-  // Quiet by default (like ollama): SDK internals only surface at ERROR.
+  // Quiet by default: SDK internals only surface at ERROR.
   // wally prints its own user-facing status/progress lines on stderr.
   return RAC_LOG_ERROR;
 }

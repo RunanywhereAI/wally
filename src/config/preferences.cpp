@@ -22,6 +22,11 @@ using Json = nlohmann::json;
 constexpr const char* kFileName = "preferences.json";
 constexpr const char* kDefaultModelKey = "default_model";
 
+// The model a harness launch falls back to when the reader passes no -m and set
+// no default (neither the env override nor the file). Compiled in, so every
+// build has a working default out of the box; change the id here.
+constexpr const char* kBuiltInDefaultModel = "glm-5.3-flash";
+
 std::string EnvValue(const char* name) {
     const char* value = std::getenv(name);
     return value == nullptr ? std::string() : std::string(value);
@@ -128,6 +133,9 @@ DefaultModel EffectiveDefaultModel() {
     }
     if (const std::optional<std::string> file = FileDefaultModel()) {
         return {*file, DefaultModelSource::File};
+    }
+    if (kBuiltInDefaultModel[0] != '\0') {
+        return {kBuiltInDefaultModel, DefaultModelSource::BuiltIn};
     }
     return {};
 }
