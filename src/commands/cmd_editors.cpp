@@ -19,6 +19,7 @@
 #include "config/cli_paths.h"
 #include "io/output.h"
 #include "desktop/claude_profile.h"
+#include "harness/catalog_models.h"
 #include "harness/harness.h"
 
 namespace wally::commands {
@@ -368,8 +369,22 @@ int Run(const Editor& editor, const std::string& model,
     const std::string advertised =
         editor.wiring == Wiring::ClaudeProfile ? std::string("claude-sonnet-4-5") : model;
 
+    // Claude Desktop's picker is Anthropic-family, so each catalog model is
+    // offered under a family name and the shim routes a request naming that
+    // family back to the real id. The launched model is first, so it stays the
+    // default (Sonnet). The CLI path takes real ids directly and needs none of it.
+    anthropic::ModelAliases desktop_aliases;
+    if (editor.wiring == Wiring::ClaudeProfile) {
+        const std::vector<harness::CatalogModel> catalog = harness::CatalogModels(endpoint, model);
+        static const char* const kFamilies[] = {"claude-sonnet-4-5", "claude-opus-5",
+                                                 "claude-haiku-4-5-20251001"};
+        for (std::size_t i = 0; i < catalog.size() && i < 3; ++i) {
+            desktop_aliases.emplace_back(kFamilies[i], catalog[i].id);
+        }
+    }
+
     anthropic::Shim shim;
-    if (!anthropic::Start(endpoint, model, &shim, verbose, advertised)) {
+    if (!anthropic::Start(endpoint, model, &shim, verbose, advertised, desktop_aliases)) {
         harness::Release(endpoint);
         return 1;
     }
@@ -385,7 +400,7 @@ int Run(const Editor& editor, const std::string& model,
         // taken back when it exits, so a crash here is the one case that leaves
         // it applied — which is what `--restore` is for.
         std::string failure;
-        if (!desktop::ApplyGateway(shim.base_url, shim.auth_token, advertised, model,
+        if (!desktop::ApplyGateway(shim.base_url, shim.auth_token, desktop_aliases,
                                    "RunAnywhere · " + model, &failure)) {
             out::error_line(failure);
             anthropic::Stop(&shim);
@@ -465,7 +480,18 @@ int Run(const Editor& editor, const std::string& model,
         // `--model` or `/model` still override it, which is correct -- a reader
         // who asks for something else inside the session should get it.
         const ScopedEnv selected_model("ANTHROPIC_MODEL", model);
-        const ScopedEnv background_model("ANTHROPIC_DEFAULT_HAIKU_MODEL", model);
+        // Claude Code's picker is Anthropic-family (Opus/Sonnet/Haiku), not a model
+        // list, so each catalog model is bound to a family slot: they all then show
+        // in the picker, labelled with their real ids. The launched model is first,
+        // so it stays on Haiku, the background-task default.
+        const std::vector<harness::CatalogModel> catalog = harness::CatalogModels(endpoint, model);
+        const char* const kFamilySlots[] = {"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                                             "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                                             "ANTHROPIC_DEFAULT_OPUS_MODEL"};
+        std::optional<ScopedEnv> family_slots[3];
+        for (std::size_t i = 0; i < catalog.size() && i < 3; ++i) {
+            family_slots[i].emplace(kFamilySlots[i], catalog[i].id);
+        }
         status = harness::Launch(editor.command, {}, args);
     }
 

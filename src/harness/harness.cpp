@@ -34,6 +34,7 @@ using wally_socklen_t = socklen_t;
 #include "commands/commands.h"
 #include "io/output.h"
 #include "bootstrap.h"
+#include "harness/catalog_models.h"
 #include "harness/local_models.h"
 
 namespace wally::harness {
@@ -110,16 +111,25 @@ std::string Quote(const std::string& text) {
 /// Inline rather than a file on purpose: writing to the user's project or to
 /// ~/.config/opencode would outlive the session and change how opencode behaves
 /// when they run it themselves.
-std::string OpencodeConfig(const std::string& model, const std::string& base_url,
-                           const std::string& api_key) {
+std::string OpencodeConfig(const std::string& primary, const std::string& base_url,
+                           const std::string& api_key, const std::vector<CatalogModel>& models) {
     // A key is always present because opencode's OpenAI client sends an
     // Authorization header regardless; a local server ignores what is in it.
     const std::string key = api_key.empty() ? std::string("local") : api_key;
+    // Every catalog model is a selectable entry so opencode's picker lists them
+    // all; `primary` stays the default selection.
+    std::string entries;
+    for (const CatalogModel& entry : models) {
+        if (!entries.empty()) {
+            entries += ",";
+        }
+        entries += Quote(entry.id) + ":{\"name\":" + Quote(entry.id) + "}";
+    }
     return std::string("{\"provider\":{\"runanywhere\":{") +
            "\"npm\":\"@ai-sdk/openai-compatible\"," + "\"name\":\"RunAnywhere\"," +
            "\"options\":{\"baseURL\":" + Quote(base_url) + ",\"apiKey\":" + Quote(key) + "}," +
-           "\"models\":{" + Quote(model) + ":{\"name\":" + Quote(model) + "}}}}," +
-           "\"model\":" + Quote("runanywhere/" + model) + "}";
+           "\"models\":{" + entries + "}}}," +
+           "\"model\":" + Quote("runanywhere/" + primary) + "}";
 }
 
 constexpr const char* kConfigVariable = "OPENCODE_CONFIG_CONTENT";
@@ -675,7 +685,8 @@ int Launch(const std::string& tool, const std::string& model,
         return 1;
     }
 
-    const std::string config = OpencodeConfig(model, endpoint.base_url, endpoint.api_key);
+    const std::string config =
+        OpencodeConfig(model, endpoint.base_url, endpoint.api_key, CatalogModels(endpoint, model));
     const char* previous = std::getenv(kConfigVariable);
     const std::string restored = previous != nullptr ? previous : std::string();
     const bool had_previous = previous != nullptr;

@@ -450,9 +450,10 @@ TestResult test_openclaw_config_selects_our_provider_and_model() {
     TestResult result;
     result.test_name = "openclaw_config_selects_our_provider_and_model";
 
+    const std::vector<wally::harness::CatalogModel> catalog = {
+        {"gemma-4-31b-it", 131072, 8192, 300000, 1200000}};
     const Json config = Json::parse(wally::harness::BuildOpenClawConfig(
-        "", "gemma-4-31b-it", "https://inference.runanywhere.ai/v1", "sk-live-xyz", 131072,
-        8192, 300000, 1200000));
+        "", "gemma-4-31b-it", "https://inference.runanywhere.ai/v1", "sk-live-xyz", catalog));
 
     if (config["agents"]["defaults"]["model"]["primary"] != "runanywhere/gemma-4-31b-it") {
         result.details = "the agent default must name <provider>/<model>, or OpenClaw keeps its own";
@@ -495,9 +496,8 @@ TestResult test_openclaw_config_substitutes_a_key_for_a_local_endpoint() {
     TestResult result;
     result.test_name = "openclaw_config_substitutes_a_key_for_a_local_endpoint";
 
-    const Json config = Json::parse(
-        wally::harness::BuildOpenClawConfig("", "qwen3-0.6b", "http://127.0.0.1:52431/v1", "", 8192,
-                                            0, 0, 0));
+    const Json config = Json::parse(wally::harness::BuildOpenClawConfig(
+        "", "qwen3-0.6b", "http://127.0.0.1:52431/v1", "", {{"qwen3-0.6b", 8192, 0, 0, 0}}));
     const std::string key = config["models"]["providers"]["runanywhere"]["apiKey"];
     if (key.empty()) {
         result.details = "an empty apiKey must become a placeholder, not an empty header";
@@ -561,8 +561,8 @@ TestResult test_openclaw_config_preserves_the_existing_document() {
       "agents": {"entries": {"main": {"name": "main"}}}
     })";
     const Json config = Json::parse(wally::harness::BuildOpenClawConfig(
-        existing, "glm-5.3-flash", "https://inference.runanywhere.ai/api-dev/v1", "sk-live", 0, 0,
-        0, 0));
+        existing, "glm-5.3-flash", "https://inference.runanywhere.ai/api-dev/v1", "sk-live",
+        {{"glm-5.3-flash", 0, 0, 0, 0}}));
 
     if (!config.contains("wizard") || !config["wizard"].contains("securityAcknowledgedAt")) {
         result.details = "the wizard flag must survive, or onboarding runs on every launch";
@@ -578,6 +578,39 @@ TestResult test_openclaw_config_preserves_the_existing_document() {
     }
     if (config["agents"]["defaults"]["model"]["primary"] != "runanywhere/glm-5.3-flash") {
         result.details = "and our model must still be selected alongside them";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+// The whole catalog reaches the picker, not just the launched model, and the
+// launched one stays the default.
+TestResult test_openclaw_config_lists_every_catalog_model() {
+    TestResult result;
+    result.test_name = "openclaw_config_lists_every_catalog_model";
+
+    const std::vector<wally::harness::CatalogModel> catalog = {{"glm-5.3-flash", 1048567, 0, 0, 0},
+                                                               {"qwen3.8-27b", 262144, 0, 0, 0},
+                                                               {"gemma-4", 131072, 0, 0, 0}};
+    const Json config = Json::parse(wally::harness::BuildOpenClawConfig(
+        "", "glm-5.3-flash", "https://inference.runanywhere.ai/v1", "sk-live", catalog));
+    const Json& models = config["models"]["providers"]["runanywhere"]["models"];
+    if (models.size() != 3) {
+        result.details = "every catalog model must be a selectable entry; got " + models.dump();
+        return result;
+    }
+    std::set<std::string> ids;
+    for (const Json& entry : models) {
+        ids.insert(entry["id"].get<std::string>());
+    }
+    if (ids.count("glm-5.3-flash") == 0 || ids.count("qwen3.8-27b") == 0 ||
+        ids.count("gemma-4") == 0) {
+        result.details = "all three catalog ids must appear: " + models.dump();
+        return result;
+    }
+    if (config["agents"]["defaults"]["model"]["primary"] != "runanywhere/glm-5.3-flash") {
+        result.details = "the launched model must stay the default";
         return result;
     }
     result.passed = true;
@@ -684,8 +717,8 @@ TestResult test_deepseek_settings_carry_the_route() {
     result.test_name = "deepseek_settings_carry_the_route";
 
     const Json upstream = Json::parse(wally::harness::BuildDeepSeekSettings(
-        "glm-5.3-flash", "https://inference.runanywhere.ai/api-dev/v1", "RUNANYWHERE_API_KEY",
-        1000000, 32768));
+        "https://inference.runanywhere.ai/api-dev/v1", "RUNANYWHERE_API_KEY",
+        {{"glm-5.3-flash", 1000000, 32768, 0, 0}}));
     const Json& provider = upstream["llm-pi-ai"]["providers"]["runanywhere"];
     if (provider["api"] != "openai-completions" ||
         provider["baseURL"] != "https://inference.runanywhere.ai/api-dev/v1") {
@@ -702,10 +735,19 @@ TestResult test_deepseek_settings_carry_the_route() {
         return result;
     }
 
-    const Json local = Json::parse(
-        wally::harness::BuildDeepSeekSettings("qwen3-0.6b", "http://127.0.0.1:52431/v1", "", 8192, 0));
+    const Json local = Json::parse(wally::harness::BuildDeepSeekSettings(
+        "http://127.0.0.1:52431/v1", "", {{"qwen3-0.6b", 8192, 0, 0, 0}}));
     if (local["llm-pi-ai"]["providers"]["runanywhere"].contains("apiKeyEnv")) {
         result.details = "a keyless local route must not name a reference that resolves to nothing";
+        return result;
+    }
+
+    // The whole catalog reaches dsh's settings, not just the launched model.
+    const Json many = Json::parse(wally::harness::BuildDeepSeekSettings(
+        "https://inference.runanywhere.ai/api-dev/v1", "RUNANYWHERE_API_KEY",
+        {{"glm-5.3-flash", 0, 0, 0, 0}, {"qwen3.8-27b", 0, 0, 0, 0}, {"gemma-4", 0, 0, 0, 0}}));
+    if (many["llm-pi-ai"]["providers"]["runanywhere"]["models"].size() != 3) {
+        result.details = "every catalog model must reach the dsh settings document";
         return result;
     }
     result.passed = true;
@@ -790,6 +832,8 @@ int main(int argc, char** argv) {
               test_openclaw_config_substitutes_a_key_for_a_local_endpoint);
     suite.add("agent_table_rows_are_usable_subcommands",
               test_agent_table_rows_are_usable_subcommands);
+    suite.add("openclaw_config_lists_every_catalog_model",
+              test_openclaw_config_lists_every_catalog_model);
     suite.add("openclaw_config_preserves_the_existing_document",
               test_openclaw_config_preserves_the_existing_document);
     suite.add("hermes_key_variable_follows_the_host",

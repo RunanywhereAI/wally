@@ -401,10 +401,9 @@ std::string IsoNow() {
     return buffer;
 }
 
-std::string BuildOpenClawConfig(const std::string& existing, const std::string& model,
+std::string BuildOpenClawConfig(const std::string& existing, const std::string& primary,
                                 const std::string& base_url, const std::string& api_key,
-                                std::int64_t context_window, std::int64_t max_output,
-                                std::int64_t input_per_mtok, std::int64_t output_per_mtok) {
+                                const std::vector<CatalogModel>& models) {
     nlohmann::json config = nlohmann::json::object();
     if (!existing.empty()) {
         nlohmann::json parsed = nlohmann::json::parse(existing, nullptr, false);
@@ -413,36 +412,41 @@ std::string BuildOpenClawConfig(const std::string& existing, const std::string& 
         }
     }
 
-    // `mode: merge` keeps the catalogs from their own providers; this adds one
-    // and selects it for the run.
+    // `mode: merge` keeps the catalogs from their own providers; this adds ours
+    // and selects one for the run.
     config["models"]["mode"] = "merge";
-    nlohmann::json entry = {{"id", model}, {"name", model}, {"input", {"text"}}};
-    // Only capabilities checked against this gateway. It returns usage on the
-    // final streaming chunk when `stream_options.include_usage` is set, and it
-    // takes `max_tokens` rather than `max_completion_tokens`.
-    entry["compat"] = {{"supportsUsageInStreaming", true}, {"maxTokensField", "max_tokens"}};
-    if (context_window > 0) {
-        entry["contextWindow"] = context_window;
-        // OpenClaw wants a maxTokens beside the window; without one it budgets
-        // the session against a cap it invented.
-        entry["maxTokens"] = max_output > 0 ? max_output
-                                            : std::min<std::int64_t>(context_window, 65536);
-    }
-    if (input_per_mtok > 0 || output_per_mtok > 0) {
-        // Per-million-token rates, in whole currency units. The catalog carries
-        // micro-dollars, so this is the same number a dollar sign away.
-        const double per_micro = 1.0 / 1000000.0;
-        entry["cost"] = {{"input", static_cast<double>(input_per_mtok) * per_micro},
-                         {"output", static_cast<double>(output_per_mtok) * per_micro},
-                         {"cacheRead", 0},
-                         {"cacheWrite", 0}};
+    nlohmann::json entries = nlohmann::json::array();
+    for (const CatalogModel& model : models) {
+        nlohmann::json entry = {{"id", model.id}, {"name", model.id}, {"input", {"text"}}};
+        // Only capabilities checked against this gateway. It returns usage on the
+        // final streaming chunk when `stream_options.include_usage` is set, and it
+        // takes `max_tokens` rather than `max_completion_tokens`.
+        entry["compat"] = {{"supportsUsageInStreaming", true}, {"maxTokensField", "max_tokens"}};
+        if (model.context_window > 0) {
+            entry["contextWindow"] = model.context_window;
+            // OpenClaw wants a maxTokens beside the window; without one it budgets
+            // the session against a cap it invented.
+            entry["maxTokens"] = model.max_output > 0
+                                     ? model.max_output
+                                     : std::min<std::int64_t>(model.context_window, 65536);
+        }
+        if (model.input_per_mtok > 0 || model.output_per_mtok > 0) {
+            // Per-million-token rates, in whole currency units. The catalog carries
+            // micro-dollars, so this is the same number a dollar sign away.
+            const double per_micro = 1.0 / 1000000.0;
+            entry["cost"] = {{"input", static_cast<double>(model.input_per_mtok) * per_micro},
+                             {"output", static_cast<double>(model.output_per_mtok) * per_micro},
+                             {"cacheRead", 0},
+                             {"cacheWrite", 0}};
+        }
+        entries.push_back(std::move(entry));
     }
     config["models"]["providers"][kProviderId] = {
         {"baseUrl", base_url},
         {"apiKey", KeyOrPlaceholder(api_key)},
         {"api", "openai-completions"},
-        {"models", nlohmann::json::array({entry})}};
-    config["agents"]["defaults"]["model"]["primary"] = std::string(kProviderId) + "/" + model;
+        {"models", std::move(entries)}};
+    config["agents"]["defaults"]["model"]["primary"] = std::string(kProviderId) + "/" + primary;
     // Mark onboarding done so a first launch skips OpenClaw's wizard: it goes
     // straight into the tui against the provider we just wrote, no setup page.
     config["wizard"]["lastRunAt"] = IsoNow();
@@ -457,19 +461,23 @@ bool DeepSeekWantsHeadless(const std::vector<std::string>& args) {
     return !args.empty() && !args.front().empty() && args.front().front() != '-';
 }
 
-std::string BuildDeepSeekSettings(const std::string& model, const std::string& base_url,
-                                  const std::string& key_variable,
-                                  std::int64_t context_window, std::int64_t max_output) {
-    nlohmann::json entry = {{"id", model}, {"name", model}};
-    if (context_window > 0) {
-        entry["contextWindow"] = context_window;
-        entry["maxTokens"] = max_output > 0 ? max_output
-                                            : std::min<std::int64_t>(context_window, 32768);
+std::string BuildDeepSeekSettings(const std::string& base_url, const std::string& key_variable,
+                                  const std::vector<CatalogModel>& models) {
+    nlohmann::json entries = nlohmann::json::array();
+    for (const CatalogModel& model : models) {
+        nlohmann::json entry = {{"id", model.id}, {"name", model.id}};
+        if (model.context_window > 0) {
+            entry["contextWindow"] = model.context_window;
+            entry["maxTokens"] = model.max_output > 0
+                                     ? model.max_output
+                                     : std::min<std::int64_t>(model.context_window, 32768);
+        }
+        entries.push_back(std::move(entry));
     }
     nlohmann::json provider = {{"displayName", "RunAnywhere"},
                                {"api", "openai-completions"},
                                {"baseURL", base_url},
-                               {"models", nlohmann::json::array({entry})}};
+                               {"models", std::move(entries)}};
     // Omitted for a local server: an absent reference leaves the route keyless,
     // which is what a loopback endpoint wants. A reference that resolves to
     // nothing would fail every request with MISSING_CREDENTIAL instead.
@@ -575,16 +583,15 @@ int LaunchAgent(const Agent& agent, const std::string& model,
             break;
         }
         case Agent::Handoff::ConfigFile: {
-            const ModelLimits limits = LookupLimits(endpoint, model);
-            if (limits.context_window > 0) {
-                out::status_line("context window: " + std::to_string(limits.context_window) +
-                                 " tokens");
+            const std::vector<CatalogModel> catalog = CatalogModels(endpoint, model);
+            if (catalog.front().context_window > 0) {
+                out::status_line("context window: " +
+                                 std::to_string(catalog.front().context_window) + " tokens");
             }
             std::string failure;
             if (!config.Write(
                     BuildOpenClawConfig(ReadOpenClawConfig(), model, endpoint.base_url,
-                                        endpoint.api_key, limits.context_window, limits.max_output,
-                                        limits.input_per_mtok, limits.output_per_mtok),
+                                        endpoint.api_key, catalog),
                     &failure)) {
                 out::error_line(failure);
                 Release(endpoint);
@@ -611,17 +618,16 @@ int LaunchAgent(const Agent& agent, const std::string& model,
             break;
         }
         case Agent::Handoff::PatchOverlay: {
-            const ModelLimits limits = LookupLimits(endpoint, model);
-            if (limits.context_window > 0) {
-                out::status_line("context window: " + std::to_string(limits.context_window) +
-                                 " tokens");
+            const std::vector<CatalogModel> catalog = CatalogModels(endpoint, model);
+            if (catalog.front().context_window > 0) {
+                out::status_line("context window: " +
+                                 std::to_string(catalog.front().context_window) + " tokens");
             }
             const std::string key_variable =
                 endpoint.api_key.empty() ? std::string() : std::string(kDeepSeekKeyVariable);
 
             std::string failure;
-            if (!settings.Write(BuildDeepSeekSettings(model, endpoint.base_url, key_variable,
-                                                      limits.context_window, limits.max_output),
+            if (!settings.Write(BuildDeepSeekSettings(endpoint.base_url, key_variable, catalog),
                                 &failure) ||
                 !config.Write(BuildDeepSeekPatch(settings.path(), model), &failure, ".yml")) {
                 out::error_line(failure);

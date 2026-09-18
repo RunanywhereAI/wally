@@ -2,6 +2,8 @@
 #define WALLY_DESKTOP_CLAUDE_PROFILE_H
 
 #include <string>
+#include <utility>
+#include <vector>
 
 /// Claude Desktop's third-party inference mode.
 ///
@@ -20,9 +22,11 @@ namespace wally::desktop {
 /// trees to third-party mode.
 ///
 /// Takes effect on the app's next launch, never on a running one. Returns
-/// false with `error` set.
+/// false with `error` set. `models` is (Anthropic family name -> real id) pairs,
+/// the first the default: each becomes a picker entry whose `name` the app maps
+/// to a family and whose `labelOverride` shows the real id.
 bool ApplyGateway(const std::string& base_url, const std::string& api_key,
-                  const std::string& advertised, const std::string& label,
+                  const std::vector<std::pair<std::string, std::string>>& models,
                   const std::string& display_name, std::string* error);
 
 /// Puts Claude Desktop back on Anthropic and strips the keys we wrote.

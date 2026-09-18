@@ -102,7 +102,7 @@ std::string MetaPath() { return SupportRoot(true) + "/configLibrary/_meta.json";
 std::string ProfileDirectory() { return SupportRoot(true); }
 
 bool ApplyGateway(const std::string& base_url, const std::string& api_key,
-                  const std::string& advertised, const std::string& label,
+                  const std::vector<std::pair<std::string, std::string>>& models,
                   const std::string& display_name, std::string* error) {
     if (Home().empty()) {
         if (error != nullptr) {
@@ -140,8 +140,11 @@ bool ApplyGateway(const std::string& base_url, const std::string& api_key,
     // drops the entry: "expected a gateway model that maps to an Anthropic
     // model". `labelOverride` is what the picker actually shows, so the row
     // names the model that really answers rather than the one we route under.
-    profile["inferenceModels"] =
-        Json::array({Json{{"name", advertised}, {"labelOverride", label}}});
+    Json inference = Json::array();
+    for (const std::pair<std::string, std::string>& entry : models) {
+        inference.push_back(Json{{"name", entry.first}, {"labelOverride", entry.second}});
+    }
+    profile["inferenceModels"] = std::move(inference);
     // Asked for explicitly: with inferenceModels set the app would otherwise
     // skip discovery, and the picker then has nothing to reconcile the served
     // model against.
