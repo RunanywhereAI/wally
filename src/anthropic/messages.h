@@ -2,6 +2,8 @@
 #define WALLY_ANTHROPIC_MESSAGES_H
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "harness/harness.h"
 
@@ -24,6 +26,11 @@
 /// inference logic every SDK consumer needs. If a second consumer ever wants
 /// it, that is the moment to move it down a layer.
 namespace wally::anthropic {
+
+/// (Anthropic family name -> real model id) pairs. Claude Desktop's picker is
+/// family-based, so each catalog model is advertised to it under a family name
+/// and a request naming that family is routed back to the real id.
+using ModelAliases = std::vector<std::pair<std::string, std::string>>;
 
 /// A running translator.
 struct Shim {
@@ -51,8 +58,11 @@ struct Shim {
 /// so a gateway serving something else has to answer under a name it accepts.
 /// The profile carries a labelOverride so the picker still shows what is really
 /// answering.
+/// `aliases`, when set, advertises each family name to the app and routes a
+/// request naming one back to its real model id. Empty for the CLI path.
 bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* shim,
-           bool verbose = false, const std::string& advertised = {});
+           bool verbose = false, const std::string& advertised = {},
+           const ModelAliases& aliases = {});
 
 /// Stops the translator and waits for its thread. Safe on a stopped shim.
 void Stop(Shim* shim);

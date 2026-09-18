@@ -189,35 +189,40 @@ int Spawn(const std::string& executable, const std::vector<std::string>& argumen
 
 }  // namespace
 
-std::string BuildOpenCodeCloudConfig(const std::string& model, const std::string& base_url,
-                                     const std::string& access_token, std::int64_t context_window,
-                                     std::int64_t max_output, std::int64_t input_per_mtok,
-                                     std::int64_t output_per_mtok) {
+std::string BuildOpenCodeCloudConfig(const std::string& primary, const std::string& base_url,
+                                     const std::string& access_token,
+                                     const std::vector<CatalogModel>& models) {
     using Json = nlohmann::json;
-    Json entry = {{"name", model}};
-    // The real limits, so opencode's context gauge and auto-compaction fire at
-    // the model's actual window instead of a wrong default (which makes it nag
-    // to compact and never stop). Output is a sane cap, never the whole context
-    // -- opencode's own docs warn against that.
-    if (context_window > 0) {
-        const std::int64_t output =
-            max_output > 0 ? max_output : std::min<std::int64_t>(context_window, 65536);
-        entry["limit"] = Json{{"context", context_window}, {"output", output}};
-    }
-    // The real price, so opencode shows spend instead of $0.00. opencode's cost
-    // is USD per million tokens; the catalog is micro-dollars per million, so a
-    // million micros is one dollar.
-    if (input_per_mtok > 0 || output_per_mtok > 0) {
-        entry["cost"] = Json{{"input", static_cast<double>(input_per_mtok) / 1'000'000.0},
-                             {"output", static_cast<double>(output_per_mtok) / 1'000'000.0}};
+    Json entries = Json::object();
+    for (const CatalogModel& model : models) {
+        Json entry = {{"name", model.id}};
+        // The real limits, so opencode's context gauge and auto-compaction fire at
+        // the model's actual window instead of a wrong default (which makes it nag
+        // to compact and never stop). Output is a sane cap, never the whole context
+        // -- opencode's own docs warn against that.
+        if (model.context_window > 0) {
+            const std::int64_t output = model.max_output > 0
+                                            ? model.max_output
+                                            : std::min<std::int64_t>(model.context_window, 65536);
+            entry["limit"] = Json{{"context", model.context_window}, {"output", output}};
+        }
+        // The real price, so opencode shows spend instead of $0.00. opencode's cost
+        // is USD per million tokens; the catalog is micro-dollars per million, so a
+        // million micros is one dollar.
+        if (model.input_per_mtok > 0 || model.output_per_mtok > 0) {
+            entry["cost"] = Json{{"input", static_cast<double>(model.input_per_mtok) / 1'000'000.0},
+                                 {"output",
+                                  static_cast<double>(model.output_per_mtok) / 1'000'000.0}};
+        }
+        entries[model.id] = std::move(entry);
     }
     const Json provider = {
         {"npm", "@ai-sdk/openai-compatible"},
         {"name", "RunAnywhere"},
         {"options", {{"baseURL", base_url}, {"apiKey", access_token}}},
-        {"models", {{model, entry}}},
+        {"models", std::move(entries)},
     };
-    return Json{{"provider", {{"runanywhere", provider}}}, {"model", "runanywhere/" + model}}
+    return Json{{"provider", {{"runanywhere", provider}}}, {"model", "runanywhere/" + primary}}
         .dump();
 }
 
@@ -268,45 +273,17 @@ int LaunchOpenCodeCloud(const std::string& model, const std::vector<std::string>
     }
 
     const std::string base_url = credentials.console_url + "/v1";
-    // The model's real context window and price, so opencode's compaction fires
-    // at the right point and its usage shows real spend. A failed fetch is not
-    // fatal -- launch with whatever we learned.
-    std::int64_t context_window = 0;
-    std::int64_t max_output = 0;
-    std::int64_t input_price = 0;
-    std::int64_t output_price = 0;
-    std::string fetch_error;
-    std::vector<account::ModelInfo> models;
-    if (console.FetchModels(credentials.console_url, credentials.access_token, &models,
-                            &fetch_error) == account::IdentityResult::Ok) {
-        for (const account::ModelInfo& info : models) {
-            if (info.id == model) {
-                context_window = info.context_window;
-                max_output = info.max_output_tokens;
-                break;
-            }
-        }
-    } else {
-        out::status_line("could not read the model list (" + fetch_error +
-                         "); launching without a context-window hint");
+    // Every catalog model, so opencode's picker lists them all; the launched one
+    // stays the default. Each carries its real window and price so opencode's
+    // compaction fires at the right point and its usage shows real spend.
+    const std::vector<CatalogModel> catalog =
+        CatalogModels(console, credentials.console_url, credentials.access_token, model);
+    if (catalog.front().context_window > 0) {
+        out::status_line("context window: " + std::to_string(catalog.front().context_window) +
+                         " tokens");
     }
-    std::vector<account::CatalogPrice> prices;
-    if (console.FetchCatalog(credentials.console_url, credentials.access_token, &prices,
-                             &fetch_error) == account::IdentityResult::Ok) {
-        for (const account::CatalogPrice& price : prices) {
-            if (price.id == model) {
-                input_price = price.input_per_mtok;
-                output_price = price.output_per_mtok;
-                break;
-            }
-        }
-    }
-    if (context_window > 0) {
-        out::status_line("context window: " + std::to_string(context_window) + " tokens");
-    }
-    const std::string config = BuildOpenCodeCloudConfig(
-        model, base_url, credentials.access_token, context_window, max_output, input_price,
-        output_price);
+    const std::string config =
+        BuildOpenCodeCloudConfig(model, base_url, credentials.access_token, catalog);
     ScopedOpenCodeConfig environment;
     if (!environment.Activate(config)) {
         out::error_line("could not set the temporary OpenCode configuration");

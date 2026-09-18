@@ -520,8 +520,27 @@ std::string StreamChunkToAnthropic(const Json& chunk, StreamState* state) {
         return StreamErrorToAnthropic(state, "the model endpoint sent a malformed finish reason");
     }
     if (!state->stop_reason.empty() && !choice.is_null()) {
-        return StreamErrorToAnthropic(state,
-                                      "the model endpoint sent a choice after its finish reason");
+        // A chunk after the finish reason is common and benign: an empty-delta
+        // keep-alive, or a usage-only tail (litellm/Vertex send one). Only real
+        // content generated after the model said it was done is the anomaly this
+        // guards against.
+        const Json trailing = choice.contains("delta") && choice["delta"].is_object()
+                                  ? choice["delta"]
+                                  : Json::object();
+        const bool has_content =
+            (trailing.contains("content") && trailing["content"].is_string() &&
+             !trailing["content"].get<std::string>().empty()) ||
+            (trailing.contains("tool_calls") && trailing["tool_calls"].is_array() &&
+             !trailing["tool_calls"].empty());
+        if (has_content) {
+            return StreamErrorToAnthropic(
+                state, "the model endpoint sent a choice after its finish reason");
+        }
+        if (chunk.contains("usage") && chunk["usage"].is_object()) {
+            state->input_tokens = Count(chunk["usage"], "prompt_tokens", state->input_tokens);
+            state->output_tokens = Count(chunk["usage"], "completion_tokens", state->output_tokens);
+        }
+        return out;
     }
     if (!finish.empty()) {
         if (finish != "stop" && finish != "length" && finish != "tool_calls" &&

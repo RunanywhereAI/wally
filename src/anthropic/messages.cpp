@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <ctime>
 #include <filesystem>
@@ -15,8 +16,10 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #include "account/cancel_worker.h"
+#include "account/model_cache.h"
 #include "anthropic/translate.h"
 #include "config/cli_paths.h"
 #include "io/output.h"
@@ -119,6 +122,14 @@ struct Runtime {
     std::string api_key;
     std::string model;
     std::string advertised;
+    // The real model ids the console advertises (never the advertised alias): a
+    // request naming one of these is forwarded as-is, which lets Claude Code's
+    // family-slot picker route each slot to its own model.
+    std::vector<std::string> catalog;
+    // (Anthropic family name -> real id) for Claude Desktop, whose picker is
+    // family-based: a request naming a family is routed to the mapped id, and the
+    // discovery endpoint advertises the family names.
+    ModelAliases aliases;
     // The secret handed to the wrapped tool, and required back on every request.
     // Binding to 127.0.0.1 keeps the network out; this keeps other local
     // processes out.
@@ -233,12 +244,52 @@ wally::net::WatchedResult PostUpstream(Runtime& runtime, bool streaming, const s
     return wally::net::WatchedResult{};
 }
 
+/// The model a request runs against: the one the client asked for when the
+/// console advertises it, otherwise the launched default. Claude Code maps its
+/// Anthropic-family picker onto catalog models, so a request can name any of
+/// them; honouring it lets each picker slot reach its own model instead of
+/// collapsing onto one.
+std::string EffectiveModel(const Runtime& runtime, const Json& request) {
+    if (request.is_object()) {
+        const auto found = request.find("model");
+        if (found != request.end() && found->is_string()) {
+            const std::string requested = found->get<std::string>();
+            if (std::find(runtime.catalog.begin(), runtime.catalog.end(), requested) !=
+                runtime.catalog.end()) {
+                return requested;
+            }
+            for (const auto& alias : runtime.aliases) {
+                if (alias.first == requested) {
+                    return alias.second;
+                }
+            }
+        }
+    }
+    return runtime.model;
+}
+
 void HandleNonStreaming(Runtime& runtime, const httplib::Request& editor, const Json& request,
                         httplib::Response& response) {
-    const Json upstream = translate::RequestToOpenAI(request, runtime.model);
-    const wally::net::WatchedResult result =
-        PostUpstream(runtime, false, runtime.prefix + "/chat/completions", upstream.dump(), nullptr,
-                     editor.is_connection_closed);
+    const std::string effective = EffectiveModel(runtime, request);
+    const std::string upstream = translate::RequestToOpenAI(request, effective).dump();
+    // Claude Desktop probes every picker model at startup and errors the whole
+    // gateway if one is refused, so a bursty rate-limited model (gemma-4 on Vertex
+    // answers ~1 request in 3) breaks it. Only there — where `aliases` is set — a
+    // few quick retries ride out a transient 429 without hiding a genuine outage:
+    // if every attempt is refused, the error still surfaces. The CLI path keeps
+    // the forward-once contract, so the editor sees the Retry-After and backs off.
+    const int attempts = runtime.aliases.empty() ? 1 : 4;
+    wally::net::WatchedResult result;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        result = PostUpstream(runtime, false, runtime.prefix + "/chat/completions", upstream, nullptr,
+                              editor.is_connection_closed);
+        if (result.abandoned || !result.reply || result.reply->status != 429) {
+            break;
+        }
+        if (attempt + 1 < attempts) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+        }
+    }
     const httplib::Result& reply = result.reply;
     if (result.abandoned) {
         // Nobody is reading; whatever is written here goes nowhere.
@@ -283,7 +334,7 @@ void HandleNonStreaming(Runtime& runtime, const httplib::Request& editor, const 
         response.set_content(translate::ErrorBody(failure_type, failure), "application/json");
         return;
     }
-    response.set_content(translate::ResponseToAnthropic(parsed, runtime.model).dump(),
+    response.set_content(translate::ResponseToAnthropic(parsed, effective).dump(),
                          "application/json");
 }
 
@@ -338,10 +389,11 @@ void HandleStreaming(Runtime& runtime, const httplib::Request& editor, const Jso
                      httplib::Response& response) {
     // The upstream body is built here rather than in the worker: the worker
     // outlives this function, and everything it touches has to outlive it too.
+    const std::string effective = EffectiveModel(runtime, request);
     auto upstream = std::make_shared<std::string>(
-        translate::RequestToOpenAI(request, runtime.model).dump());
+        translate::RequestToOpenAI(request, effective).dump());
     auto path = std::make_shared<std::string>(runtime.prefix + "/chat/completions");
-    auto model = std::make_shared<std::string>(runtime.model);
+    auto model = std::make_shared<std::string>(effective);
     // Computed once, up front: message_start's usage estimate is built from the
     // request and must be ready before the first upstream chunk arrives.
     const int input_estimate = translate::EstimateRequestTokens(request);
@@ -543,7 +595,7 @@ void HandleStreaming(Runtime& runtime, const httplib::Request& editor, const Jso
 }  // namespace
 
 bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* shim, bool verbose,
-           const std::string& advertised) {
+           const std::string& advertised, const ModelAliases& aliases) {
     if (shim == nullptr) {
         return false;
     }
@@ -558,6 +610,9 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
     runtime->console_url = upstream.console_url;
     runtime->model = model;
     runtime->advertised = advertised.empty() ? model : advertised;
+    // The real routable ids, for EffectiveModel. Reads a local file, no network.
+    runtime->catalog = account::CachedModelIds();
+    runtime->aliases = aliases;
     runtime->local_token = wally::net::GenerateLoopbackToken();
     runtime->verbose = verbose;
     wally::net::UpstreamOptions pool_options;
@@ -636,10 +691,18 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
         // gateway, which is OpenAI's list envelope rather than Anthropic's.
         // Guessing the Anthropic shape here is what produced "Gateway returned
         // no usable models".
-        const Json entry{{"id", raw->advertised}, {"object", "model"}};
-        response.set_content(
-            Json{{"object", "list"}, {"data", Json::array({entry})}}.dump(),
-            "application/json");
+        // Claude Desktop reconciles its picker against discovery, so advertise the
+        // family names it will list; the CLI path advertises the one real id.
+        Json data = Json::array();
+        if (raw->aliases.empty()) {
+            data.push_back(Json{{"id", raw->advertised}, {"object", "model"}});
+        } else {
+            for (const auto& alias : raw->aliases) {
+                data.push_back(Json{{"id", alias.first}, {"object", "model"}});
+            }
+        }
+        response.set_content(Json{{"object", "list"}, {"data", std::move(data)}}.dump(),
+                             "application/json");
     });
 
     // Claude Code probes this before it sends anything and treats a failure as

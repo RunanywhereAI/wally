@@ -249,7 +249,7 @@ TestResult test_config_injects_limit_and_cost() {
     // glm-like: 1M context, no separate output cap (0 -> sane default), and
     // $0.60/$2.20 per Mtok (600000/2200000 micro-dollars).
     const Json j = Json::parse(wally::harness::BuildOpenCodeCloudConfig(
-        "glm-5.3-flash", "https://x/v1", "tok", 1048576, 0, 600000, 2200000));
+        "glm-5.3-flash", "https://x/v1", "tok", {{"glm-5.3-flash", 1048576, 0, 600000, 2200000}}));
     const Json m = j["provider"]["runanywhere"]["models"]["glm-5.3-flash"];
     const double cin = m.value("cost", Json::object()).value("input", -1.0);
     const double cout = m.value("cost", Json::object()).value("output", -1.0);
@@ -261,10 +261,20 @@ TestResult test_config_injects_limit_and_cost() {
     }
     // No metadata (all zeros) -> neither block is emitted.
     const Json bare = Json::parse(
-        wally::harness::BuildOpenCodeCloudConfig("m", "https://x/v1", "tok", 0, 0, 0, 0));
+        wally::harness::BuildOpenCodeCloudConfig("m", "https://x/v1", "tok", {{"m", 0, 0, 0, 0}}));
     if (bare["provider"]["runanywhere"]["models"]["m"].contains("limit") ||
         bare["provider"]["runanywhere"]["models"]["m"].contains("cost")) {
         result.details = "empty metadata should omit limit and cost";
+        return result;
+    }
+
+    // Every catalog model becomes a selectable entry; the launched one is default.
+    const Json all = Json::parse(wally::harness::BuildOpenCodeCloudConfig(
+        "glm-5.3-flash", "https://x/v1", "tok",
+        {{"glm-5.3-flash", 0, 0, 0, 0}, {"qwen3.8-27b", 0, 0, 0, 0}, {"gemma-4", 0, 0, 0, 0}}));
+    if (all["provider"]["runanywhere"]["models"].size() != 3 ||
+        all["model"] != "runanywhere/glm-5.3-flash") {
+        result.details = "all catalog models must appear, primary as default: " + all.dump();
         return result;
     }
     result.passed = true;

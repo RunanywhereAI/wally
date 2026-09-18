@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "harness/catalog_models.h"
+
 /// Coding agents that speak OpenAI directly.
 ///
 /// These need no translator: `Resolve` already hands back an OpenAI-compatible
@@ -77,14 +79,14 @@ extern const int kAgentCount;
 /// document: a bare provider block would drop their wizard state, their agents
 /// and their gateway token, and OpenClaw would run onboarding on every launch.
 /// `existing` is that document, or empty when they have none.
-/// `context_window`, `max_output` and the prices come from the console catalog;
-/// a 0 for any of them leaves that field out, and OpenClaw falls back to its own
-/// default — 128k and no spend, which is what a missing `contextWindow` looked
-/// like in the status bar.
-std::string BuildOpenClawConfig(const std::string& existing, const std::string& model,
+/// `models` is the console catalog, `primary` first; every entry becomes a
+/// selectable model and `primary` is the agent default. A model's 0 window or
+/// price leaves that field out, and OpenClaw falls back to its own default —
+/// 128k and no spend, which is what a missing `contextWindow` looked like in the
+/// status bar.
+std::string BuildOpenClawConfig(const std::string& existing, const std::string& primary,
                                 const std::string& base_url, const std::string& api_key,
-                                std::int64_t context_window, std::int64_t max_output,
-                                std::int64_t input_per_mtok, std::int64_t output_per_mtok);
+                                const std::vector<CatalogModel>& models);
 
 /// The environment variable Hermes will accept a key for at `base_url`.
 ///
@@ -97,10 +99,10 @@ std::string HermesKeyVariable(const std::string& base_url);
 
 /// The settings document dsh reads our provider out of. JSON on purpose: the
 /// settings file's extension picks the format, which keeps a hand-written YAML
-/// document out of this.
-std::string BuildDeepSeekSettings(const std::string& model, const std::string& base_url,
-                                  const std::string& key_variable,
-                                  std::int64_t context_window, std::int64_t max_output);
+/// document out of this. `models` is the console catalog; every entry is a
+/// selectable model, and the patch's default-model row names the launched one.
+std::string BuildDeepSeekSettings(const std::string& base_url, const std::string& key_variable,
+                                  const std::vector<CatalogModel>& models);
 
 /// Whether the person's arguments carry a prompt, which is what picks dsh's
 /// headless profile over its web ui. Exposed for the test.
