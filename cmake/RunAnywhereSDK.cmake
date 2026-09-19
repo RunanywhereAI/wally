@@ -242,13 +242,13 @@ function(wally_define_engine_macros target)
         # machine where CMake happened to find it anyway. On a clean consumer
         # it configures fine and then fails at the very end with an undefined
         # symbol (wally #92). Ask for it here, and say so at configure time.
-        # Windows is excluded deliberately, not by oversight. Its kit carries the
-        # same undefined OPENSSL_thread_stop in rac_server.lib, but nothing in
-        # the Windows build references the object that needs it, so the linker
-        # never pulls it and the build is green without any OpenSSL at all.
-        # Requiring it there would break a working build for a dependency that
-        # does not currently bite. If a Windows link ever fails on that symbol,
-        # this is the block to extend.
+        # Windows adds no find_package/link here: the linker resolves that
+        # OPENSSL_thread_stop against whatever OpenSSL sits on the build machine,
+        # so the link succeeds without us asking. That is not free -- it leaves
+        # wally.exe importing libssl-3/libcrypto-3, which must ship beside it or a
+        # clean machine fails at launch with 0xC0000135 (wally #122). Those two
+        # DLLs are bundled in wally_stage_windows_runtime_dlls below, so the
+        # Windows archive is self-contained without a link step here.
         if(NOT WIN32)
             # Homebrew's openssl@3 is keg-only, so it is not on the default
             # search path and a bare find_package misses it on an otherwise
@@ -331,6 +331,39 @@ function(wally_stage_windows_runtime_dlls target)
                     "$<TARGET_FILE_DIR:${target}>/${_rt_name}"
                 COMMENT "Stage ${_rt_name} next to $<TARGET_FILE_NAME:${target}>"
                 VERBATIM)
+        endforeach()
+    endif()
+    # rac_server.lib imports one OpenSSL symbol (OPENSSL_thread_stop), which the
+    # linker resolves against the build machine's OpenSSL, so every exe ends up
+    # importing libssl-3/libcrypto-3. httplib is built without TLS here, so this
+    # is a link-time artefact, not real crypto -- but the DLLs still have to ship
+    # beside the exe or the archive fails with 0xC0000135 on a machine without
+    # OpenSSL. Bundle the two the exe actually imports.
+    if(TARGET RunAnywhere::server)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+            set(_wally_ssl_arch "arm64")
+        else()
+            set(_wally_ssl_arch "x64")
+        endif()
+        foreach(_ossl libssl libcrypto)
+            find_file(WALLY_${_ossl}_DLL
+                NAMES "${_ossl}-3-${_wally_ssl_arch}.dll" "${_ossl}-3.dll"
+                PATHS ENV PATH
+                PATH_SUFFIXES bin)
+            if(WALLY_${_ossl}_DLL)
+                get_filename_component(_ossl_name "${WALLY_${_ossl}_DLL}" NAME)
+                add_custom_command(TARGET ${target} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${WALLY_${_ossl}_DLL}"
+                        "$<TARGET_FILE_DIR:${target}>/${_ossl_name}"
+                    COMMENT "Stage ${_ossl_name} next to $<TARGET_FILE_NAME:${target}>"
+                    VERBATIM)
+            else()
+                message(WARNING
+                    "wally: ${_ossl}-3-${_wally_ssl_arch}.dll not found on PATH to "
+                    "bundle; the Windows archive may fail with 0xC0000135 on a "
+                    "clean machine.")
+            endif()
         endforeach()
     endif()
 endfunction()
