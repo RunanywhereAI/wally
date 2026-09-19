@@ -247,7 +247,7 @@ function(wally_define_engine_macros target)
         # so the link succeeds without us asking. That is not free -- it leaves
         # wally.exe importing libssl-3/libcrypto-3, which must ship beside it or a
         # clean machine fails at launch with 0xC0000135 (wally #122). Those two
-        # DLLs are bundled in wally_stage_windows_runtime_dlls below, so the
+        # DLLs are bundled in wally_bundle_product_dlls below, so the
         # Windows archive is self-contained without a link step here.
         if(NOT WIN32)
             # Homebrew's openssl@3 is keg-only, so it is not on the default
@@ -315,11 +315,22 @@ function(wally_stage_windows_runtime_dlls target)
             COMMENT "Stage overlay DLLs next to $<TARGET_FILE_NAME:${target}>"
             VERBATIM)
     endif()
+endfunction()
+
+# The MSVC runtime and OpenSSL DLLs only have to ship with the product exe, not
+# beside every test binary: the tests run under the build environment's PATH,
+# where those DLLs already resolve. Staging them for all ~12 test targets made a
+# dozen POST_BUILD commands copy one DLL into build/tests/ at once, which Windows
+# fails with a sharing violation (wally #122). Bundle them for the product only.
+function(wally_bundle_product_dlls target)
+    if(NOT WIN32)
+        return()
+    endif()
     # The exe links the MSVC runtime dynamically (vcruntime140.dll,
     # vcruntime140_1.dll on arm64, msvcp140.dll). Those live in the toolchain, so
     # a build machine resolves them on PATH but a clean user machine without the
-    # VC++ redistributable does not -- 0xC0000135 at launch. Stage them here so
-    # the archive carries its own runtime.
+    # VC++ redistributable does not -- 0xC0000135 at launch. Stage them so the
+    # archive carries its own runtime.
     if(MSVC)
         set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
         include(InstallRequiredSystemLibraries)
@@ -334,7 +345,7 @@ function(wally_stage_windows_runtime_dlls target)
         endforeach()
     endif()
     # rac_server.lib imports one OpenSSL symbol (OPENSSL_thread_stop), which the
-    # linker resolves against the build machine's OpenSSL, so every exe ends up
+    # linker resolves against the build machine's OpenSSL, so the exe ends up
     # importing libssl-3/libcrypto-3. httplib is built without TLS here, so this
     # is a link-time artefact, not real crypto -- but the DLLs still have to ship
     # beside the exe or the archive fails with 0xC0000135 on a machine without

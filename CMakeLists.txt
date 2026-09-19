@@ -288,6 +288,7 @@ elseif(UNIX)
         INSTALL_RPATH "\$ORIGIN/../lib")
 endif()
 wally_stage_windows_runtime_dlls(wally)
+wally_bundle_product_dlls(wally)
 
 install(TARGETS wally RUNTIME DESTINATION bin)
 
