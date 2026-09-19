@@ -315,4 +315,22 @@ function(wally_stage_windows_runtime_dlls target)
             COMMENT "Stage overlay DLLs next to $<TARGET_FILE_NAME:${target}>"
             VERBATIM)
     endif()
+    # The exe links the MSVC runtime dynamically (vcruntime140.dll,
+    # vcruntime140_1.dll on arm64, msvcp140.dll). Those live in the toolchain, so
+    # a build machine resolves them on PATH but a clean user machine without the
+    # VC++ redistributable does not -- 0xC0000135 at launch. Stage them here so
+    # the archive carries its own runtime.
+    if(MSVC)
+        set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+        include(InstallRequiredSystemLibraries)
+        foreach(_rt IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+            get_filename_component(_rt_name "${_rt}" NAME)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_rt}"
+                    "$<TARGET_FILE_DIR:${target}>/${_rt_name}"
+                COMMENT "Stage ${_rt_name} next to $<TARGET_FILE_NAME:${target}>"
+                VERBATIM)
+        endforeach()
+    endif()
 endfunction()
