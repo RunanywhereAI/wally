@@ -334,6 +334,12 @@ function(wally_bundle_product_dlls target)
     if(MSVC)
         set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
         include(InstallRequiredSystemLibraries)
+        if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+            message(WARNING
+                "wally: InstallRequiredSystemLibraries found no MSVC runtime to "
+                "bundle; the Windows archive may fail with 0xC0000135 on a clean "
+                "machine. Check the toolset and arch of the configure environment.")
+        endif()
         foreach(_rt IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
             get_filename_component(_rt_name "${_rt}" NAME)
             add_custom_command(TARGET ${target} POST_BUILD
@@ -351,16 +357,22 @@ function(wally_bundle_product_dlls target)
     # beside the exe or the archive fails with 0xC0000135 on a machine without
     # OpenSSL. Bundle the two the exe actually imports.
     if(TARGET RunAnywhere::server)
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
             set(_wally_ssl_arch "arm64")
         else()
             set(_wally_ssl_arch "x64")
         endif()
         foreach(_ossl libssl libcrypto)
+            # Only the arch-suffixed name can satisfy a 64-bit exe's import table;
+            # the un-suffixed libssl-3.dll is OpenSSL's 32-bit x86 spelling, so a
+            # stray one on PATH would stage a wrong-arch DLL. NO_CACHE re-resolves
+            # every configure, so reusing a build tree across arches cannot pin a
+            # stale path.
             find_file(WALLY_${_ossl}_DLL
-                NAMES "${_ossl}-3-${_wally_ssl_arch}.dll" "${_ossl}-3.dll"
+                NAMES "${_ossl}-3-${_wally_ssl_arch}.dll"
                 PATHS ENV PATH
-                PATH_SUFFIXES bin)
+                PATH_SUFFIXES bin
+                NO_CACHE)
             if(WALLY_${_ossl}_DLL)
                 get_filename_component(_ossl_name "${WALLY_${_ossl}_DLL}" NAME)
                 add_custom_command(TARGET ${target} POST_BUILD
