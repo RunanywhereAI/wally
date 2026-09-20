@@ -1701,7 +1701,7 @@ constexpr CatalogEntry kCatalog[] = {
     // Apple-optimized Stable Diffusion 1.5. Id matches the built-in diffusion
     // model registry (diffusion_model_registry.cpp) and the Swift facade's
     // canonical `.imageGeneration` model, so `wally image generate` resolves it
-    // and `wally list` shows it. The palettized CoreML bundle is a directory of
+    // and `wally models list` shows it. The palettized CoreML bundle is a directory of
     // compiled .mlmodelc sub-models served by the `coreml` engine; a
     // pre-fetched bundle can also be passed to `--model` as a local path.
     // The Hugging Face *repo page* is HTML (~160 KB) and is not a model.
@@ -1714,7 +1714,7 @@ constexpr CatalogEntry kCatalog[] = {
      "coreml-stable-diffusion-v1-5-palettized_split_einsum_v2_compiled.zip",
      nullptr, 0, 1500 * MB, 0, false},
     // NeuRT advertises LLM + STT + EMBED + RERANK + VLM + EMBED_IMAGE + DIFFUSION; folder refs (same ModelInfo
-    // path as sd15). Pass a local compiled tree to `--model` — `wally pull` of a
+    // path as sd15). Pass a local compiled tree to `--model` — `wally models pull` of a
     // Hugging Face repo page is HTML, not a bundle.
     {"lfm2_5_230m_ane", "lfm2-230m-ane", "LFM2.5 230M (Apple Neural Engine)",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_COREML,
@@ -1789,7 +1789,7 @@ constexpr CatalogEntry kCatalog[] = {
      v1::MODEL_CATEGORY_SPEECH_SYNTHESIS, v1::INFERENCE_FRAMEWORK_COREML,
      v1::MODEL_FORMAT_MLPACKAGE,
      // The .zip, NOT the repo root. A bare huggingface.co/<org>/<repo> URL makes
-     // `wally pull` fetch the repo's HTML PAGE -- 120 KB of markup written to disk
+     // `wally models pull` fetch the repo's HTML PAGE -- 120 KB of markup written to disk
      // under the model id, with a cheerful "done 100%". Every other ANE row here
      // still has that shape and is therefore listable but not pullable.
      "https://huggingface.co/runanywhere/Kokoro-82M_ANE/resolve/main/"
@@ -2008,7 +2008,7 @@ constexpr CatalogEntry kCatalog[] = {
      false},
     // Non-LLM Hexagon primitives. Ids match engines/qhexrt/qhexrt_model_catalog.cpp.
     // Same folder-URL registration as the LLM rows — pass a local `*_HNPU`
-    // directory; do not expect `wally pull` to fetch the HF repo HTML.
+    // directory; do not expect `wally models pull` to fetch the HF repo HTML.
     {"whisper_base", "whisper-base-npu", "Whisper Base (Hexagon NPU)",
      v1::MODEL_CATEGORY_SPEECH_RECOGNITION, v1::INFERENCE_FRAMEWORK_QHEXRT,
      v1::MODEL_FORMAT_QNN_CONTEXT,
@@ -2061,12 +2061,12 @@ rac_result_t register_entry(const CatalogEntry &entry) {
   // CoreML bundles (a directory of compiled .mlmodelc sub-models) don't fit the
   // URL / multi-file download-factory grammar, which rejects a bare repo ref.
   // Register the ModelInfo directly so the id resolves in the general registry
-  // (and `wally list` shows it); the bundle itself is fetched by the diffusion
+  // (and `wally models list` shows it); the bundle itself is fetched by the diffusion
   // pipeline or supplied to `wally image --model <local path>`.
   if (entry.framework == v1::INFERENCE_FRAMEWORK_COREML ||
       entry.framework == v1::INFERENCE_FRAMEWORK_QHEXRT) {
     // CoreML bundles and QHexRT HNPU folders don't fit the single-file
-    // download-factory grammar. Register ModelInfo so `wally list` / `wally run`
+    // download-factory grammar. Register ModelInfo so `wally models list` / `wally run`
     // resolve the id; the tree is fetched by the engine or passed as a local path.
     v1::ModelInfo model;
     model.set_id(entry.id);

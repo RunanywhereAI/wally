@@ -2,7 +2,8 @@
  * @file model_setup.h
  * @brief Shared ensure-downloaded + resolve-paths step for speech commands.
  *
- * Resolves a model ref, pulls it when missing (same flow as `wally pull`), and
+ * Resolves a model ref, pulls it when missing (same flow as `wally models
+ * pull`), and
  * resolves the on-disk artifact paths through commons'
  * rac_model_lifecycle_resolve_paths_proto — no engine load, no path guessing
  * in the CLI.

@@ -1,7 +1,7 @@
 /**
  * @file cmd_rm.cpp
- * @brief `wally models delete <model>` (alias `wally rm`) — delete downloaded
- *        files + unregister.
+ * @brief `wally models rm <model>` (alias `wally models delete`/`wally models
+ *        remove`) — delete downloaded files + unregister.
  *
  * File deletion is CLI-owned (registry remove only unregisters, per the
  * rac_model_registry_remove contract). Deletion targets come from the

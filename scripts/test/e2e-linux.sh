@@ -92,10 +92,10 @@ hermetic_pull_rm() {
     curl -sf http://127.0.0.1:8077/ >/dev/null 2>&1 && break
     sleep 1
   done
-  wally --no-progress pull http://127.0.0.1:8077/silero_vad.onnx
-  wally list | grep -q silero_vad
-  wally rm silero_vad --force
-  ! wally list | grep -q silero_vad
+  wally --no-progress models pull http://127.0.0.1:8077/silero_vad.onnx
+  wally models list | grep -q silero_vad
+  wally models rm silero_vad --force
+  ! wally models list | grep -q silero_vad
   pkill -f "http.server 8077" || true
   rm -rf "$stage"
 }

@@ -1,6 +1,6 @@
 /**
  * @file cmd_list.cpp
- * @brief `wally models list` (alias `wally list`) — downloaded models by
+ * @brief `wally models list` (alias `wally models ls`) — downloaded models by
  *        default, the whole catalog with --all.
  *
  * The registry is refreshed with rescan_local so on-disk artifacts pulled by
@@ -108,8 +108,8 @@ int run_list(const GlobalOptions& options, bool show_all) {
 
     if (rows.empty()) {
         out::result_line(show_all ? "no models registered"
-                                  : "no models downloaded — try `wally list --all` then "
-                                    "`wally pull <id>`");
+                                  : "no models downloaded — try `wally models list --all` then "
+                                    "`wally models pull <id>`");
         return 0;
     }
     out::table({"ID", "MODALITY", "BACKEND", "SIZE", "DOWNLOADED"}, rows);

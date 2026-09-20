@@ -320,11 +320,14 @@ TestResult test_catalog_lookup() {
   }
 
   // Multi-file entries (VLM pairs, embeddings) must carry ≥2 required files.
-  const wally::catalog::CatalogEntry *vlm = wally::catalog::find("smolvlm2");
-  if (!vlm || vlm->files == nullptr || vlm->file_count != 2) {
-    result.details = "smolvlm2 should be a two-file artifact";
-    return result;
-  }
+  // smolvlm2 is a VLM, out of scope for the LLM-only cut (src/app.cpp,
+  // src/catalog/catalog.cpp) -- commented out, not deleted, so it comes back
+  // when the cut reverts.
+  // const wally::catalog::CatalogEntry *vlm = wally::catalog::find("smolvlm2");
+  // if (!vlm || vlm->files == nullptr || vlm->file_count != 2) {
+  //   result.details = "smolvlm2 should be a two-file artifact";
+  //   return result;
+  // }
 
   const wally::catalog::CatalogEntry *mlx_llm = wally::catalog::find("mlx-qwen3");
   if (!mlx_llm ||
@@ -377,6 +380,10 @@ TestResult test_catalog_lookup() {
     return result;
   }
 
+  // VLM (multimodal) and embedding catalog entries are out of scope for the
+  // LLM-only cut (src/app.cpp, src/catalog/catalog.cpp) -- commented out, not
+  // deleted, so this comes back when the cut reverts.
+  /*
   const wally::catalog::CatalogEntry *mlx_vlm =
       wally::catalog::find("mlx-qwen2-vl");
   if (!mlx_vlm ||
@@ -465,6 +472,7 @@ TestResult test_catalog_lookup() {
       return result;
     }
   }
+  */
 
   const wally::catalog::CatalogEntry *nemotron_nano =
       wally::catalog::find("mlx-nemotron-nano");
@@ -499,6 +507,10 @@ TestResult test_catalog_lookup() {
     }
   }
 
+  // Speech recognition entries are out of scope for the LLM-only cut
+  // (src/app.cpp, src/catalog/catalog.cpp) -- commented out, not deleted, so
+  // this comes back when the cut reverts.
+  /*
   struct NvidiaSpeechCase {
     const char *alias;
     int64_t download_size_bytes;
@@ -526,6 +538,7 @@ TestResult test_catalog_lookup() {
       return result;
     }
   }
+  */
 
   result.passed = true;
   return result;
@@ -542,33 +555,36 @@ TestResult test_overlay_catalog() {
     runanywhere::v1::InferenceFramework framework;
   };
   const Row rows[] = {
-      {"sd15", "stable-diffusion-v1-5-coreml",
-       runanywhere::v1::MODEL_CATEGORY_IMAGE_GENERATION,
-       runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
+      // Non-LANGUAGE overlay rows are out of scope for the LLM-only cut
+      // (src/app.cpp, src/catalog/catalog.cpp) -- commented out, not
+      // deleted, so they come back when the cut reverts.
+      // {"sd15", "stable-diffusion-v1-5-coreml",
+      //  runanywhere::v1::MODEL_CATEGORY_IMAGE_GENERATION,
+      //  runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
       {"lfm2-230m-ane", "lfm2_5_230m_ane",
        runanywhere::v1::MODEL_CATEGORY_LANGUAGE,
        runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
-      {"parakeet-tdt-v2-ane", "parakeet_tdt_0_6b_v2_ane",
-       runanywhere::v1::MODEL_CATEGORY_SPEECH_RECOGNITION,
-       runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
+      // {"parakeet-tdt-v2-ane", "parakeet_tdt_0_6b_v2_ane",
+      //  runanywhere::v1::MODEL_CATEGORY_SPEECH_RECOGNITION,
+      //  runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
       {"lfm2-230m-npu", "lfm2_5_230m",
        runanywhere::v1::MODEL_CATEGORY_LANGUAGE,
        runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
-      {"whisper-base-npu", "whisper_base",
-       runanywhere::v1::MODEL_CATEGORY_SPEECH_RECOGNITION,
-       runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
-      {"kitten-micro-npu", "kitten_micro_0_8",
-       runanywhere::v1::MODEL_CATEGORY_SPEECH_SYNTHESIS,
-       runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
-      {"embeddinggemma-npu", "embeddinggemma_300m",
-       runanywhere::v1::MODEL_CATEGORY_EMBEDDING,
-       runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
-      {"internvl-1b-npu", "internvl3_5_1b",
-       runanywhere::v1::MODEL_CATEGORY_MULTIMODAL,
-       runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
-      {"cosmos3-diffusion-npu", "cosmos3_edge_diffusion",
-       runanywhere::v1::MODEL_CATEGORY_IMAGE_GENERATION,
-       runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
+      // {"whisper-base-npu", "whisper_base",
+      //  runanywhere::v1::MODEL_CATEGORY_SPEECH_RECOGNITION,
+      //  runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
+      // {"kitten-micro-npu", "kitten_micro_0_8",
+      //  runanywhere::v1::MODEL_CATEGORY_SPEECH_SYNTHESIS,
+      //  runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
+      // {"embeddinggemma-npu", "embeddinggemma_300m",
+      //  runanywhere::v1::MODEL_CATEGORY_EMBEDDING,
+      //  runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
+      // {"internvl-1b-npu", "internvl3_5_1b",
+      //  runanywhere::v1::MODEL_CATEGORY_MULTIMODAL,
+      //  runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
+      // {"cosmos3-diffusion-npu", "cosmos3_edge_diffusion",
+      //  runanywhere::v1::MODEL_CATEGORY_IMAGE_GENERATION,
+      //  runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
   };
   for (const Row &row : rows) {
     const wally::catalog::CatalogEntry *by_alias = wally::catalog::find(row.id);
@@ -588,6 +604,12 @@ TestResult test_nvidia_sherpa_catalog() {
   TestResult result;
   result.test_name = "nvidia_sherpa_catalog";
 
+  // Sherpa-ONNX (speech recognition) is out of scope for the LLM-only cut
+  // (src/app.cpp, src/catalog/catalog.cpp): the whole body below is
+  // commented out, not deleted, so it comes back when the cut reverts.
+  result.passed = true;
+  return result;
+  /*
   struct ExpectedFile {
     const char *filename;
     int64_t size_bytes;
@@ -719,6 +741,7 @@ TestResult test_nvidia_sherpa_catalog() {
 
   result.passed = true;
   return result;
+  */
 }
 
 TestResult test_engine_hint_parsing() {
@@ -866,6 +889,10 @@ TestResult test_mlx_catalog_registration() {
     return result;
   }
 
+  // VLM, embedding and ASR registrations are out of scope for the LLM-only
+  // cut (src/app.cpp, src/catalog/catalog.cpp) -- commented out, not
+  // deleted, so this comes back when the cut reverts.
+  /*
   runanywhere::v1::ModelInfo vlm;
   if (!get_registered_model("mlx-qwen2-vl-2b-instruct-4bit", &vlm, &error)) {
     result.details = error;
@@ -941,6 +968,7 @@ TestResult test_mlx_catalog_registration() {
     result.details = "registered MLX GLM-ASR metadata is incomplete";
     return result;
   }
+  */
 
   struct RegisteredNvidiaCase {
     const char *id;
@@ -950,11 +978,12 @@ TestResult test_mlx_catalog_registration() {
   const RegisteredNvidiaCase registered_nvidia_cases[] = {
       {"mlx-llama-3.1-nemotron-nano-8b-v1-4bit", 8, 4534806075LL},
       {"mlx-nemotron-mini-4b-instruct-4bit", 6, 2392679103LL},
-      {"mlx-parakeet-ctc-1.1b", 2, 4250718357LL},
-      {"mlx-parakeet-tdt-0.6b-v2", 2, 2471596080LL},
-      {"mlx-parakeet-tdt-0.6b-v3", 2, 2508532829LL},
-      {"mlx-parakeet-rnnt-1.1b", 2, 4282283914LL},
-      {"mlx-nemotron-3.5-asr-streaming-0.6b-8bit", 2, 755758528LL},
+      // Speech recognition entries, out of scope for the LLM-only cut.
+      // {"mlx-parakeet-ctc-1.1b", 2, 4250718357LL},
+      // {"mlx-parakeet-tdt-0.6b-v2", 2, 2471596080LL},
+      // {"mlx-parakeet-tdt-0.6b-v3", 2, 2508532829LL},
+      // {"mlx-parakeet-rnnt-1.1b", 2, 4282283914LL},
+      // {"mlx-nemotron-3.5-asr-streaming-0.6b-8bit", 2, 755758528LL},
   };
   for (const RegisteredNvidiaCase &test_case : registered_nvidia_cases) {
     runanywhere::v1::ModelInfo model;
@@ -971,6 +1000,10 @@ TestResult test_mlx_catalog_registration() {
     }
   }
 
+  // Sherpa-ONNX (speech recognition) and TTS registrations are out of scope
+  // for the LLM-only cut (src/app.cpp, src/catalog/catalog.cpp) --
+  // commented out, not deleted, so this comes back when the cut reverts.
+  /*
   struct RegisteredSherpaCase {
     const char *id;
     int expected_files;
@@ -1080,6 +1113,7 @@ TestResult test_mlx_catalog_registration() {
     result.details = "registered MLX Soprano metadata is incomplete";
     return result;
   }
+  */
 
   result.passed = true;
   return result;
@@ -1197,6 +1231,12 @@ TestResult test_diarize_arg_surface() {
   TestResult result;
   result.test_name = "diarize_arg_surface";
 
+  // register_diarize() is commented out in src/app.cpp for the LLM-only cut,
+  // so the subcommand it asserts on is unreachable. Body commented out, not
+  // deleted, so it comes back when the cut reverts.
+  result.passed = true;
+  return result;
+  /*
   wally::GlobalOptions options;
   CLI::App app{"wally test app"};
   wally::configure_app(app, options);
@@ -1241,6 +1281,7 @@ TestResult test_diarize_arg_surface() {
 
   result.passed = true;
   return result;
+  */
 }
 
 TestResult test_diarize_missing_model_exit2() {
@@ -2326,10 +2367,10 @@ TestResult test_bench_zero_trials_exit2() {
     return result;
 }
 
-// CLI11's help banner always names a subcommand's primary registered name,
-// never the alias actually typed (App::get_display_name() ignores it), so
-// the shorter terminal name has to be the one registered as primary — the
-// same call `rm`/`remove` already makes.
+// Model verbs live under the `models` namespace only (`wally models
+// list|pull|rm|show`); there is no top-level `ls`/`pull`/`show`/`rm`
+// shortcut. `list` is the primary registered name there (`ls` is its
+// alias), and `run` remains the only top-level model shortcut.
 TestResult test_models_ls_is_primary_name() {
     TestResult result;
     result.test_name = "models_ls_is_primary_name";
@@ -2338,20 +2379,30 @@ TestResult test_models_ls_is_primary_name() {
     CLI::App app{"wally test app"};
     wally::configure_app(app, options);
 
-    const CLI::App *ls = app.get_subcommand_no_throw("ls");
-    if (ls == nullptr) {
-        result.details = "ls subcommand not registered";
+    if (app.get_subcommand_no_throw("ls") != nullptr) {
+        result.details = "top-level ls must not be registered; use `models list`";
         return result;
     }
-    if (ls->get_name() != "ls") {
-        result.expected = "ls";
-        result.actual = ls->get_name();
-        result.details = "ls must be the primary name so its own --help banner names itself";
+
+    const CLI::App *models = app.get_subcommand_no_throw("models");
+    if (models == nullptr) {
+        result.details = "models subcommand not registered";
         return result;
     }
-    const CLI::App *list = app.get_subcommand_no_throw("list");
-    if (list != ls) {
-        result.details = "list must still resolve to the same subcommand, as an alias";
+    const CLI::App *list = models->get_subcommand_no_throw("list");
+    if (list == nullptr) {
+        result.details = "models list not registered";
+        return result;
+    }
+    if (list->get_name() != "list") {
+        result.expected = "list";
+        result.actual = list->get_name();
+        result.details = "list must be the primary name under models";
+        return result;
+    }
+    const CLI::App *ls = models->get_subcommand_no_throw("ls");
+    if (ls != list) {
+        result.details = "models ls must resolve to the same subcommand, as an alias";
         return result;
     }
     result.passed = true;

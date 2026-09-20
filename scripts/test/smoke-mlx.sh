@@ -36,7 +36,7 @@ wally() { "$BIN" --home "$HOME_DIR" "$@"; }
 pull_if_enabled() {
   local model="$1"
   if [[ "$PULL" == "1" ]]; then
-    wally pull "$model"
+    wally models pull "$model"
   fi
 }
 

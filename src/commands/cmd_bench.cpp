@@ -673,7 +673,7 @@ int run_bench(const GlobalOptions& options, const std::string& model_ref_arg, in
     }
     if (models.empty()) {
         out::error_line(only_model.empty()
-                            ? "no downloaded models to benchmark (pull one with `wally pull`)"
+                            ? "no downloaded models to benchmark (pull one with `wally models pull`)"
                             : "model '" + only_model + "' is not a downloaded benchmarkable model");
         return 1;
     }

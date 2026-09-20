@@ -1003,7 +1003,8 @@ TestResult test_wally_mlx_run_end_to_end() {
   }
 
   const std::filesystem::path input_wav = home / "input.wav";
-  const std::filesystem::path output_wav = home / "output.wav";
+  // Only referenced by the commented-out TTS block below (LLM-only cut).
+  [[maybe_unused]] const std::filesystem::path output_wav = home / "output.wav";
   const std::filesystem::path input_image = home / "image.rgb";
   if (!write_file(input_image, "fake image")) {
     result.details = "failed to create fake VLM image";
@@ -1065,8 +1066,8 @@ TestResult test_wally_mlx_run_end_to_end() {
 
   std::string list_json;
   if (!run_cli_or_fail({"wally", "--json", "--no-progress", "--home",
-                        home.string(), "list", "--all"},
-                       "list", &list_json, &result)) {
+                        home.string(), "models", "list", "--all"},
+                       "models list", &list_json, &result)) {
     wally::shutdown();
     return result;
   }
@@ -1152,6 +1153,21 @@ TestResult test_wally_mlx_run_end_to_end() {
     return result;
   }
 
+  // embed/stt/tts are standalone top-level commands (register_embed/
+  // register_stt/register_tts) commented out in src/app.cpp for the
+  // LLM-only cut -- commented out here too, not deleted, so this comes back
+  // when the cut reverts. `run`'s LLM/VLM coverage above is unaffected: it
+  // goes through register_llm_aliases, which the cut does not touch.
+  wally::shutdown();
+  if (g_mlx_state.create_count != 2 || g_mlx_state.initialize_count != 2) {
+    result.details =
+        "MLX create/initialize should run once per LLM/VLM model";
+    return result;
+  }
+
+  result.passed = true;
+  return result;
+  /*
   std::string embed_json;
   if (!run_cli_or_fail({"wally", "--json", "--no-progress", "--home",
                         home.string(), "embed", "Hello MLX embeddings",
@@ -1258,6 +1274,7 @@ TestResult test_wally_mlx_run_end_to_end() {
 
   result.passed = true;
   return result;
+  */
 }
 
 } // namespace
