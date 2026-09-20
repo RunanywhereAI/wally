@@ -65,6 +65,11 @@ void register_backends(CLI::App& app, GlobalOptions& options);
 void register_help(CLI::App& app, GlobalOptions& options);
 void register_uninstall(CLI::App& app, GlobalOptions& options);
 
+// Actions shared by their subcommands and the top-level `-u/--update` and
+// `--uninstall` flags. Return a process exit code (0 on success).
+int run_update(bool nightly);
+int run_uninstall(bool yes);
+
 /** One registered engine, folded across every primitive it advertises. */
 struct EngineRow {
     std::string display_name;

@@ -57,6 +57,13 @@ class CliFormatter : public CLI::Formatter {
     std::string make_option(const CLI::Option* opt, bool is_positional) const override;
 
   private:
+    // Renders one command row at a chosen left indent, so a parent prints at
+    // "  " and its subcommands print nested beneath at a deeper indent. The
+    // description column is the same for every row regardless of indent, which
+    // is what keeps the two levels aligned.
+    std::string make_subcommand_indented(const CLI::App* sub, const std::string& indent,
+                                          const char* name_color) const;
+
     bool color_enabled_;
 };
 

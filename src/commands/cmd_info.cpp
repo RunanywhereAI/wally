@@ -22,7 +22,6 @@ namespace wally::commands {
 
 void register_info(CLI::App& app, GlobalOptions& options) {
     CLI::App* cmd = app.add_subcommand("info", "Report versions, paths, memory and backends");
-    cmd->alias("doctor");
     cmd->callback([&options]() {
         Bootstrapped env;
         if (bootstrap(options, &env) != RAC_SUCCESS) {
@@ -69,15 +68,22 @@ void register_info(CLI::App& app, GlobalOptions& options) {
             return;
         }
 
-        out::result_line("wally       " WALLY_VERSION);
-        out::result_line("commons    " + commons_version);
-        out::result_line("platform   " + std::string(platform));
-        out::result_line("home       " + env.home);
-        out::result_line("models     " + env.models_dir);
-        out::result_line("backends   " + std::to_string(rac_plugin_count()));
+        // One column for the labels so every value starts at the same offset.
+        // The widest label is "platform"/"backends" (8); pad to 10.
+        auto row = [](const char* label, const std::string& value) {
+            std::string key(label);
+            if (key.size() < 10) key.append(10 - key.size(), ' ');
+            out::result_line(key + value);
+        };
+        row("wally", WALLY_VERSION);
+        row("commons", commons_version);
+        row("platform", platform);
+        row("home", env.home);
+        row("models", env.models_dir);
+        row("backends", std::to_string(rac_plugin_count()));
         if (memory_ok) {
-            out::result_line("memory     " + out::human_bytes(memory.available_bytes) +
-                             " available of " + out::human_bytes(memory.total_bytes));
+            row("memory", out::human_bytes(memory.available_bytes) + " available of " +
+                              out::human_bytes(memory.total_bytes));
         }
     });
 }

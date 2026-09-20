@@ -22,6 +22,7 @@ constexpr const char* kBoldCyanCode = "\033[1;36m";
 constexpr const char* kBlueCode = "\033[34m";
 constexpr const char* kRedCode = "\033[1;31m";
 constexpr const char* kGreenCode = "\033[32m";
+constexpr const char* kGrayCode = "\033[90m";  // bright black -> gray, for nested subcommands
 constexpr const char* kResetCode = "\033[0m";
 }  // namespace
 
@@ -94,11 +95,22 @@ std::string CliFormatter::make_subcommands(const CLI::App* app, CLI::AppFormatMo
         });
         for (const CLI::App* new_com : subcommands_group) {
             if (new_com->get_name().empty()) continue;
-            if (mode != CLI::AppFormatMode::All) {
-                out << make_subcommand(new_com);
-            } else {
+            if (mode == CLI::AppFormatMode::All) {
                 out << new_com->help(new_com->get_name(), CLI::AppFormatMode::Sub);
                 out << '\n';
+                continue;
+            }
+            out << make_subcommand_indented(new_com, "  ", cli_color::kBoldCyanCode);
+            // One level of nesting: a command's own subcommands print as
+            // branches beneath it, in gray, so the parents stay the eye's
+            // anchor. A subcommand hidden with an empty group (models
+            // register/load/... ) is left out, same as at the top.
+            for (const CLI::App* child : new_com->get_subcommands({})) {
+                if (child->get_name().empty() || child->get_group().empty()) continue;
+                // Mark a subcommand with a "> " so the nesting is obvious even
+                // without color. Same 6-column width as a plain indent, so the
+                // description column stays put.
+                out << make_subcommand_indented(child, "    > ", cli_color::kGrayCode);
             }
         }
     }
@@ -107,16 +119,30 @@ std::string CliFormatter::make_subcommands(const CLI::App* app, CLI::AppFormatMo
 }
 
 std::string CliFormatter::make_subcommand(const CLI::App* sub) const {
+    return make_subcommand_indented(sub, "  ", cli_color::kBoldCyanCode);
+}
+
+std::string CliFormatter::make_subcommand_indented(const CLI::App* sub, const std::string& indent,
+                                                   const char* name_color) const {
     std::stringstream out;
     const std::string suffix = sub->get_required() ? " " + get_label("REQUIRED") : "";
-    const std::string plain_name = "  " + sub->get_display_name(true) + suffix;
+    // Primary name only (no ", alias" tail): the tree reads cleaner, and the
+    // aliases still resolve on the command line.
+    const std::string plain_name = indent + sub->get_display_name(false) + suffix;
 
-    out << colorize("  " + sub->get_display_name(true), cli_color::kBoldCyanCode, color_enabled_) << suffix;
+    out << colorize(indent + sub->get_display_name(false), name_color, color_enabled_) << suffix;
+
+    bool skip_first_line_prefix = true;
     if (plain_name.length() < get_column_width()) {
         out << std::string(get_column_width() - plain_name.length(), ' ');
+    } else {
+        // Name is wider than the column: drop the description to the next line
+        // at the column, rather than butting it against the name with no gap.
+        out << '\n';
+        skip_first_line_prefix = false;
     }
     CLI::detail::streamOutAsParagraph(out, sub->get_description(), get_right_column_width(),
-                                      std::string(get_column_width(), ' '), true);
+                                      std::string(get_column_width(), ' '), skip_first_line_prefix);
     out << '\n';
     return out.str();
 }

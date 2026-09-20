@@ -30,38 +30,41 @@ constexpr const char* kInstallUrl =
 
 }  // namespace
 
+int run_update(bool nightly) {
+#if defined(_WIN32)
+    static_cast<void>(nightly);
+    // The installer is a POSIX shell script; the Windows bottle updates
+    // through its own channel, not this command.
+    out::error_line("wally update is not available on Windows; reinstall from the release page");
+    return 1;
+#else
+    // WALLY_VERSION is a compile-time constant and the flag is a fixed token,
+    // so the command line carries nothing a caller could inject.
+    std::string command = "curl -fsSL ";
+    command += kInstallUrl;
+    command += " | sh -s --";
+    if (nightly) {
+        command += " --nightly";
+    }
+    command += " --version=";
+    command += WALLY_VERSION;
+
+    out::status_line("checking for a newer wally...");
+    // std::system returns a wait-status, not the exit code; a non-zero one
+    // means the installer already explained why on its own stderr.
+    return std::system(command.c_str()) != 0 ? 1 : 0;
+#endif
+}
+
 void register_update(CLI::App& app, GlobalOptions& options) {
     static_cast<void>(options);
     auto nightly = std::make_shared<bool>(false);
     CLI::App* cmd = app.add_subcommand("update", "update wally to the latest release");
     cmd->add_flag("--nightly", *nightly, "track the development channel instead of production");
     cmd->callback([nightly]() {
-#if defined(_WIN32)
-        static_cast<void>(nightly);
-        // The installer is a POSIX shell script; the Windows bottle updates
-        // through its own channel, not this command.
-        out::error_line(
-            "wally update is not available on Windows; reinstall from the release page");
-        throw CLI::RuntimeError(1);
-#else
-        // WALLY_VERSION is a compile-time constant and the flag is a fixed
-        // token, so the command line carries nothing a caller could inject.
-        std::string command = "curl -fsSL ";
-        command += kInstallUrl;
-        command += " | sh -s --";
-        if (*nightly) {
-            command += " --nightly";
-        }
-        command += " --version=";
-        command += WALLY_VERSION;
-
-        out::status_line("checking for a newer wally...");
-        // std::system returns a wait-status, not the exit code; a non-zero one
-        // means the installer already explained why on its own stderr.
-        if (std::system(command.c_str()) != 0) {
+        if (run_update(*nightly) != 0) {
             throw CLI::RuntimeError(1);
         }
-#endif
     });
 }
 

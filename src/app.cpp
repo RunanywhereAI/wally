@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <set>
@@ -32,11 +33,22 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     app.add_flag("--json", options.json, "Machine-readable JSON output on stdout");
     app.add_flag("-v,--verbose", options.verbose, "Debug logging on stderr");
     app.add_flag("-q,--quiet", options.quiet, "Errors only on stderr");
-    app.add_flag("--no-progress", options.no_progress, "Disable progress rendering");
-    app.add_flag("--no-color", options.no_color, "Disable colored --help output");
+    app.add_flag("--no-progress", options.no_progress, "Disable progress rendering")->group("");
+    app.add_flag("--no-color", options.no_color, "Disable colored --help output")->group("");
     app.add_option("--home", options.home_override,
                    "RunAnywhere home directory (default: $RUNANYWHERE_HOME or "
-                   "~/.local/share/runanywhere; models live under <home>/Models)");
+                   "~/.local/share/runanywhere; models live under <home>/Models)")
+        ->group("");
+
+    // Top-level shortcuts that run the matching command and exit, like -V for
+    // version. `-un` is not a valid single-dash short (that parses as `-u -n`),
+    // so uninstall takes `-U`.
+    app.add_flag_callback(
+        "-u,--update", [] { std::exit(commands::run_update(false)); },
+        "Update wally to the latest release");
+    app.add_flag_callback(
+        "-U,--uninstall", [] { std::exit(commands::run_uninstall(false)); },
+        "Uninstall wally, its models and config");
 
     // Control-plane connection. validation happens in resolve_connection().
     // Developer/SDK-facing, not something a person reaches for day to day --
@@ -60,102 +72,63 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
         ->envname("RUNANYWHERE_API_KEY")
         ->group("");
 
-    // Namespaces first (the spec grammar), then the terminal aliases, then the
-    // infrastructure commands — that is the order `--help` lists them in.
-    commands::register_llm(app, options);
-    commands::register_vlm(app, options);
-    commands::register_tool(app, options);  // must follow register_llm (extends the `llm` group)
-    commands::register_stt(app, options);
-    commands::register_tts(app, options);
-    commands::register_vad(app, options);
-    commands::register_embed(app, options);
-    commands::register_rerank(app, options);
-    commands::register_image(app, options);
-    commands::register_diarize(app, options);
-    commands::register_segment(app, options);
-    commands::register_voice(app, options);
-    commands::register_rag(app, options);
+    // Registration order is the --help print order: run first (the primary
+    // verb), then llm and models, serve, the coding agents, the cloud account,
+    // then diagnostics and maintenance. bench/backends/telemetry are registered
+    // but hidden from the list further down.
+    commands::register_llm_aliases(app, options);  // `run`
+    commands::register_llm(app, options);          // `llm` (must precede register_tool)
+    commands::register_tool(app, options);         // attaches to `llm`
+    // TEMP(llm-only cut): every non-LLM modality is hidden from --help and from
+    // execution for this release. Re-enable the full surface by uncommenting
+    // this block as a whole -- nothing else has to change.
+    // commands::register_vlm(app, options);
+    // commands::register_stt(app, options);
+    // commands::register_tts(app, options);
+    // commands::register_vad(app, options);
+    // commands::register_embed(app, options);
+    // commands::register_rerank(app, options);
+    // commands::register_image(app, options);
+    // commands::register_diarize(app, options);
+    // commands::register_segment(app, options);
+    // commands::register_voice(app, options);
+    // commands::register_rag(app, options);
+    // commands::register_lora(app, options);
     commands::register_models(app, options);
-    commands::register_lora(app, options);
-
-    commands::register_llm_aliases(app, options);
-    commands::register_models_aliases(app, options);
-
     commands::register_serve(app, options);
-    commands::register_bench(app, options);
-    commands::register_backends(app, options);
-    commands::register_help(app, options);
-    commands::register_uninstall(app, options);
+
+    commands::register_editors(app, options);
+    commands::register_harness(app, options);      // coding agents
+    commands::register_default_models(app, options);
+
+    commands::register_account(app, options);      // login / logout / whoami
+    commands::register_usage(app, options);
+    commands::register_auth(app, options);
+
     commands::register_info(app, options);
     commands::register_about(app, options);
     commands::register_version(app, options);
     commands::register_update(app, options);
-    commands::register_auth(app, options);
-    commands::register_account(app, options);
-    commands::register_usage(app, options);
-    commands::register_editors(app, options);
-    commands::register_harness(app, options);
-    commands::register_default_models(app, options);
-    commands::register_telemetry(app, options);
+    commands::register_uninstall(app, options);
+    commands::register_help(app, options);
 
-    // `--help` groups: CLI11 prints one heading per distinct group string, in
-    // the order each group is first seen (Formatter::make_subcommands), so
-    // this order is the print order. Centralized here rather than one
-    // ->group() call per register_* file: 36 top-level commands with no
-    // grouping at all used to land in a single default SUBCOMMANDS: bucket.
-    // Grouped so the split a reader cares about is visible at a glance: what
-    // runs on this machine, versus what talks to the hosted console. The
-    // coding agents sit between the two because they do both — a local model or
-    // a hosted one behind the same command — so they carry the "(local or
-    // hosted)" tag rather than landing in either camp.
-    constexpr const char* kGenerate = "Generate (on-device)";
-    constexpr const char* kModels = "On-device models";
-    constexpr const char* kAgents = "Coding agents (local or hosted)";
-    constexpr const char* kCloud = "Cloud account";
-    constexpr const char* kServe = "Serve & benchmark (on-device)";
-    constexpr const char* kAbout = "About";
-    const std::vector<std::pair<const char*, const char*>> help_groups = {
-        {"llm", kGenerate},      {"vlm", kGenerate},      {"stt", kGenerate},
-        {"tts", kGenerate},      {"vad", kGenerate},      {"embed", kGenerate},
-        {"rerank", kGenerate},   {"image", kGenerate},    {"diarize", kGenerate},
-        {"segment", kGenerate},  {"voice", kGenerate},    {"rag", kGenerate},
-        {"run", kModels},        {"chat", kModels},       {"ls", kModels},
-        {"show", kModels},       {"pull", kModels},       {"rm", kModels},
-        {"models", kModels},     {"lora", kModels},
-        {"opencode", kAgents},        {"claude-code", kAgents},
-        {"claude-desktop", kAgents},
-        {"hermes", kAgents},          {"openclaw", kAgents},
-        {"deepseek", kAgents},
-        {"default-models", kAgents},
-        {"auth", kCloud},        {"login", kCloud},       {"logout", kCloud},
-        {"whoami", kCloud},      {"usage", kCloud},
-        {"serve", kServe},       {"bench", kServe},       {"backends", kServe},
-        {"info", kAbout},        {"about", kAbout},       {"version", kAbout},
-        {"update", kAbout},
-    };
-    // configure_app() runs ahead of run()'s own try/catch (and tests call it
-    // directly with none at all), so a typo here must never propagate as an
-    // uncaught exception -- that crashed the Windows CI binaries outright
-    // (0xC0000409, no diagnostic) the one time a name here didn't match.
-    // Report it and keep going with the default flat listing rather than
-    // taking the whole CLI down over a --help cosmetic.
-    for (const auto& [name, group] : help_groups) {
-        try {
-            app.get_subcommand(name)->group(group);
-        } catch (const CLI::OptionNotFound&) {
-            out::error_line(std::string("internal: --help grouping named an unknown "
-                                        "subcommand '") +
-                            name + "', skipping it");
-        }
+    commands::register_bench(app, options);        // hidden below
+    commands::register_backends(app, options);     // hidden below
+    commands::register_telemetry(app, options);    // hidden below
+
+    // Flat help: one "Available Commands" section, in registration order. The
+    // group is set by walking the registered subcommands (not by name), so a
+    // rename can never leave a stale string to crash the CLI (0xC0000409).
+    for (CLI::App* sub : app.get_subcommands({})) {
+        if (!sub->get_name().empty()) sub->group("Available Commands");
     }
-    // Internal debug tool, not a command a user reaches for. An empty group
-    // string drops a subcommand out of the default listing entirely
-    // (Formatter::make_subcommands) while it stays fully callable —
-    // `wally telemetry --help` still works.
-    try {
-        app.get_subcommand("telemetry")->group("");
-    } catch (const CLI::OptionNotFound&) {
-        // Nothing to hide if it isn't there.
+    // Diagnostic and advanced commands: callable, but kept out of the list.
+    for (const char* hidden : {"bench", "backends", "telemetry", "auth"}) {
+        try {
+            app.get_subcommand(hidden)->group("");
+        } catch (const CLI::OptionNotFound&) {
+            // Nothing to hide if it isn't there.
+        }
     }
 }
 
@@ -284,18 +257,16 @@ int run(int argc, char** argv) {
         }
     }
 
-    CLI::App app{"RunAnywhere on-device AI CLI — llm, vlm, stt, tts, vad, embed, rerank, "
-                 "image, rag, voice and the models that back them"};
-    app.formatter(std::make_shared<CliFormatter>(color_output_enabled(no_color_requested)));
+    CLI::App app{""};
+    // Help is intentionally plain: keep the tree/layout, drop all color.
+    static_cast<void>(no_color_requested);
+    app.formatter(std::make_shared<CliFormatter>(false));
     configure_app(app, options);
     // Every subcommand here loads a model on this machine; a hosted console
     // model (glm-5.3-flash, ...) has no path through `run`/`llm generate` at
     // all, and that dead end used to be the only place someone learned the
     // cloud path exists.
-    app.footer(
-        "A model your account has on the hosted console (not this machine) runs through "
-        "`wally claude-code -m <id>` or `wally opencode --cloud -m <id>`, not "
-        "`run`/`llm generate`.");
+    app.footer("Use \"wally [command] --help\" for more information about a command.");
 
     // A `--` before the wrapped tool's own arguments, added for the reader, so
     // `wally claude-code --dangerously-skip-permissions` forwards the flag

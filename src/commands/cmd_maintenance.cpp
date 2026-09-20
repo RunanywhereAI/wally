@@ -143,6 +143,11 @@ struct Target {
     fs::path path;
 };
 
+}  // namespace
+
+// External (not in the anonymous namespace above) so the top-level
+// `--uninstall` flag can call it too, via commands.h. Still uses the internal
+// helpers above -- anonymous-namespace names stay visible through the TU.
 int run_uninstall(bool yes) {
     std::vector<Target> targets;
 
@@ -235,8 +240,6 @@ int run_uninstall(bool yes) {
     out::status_line("wally is uninstalled. thanks for trying it.");
     return 0;
 }
-
-}  // namespace
 
 void register_help(CLI::App& app, GlobalOptions& options) {
     static_cast<void>(options);

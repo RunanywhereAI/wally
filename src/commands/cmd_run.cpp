@@ -787,11 +787,10 @@ void register_vlm(CLI::App& app, GlobalOptions& options) {
 }
 
 void register_llm_aliases(CLI::App& app, GlobalOptions& options) {
-    configure_llm(app.add_subcommand("run", "Chat with a model (alias of `llm stream`)"), options,
+    // `run` is the interactive model runner (prompt, or a REPL when omitted).
+    // `llm generate` / `llm stream` are the explicit, manual entry points.
+    configure_llm(app.add_subcommand("run", "Run a model"), options,
                   LlmVerb::Chat, ModelArg::Positional);
-    configure_llm(
-        app.add_subcommand("chat", "Start an interactive session (alias of `llm stream`)"),
-        options, LlmVerb::Chat, ModelArg::Positional);
 }
 
 }  // namespace wally::commands
