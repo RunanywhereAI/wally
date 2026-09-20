@@ -329,6 +329,9 @@ TestResult test_catalog_lookup() {
   //   return result;
   // }
 
+  // MLX entries are Apple-only; the catalog hides them off Apple, so these
+  // lookups only resolve (and are only asserted) on Apple.
+#if defined(__APPLE__)
   const wally::catalog::CatalogEntry *mlx_llm = wally::catalog::find("mlx-qwen3");
   if (!mlx_llm ||
       mlx_llm->framework != runanywhere::v1::INFERENCE_FRAMEWORK_MLX ||
@@ -339,6 +342,7 @@ TestResult test_catalog_lookup() {
     result.details = "mlx-qwen3 should be a complete MLX language bundle";
     return result;
   }
+#endif
 
   const wally::catalog::CatalogEntry *maple_gguf =
       wally::catalog::find("maple-preview");
@@ -351,6 +355,7 @@ TestResult test_catalog_lookup() {
     return result;
   }
 
+#if defined(__APPLE__)
   const wally::catalog::CatalogEntry *mlx_maple =
       wally::catalog::find("mlx-maple-preview");
   if (!mlx_maple ||
@@ -379,6 +384,7 @@ TestResult test_catalog_lookup() {
     result.details = "mlx-maple-preview file sizes must sum to the bundle size";
     return result;
   }
+#endif
 
   // VLM (multimodal) and embedding catalog entries are out of scope for the
   // LLM-only cut (src/app.cpp, src/catalog/catalog.cpp) -- commented out, not
@@ -474,6 +480,7 @@ TestResult test_catalog_lookup() {
   }
   */
 
+#if defined(__APPLE__)
   const wally::catalog::CatalogEntry *nemotron_nano =
       wally::catalog::find("mlx-nemotron-nano");
   if (!nemotron_nano ||
@@ -506,6 +513,7 @@ TestResult test_catalog_lookup() {
       return result;
     }
   }
+#endif
 
   // Speech recognition entries are out of scope for the LLM-only cut
   // (src/app.cpp, src/catalog/catalog.cpp) -- commented out, not deleted, so
@@ -561,9 +569,12 @@ TestResult test_overlay_catalog() {
       // {"sd15", "stable-diffusion-v1-5-coreml",
       //  runanywhere::v1::MODEL_CATEGORY_IMAGE_GENERATION,
       //  runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
+      // ANE (Core ML) rows exist only on Apple; the catalog hides them elsewhere.
+#if defined(__APPLE__)
       {"lfm2-230m-ane", "lfm2_5_230m_ane",
        runanywhere::v1::MODEL_CATEGORY_LANGUAGE,
        runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
+#endif
       // {"parakeet-tdt-v2-ane", "parakeet_tdt_0_6b_v2_ane",
       //  runanywhere::v1::MODEL_CATEGORY_SPEECH_RECOGNITION,
       //  runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
@@ -837,6 +848,9 @@ TestResult test_mlx_catalog_registration() {
     result.details = "catalog registration failed rc=" + std::to_string(rc);
     return result;
   }
+  // MLX is an Apple-only backend; off Apple the catalog deliberately does not
+  // register its MLX rows, so the per-model checks below only run on Apple.
+#if defined(__APPLE__)
   RegisteredModelCleanup cleanup({
       "mlx-qwen3-0.6b-4bit",
       "mlx-maple-preview-2bit",
@@ -1114,6 +1128,7 @@ TestResult test_mlx_catalog_registration() {
     return result;
   }
   */
+#endif  // defined(__APPLE__)
 
   result.passed = true;
   return result;
