@@ -29,7 +29,7 @@ irm https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.ps1 | iex
 You don't need an account or a key, and nothing leaves the machine.
 
 ```bash
-wally pull qwen3            # download
+wally models pull qwen3     # download
 wally run qwen3             # chat
 wally run qwen3 "Hello"     # one answer and exit
 wally serve qwen3           # OpenAI-compatible API on :8080 (macOS, Linux)
@@ -39,7 +39,7 @@ wally serve qwen3           # OpenAI-compatible API on :8080 (macOS, Linux)
 works too:
 
 ```bash
-wally pull hf.co/Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf
+wally models pull hf.co/Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf
 ```
 
 ## Use a hosted model in your coding agent
@@ -48,10 +48,10 @@ Sign in once. The terminal shows a code and you approve it in the browser, so
 you never paste a key.
 
 ```bash
-wally login
+wally account login
 wally opencode --cloud -m glm-5.3-flash
 wally claude-code -m glm-5.3-flash
-wally usage                 # credit left and recent spend
+wally account usage         # credit left and recent spend
 ```
 
 Hosted models today are `glm-5.3-flash`, `qwen3.8-27b` and `gemma-4`. The same
@@ -63,10 +63,10 @@ commands work with a model on your machine, and `claude-desktop`, `hermes` and
 | | |
 |---|---|
 | `wally run` | chat, or one answer with a prompt |
-| `wally pull` / `wally rm` | download or delete a model |
-| `wally list` | models on this machine |
+| `wally models pull` / `wally models rm` | download or delete a model |
+| `wally models list` | models on this machine |
 | `wally serve` | OpenAI-compatible API |
-| `wally login` / `wally usage` | sign in, check credit |
+| `wally account login` / `wally account usage` | sign in, check credit |
 | `wally opencode` / `wally claude-code` | start a coding agent on a model |
 | `wally update` | update wally to the latest release |
 

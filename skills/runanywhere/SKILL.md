@@ -27,22 +27,22 @@ in on its own.
 ## First check what is already true
 
 ```bash
-wally whoami     # signed in? which console?
+wally account whoami     # signed in? which console?
 wally backends   # which engines this build linked
 ```
 
-`wally whoami` failing with "not signed in" is the only thing that needs fixing
+`wally account whoami` failing with "not signed in" is the only thing that needs fixing
 before anything else works against the cloud. On-device models need no account.
 
 ## Signing in
 
 ```bash
-wally login
+wally account login
 ```
 
 Opens the console in a browser. The person signs in with Google or GitHub,
 approves the terminal, and the CLI stores a key in `~/.config/wally`. There is no
-password and no organization step. If a browser cannot open, `wally login
+password and no organization step. If a browser cannot open, `wally account login
 --no-browser` prints the URL to visit.
 
 ## Coding harnesses
@@ -66,8 +66,8 @@ opencode harness works?" is a better second message than a launched TUI.
 ## Running a model directly
 
 ```bash
-wally pull qwen3-0.6b     # download it
-wally list                # what is downloaded
+wally models pull qwen3-0.6b     # download it
+wally models list                # what is downloaded
 wally run qwen3-0.6b      # talk to it
 ```
 
@@ -76,16 +76,16 @@ Models land in `~/.local/share/runanywhere`. Nothing is downloaded until asked.
 ## Spend
 
 ```bash
-wally usage               # credit left, then input/output/cache tokens and spend
-wally usage --json
+wally account usage               # credit left, then input/output/cache tokens and spend
+wally account usage --json
 ```
 
 Read-only, and scoped to the signed-in account.
 
 ## When something is wrong
 
-- **"not signed in"** — `wally login`.
-- **"that key is not valid"** — the key was revoked or expired; `wally login` again.
+- **"not signed in"** — `wally account login`.
+- **"that key is not valid"** — the key was revoked or expired; `wally account login` again.
 - **opencode not installed** — `npm i -g opencode-ai`.
 - **a model is slow or unavailable** — `wally backends` shows which engines this
   build actually linked; a model needing an engine that is not there will not run.

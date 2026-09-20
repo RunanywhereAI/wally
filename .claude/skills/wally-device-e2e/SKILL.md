@@ -34,22 +34,17 @@ WALLY_E2E_EMBED=/path/to/embeddinggemma_300m_HNPU \
 can run (`smollm2`, `whisper-tiny`, `piper`, `minilm`, `silero`, `mlx-qwen3`,
 …). Never enable AUTO in public CI.
 
-## Why a device "only has LLM"
+## Local model ids
 
-QHexRT and NeuRT implement STT/TTS/VLM/embed/diffusion. The Windows ARM64 box
-often only has LFM `*_HNPU` trees under `Downloads\hnpu` because those were
-copied for LLM smoke — not because the engine is LLM-only. Catalog ids:
+The Windows ARM64 box often only has LFM `*_HNPU` trees under `Downloads\hnpu`,
+copied for LLM smoke. Catalog ids:
 
-| Modality | QHexRT id (local `*_HNPU`) | NeuRT id (local Core ML tree) |
-|---|---|---|
-| LLM | `lfm2_5_230m` | `lfm2_5_230m_ane` |
-| STT | `whisper_base`, `moonshine_tiny` | `parakeet_tdt_0_6b_v2_ane` |
-| TTS | `kitten_micro_0_8` | — |
-| Embed | `embeddinggemma_300m` | — |
-| VLM | `internvl3_5_1b` (~10 GB) | — |
-| Image | `cosmos3_edge_diffusion` | `sd15` |
+| QHexRT id (local `*_HNPU`) | NeuRT id (local Core ML tree) |
+|---|---|
+| `lfm2_5_230m` | `lfm2_5_230m_ane` |
 
-`wally pull` of a Hugging Face **repo page** is HTML. Pass the expanded
+
+`wally models pull` of a Hugging Face **repo page** is HTML. Pass the expanded
 directory to `-m`. Download `v81/*` only on Hexagon v81.
 
 Skip with a clear "no bundle" when the tree is missing. Fail only when a
