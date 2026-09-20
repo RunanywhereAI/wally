@@ -1045,71 +1045,6 @@ constexpr CatalogFile kMlxGemma4_31BFiles[] = {
      "tokenizer_config.json", true},
 };
 
-// mlx-community/Qwen3.6-35B-A3B-4bit (MoE) — config.json model_type
-// "qwen3_5_moe", registered in mlx-swift-lm 3.31.5's LLMTypeRegistry.
-constexpr CatalogFile kMlxQwen3_6_35BA3BFiles[] = {
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "chat_template.jinja",
-     "chat_template.jinja", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "config.json",
-     "config.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "configuration.json",
-     "configuration.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "generation_config.json",
-     "generation_config.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "model-00001-of-00004.safetensors",
-     "model-00001-of-00004.safetensors", true, 5288196018LL},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "model-00002-of-00004.safetensors",
-     "model-00002-of-00004.safetensors", true, 5368472749LL},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "model-00003-of-00004.safetensors",
-     "model-00003-of-00004.safetensors", true, 5368324139LL},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "model-00004-of-00004.safetensors",
-     "model-00004-of-00004.safetensors", true, 4377211365LL},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "model.safetensors.index.json",
-     "model.safetensors.index.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "preprocessor_config.json",
-     "preprocessor_config.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "processor_config.json",
-     "processor_config.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "tokenizer.json",
-     "tokenizer.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "tokenizer_config.json",
-     "tokenizer_config.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "video_preprocessor_config.json",
-     "video_preprocessor_config.json", true},
-    {"https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit/resolve/"
-     "38740b847e4cb78f352aba30aa41c76e08e6eb46/"
-     "vocab.json",
-     "vocab.json", true},
-};
-
 // mlx-community/Qwen3.8-27B-4bit (dense) — config.json model_type "qwen3_5",
 // registered in mlx-swift-lm 3.31.5's LLMTypeRegistry.
 constexpr CatalogFile kMlxQwen3_8_27BFiles[] = {
@@ -1331,103 +1266,99 @@ constexpr int64_t MB = 1024LL * 1024LL;
 // test rig's LlamaCpp/qwen3-0.6b layout).
 constexpr CatalogEntry kCatalog[] = {
     // --- LLM (LlamaCpp / GGUF) ---
-    {"qwen3-0.6b", "qwen3", "Qwen3 0.6B Q8_0", v1::MODEL_CATEGORY_LANGUAGE,
+    {"qwen3-0.6b", "qwen3", "Qwen3 0.6B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/"
      "Qwen3-0.6B-Q8_0.gguf",
-     nullptr, 0, 639 * MB, 4096, true},
-    {"qwen3-1.7b-q4_k_m", "qwen3-1.7b", "Qwen3 1.7B Q4_K_M",
-     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
-     v1::MODEL_FORMAT_GGUF,
-     "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/"
-     "Qwen3-1.7B-Q4_K_M.gguf",
-     nullptr, 0, 1230 * MB, 4096, true},
-    {"qwen3-4b-q4_k_m", "qwen3-4b", "Qwen3 4B Q4_K_M",
-     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
-     v1::MODEL_FORMAT_GGUF,
-     "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/"
-     "Qwen3-4B-Q4_K_M.gguf",
-     nullptr, 0, 2560 * MB, 4096, true},
+     nullptr, 0, 639 * MB, 4096, true, 0, "", "qwen3-0.6b"},
     // RunAnywhere's canonical-based llama.cpp fork supports PrismML's Q1_0
     // Bonsai artifacts. Ternary-Bonsai uses the explicitly canonical
     // Q2_0_g64 artifacts below; legacy 128-value Q2_0 remains unsupported.
     // Exact artifact byte sizes.
-    {"bonsai-1.7b-q1_0", "bonsai-1.7b", "Bonsai-1.7B 1-bit Q1_0 (CPU)",
+    {"bonsai-1.7b", "bonsai-1.7b", "Bonsai 1.7B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/prism-ml/Bonsai-1.7B-gguf/resolve/main/"
      "Bonsai-1.7B-Q1_0.gguf",
-     nullptr, 0, 248302272LL, 4096, true},
-    {"bonsai-4b-q1_0", "bonsai-4b", "Bonsai-4B 1-bit Q1_0 (CPU)",
+     nullptr, 0, 248302272LL, 4096, true, 0, "", "bonsai-1.7b"},
+    {"bonsai-4b", "bonsai-4b", "Bonsai 4B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/prism-ml/Bonsai-4B-gguf/resolve/main/"
      "Bonsai-4B-Q1_0.gguf",
-     nullptr, 0, 572270624LL, 4096, true},
-    {"bonsai-8b-q1_0", "bonsai-8b", "Bonsai-8B 1-bit Q1_0 (CPU)",
+     nullptr, 0, 572270624LL, 4096, true, 0, "", "bonsai-4b"},
+    {"bonsai-8b", "bonsai-8b", "Bonsai 8B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/"
      "Bonsai-8B-Q1_0.gguf",
-     nullptr, 0, 1158654496LL, 4096, true},
-    {"bonsai-27b-q1_0", "bonsai-27b", "Bonsai-27B 1-bit Q1_0 (CPU)",
+     nullptr, 0, 1158654496LL, 4096, true, 0, "", "bonsai-8b"},
+    {"bonsai-27b", "bonsai-27b", "Bonsai 27B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/prism-ml/Bonsai-27B-gguf/resolve/main/"
      "Bonsai-27B-Q1_0.gguf",
-     nullptr, 0, 3803452480LL, 4096, true},
-    {"ternary-bonsai-1.7b-q2_0-g64", "ternary-bonsai-1.7b",
-     "Ternary-Bonsai-1.7B Q2_0 g64", v1::MODEL_CATEGORY_LANGUAGE,
+     nullptr, 0, 3803452480LL, 4096, true, 0, "", "bonsai-27b"},
+    {"ternary-bonsai-1.7b", "ternary-bonsai-1.7b",
+     "Ternary-Bonsai 1.7B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/prism-ml/Ternary-Bonsai-1.7B-gguf/resolve/"
      "983b5dec2ff16aab79990711ba0f828a499a7e6a/"
      "Ternary-Bonsai-1.7B-Q2_0_g64.gguf",
-     nullptr, 0, 490163968LL, 4096, true},
-    {"ternary-bonsai-4b-q2_0-g64", "ternary-bonsai-4b",
-     "Ternary-Bonsai-4B Q2_0 g64", v1::MODEL_CATEGORY_LANGUAGE,
+     nullptr, 0, 490163968LL, 4096, true, 0, "", "ternary-bonsai-1.7b"},
+    {"ternary-bonsai-4b", "ternary-bonsai-4b",
+     "Ternary-Bonsai 4B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/prism-ml/Ternary-Bonsai-4B-gguf/resolve/"
      "a3eb42bafe873f9686bc97486c43b72ef7d75ec8/"
      "Ternary-Bonsai-4B-Q2_0_g64.gguf",
-     nullptr, 0, 1137806656LL, 4096, true},
-    {"ternary-bonsai-8b-q2_0-g64", "ternary-bonsai-8b",
-     "Ternary-Bonsai-8B Q2_0 g64", v1::MODEL_CATEGORY_LANGUAGE,
+     nullptr, 0, 1137806656LL, 4096, true, 0, "", "ternary-bonsai-4b"},
+    {"ternary-bonsai-8b", "ternary-bonsai-8b",
+     "Ternary-Bonsai 8B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/prism-ml/Ternary-Bonsai-8B-gguf/resolve/"
      "c2aefbeb4b24469cd11579c3384b990404c17a30/"
      "Ternary-Bonsai-8B-Q2_0_g64.gguf",
-     nullptr, 0, 2310125920LL, 4096, true},
-    {"maple-preview-tq1_0-q4_k", "maple-preview",
-     "DeepGrove Maple Preview TQ1_0 + Q4_K head (CPU)",
+     nullptr, 0, 2310125920LL, 4096, true, 0, "", "ternary-bonsai-8b"},
+    {"maple-preview", "maple-preview",
+     "DeepGrove Maple Preview",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/deepgrove/maple-preview-GGUF/resolve/"
      "f5466f918e0c50cdb9d4d47a6f35813509a42a30/"
      "maple-preview-TQ1_0-head-Q4_K.gguf",
-     nullptr, 0, 4984016416LL, 4096, true},
-    {"llama-3.2-3b", "llama3.2", "Llama 3.2 3B Instruct Q4_K_M",
+     nullptr, 0, 4984016416LL, 4096, true, 0, "", "maple-preview"},
+    {"llama-3.2-3b", "llama3.2", "Llama 3.2 3B Instruct",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/"
      "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
      nullptr, 0, 2020 * MB, 0, false},
     // LiquidAI LFM2.5 family (official GGUF, Apache 2.0). Replaces the older
-    // LFM2 Q8 entry: newer version, ≤4-bit, pinned revisions.
-    {"lfm2.5-350m-q4_k_m", "lfm2.5-350m", "LiquidAI LFM2.5 350M Q4_K_M",
+    // LFM2 Q8 entry: newer version, ≤4-bit, pinned revisions. 230M/350M also ship
+    // as ANE (Core ML) and NPU (Hexagon) bundles below, merged into one list row.
+    {"lfm2.5-230m", "lfm2.5-230m", "LiquidAI LFM2.5 230M",
+     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
+     v1::MODEL_FORMAT_GGUF,
+     "https://huggingface.co/LiquidAI/LFM2.5-230M-GGUF/resolve/"
+     "cdf97bd8205908758f44aec508d68ac1aef98f5c/"
+     "LFM2.5-230M-Q4_K_M.gguf",
+     nullptr, 0, 153406304LL, 32768, false, 0, "", "lfm2.5-230m"},
+    {"lfm2.5-350m", "lfm2.5-350m", "LiquidAI LFM2.5 350M",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/"
      "9969000761ce34de907bf20017cbfc3d52d6eaf9/"
      "LFM2.5-350M-Q4_K_M.gguf",
-     nullptr, 0, 219 * MB, 32768, false},
-    {"lfm2.5-1.2b-instruct-q4_k_m", "lfm2.5",
-     "LiquidAI LFM2.5 1.2B Instruct Q4_K_M", v1::MODEL_CATEGORY_LANGUAGE,
+     nullptr, 0, 219 * MB, 32768, false, 0, "", "lfm2.5-350m"},
+    {"lfm2.5-1.2b", "lfm2.5",
+     "LiquidAI LFM2.5 1.2B Instruct", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/"
      "6767265158422fb8a19c62ceb45f16f05363615b/"
      "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
-     nullptr, 0, 697 * MB, 32768, false},
-    {"lfm2.5-2.6b-q4_k_m", "lfm2.5-2.6b", "LiquidAI LFM2.5 2.6B Q4_K_M",
+     nullptr, 0, 697 * MB, 32768, false, 0, "", "lfm2.5-1.2b"},
+    {"lfm2.5-2.6b", "lfm2.5-2.6b", "LiquidAI LFM2.5 2.6B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF/resolve/"
@@ -1435,7 +1366,7 @@ constexpr CatalogEntry kCatalog[] = {
      "LFM2.5-2.6B-Q4_K_M.gguf",
      nullptr, 0, 1597 * MB, 32768, false},
     // SmolLM2 135M from the llama.cpp org's own GGUF (official), ≤4-bit.
-    {"smollm2-135m-q4_k_m", "smollm2", "SmolLM2 135M Q4_K_M",
+    {"smollm2-135m", "smollm2", "SmolLM2 135M",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/ggml-org/SmolLM2-135M-GGUF/resolve/"
@@ -1445,99 +1376,83 @@ constexpr CatalogEntry kCatalog[] = {
 
     // Google Gemma 4 family (GGUF). Licensed under Apache 2.0; preserve the
     // upstream license and attribution notices when redistributing.
-    {"gemma-4-e2b-it-q4_k_m", "gemma4-e2b", "Gemma 4 E2B IT Q4_K_M",
+    {"gemma-4-e2b", "gemma4-e2b", "Gemma 4 E2B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/"
      "0314792d7f1f7e229411f620751375812bb9faf2/"
      "gemma-4-E2B-it-Q4_K_M.gguf",
-     nullptr, 0, 3106738272LL, 4096, false},
-    {"gemma-4-e4b-it-q4_k_m", "gemma4-e4b", "Gemma 4 E4B IT Q4_K_M",
+     nullptr, 0, 3106738272LL, 4096, false, 0, "", "gemma-4-e2b"},
+    {"gemma-4-e4b", "gemma4-e4b", "Gemma 4 E4B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/"
      "bfc15c382204943c3a8fff0c750b94ae2364d7a3/"
      "gemma-4-E4B-it-Q4_K_M.gguf",
-     nullptr, 0, 4977171584LL, 4096, false},
-    {"gemma-4-12b-it-q4_k_m", "gemma4-12b", "Gemma 4 12B IT Q4_K_M",
+     nullptr, 0, 4977171584LL, 4096, false, 0, "", "gemma-4-e4b"},
+    {"gemma-4-12b", "gemma4-12b", "Gemma 4 12B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/"
      "fc034cfff751157913579611efad8462ac1be606/"
      "gemma-4-12b-it-Q4_K_M.gguf",
-     nullptr, 0, 7121861440LL, 4096, false},
-    {"gemma-4-26b-a4b-it-q4_k_xl", "gemma4-26b-a4b",
-     "Gemma 4 26B-A4B IT UD-Q4_K_XL (MoE)", v1::MODEL_CATEGORY_LANGUAGE,
+     nullptr, 0, 7121861440LL, 4096, false, 0, "", "gemma-4-12b"},
+    {"gemma-4-26b-a4b", "gemma4-26b-a4b",
+     "Gemma 4 26B-A4B (MoE)", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/"
      "c099eb48e663fd284577b04978a94ffccb261841/"
      "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
-     nullptr, 0, 17010980576LL, 4096, false},
-    {"gemma-4-31b-it-q4_k_m", "gemma4-31b", "Gemma 4 31B IT Q4_K_M",
+     nullptr, 0, 17010980576LL, 4096, false, 0, "", "gemma-4-26b-a4b"},
+    {"gemma-4-31b", "gemma4-31b", "Gemma 4 31B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/resolve/"
      "c1ac76e99d5513b141e8adde7288b85c3f9c32ec/"
      "gemma-4-31B-it-Q4_K_M.gguf",
-     nullptr, 0, 18323733440LL, 4096, false},
-    // Smaller quant of the same 31B model for tighter RAM budgets.
-    {"gemma-4-31b-it-ud-q2_k_xl", "gemma4-31b-q2", "Gemma 4 31B IT UD-Q2_K_XL",
-     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
-     v1::MODEL_FORMAT_GGUF,
-     "https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/resolve/"
-     "c1ac76e99d5513b141e8adde7288b85c3f9c32ec/"
-     "gemma-4-31B-it-UD-Q2_K_XL.gguf",
-     nullptr, 0, 11774991296LL, 4096, false},
+     nullptr, 0, 18323733440LL, 4096, false, 0, "", "gemma-4-31b"},
 
-    // Qwen3.6-35B-A3B (MoE, agentic-coding, Apache 2.0).
-    {"qwen3.6-35b-a3b-q4_k_m", "qwen3.6-35b", "Qwen3.6 35B-A3B UD-Q4_K_M (MoE)",
-     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
-     v1::MODEL_FORMAT_GGUF,
-     "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/"
-     "a483e9e6cbd595906af30beda3187c2663a1118c/"
-     "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
-     nullptr, 0, 22134528992LL, 4096, true},
     // Qwen3.8-27B (dense, newest Qwen, Apache 2.0).
-    {"qwen3.8-27b-q4_k_m", "qwen3.8-27b", "Qwen3.8 27B Q4_K_M",
+    {"qwen3.8-27b", "qwen3.8-27b", "Qwen3.8 27B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/"
      "f1bfb127c64f7072bdd2cad55f258b9c8b2910fe/"
      "Qwen3.8-27B-Q4_K_M.gguf",
-     nullptr, 0, 17106775008LL, 4096, true},
+     nullptr, 0, 17106775008LL, 4096, true, 0, "", "qwen3.8-27b"},
 
     // IBM Granite 4.1 family (Apache 2.0).
-    {"granite-4.1-3b-q4_k_m", "granite4.1-3b", "IBM Granite 4.1 3B Q4_K_M",
+    {"granite-4.1-3b", "granite4.1-3b", "IBM Granite 4.1 3B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/granite-4.1-3b-GGUF/resolve/"
      "5b88826e4b80789548180f8faab39c5cf68772c9/"
      "granite-4.1-3b-Q4_K_M.gguf",
-     nullptr, 0, 2099502400LL, 4096, false},
-    {"granite-4.1-8b-q4_k_m", "granite4.1-8b", "IBM Granite 4.1 8B Q4_K_M",
+     nullptr, 0, 2099502400LL, 4096, false, 0, "", "granite-4.1-3b"},
+    {"granite-4.1-8b", "granite4.1-8b", "IBM Granite 4.1 8B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/granite-4.1-8b-GGUF/resolve/"
      "6f9671f73eb03273bc09319194b8a4e810e03a8f/"
      "granite-4.1-8b-Q4_K_M.gguf",
-     nullptr, 0, 5347915136LL, 4096, false},
-    {"granite-4.1-30b-q4_k_m", "granite4.1-30b", "IBM Granite 4.1 30B Q4_K_M",
+     nullptr, 0, 5347915136LL, 4096, false, 0, "", "granite-4.1-8b"},
+    {"granite-4.1-30b", "granite4.1-30b", "IBM Granite 4.1 30B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/unsloth/granite-4.1-30b-GGUF/resolve/"
      "6cb34f31b11ca4c1433de1af7391dac46de4e666/"
      "granite-4.1-30b-Q4_K_M.gguf",
-     nullptr, 0, 17490241472LL, 4096, false},
+     nullptr, 0, 17490241472LL, 4096, false, 0, "", "granite-4.1-30b"},
 
     // IBM Granite 4.2 family (bartowski GGUF, Apache 2.0) — newest Granite.
-    {"granite-4.2-8b-q4_k_m", "granite4.2-8b", "IBM Granite 4.2 8B Q4_K_M",
+    {"granite-4.2-8b", "granite4.2-8b", "IBM Granite 4.2 8B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/bartowski/granite-4.2-8b-GGUF/resolve/"
      "a592100df8fe4931c7cffbac7b28e8176a1d52da/"
      "granite-4.2-8b-Q4_K_M.gguf",
      nullptr, 0, 5283 * MB, 131072, false},
-    {"granite-4.2-30b-q4_k_m", "granite4.2-30b", "IBM Granite 4.2 30B Q4_K_M",
+    {"granite-4.2-30b", "granite4.2-30b", "IBM Granite 4.2 30B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/bartowski/granite-4.2-30b-GGUF/resolve/"
@@ -1716,16 +1631,16 @@ constexpr CatalogEntry kCatalog[] = {
     // NeuRT advertises LLM + STT + EMBED + RERANK + VLM + EMBED_IMAGE + DIFFUSION; folder refs (same ModelInfo
     // path as sd15). Pass a local compiled tree to `--model` — `wally models pull` of a
     // Hugging Face repo page is HTML, not a bundle.
-    {"lfm2_5_230m_ane", "lfm2-230m-ane", "LFM2.5 230M (Apple Neural Engine)",
+    {"lfm2_5_230m_ane", "lfm2-230m-ane", "LiquidAI LFM2.5 230M",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_COREML,
      v1::MODEL_FORMAT_MLPACKAGE,
      "https://huggingface.co/runanywhere/LFM2.5-230M_ANE", nullptr, 0, 0, 0,
-     false},
-    {"lfm2_5_350m_ane", "lfm2-350m-ane", "LFM2.5 350M (Apple Neural Engine)",
+     false, 0, "", "lfm2.5-230m"},
+    {"lfm2_5_350m_ane", "lfm2-350m-ane", "LiquidAI LFM2.5 350M",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_COREML,
      v1::MODEL_FORMAT_MLPACKAGE,
      "https://huggingface.co/runanywhere/LFM2.5-350M_ANE", nullptr, 0, 0, 0,
-     false},
+     false, 0, "", "lfm2.5-350m"},
     // The first ANE EMBEDDING row. docs/BUNDLE_CONTRACT.md listed this exact bundle as the one
     // that "loads, undrivable" — its manifest parsed and its encoder graph bound, but the SDK's
     // neurt engine filled no embedding_ops, so nothing could drive it. Gate B on an M4 Max:
@@ -1803,70 +1718,75 @@ constexpr CatalogEntry kCatalog[] = {
      0, 0, false},
 
     // --- MLX (Apple Silicon / Apple GPU via mlx-swift-lm) ---
-    {"mlx-qwen3-0.6b-4bit", "mlx-qwen3", "Qwen3 0.6B 4-bit (MLX)",
+    {"mlx-qwen3-0.6b-4bit", "mlx-qwen3", "Qwen3 0.6B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxQwen3_06BFiles, 9, 351383618,
-     4096, true},
+     4096, true, 0, "", "qwen3-0.6b"},
     {"mlx-maple-preview-2bit", "mlx-maple-preview",
-     "DeepGrove Maple Preview 2-bit (MLX)", v1::MODEL_CATEGORY_LANGUAGE,
+     "DeepGrove Maple Preview", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxMaplePreviewFiles, 13, 5330252282LL, 128000, true},
+     kMlxMaplePreviewFiles, 13, 5330252282LL, 128000, true, 0, "",
+     "maple-preview"},
     {"mlx-llama-3.1-nemotron-nano-8b-v1-4bit", "mlx-nemotron-nano",
-     "NVIDIA Llama 3.1 Nemotron Nano 8B 4-bit (MLX)",
+     "NVIDIA Llama 3.1 Nemotron Nano 8B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxNemotronNano8BFiles, 8,
-     4534806075LL, 131072, false},
+     4534806075LL, 131072, false, 0, "", "mlx-nemotron-nano"},
     {"mlx-nemotron-mini-4b-instruct-4bit", "mlx-nemotron-mini",
-     "NVIDIA Nemotron Mini 4B Instruct 4-bit (MLX)",
+     "NVIDIA Nemotron Mini 4B Instruct",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxNemotronMini4BFiles, 6,
-     2392679103LL, 4096, false},
+     2392679103LL, 4096, false, 0, "", "mlx-nemotron-mini"},
     // PrismML Bonsai family 1-bit MLX. Needs the narrow Prism kernels carried
     // by the canonical-first RunAnywhere MLX/mlx-swift forks pinned in the
     // Swift manifests and resolved files.
-    {"mlx-bonsai-1.7b-1bit", "mlx-bonsai-1.7b", "MLX Bonsai-1.7B 1-bit",
+    {"mlx-bonsai-1.7b-1bit", "mlx-bonsai-1.7b", "Bonsai 1.7B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxBonsai1_7B1BitFiles, 8,
-     269060904LL, 4096, true},
-    {"mlx-bonsai-4b-1bit", "mlx-bonsai-4b", "MLX Bonsai-4B 1-bit",
+     269060904LL, 4096, true, 0, "", "bonsai-1.7b"},
+    {"mlx-bonsai-4b-1bit", "mlx-bonsai-4b", "Bonsai 4B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxBonsai4B1BitFiles, 8,
-     628865840LL, 4096, true},
-    {"mlx-bonsai-8b-1bit", "mlx-bonsai-8b", "MLX Bonsai-8B 1-bit",
+     628865840LL, 4096, true, 0, "", "bonsai-4b"},
+    {"mlx-bonsai-8b-1bit", "mlx-bonsai-8b", "Bonsai 8B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxBonsai8B1BitFiles, 8,
-     1280131424LL, 4096, true},
+     1280131424LL, 4096, true, 0, "", "bonsai-8b"},
     // PrismML Bonsai-27B 1-bit MLX (~5.1 GB safetensors). Experimental —
     // requires mlx-swift-lm support for qwen3_5 / 1-bit Bonsai.
-    {"mlx-bonsai-27b-1bit", "mlx-bonsai", "MLX Bonsai-27B 1-bit",
+    {"mlx-bonsai-27b-1bit", "mlx-bonsai", "Bonsai 27B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxBonsai27B1BitFiles, 8,
-     5129115752LL, 4096, true},
+     5129115752LL, 4096, true, 0, "", "bonsai-27b"},
     // PrismML Ternary-Bonsai family at ternary/2-bit MLX. bits=2 was already
     // supported by upstream MLX 0.31.6 before the Prism 1-bit patch, so this
     // needs no additional fork support beyond what Bonsai (above) needs.
     // Verified this session: loaded + generated correctly via the app's
     // Add-from-URL flow (Ternary-Bonsai-1.7B, 64 tok/s, no crash).
     {"mlx-ternary-bonsai-1.7b-2bit", "mlx-ternary-bonsai-1.7b",
-     "MLX Ternary-Bonsai-1.7B 2-bit", v1::MODEL_CATEGORY_LANGUAGE,
+     "Ternary-Bonsai 1.7B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxTernaryBonsai1_7B2BitFiles, 6, 484049216LL, 4096, true},
+     kMlxTernaryBonsai1_7B2BitFiles, 6, 484049216LL, 4096, true, 0, "",
+     "ternary-bonsai-1.7b"},
     {"mlx-ternary-bonsai-4b-2bit", "mlx-ternary-bonsai-4b",
-     "MLX Ternary-Bonsai-4B 2-bit", v1::MODEL_CATEGORY_LANGUAGE,
+     "Ternary-Bonsai 4B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxTernaryBonsai4B2BitFiles, 6, 1131565944LL, 4096, true},
+     kMlxTernaryBonsai4B2BitFiles, 6, 1131565944LL, 4096, true, 0, "",
+     "ternary-bonsai-4b"},
     {"mlx-ternary-bonsai-8b-2bit", "mlx-ternary-bonsai-8b",
-     "MLX Ternary-Bonsai-8B 2-bit", v1::MODEL_CATEGORY_LANGUAGE,
+     "Ternary-Bonsai 8B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxTernaryBonsai8B2BitFiles, 6, 2303661704LL, 4096, true},
+     kMlxTernaryBonsai8B2BitFiles, 6, 2303661704LL, 4096, true, 0, "",
+     "ternary-bonsai-8b"},
     {"mlx-ternary-bonsai-27b-2bit", "mlx-ternary-bonsai-27b",
-     "MLX Ternary-Bonsai-27B 2-bit", v1::MODEL_CATEGORY_LANGUAGE,
+     "Ternary-Bonsai 27B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxTernaryBonsai27B2BitFiles, 8, 8490785104LL, 4096, true},
+     kMlxTernaryBonsai27B2BitFiles, 8, 8490785104LL, 4096, true, 0, "",
+     "mlx-ternary-bonsai-27b"},
     {"mlx-llama-3.2-1b-instruct-4bit", "mlx-llama3.2",
-     "Llama 3.2 1B Instruct 4-bit (MLX)", v1::MODEL_CATEGORY_LANGUAGE,
+     "Llama 3.2 1B Instruct", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxLlama32_1BFiles, 6, 712575975, 0, false},
+     kMlxLlama32_1BFiles, 6, 712575975, 0, false, 0, "", "mlx-llama3.2"},
     {"mlx-qwen2-vl-2b-instruct-4bit", "mlx-qwen2-vl",
      "Qwen2-VL 2B Instruct 4-bit (MLX)", v1::MODEL_CATEGORY_MULTIMODAL,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
@@ -1927,58 +1847,56 @@ constexpr CatalogEntry kCatalog[] = {
     // 3.31.5 LLMTypeRegistry/VLMTypeRegistry — verified by reading the
     // checked-out package source this session (not assumed). Licensed under
     // Apache 2.0; preserve the upstream license and attribution notices.
-    {"mlx-gemma-4-e2b-it-4bit", "mlx-gemma4-e2b", "Gemma 4 E2B IT 4-bit (MLX)",
+    {"mlx-gemma-4-e2b-it-4bit", "mlx-gemma4-e2b", "Gemma 4 E2B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxGemma4E2BFiles, 8, 3550670554LL,
-     4096, false},
+     4096, false, 0, "", "gemma-4-e2b"},
     {"mlx-gemma-4-e4b-it-qat-4bit", "mlx-gemma4-e4b",
-     "Gemma 4 E4B IT QAT 4-bit (MLX)", v1::MODEL_CATEGORY_LANGUAGE,
+     "Gemma 4 E4B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxGemma4E4BFiles, 9, 6798307742LL, 4096, false},
+     kMlxGemma4E4BFiles, 9, 6798307742LL, 4096, false, 0, "", "gemma-4-e4b"},
     {"mlx-gemma-4-12b-it-qat-4bit", "mlx-gemma4-12b",
-     "Gemma 4 12B IT QAT 4-bit (MLX)", v1::MODEL_CATEGORY_LANGUAGE,
+     "Gemma 4 12B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxGemma4_12BFiles, 10, 10987772430LL, 4096, false},
+     kMlxGemma4_12BFiles, 10, 10987772430LL, 4096, false, 0, "", "gemma-4-12b"},
     {"mlx-gemma-4-26b-a4b-it-4bit", "mlx-gemma4-26b-a4b",
-     "Gemma 4 26B-A4B IT 4-bit (MLX, MoE)", v1::MODEL_CATEGORY_LANGUAGE,
+     "Gemma 4 26B-A4B (MoE)", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxGemma4_26BA4BFiles, 10, 15341205776LL, 4096, false},
+     kMlxGemma4_26BA4BFiles, 10, 15341205776LL, 4096, false, 0, "",
+     "gemma-4-26b-a4b"},
     // The plain 4bit variant, NOT "-qat-4bit" — that name does not resolve to
     // a clean repo (verified this session); this is the largest dense Gemma 4.
-    {"mlx-gemma-4-31b-it-4bit", "mlx-gemma4-31b", "Gemma 4 31B IT 4-bit (MLX)",
+    {"mlx-gemma-4-31b-it-4bit", "mlx-gemma4-31b", "Gemma 4 31B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxGemma4_31BFiles, 11,
-     18412016676LL, 4096, false},
+     18412016676LL, 4096, false, 0, "", "gemma-4-31b"},
 
-    // Qwen3.6-35B-A3B (MoE) — config.json model_type "qwen3_5_moe",
-    // registered in mlx-swift-lm 3.31.5's LLMTypeRegistry.
-    {"mlx-qwen3.6-35b-a3b-4bit", "mlx-qwen3.6-35b",
-     "Qwen3.6 35B-A3B 4-bit (MLX, MoE)", v1::MODEL_CATEGORY_LANGUAGE,
-     v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxQwen3_6_35BA3BFiles, 15, 20402204271LL, 4096, true},
     // Qwen3.8-27B (dense) — config.json model_type "qwen3_5", registered.
-    {"mlx-qwen3.8-27b-4bit", "mlx-qwen3.8-27b", "Qwen3.8 27B 4-bit (MLX)",
+    {"mlx-qwen3.8-27b-4bit", "mlx-qwen3.8-27b", "Qwen3.8 27B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxQwen3_8_27BFiles, 13,
-     16054541349LL, 4096, true},
+     16054541349LL, 4096, true, 0, "", "qwen3.8-27b"},
 
     // IBM Granite 4.1 family (MLX). config.json model_type "granite",
     // registered in mlx-swift-lm 3.31.5's LLMTypeRegistry.
     {"mlx-granite-4.1-3b-4bit", "mlx-granite4.1-3b",
-     "IBM Granite 4.1 3B 4-bit (MLX)", v1::MODEL_CATEGORY_LANGUAGE,
+     "IBM Granite 4.1 3B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxGranite4_1_3BFiles, 7, 2127162429LL, 4096, false},
+     kMlxGranite4_1_3BFiles, 7, 2127162429LL, 4096, false, 0, "",
+     "granite-4.1-3b"},
     // A real, official mlx-community 8B 4-bit quant does exist (Apache-2.0,
     // model_type "granite") — verified via HF API this session, despite the
     // original assumption that none did; added for parity with 3B/30B.
     {"mlx-granite-4.1-8b-4bit", "mlx-granite4.1-8b",
-     "IBM Granite 4.1 8B 4-bit (MLX)", v1::MODEL_CATEGORY_LANGUAGE,
+     "IBM Granite 4.1 8B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxGranite4_1_8BFiles, 7, 5238406779LL, 4096, false},
+     kMlxGranite4_1_8BFiles, 7, 5238406779LL, 4096, false, 0, "",
+     "granite-4.1-8b"},
     {"mlx-granite-4.1-30b-4bit", "mlx-granite4.1-30b",
-     "IBM Granite 4.1 30B 4-bit (MLX)", v1::MODEL_CATEGORY_LANGUAGE,
+     "IBM Granite 4.1 30B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxGranite4_1_30BFiles, 10, 18041976573LL, 4096, false},
+     kMlxGranite4_1_30BFiles, 10, 18041976573LL, 4096, false, 0, "",
+     "granite-4.1-30b"},
 
     // --- QHexRT (Snapdragon Hexagon NPU; Windows ARM64 overlay) ---
     // Ids match engines/qhexrt/qhexrt_model_catalog.cpp so pull/lifecycle
@@ -1986,26 +1904,21 @@ constexpr CatalogEntry kCatalog[] = {
     // URLs are registered as ModelInfo (same path as CoreML diffusion) —
     // the QNN context tree is fetched by the QHexRT bundle policy or passed
     // as a local `*_HNPU` directory to `wally run`.
-    {"lfm2_5_230m", "lfm2-230m-npu", "LFM2.5 230M (Hexagon NPU)",
+    {"lfm2_5_230m", "lfm2-230m-npu", "LiquidAI LFM2.5 230M",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_QHEXRT,
      v1::MODEL_FORMAT_QNN_CONTEXT,
      "https://huggingface.co/runanywhere/lfm2_5_230m_HNPU", nullptr, 0, 0, 0,
-     false},
-    {"lfm2_5_350m", "lfm2-350m-npu", "LFM2.5 350M (Hexagon NPU)",
+     false, 0, "", "lfm2.5-230m"},
+    {"lfm2_5_350m", "lfm2-350m-npu", "LiquidAI LFM2.5 350M",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_QHEXRT,
      v1::MODEL_FORMAT_QNN_CONTEXT,
      "https://huggingface.co/runanywhere/lfm2_5_350m_HNPU", nullptr, 0, 0, 0,
-     false},
+     false, 0, "", "lfm2.5-350m"},
     {"lfm2_5_1_2b_thinking", "lfm2-1.2b-npu",
-     "LFM2.5 1.2B Thinking (Hexagon NPU)", v1::MODEL_CATEGORY_LANGUAGE,
+     "LiquidAI LFM2.5 1.2B Thinking", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_QHEXRT, v1::MODEL_FORMAT_QNN_CONTEXT,
      "https://huggingface.co/runanywhere/lfm2_5_1_2b_thinking_HNPU", nullptr, 0,
-     0, 0, true},
-    {"qwen3_5_2b", "qwen3.5-2b-npu", "Qwen3.5 2B (Hexagon NPU)",
-     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_QHEXRT,
-     v1::MODEL_FORMAT_QNN_CONTEXT,
-     "https://huggingface.co/runanywhere/qwen3_5_2b_HNPU", nullptr, 0, 0, 0,
-     false},
+     0, 0, true, 0, "", "lfm2.5-1.2b"},
     // Non-LLM Hexagon primitives. Ids match engines/qhexrt/qhexrt_model_catalog.cpp.
     // Same folder-URL registration as the LLM rows — pass a local `*_HNPU`
     // directory; do not expect `wally models pull` to fetch the HF repo HTML.
@@ -2159,13 +2072,32 @@ static bool is_llm(const CatalogEntry &entry) {
   return entry.category == runanywhere::v1::MODEL_CATEGORY_LANGUAGE;
 }
 
+// MLX and the Apple Neural Engine (Core ML) are Apple-only backends. On any
+// other platform their entries are hidden and never registered, so a Windows or
+// Linux user cannot list, resolve, or download a model they could never run.
+// llama.cpp is everywhere; QHexRT (Windows NPU) is left to its own engine gate.
+static bool platform_supports(runanywhere::v1::InferenceFramework framework) {
+#if defined(__APPLE__)
+  (void)framework;
+  return true;
+#else
+  return framework != runanywhere::v1::INFERENCE_FRAMEWORK_MLX &&
+         framework != runanywhere::v1::INFERENCE_FRAMEWORK_COREML;
+#endif
+}
+
+// The one predicate every surface filters on: an LLM this platform can run.
+static bool listed(const CatalogEntry &entry) {
+  return is_llm(entry) && platform_supports(entry.framework);
+}
+
 const CatalogEntry *all(size_t *count) {
   // A contiguous, LLM-only view built once; callers get the same stable
   // pointer + count contract they had against kCatalog.
   static const std::vector<CatalogEntry> llm_only = [] {
     std::vector<CatalogEntry> filtered;
     for (const CatalogEntry &entry : kCatalog) {
-      if (is_llm(entry)) {
+      if (listed(entry)) {
         filtered.push_back(entry);
       }
     }
@@ -2179,12 +2111,41 @@ const CatalogEntry *all(size_t *count) {
 
 const CatalogEntry *find(const std::string &id_or_alias) {
   for (const CatalogEntry &entry : kCatalog) {
-    if (!is_llm(entry)) {
+    if (!listed(entry)) {
       continue;
     }
     if (id_or_alias == entry.id ||
         (entry.alias && id_or_alias == entry.alias)) {
       return &entry;
+    }
+  }
+
+  // Predictable per-backend names for a merged row. `models list` shows one id
+  // per model (the shared merge_key); each backend's build is that id with a
+  // backend prefix — `mlx-<id>`, `ane-<id>`, `npu-<id>` — so a reader never has
+  // to guess the old alias. Only reached when the exact match above missed.
+  static constexpr struct {
+    const char *prefix;
+    v1::InferenceFramework framework;
+  } kBackendPrefixes[] = {
+      {"mlx-", v1::INFERENCE_FRAMEWORK_MLX},
+      {"ane-", v1::INFERENCE_FRAMEWORK_COREML},
+      {"npu-", v1::INFERENCE_FRAMEWORK_QHEXRT},
+  };
+  for (const auto &prefixed : kBackendPrefixes) {
+    const std::string prefix = prefixed.prefix;
+    if (id_or_alias.rfind(prefix, 0) != 0) {
+      continue;
+    }
+    const std::string base = id_or_alias.substr(prefix.size());
+    for (const CatalogEntry &entry : kCatalog) {
+      if (!listed(entry) || entry.framework != prefixed.framework) {
+        continue;
+      }
+      const char *key = entry.merge_key ? entry.merge_key : entry.id;
+      if (base == key) {
+        return &entry;
+      }
     }
   }
   return nullptr;
@@ -2196,7 +2157,7 @@ std::vector<std::string> suggestions(const std::string &input, size_t max) {
     if (matches.size() >= max) {
       break;
     }
-    if (!is_llm(entry)) {
+    if (!listed(entry)) {
       continue;
     }
     if (std::string(entry.id).find(input) != std::string::npos ||
@@ -2208,10 +2169,19 @@ std::vector<std::string> suggestions(const std::string &input, size_t max) {
   return matches;
 }
 
+std::string merge_key_for(const std::string &id) {
+  for (const CatalogEntry &entry : kCatalog) {
+    if (id == entry.id) {
+      return entry.merge_key ? entry.merge_key : entry.id;
+    }
+  }
+  return id;
+}
+
 rac_result_t register_all() {
   rac_result_t first_error = RAC_SUCCESS;
   for (const CatalogEntry &entry : kCatalog) {
-    if (!is_llm(entry)) {
+    if (!listed(entry)) {
       continue;
     }
     const rac_result_t rc = register_entry(entry);

@@ -1077,7 +1077,7 @@ TestResult test_wally_mlx_run_end_to_end() {
       list_json.find("\"modality\":\"embedding\"") == std::string::npos ||
       list_json.find("\"id\":\"mlx.fake.stt\"") == std::string::npos ||
       list_json.find("\"modality\":\"stt\"") == std::string::npos ||
-      list_json.find("\"backend\":\"MLX\"") == std::string::npos ||
+      list_json.find("\"backend\":\"mlx\"") == std::string::npos ||
       list_json.find("\"id\":\"mlx.fake.tts\"") == std::string::npos ||
       list_json.find("\"modality\":\"tts\"") == std::string::npos) {
     result.expected = "MLX VLM/embedding/STT/TTS rows from wally list --all";

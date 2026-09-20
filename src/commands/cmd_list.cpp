@@ -10,15 +10,20 @@
 
 #include "commands/commands.h"
 
+#include <climits>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "model_types.pb.h"
 #include "rac/core/rac_core.h"
 #include "rac/infrastructure/model_management/rac_model_registry.h"
 
+#include "catalog/catalog.h"
 #include "commands/model_setup.h"
 #include "commands/model_labels.h"
 #include "io/output.h"
@@ -29,6 +34,45 @@ namespace wally::commands {
 namespace {
 
 namespace v1 = runanywhere::v1;
+
+// The same model is registered once per backend it runs on (llama.cpp / MLX /
+// ANE / NPU). `models list` collapses those into one row keyed by the catalog's
+// merge_key, joining the backends into "mlx/llama.cpp"-style tags. Lower rank =
+// listed first in the joined tag and preferred for the row's name/size.
+int backend_rank(v1::InferenceFramework framework) {
+    switch (framework) {
+        case v1::INFERENCE_FRAMEWORK_MLX: return 0;
+        case v1::INFERENCE_FRAMEWORK_LLAMA_CPP: return 1;
+        case v1::INFERENCE_FRAMEWORK_COREML: return 2;
+        case v1::INFERENCE_FRAMEWORK_QHEXRT: return 3;
+        default: return 4;
+    }
+}
+
+struct GroupedRow {
+    std::string id;
+    std::string name;
+    v1::ModelCategory category = v1::MODEL_CATEGORY_UNSPECIFIED;
+    int64_t size_bytes = 0;
+    int name_rank = INT_MAX;   // rank of the variant that set name/category
+    int size_rank = INT_MAX;   // rank of the variant that set a positive size
+    bool downloaded = false;
+    // Distinct backends, ordered by (rank, label) so the join is stable.
+    std::set<std::pair<int, std::string>> backends;
+};
+
+// A short "how do I download one?" header for the human list. The pull id
+// differs by backend, so show one example per backend this platform can run:
+// llama.cpp everywhere; on Apple also MLX and ANE. Never printed in --json.
+void print_pull_examples() {
+    out::result_line("Download a model with `wally models pull <id>`:");
+    out::result_line("  wally models pull qwen3-0.6b        # llama.cpp");
+#if defined(__APPLE__)
+    out::result_line("  wally models pull mlx-qwen3-0.6b    # MLX (Apple GPU)");
+    out::result_line("  wally models pull ane-lfm2.5-350m   # ANE (Apple Neural Engine)");
+#endif
+    out::result_line("");
+}
 
 int run_list(const GlobalOptions& options, bool show_all) {
     Bootstrapped env;
@@ -65,32 +109,11 @@ int run_list(const GlobalOptions& options, bool show_all) {
         }
     }
 
-    if (options.json) {
-        out::JsonWriter json;
-        json.begin_object().begin_array("models");
-        for (const v1::ModelInfo& model : all_models.models()) {
-            const bool is_downloaded =
-                downloaded_ids.count(model.id()) > 0 ||
-                model.registry_status() == v1::MODEL_REGISTRY_STATUS_DOWNLOADED;
-            if (!show_all && !is_downloaded) {
-                continue;
-            }
-            json.begin_array_object()
-                .field("id", model.id())
-                .field("name", model.name())
-                .field("modality", model_labels::category(model.category()))
-                .field("backend", model_labels::backend(model.framework()))
-                .field("size_bytes", static_cast<int64_t>(model.download_size_bytes()))
-                .field("downloaded", is_downloaded)
-                .field("local_path", model.local_path())
-                .end_object();
-        }
-        json.end_array().end_object();
-        out::result_line(json.str());
-        return 0;
-    }
-
-    std::vector<std::vector<std::string>> rows;
+    // Collapse per-backend variants of the same model into one row, keyed by the
+    // catalog merge_key (a non-catalog id keys as itself). Insertion order is
+    // kept so the list reads the same as the registry.
+    std::vector<std::string> order;
+    std::unordered_map<std::string, GroupedRow> groups;
     for (const v1::ModelInfo& model : all_models.models()) {
         const bool is_downloaded =
             downloaded_ids.count(model.id()) > 0 ||
@@ -98,12 +121,72 @@ int run_list(const GlobalOptions& options, bool show_all) {
         if (!show_all && !is_downloaded) {
             continue;
         }
-        rows.push_back({model.id(), model_labels::category(model.category()),
-                        model_labels::backend(model.framework()),
-                        model.download_size_bytes() > 0
-                            ? out::human_bytes(static_cast<uint64_t>(model.download_size_bytes()))
+        const std::string key = catalog::merge_key_for(model.id());
+        auto it = groups.find(key);
+        if (it == groups.end()) {
+            GroupedRow row;
+            row.id = key;
+            it = groups.emplace(key, std::move(row)).first;
+            order.push_back(key);
+        }
+        GroupedRow& row = it->second;
+        const int rank = backend_rank(model.framework());
+        row.backends.insert({rank, model_labels::short_backend(model.framework())});
+        row.downloaded = row.downloaded || is_downloaded;
+        if (rank < row.name_rank) {
+            row.name_rank = rank;
+            row.name = model.name();
+            row.category = model.category();
+        }
+        const int64_t size = static_cast<int64_t>(model.download_size_bytes());
+        if (size > 0 && rank < row.size_rank) {
+            row.size_rank = rank;
+            row.size_bytes = size;
+        }
+    }
+
+    auto join_backends = [](const GroupedRow& row) {
+        std::string joined;
+        for (const auto& [rank, label] : row.backends) {
+            (void)rank;
+            if (!joined.empty()) {
+                joined += "/";
+            }
+            joined += label;
+        }
+        return joined;
+    };
+
+    if (options.json) {
+        out::JsonWriter json;
+        json.begin_object().begin_array("models");
+        for (const std::string& key : order) {
+            const GroupedRow& row = groups.at(key);
+            json.begin_array_object()
+                .field("id", row.id)
+                .field("name", row.name)
+                .field("modality", model_labels::category(row.category))
+                .field("backend", join_backends(row))
+                .field("size_bytes", row.size_bytes)
+                .field("downloaded", row.downloaded)
+                .end_object();
+        }
+        json.end_array().end_object();
+        out::result_line(json.str());
+        return 0;
+    }
+
+    print_pull_examples();
+
+    std::vector<std::vector<std::string>> rows;
+    for (const std::string& key : order) {
+        const GroupedRow& row = groups.at(key);
+        rows.push_back({row.id, model_labels::category(row.category),
+                        join_backends(row),
+                        row.size_bytes > 0
+                            ? out::human_bytes(static_cast<uint64_t>(row.size_bytes))
                             : "-",
-                        is_downloaded ? "yes" : "no"});
+                        row.downloaded ? "yes" : "no"});
     }
 
     if (rows.empty()) {
