@@ -91,7 +91,15 @@
             }
           }
         },
-        "description": "Typed control-plane error"
+        "description": "Typed control-plane error",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds before retrying. Sent only with a 503 that clears on its own: `control_plane_overloaded`, when no database connection came free, and a billing action refused while another holds the account's customer or every billing place.",
+            "schema": {
+              "$ref": "#/components/schemas/RetryAfterSeconds"
+            }
+          }
+        }
       },
       "Error": {
         "content": {
@@ -121,10 +129,22 @@
         },
         "description": "Entitlement or GPU admission capacity limit",
         "headers": {
+          "Access-Control-Expose-Headers": {
+            "description": "Response headers a browser client may read",
+            "schema": {
+              "$ref": "#/components/schemas/AccessControlExposeHeaders"
+            }
+          },
           "Retry-After": {
             "description": "Seconds before retrying when supplied",
             "schema": {
               "$ref": "#/components/schemas/RetryAfterSeconds"
+            }
+          },
+          "Server-Timing": {
+            "description": "Pre-stream phase timings when supplied",
+            "schema": {
+              "$ref": "#/components/schemas/ServerTiming"
             }
           },
           "x-request-id": {
@@ -165,6 +185,12 @@
       }
     },
     "schemas": {
+      "AccessControlExposeHeaders": {
+        "description": "The response headers a browser client may read, as a comma-separated list; it names x-request-id, Retry-After and Server-Timing when the response carries them.",
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
       "ApiError": {
         "additionalProperties": false,
         "description": "One closed error shape for every non-public control-plane route.",
@@ -220,7 +246,8 @@
           "gateway_timeout",
           "gateway_protocol_error",
           "gateway_operation_pending",
-          "reconciliation_unverified"
+          "reconciliation_unverified",
+          "retention_managed_by_runanywhere"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -802,8 +829,16 @@
       "Harness": {
         "enum": [
           "claude_code",
+          "claude_desktop",
           "opencode",
           "hermes",
+          "openclaw",
+          "deepseek",
+          "console",
+          "playground",
+          "rcli",
+          "sdk",
+          "unknown",
           "cursor",
           "continue",
           "aider",
@@ -813,12 +848,7 @@
           "openai_sdk",
           "langchain",
           "llamaindex",
-          "curl",
-          "console",
-          "playground",
-          "rcli",
-          "sdk",
-          "unknown"
+          "curl"
         ],
         "title": "Harness",
         "type": "string"
@@ -1061,7 +1091,7 @@
             "$ref": "#/components/schemas/PublicModelId"
           },
           "max_input_tokens": {
-            "description": "The advertised ceiling on input tokens for this model -- what an OpenAI-shaped coding agent reads to decide when to compact (contracts/public/status_semantics.json context_window). null means the deployment has not established one.",
+            "description": "The advertised ceiling on input tokens for this model -- what an OpenAI-shaped coding agent reads to decide when to compact. It is the largest prompt the engine still answers with one output token, not the raw context length: a prompt longer than this is refused with 400 before it is billed. null means the deployment has not established one.",
             "minimum": 1,
             "type": [
               "integer",
@@ -1069,7 +1099,7 @@
             ]
           },
           "max_output_tokens": {
-            "description": "The advertised ceiling on output tokens, when the deployment declares one separately from the context window (gateway/litellm/config/proxy_config.yaml model_info; gemma-4 does, qwen3.8-27b shares one budget and omits it).",
+            "description": "The advertised ceiling on output tokens, when the deployment declares one separately from the context window. null means this model draws output from the single budget max_input_tokens already describes.",
             "minimum": 1,
             "type": [
               "integer",
@@ -1116,6 +1146,12 @@
         "default": "",
         "maxLength": 8192,
         "title": "Authorization",
+        "type": "string"
+      },
+      "ServerTiming": {
+        "description": "W3C Server-Timing. As a HEADER it carries pre-stream phases only, for example the gateway's authorize call and the sidecar's ra-queue (time waiting for a seat) and ra-admit (the sidecar's own work before the request reached the model). Time to first token is never in the header, because it is not known when the headers are sent; on a streaming response it arrives as a Server-Timing TRAILER named ra-ttft, after the last SSE frame. Metric names are not a closed set: ignore a name you do not know, and treat the trailer as optional.",
+        "maxLength": 1024,
+        "minLength": 1,
         "type": "string"
       },
       "UsageModelRollup": {
@@ -1450,6 +1486,11 @@
             "$ref": "#/components/responses/ApiError"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Get Usage",
         "tags": [
           "cli"
@@ -1458,7 +1499,7 @@
     },
     "/v1/me": {
       "get": {
-        "description": "`rcli whoami`. Authenticated by the API key the CLI was issued, because\nthat is the only credential it has.",
+        "description": "`rcli whoami`. Authenticated by the API key the CLI was issued, because\nthat is the only credential it has.\n\nThe contract declares that key as `BearerAuth`. The same Authorization\nheader also carries the console's signed PropelAuth session token, and\nwhere PropelAuth is not configured, never in production, the `X-User-Id`\nand `X-User-Email` development identity headers are accepted instead.\nNeither is a separate security scheme: this contract declares no console\nsession scheme on any operation, and the development headers are not a\ncredential.",
         "operationId": "getCurrentIdentity",
         "parameters": [
           {
@@ -1489,6 +1530,11 @@
             "$ref": "#/components/responses/ApiError"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Me",
         "tags": [
           "cli auth"
@@ -1585,11 +1631,22 @@
             "$ref": "#/components/responses/ApiError"
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Cancel Request",
         "tags": [
           "console"
         ]
       }
     }
+  },
+  "x-runanywhere-source": {
+    "artifact": "contracts/control-plane-v1.openapi.json",
+    "branch": "development",
+    "commit": "29654ea8bd5577b1d776fcdd9fd7f4551cb07bec",
+    "repository": "RunanywhereAI/InferenceInfra"
   }
 }

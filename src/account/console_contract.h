@@ -17,7 +17,7 @@
 namespace wally::account::contract {
 
 // SHA-256 of contracts/wally-cli-v1.openapi.json this header was built from.
-inline constexpr char kContractSha256[] = "40512a48d9a94d093ce5d9da9c9fc7984fabd90bb9bc61b2814fb58fc685e85f";
+inline constexpr char kContractSha256[] = "1c4b1bcf942dfb770cce290916573318d3b3d7175b5dc2b9cfea753b7a380cb2";
 
 enum class ApiErrorCode {
     kInvalidRequest,
@@ -53,6 +53,7 @@ enum class ApiErrorCode {
     kGatewayProtocolError,
     kGatewayOperationPending,
     kReconciliationUnverified,
+    kRetentionManagedByRunanywhere,
 };
 
 inline void from_json(const nlohmann::json& j, ApiErrorCode& value) {
@@ -90,6 +91,7 @@ inline void from_json(const nlohmann::json& j, ApiErrorCode& value) {
     if (raw == "gateway_protocol_error") { value = ApiErrorCode::kGatewayProtocolError; return; }
     if (raw == "gateway_operation_pending") { value = ApiErrorCode::kGatewayOperationPending; return; }
     if (raw == "reconciliation_unverified") { value = ApiErrorCode::kReconciliationUnverified; return; }
+    if (raw == "retention_managed_by_runanywhere") { value = ApiErrorCode::kRetentionManagedByRunanywhere; return; }
     throw nlohmann::json::type_error::create(302, "unknown ApiErrorCode: " + raw, &j);
 }
 
@@ -128,6 +130,7 @@ inline void to_json(nlohmann::json& j, const ApiErrorCode& value) {
         case ApiErrorCode::kGatewayProtocolError: j = "gateway_protocol_error"; return;
         case ApiErrorCode::kGatewayOperationPending: j = "gateway_operation_pending"; return;
         case ApiErrorCode::kReconciliationUnverified: j = "reconciliation_unverified"; return;
+        case ApiErrorCode::kRetentionManagedByRunanywhere: j = "retention_managed_by_runanywhere"; return;
     }
 }
 
@@ -321,8 +324,16 @@ inline void to_json(nlohmann::json& j, const ErrorType& value) {
 
 enum class Harness {
     kClaudeCode,
+    kClaudeDesktop,
     kOpencode,
     kHermes,
+    kOpenclaw,
+    kDeepseek,
+    kConsole,
+    kPlayground,
+    kRcli,
+    kSdk,
+    kUnknown,
     kCursor,
     kContinue,
     kAider,
@@ -333,18 +344,21 @@ enum class Harness {
     kLangchain,
     kLlamaindex,
     kCurl,
-    kConsole,
-    kPlayground,
-    kRcli,
-    kSdk,
-    kUnknown,
 };
 
 inline void from_json(const nlohmann::json& j, Harness& value) {
     const std::string raw = j.get<std::string>();
     if (raw == "claude_code") { value = Harness::kClaudeCode; return; }
+    if (raw == "claude_desktop") { value = Harness::kClaudeDesktop; return; }
     if (raw == "opencode") { value = Harness::kOpencode; return; }
     if (raw == "hermes") { value = Harness::kHermes; return; }
+    if (raw == "openclaw") { value = Harness::kOpenclaw; return; }
+    if (raw == "deepseek") { value = Harness::kDeepseek; return; }
+    if (raw == "console") { value = Harness::kConsole; return; }
+    if (raw == "playground") { value = Harness::kPlayground; return; }
+    if (raw == "rcli") { value = Harness::kRcli; return; }
+    if (raw == "sdk") { value = Harness::kSdk; return; }
+    if (raw == "unknown") { value = Harness::kUnknown; return; }
     if (raw == "cursor") { value = Harness::kCursor; return; }
     if (raw == "continue") { value = Harness::kContinue; return; }
     if (raw == "aider") { value = Harness::kAider; return; }
@@ -355,19 +369,22 @@ inline void from_json(const nlohmann::json& j, Harness& value) {
     if (raw == "langchain") { value = Harness::kLangchain; return; }
     if (raw == "llamaindex") { value = Harness::kLlamaindex; return; }
     if (raw == "curl") { value = Harness::kCurl; return; }
-    if (raw == "console") { value = Harness::kConsole; return; }
-    if (raw == "playground") { value = Harness::kPlayground; return; }
-    if (raw == "rcli") { value = Harness::kRcli; return; }
-    if (raw == "sdk") { value = Harness::kSdk; return; }
-    if (raw == "unknown") { value = Harness::kUnknown; return; }
     throw nlohmann::json::type_error::create(302, "unknown Harness: " + raw, &j);
 }
 
 inline void to_json(nlohmann::json& j, const Harness& value) {
     switch (value) {
         case Harness::kClaudeCode: j = "claude_code"; return;
+        case Harness::kClaudeDesktop: j = "claude_desktop"; return;
         case Harness::kOpencode: j = "opencode"; return;
         case Harness::kHermes: j = "hermes"; return;
+        case Harness::kOpenclaw: j = "openclaw"; return;
+        case Harness::kDeepseek: j = "deepseek"; return;
+        case Harness::kConsole: j = "console"; return;
+        case Harness::kPlayground: j = "playground"; return;
+        case Harness::kRcli: j = "rcli"; return;
+        case Harness::kSdk: j = "sdk"; return;
+        case Harness::kUnknown: j = "unknown"; return;
         case Harness::kCursor: j = "cursor"; return;
         case Harness::kContinue: j = "continue"; return;
         case Harness::kAider: j = "aider"; return;
@@ -378,11 +395,6 @@ inline void to_json(nlohmann::json& j, const Harness& value) {
         case Harness::kLangchain: j = "langchain"; return;
         case Harness::kLlamaindex: j = "llamaindex"; return;
         case Harness::kCurl: j = "curl"; return;
-        case Harness::kConsole: j = "console"; return;
-        case Harness::kPlayground: j = "playground"; return;
-        case Harness::kRcli: j = "rcli"; return;
-        case Harness::kSdk: j = "sdk"; return;
-        case Harness::kUnknown: j = "unknown"; return;
     }
 }
 
