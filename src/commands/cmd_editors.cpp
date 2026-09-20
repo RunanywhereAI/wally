@@ -547,6 +547,9 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
         auto rest = std::make_shared<std::vector<std::string>>();
         auto serve = std::make_shared<bool>(false);
         auto* command = app.add_subcommand(editor.id, editor.summary);
+        command->footer("Examples:\n  wally " + std::string(editor.id) +
+                        " -m qwen3-4b            (on-device)\n  wally " + std::string(editor.id) +
+                        " -m glm-5.3-flash       (hosted)");
         command->add_option("-m,--model", *model,
                             "a model on this machine, or one served upstream");
         command->add_flag("--serve", *serve,

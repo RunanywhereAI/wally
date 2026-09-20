@@ -50,27 +50,11 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
         "-U,--uninstall", [] { std::exit(commands::run_uninstall(false)); },
         "Uninstall wally, its models and config");
 
-    // Control-plane connection. validation happens in resolve_connection().
-    // Developer/SDK-facing, not something a person reaches for day to day --
-    // group("") drops them out of the default --help listing the same way
-    // `telemetry` is hidden below, while leaving them fully parseable
-    // (flags and RUNANYWHERE_* env fallbacks both still resolve).
-    app.add_option("--environment", options.environment,
-                   "SDK environment: development (default, keyless OSS → baked staging "
-                   "backend) or production (API key + https URL).")
-        ->envname("RUNANYWHERE_ENVIRONMENT")
-        ->check(CLI::IsMember({"dev", "development", "prod", "production"}))
-        ->group("");
-    app.add_option("--base-url", options.base_url,
-                   "Backend base URL. Optional in development (baked staging URL). "
-                   "Required https for production.")
-        ->envname("RUNANYWHERE_BASE_URL")
-        ->group("");
-    app.add_option("--api-key", options.api_key,
-                   "Control-plane API key (required for production; omit for "
-                   "keyless development)")
-        ->envname("RUNANYWHERE_API_KEY")
-        ->group("");
+    // Control-plane connection (environment / base URL / API key) is not exposed
+    // as CLI flags: resolve_connection() reads RUNANYWHERE_ENVIRONMENT /
+    // RUNANYWHERE_BASE_URL / RUNANYWHERE_API_KEY straight from the environment
+    // (bootstrap.cpp), so a dev build still overrides via env with no
+    // developer-only flags cluttering the surface.
 
     // Registration order is the --help print order: run first (the primary
     // verb), then llm and models, serve, the coding agents, the cloud account,
@@ -101,9 +85,11 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     commands::register_harness(app, options);      // coding agents
     commands::register_default_models(app, options);
 
-    commands::register_account(app, options);      // login / logout / whoami
-    commands::register_usage(app, options);
-    commands::register_auth(app, options);
+    commands::register_account(app, options);      // account login/logout/whoami/usage
+    commands::register_usage(app, options);        // attaches `usage` under `account`
+    // `auth` (device sign-in against the control plane) is a developer path that
+    // duplicates `account login`; unregister it. Uncomment to restore.
+    // commands::register_auth(app, options);
 
     commands::register_info(app, options);
     commands::register_about(app, options);
@@ -123,7 +109,7 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
         if (!sub->get_name().empty()) sub->group("Available Commands");
     }
     // Diagnostic and advanced commands: callable, but kept out of the list.
-    for (const char* hidden : {"bench", "backends", "telemetry", "auth"}) {
+    for (const char* hidden : {"bench", "backends", "telemetry"}) {
         try {
             app.get_subcommand(hidden)->group("");
         } catch (const CLI::OptionNotFound&) {
@@ -133,6 +119,29 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
 }
 
 namespace {
+
+/// Friendly reply to a missing or wrong (sub)command: walk to the deepest
+/// command that actually parsed and print its help, instead of CLI11's terse
+/// "A subcommand is required" / "The following argument was not expected" line.
+/// Detected by exception TYPE at the call site (RequiredError / ExtrasError) --
+/// ExtrasError::get_name() is the app name, not "ExtrasError", so a string match
+/// would miss every wrong-argument case.
+void PrintTypoHelp(const CLI::App& app) {
+    const CLI::App* ctx = &app;
+    for (;;) {
+        const CLI::App* next = nullptr;
+        for (const CLI::App* sub : ctx->get_subcommands({})) {
+            if (sub->parsed()) {
+                next = sub;
+                break;
+            }
+        }
+        if (next == nullptr) break;
+        ctx = next;
+    }
+    out::error_line("You typed it wrong..! Use -h/--help on the sub command to know its options");
+    std::fputs(ctx->help().c_str(), stderr);
+}
 
 /// The subcommands that hand the terminal to another tool and forward the rest
 /// of the command line to it. Kept in step with register_editors and
@@ -266,7 +275,30 @@ int run(int argc, char** argv) {
     // model (glm-5.3-flash, ...) has no path through `run`/`llm generate` at
     // all, and that dead end used to be the only place someone learned the
     // cloud path exists.
-    app.footer("Use \"wally [command] --help\" for more information about a command.");
+    // Example block at the end of --help. Built with computed padding so the
+    // description column lines up regardless of command length.
+    auto ex = [](const std::string& cmd, const std::string& desc) {
+        std::string line = "    " + cmd;
+        if (line.size() < 48) {
+            line.append(48 - line.size(), ' ');
+        }
+        return line + desc + "\n";
+    };
+    const std::string examples =
+        "Examples:\n"
+        "  On-device (offline):\n" +
+        ex("wally models pull qwen3-4b", "download a model") +
+        ex("wally run qwen3-4b \"write a haiku\"", "chat with it locally") +
+        ex("wally llm generate -m qwen3-4b \"hi\"", "one-shot completion") +
+        "  Cloud (hosted account models):\n" +
+        ex("wally opencode --cloud -m glm-5.3-flash", "coding agent on a hosted model") +
+        ex("wally claude-code -m glm-5.3-flash", "Claude Code on a hosted model") +
+        "  Models:\n" +
+        ex("wally models list --all", "browse the full catalog") +
+        ex("wally models show granite-4.2-8b", "details for one model") +
+        ex("wally models rm qwen3-4b", "delete a downloaded model") +
+        "\nUse \"wally [command] --help\" for more information about a command.";
+    app.footer(examples);
 
     // A `--` before the wrapped tool's own arguments, added for the reader, so
     // `wally claude-code --dangerously-skip-permissions` forwards the flag
@@ -312,8 +344,14 @@ int run(int argc, char** argv) {
         exit_code = app.exit(e);
     } catch (const CLI::RuntimeError& e) {
         exit_code = (e.get_exit_code() != 0) ? e.get_exit_code() : 1;
+    } catch (const CLI::RequiredError&) {
+        PrintTypoHelp(app);  // missing required (sub)command
+        exit_code = 2;
+    } catch (const CLI::ExtrasError&) {
+        PrintTypoHelp(app);  // an unexpected / wrong (sub)command or argument
+        exit_code = 2;
     } catch (const CLI::ParseError& e) {
-        app.exit(e);  // prints the usage message to stderr
+        app.exit(e);  // any other parse error: keep CLI11's own message
         exit_code = 2;
     } catch (const std::exception& e) {
         out::error_line(e.what());

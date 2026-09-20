@@ -49,7 +49,7 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
             if (effective.empty()) {
                 out::error_line(
                     "--cloud requires --model <console-model-id>, and no default is set "
-                    "(wally default-models <id>)");
+                    "(wally models default <id>)");
                 fail(2);
             }
             fail(harness::LaunchOpenCodeCloud(effective, *rest));
@@ -66,6 +66,9 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
         auto agent_model = std::make_shared<std::string>();
         auto agent_rest = std::make_shared<std::vector<std::string>>();
         auto* command = app.add_subcommand(agent.id, agent.summary);
+        command->footer("Examples:\n  wally " + std::string(agent.id) +
+                        " -m qwen3-4b            (on-device)\n  wally " + std::string(agent.id) +
+                        " --cloud -m glm-5.3-flash  (hosted)");
         command->add_option("-m,--model", *agent_model,
                             "a model on this machine, or one served upstream");
         command->add_option("args", *agent_rest, "passed through to the tool")

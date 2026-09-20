@@ -115,11 +115,25 @@ std::string CliFormatter::make_subcommands(const CLI::App* app, CLI::AppFormatMo
         }
     }
 
+    // Emit the footer here, verbatim, rather than through CLI11's paragraph
+    // reflow (see make_footer). Only the root app carries one.
+    const std::string footer = app->get_footer();
+    if (!footer.empty()) {
+        out << '\n' << footer << '\n';
+    }
+
     return out.str();
 }
 
 std::string CliFormatter::make_subcommand(const CLI::App* sub) const {
     return make_subcommand_indented(sub, "  ", cli_color::kBoldCyanCode);
+}
+
+std::string CliFormatter::make_footer(const CLI::App* /*app*/) const {
+    // Suppressed: CLI11 reflows the footer as a paragraph (collapsing the
+    // example block's indentation). The footer is emitted verbatim at the end
+    // of make_subcommands instead, where the output is printed as-is.
+    return "";
 }
 
 std::string CliFormatter::make_subcommand_indented(const CLI::App* sub, const std::string& indent,

@@ -278,8 +278,12 @@ void register_tool(CLI::App& app, GlobalOptions& options) {
     CLI::App* ns = app.get_subcommand("llm");
     configure_tool_call(
         ns->add_subcommand("tool-call",
-                           "Run the tool-calling loop with built-in demo tools (get_weather, "
-                           "calculate)"),
+                           "Run the tool-calling loop with two built-in demo tools "
+                           "(get_weather, calculate). Usage: llm tool-call -m <model> "
+                           "\"<prompt>\"")
+            ->footer("Examples:\n"
+                     "  wally llm tool-call -m qwen3-4b \"what's the weather in Paris?\"\n"
+                     "  wally llm tool-call -m qwen3-4b \"what is 19 * 23?\""),
         options);
 }
 

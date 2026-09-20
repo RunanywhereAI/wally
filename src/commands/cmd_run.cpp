@@ -773,10 +773,23 @@ void configure_vlm_generate(CLI::App* cmd, GlobalOptions& options) {
 void register_llm(CLI::App& app, GlobalOptions& options) {
     CLI::App* ns = app.add_subcommand("llm", "Generate text with a language model");
     ns->require_subcommand(1);
-    configure_llm(ns->add_subcommand("generate", "Complete a prompt and print the result"),
-                  options, LlmVerb::Generate, ModelArg::Option);
-    configure_llm(ns->add_subcommand("stream", "Complete a prompt, printing tokens as they arrive"),
-                  options, LlmVerb::Stream, ModelArg::Option);
+    configure_llm(
+        ns->add_subcommand(
+              "generate",
+              "One-shot completion, printed once when done. "
+              "Usage: llm generate -m <model> \"<prompt>\"  (reads stdin if no prompt)")
+            ->footer("Examples:\n"
+                     "  wally llm generate -m qwen3-4b \"explain quantum tunnelling\"\n"
+                     "  echo \"summarise this\" | wally llm generate -m qwen3-4b"),
+        options, LlmVerb::Generate, ModelArg::Option);
+    configure_llm(
+        ns->add_subcommand(
+              "stream",
+              "Same as generate but tokens print as they arrive. "
+              "Usage: llm stream -m <model> \"<prompt>\"")
+            ->footer("Examples:\n"
+                     "  wally llm stream -m qwen3-4b \"tell me a short story\""),
+        options, LlmVerb::Stream, ModelArg::Option);
 }
 
 void register_vlm(CLI::App& app, GlobalOptions& options) {
@@ -789,8 +802,11 @@ void register_vlm(CLI::App& app, GlobalOptions& options) {
 void register_llm_aliases(CLI::App& app, GlobalOptions& options) {
     // `run` is the interactive model runner (prompt, or a REPL when omitted).
     // `llm generate` / `llm stream` are the explicit, manual entry points.
-    configure_llm(app.add_subcommand("run", "Run a model"), options,
-                  LlmVerb::Chat, ModelArg::Positional);
+    configure_llm(app.add_subcommand("run", "Run a model")
+                      ->footer("Examples:\n"
+                               "  wally run qwen3-4b\n"
+                               "  wally run qwen3-4b \"write a haiku about the sea\""),
+                  options, LlmVerb::Chat, ModelArg::Positional);
 }
 
 }  // namespace wally::commands

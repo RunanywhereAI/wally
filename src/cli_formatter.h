@@ -54,6 +54,9 @@ class CliFormatter : public CLI::Formatter {
                                             std::vector<const CLI::Option*> opts) const override;
     std::string make_subcommands(const CLI::App* app, CLI::AppFormatMode mode) const override;
     std::string make_subcommand(const CLI::App* sub) const override;
+    // Print the footer verbatim. CLI11's default reflows it as a paragraph,
+    // which collapses the indentation and column padding of the examples block.
+    std::string make_footer(const CLI::App* app) const override;
     std::string make_option(const CLI::Option* opt, bool is_positional) const override;
 
   private:

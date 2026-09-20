@@ -349,19 +349,27 @@ void register_models(CLI::App& app, GlobalOptions& options) {
     CLI::App* ns = app.add_subcommand("models", "Manage the local model catalog");
     ns->require_subcommand(1);
 
-    CLI::App* list_cmd = ns->add_subcommand("list", "List downloaded models");
+    CLI::App* list_cmd = ns->add_subcommand(
+        "list", "List models: downloaded by default, `--all` for the whole catalog");
     list_cmd->alias("ls");
+    list_cmd->footer("Examples:\n  wally models list\n  wally models list --all");
     configure_models_list(list_cmd, options);
 
-    CLI::App* show_cmd = ns->add_subcommand("show", "Show a model's details");
+    CLI::App* show_cmd = ns->add_subcommand(
+        "show", "Show one model's details (size, url, context). Usage: models show <id>");
     show_cmd->alias("get");
+    show_cmd->footer("Examples:\n  wally models show granite-4.2-8b");
     configure_models_get(show_cmd, options);
 
-    CLI::App* pull_cmd = ns->add_subcommand("pull", "Download a model");
+    CLI::App* pull_cmd = ns->add_subcommand(
+        "pull", "Download a model by id. Usage: models pull <id>  (ids from `models list --all`)");
     pull_cmd->alias("download");
+    pull_cmd->footer("Examples:\n  wally models pull qwen3-4b\n  wally models pull granite-4.2-8b");
     configure_models_download(pull_cmd, options);
 
-    CLI::App* delete_cmd = ns->add_subcommand("rm", "Delete a model");
+    CLI::App* delete_cmd = ns->add_subcommand(
+        "rm", "Delete a downloaded model. Usage: models rm <id>");
+    delete_cmd->footer("Examples:\n  wally models rm qwen3-4b");
     delete_cmd->alias("remove");
     delete_cmd->alias("delete");
     configure_models_delete(delete_cmd, options);

@@ -34,10 +34,17 @@ void register_default_models(CLI::App& app, GlobalOptions& options) {
     auto model = std::make_shared<std::string>();
     auto clear = std::make_shared<bool>(false);
 
-    CLI::App* cmd = app.add_subcommand(
-        "default-models", "Set the model a harness uses when you pass no -m");
+    // Lives under `models` (`wally models default`). register_models runs first
+    // (app.cpp), so the namespace exists; a reorder would trip OptionNotFound.
+    CLI::App* models = app.get_subcommand("models");
+    CLI::App* cmd =
+        models->add_subcommand("default", "Set the model a harness uses when you pass no -m");
     cmd->add_option("model", *model, "a model id to make the default, e.g. glm-5.3-flash");
     cmd->add_flag("--clear", *clear, "remove the saved default");
+    cmd->footer("Examples:\n"
+                "  wally models default glm-5.3-flash\n"
+                "  wally models default          (show the current default)\n"
+                "  wally models default --clear");
 
     cmd->callback([model, clear] {
         if (*clear) {
