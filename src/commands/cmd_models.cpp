@@ -28,6 +28,7 @@
 #include "rac/infrastructure/model_management/rac_model_registry.h"
 
 #include "catalog/model_ref.h"
+#include "cli_formatter.h"
 #include "commands/engine_options.h"
 #include "commands/model_labels.h"
 #include "io/output.h"
@@ -346,30 +347,30 @@ int run_state(const GlobalOptions& options) {
 }  // namespace
 
 void register_models(CLI::App& app, GlobalOptions& options) {
-    CLI::App* ns = app.add_subcommand("models", "Manage the local model catalog");
+    CLI::App* ns = app.add_subcommand("models", "Manage local models");
     ns->require_subcommand(1);
 
-    CLI::App* list_cmd = ns->add_subcommand(
-        "list", "List models: downloaded by default, `--all` for the whole catalog");
+    CLI::App* list_cmd =
+        ns->add_subcommand("list", "List downloaded models (--all for the catalog)");
     list_cmd->alias("ls");
-    list_cmd->footer("Examples:\n  wally models list\n  wally models list --all");
+    list_cmd->footer(examples_footer({{"wally models list --all", "Browse the whole catalog"}}));
     configure_models_list(list_cmd, options);
 
-    CLI::App* show_cmd = ns->add_subcommand(
-        "show", "Show one model's details (size, url, context). Usage: models show <id>");
+    CLI::App* show_cmd = ns->add_subcommand("show", "Show a model's details");
     show_cmd->alias("get");
-    show_cmd->footer("Examples:\n  wally models show granite-4.2-8b");
+    show_cmd->footer(examples_footer({{"wally models show granite-4.2-8b", ""}}));
     configure_models_get(show_cmd, options);
 
-    CLI::App* pull_cmd = ns->add_subcommand(
-        "pull", "Download a model by id. Usage: models pull <id>  (ids from `models list --all`)");
+    CLI::App* pull_cmd = ns->add_subcommand("pull", "Download a model");
     pull_cmd->alias("download");
-    pull_cmd->footer("Examples:\n  wally models pull qwen3-4b\n  wally models pull granite-4.2-8b");
+    pull_cmd->footer(examples_footer({
+        {"wally models pull qwen3-0.6b", "From the catalog"},
+        {"wally models pull hf.co/<org>/<repo>/<file>", "From Hugging Face"},
+    }));
     configure_models_download(pull_cmd, options);
 
-    CLI::App* delete_cmd = ns->add_subcommand(
-        "rm", "Delete a downloaded model. Usage: models rm <id>");
-    delete_cmd->footer("Examples:\n  wally models rm qwen3-4b");
+    CLI::App* delete_cmd = ns->add_subcommand("rm", "Delete a downloaded model");
+    delete_cmd->footer(examples_footer({{"wally models rm qwen3-0.6b", ""}}));
     delete_cmd->alias("remove");
     delete_cmd->alias("delete");
     configure_models_delete(delete_cmd, options);

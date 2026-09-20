@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "catalog/catalog.h"
+#include "cli_formatter.h"
 #include "commands/commands.h"
 #include "io/output.h"
 #include "harness/harness.h"
@@ -27,15 +28,19 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
     auto model = std::make_shared<std::string>();
     auto rest = std::make_shared<std::vector<std::string>>();
     auto cloud = std::make_shared<bool>(false);
-    auto* opencode =
-        app.add_subcommand("opencode", "open a coding session in opencode, wired to a model");
+    auto* opencode = app.add_subcommand("opencode", "Open opencode with a model");
+    opencode->footer(examples_footer({
+        {"wally opencode -m qwen3-0.6b", "A model on this machine"},
+        {"wally opencode --cloud -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
+    }));
     // A named option rather than a positional: with two positionals there is no
     // way to tell `wally opencode run` asking for passthrough from someone
     // naming a model called run, and the first reading wins silently.
-    opencode->add_option("-m,--model", *model, "a model on this machine, or one served upstream");
+    opencode->add_option("-m,--model", *model,
+                         "A model on this machine, or a hosted one from your account");
     opencode->add_flag("--cloud", *cloud,
-                       "use the signed-in hosted endpoint (never routes local models)");
-    opencode->add_option("args", *rest, "passed through to opencode")->allow_extra_args();
+                       "Use your account's hosted endpoint (never a local model)");
+    opencode->add_option("args", *rest, "Passed through to opencode")->allow_extra_args();
     opencode->prefix_command();
     opencode->callback([&options, model, rest, cloud] {
         // Before resolving a model or printing anything: a person without the
@@ -66,12 +71,14 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
         auto agent_model = std::make_shared<std::string>();
         auto agent_rest = std::make_shared<std::vector<std::string>>();
         auto* command = app.add_subcommand(agent.id, agent.summary);
-        command->footer("Examples:\n  wally " + std::string(agent.id) +
-                        " -m qwen3-4b            (on-device)\n  wally " + std::string(agent.id) +
-                        " --cloud -m glm-5.3-flash  (hosted)");
+        const std::string invocation = "wally " + std::string(agent.id);
+        command->footer(examples_footer({
+            {invocation + " -m qwen3-0.6b", "A model on this machine"},
+            {invocation + " -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
+        }));
         command->add_option("-m,--model", *agent_model,
-                            "a model on this machine, or one served upstream");
-        command->add_option("args", *agent_rest, "passed through to the tool")
+                            "A model on this machine, or a hosted one from your account");
+        command->add_option("args", *agent_rest, "Passed through to the tool")
             ->allow_extra_args();
         command->prefix_command();
         command->callback([&options, &agent, agent_model, agent_rest] {

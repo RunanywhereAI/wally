@@ -203,7 +203,7 @@ int run_list(const GlobalOptions& options, bool show_all) {
 
 void configure_models_list(CLI::App* cmd, GlobalOptions& options) {
     auto show_all = std::make_shared<bool>(false);
-    cmd->add_flag("--all,-a", *show_all, "Include catalog models that are not downloaded");
+    cmd->add_flag("--all,-a", *show_all, "Include catalog models not yet downloaded");
     cmd->callback([&options, show_all]() {
         const int exit_code = run_list(options, *show_all);
         if (exit_code != 0) {

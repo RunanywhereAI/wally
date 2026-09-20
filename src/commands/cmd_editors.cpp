@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include "anthropic/messages.h"
+#include "cli_formatter.h"
 #include "commands/editor_env.h"
 #include "commands/commands.h"
 #include "config/cli_paths.h"
@@ -67,8 +68,8 @@ struct Editor {
 /// to the Claude Code it runs inside itself, and ANTHROPIC_BASE_URL is one of
 /// them. That is the same trick as `wally claude-code`, one process further out.
 constexpr Editor kEditors[] = {
-    {"claude-code", "claude", "", "open Claude Code against a model", Wiring::Environment},
-    {"claude-desktop", "", "Claude.app", "open Claude Desktop against a model",
+    {"claude-code", "claude", "", "Open Claude Code with a model", Wiring::Environment},
+    {"claude-desktop", "", "Claude.app", "Open Claude Desktop with a model",
      Wiring::ClaudeProfile},
 };
 
@@ -547,22 +548,24 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
         auto rest = std::make_shared<std::vector<std::string>>();
         auto serve = std::make_shared<bool>(false);
         auto* command = app.add_subcommand(editor.id, editor.summary);
-        command->footer("Examples:\n  wally " + std::string(editor.id) +
-                        " -m qwen3-4b            (on-device)\n  wally " + std::string(editor.id) +
-                        " -m glm-5.3-flash       (hosted)");
+        const std::string invocation = "wally " + std::string(editor.id);
+        command->footer(examples_footer({
+            {invocation + " -m qwen3-0.6b", "A model on this machine"},
+            {invocation + " -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
+        }));
         command->add_option("-m,--model", *model,
-                            "a model on this machine, or one served upstream");
+                            "A model on this machine, or a hosted one from your account");
         command->add_flag("--serve", *serve,
-                          "hold the endpoint open and print it, instead of launching");
+                          "Print the endpoint and keep it open instead of launching");
         if (editor.wiring == Wiring::ClaudeProfile) {
             command->add_flag("--restore", *restore,
-                              "undo what we configured and launch nothing");
+                              "Put Claude Desktop back on Anthropic and exit");
         }
         // Tokens after the wally flags belong to the tool, its own flags
         // included. They reach here as positionals because `run()` inserts a
         // `--` ahead of them (see SplitPassthroughArgv); CLI11 would otherwise
         // read a leading `--flag` as an unknown wally option and reject it.
-        command->add_option("args", *rest, "passed through to the tool")->allow_extra_args();
+        command->add_option("args", *rest, "Passed through to the tool")->allow_extra_args();
         command->prefix_command();
         command->callback([&options, &editor, model, rest, serve, restore] {
             if (*restore) {

@@ -59,8 +59,8 @@ int run_update(bool nightly) {
 void register_update(CLI::App& app, GlobalOptions& options) {
     static_cast<void>(options);
     auto nightly = std::make_shared<bool>(false);
-    CLI::App* cmd = app.add_subcommand("update", "update wally to the latest release");
-    cmd->add_flag("--nightly", *nightly, "track the development channel instead of production");
+    CLI::App* cmd = app.add_subcommand("update", "Update wally to the latest release");
+    cmd->add_flag("--nightly", *nightly, "Track the development channel");
     cmd->callback([nightly]() {
         if (run_update(*nightly) != 0) {
             throw CLI::RuntimeError(1);

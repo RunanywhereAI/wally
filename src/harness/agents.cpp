@@ -303,14 +303,14 @@ std::string ReadOpenClawConfig() {
 }  // namespace
 
 const Agent kAgents[] = {
-    {"hermes", "hermes", "open a Hermes coding session against a model",
-     Agent::Handoff::CustomEndpointEnvironment, "--tui"},
-    {"openclaw", "openclaw", "open OpenClaw against a model", Agent::Handoff::ConfigFile,
+    {"hermes", "hermes", "Open Hermes with a model", Agent::Handoff::CustomEndpointEnvironment,
+     "--tui"},
+    {"openclaw", "openclaw", "Open OpenClaw with a model", Agent::Handoff::ConfigFile,
      "tui --local"},
     // No default arguments: this row picks its own profile below, and a `web`
     // default would arrive here as the person's first positional — which is to
     // say, as a prompt.
-    {"deepseek", "dsh", "open DeepSeek Harness against a model", Agent::Handoff::PatchOverlay, ""},
+    {"deepseek", "dsh", "Open DeepSeek Harness with a model", Agent::Handoff::PatchOverlay, ""},
 };
 
 const int kAgentCount = static_cast<int>(sizeof(kAgents) / sizeof(kAgents[0]));

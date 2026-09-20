@@ -298,8 +298,7 @@ void configure_models_download(CLI::App *cmd, GlobalOptions &options) {
   cmd->add_option("model", *ref, "Model id, alias, hf.co/org/repo/file or URL")
       ->required();
   cmd->add_option("--engine", *engine,
-                  "Engine hint (neurt|coreml|ane, mlx, llamacpp, onnx, sherpa). Honoured for "
-                  "catalog models too, not just URL/HF refs.");
+                  "Engine to fetch for (mlx, llamacpp, onnx, sherpa, neurt, qhexrt)");
   cmd->callback([&options, ref, engine]() {
     Bootstrapped env;
     if (bootstrap(options, &env) != RAC_SUCCESS) {

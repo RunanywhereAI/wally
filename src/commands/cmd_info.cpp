@@ -21,7 +21,7 @@
 namespace wally::commands {
 
 void register_info(CLI::App& app, GlobalOptions& options) {
-    CLI::App* cmd = app.add_subcommand("info", "Report versions, paths, memory and backends");
+    CLI::App* cmd = app.add_subcommand("info", "Show versions, paths, memory and backends");
     cmd->callback([&options]() {
         Bootstrapped env;
         if (bootstrap(options, &env) != RAC_SUCCESS) {

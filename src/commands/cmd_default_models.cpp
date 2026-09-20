@@ -38,13 +38,13 @@ void register_default_models(CLI::App& app, GlobalOptions& options) {
     // (app.cpp), so the namespace exists; a reorder would trip OptionNotFound.
     CLI::App* models = app.get_subcommand("models");
     CLI::App* cmd =
-        models->add_subcommand("default", "Set the model a harness uses when you pass no -m");
-    cmd->add_option("model", *model, "a model id to make the default, e.g. glm-5.3-flash");
-    cmd->add_flag("--clear", *clear, "remove the saved default");
-    cmd->footer("Examples:\n"
-                "  wally models default glm-5.3-flash\n"
-                "  wally models default          (show the current default)\n"
-                "  wally models default --clear");
+        models->add_subcommand("default", "Show or set the default model for coding tools");
+    cmd->add_option("model", *model, "Model id to save as the default (omit to show it)");
+    cmd->add_flag("--clear", *clear, "Forget the saved default");
+    cmd->footer(examples_footer({
+        {"wally models default glm-5.3-flash", ""},
+        {"wally models default --clear", ""},
+    }));
 
     cmd->callback([model, clear] {
         if (*clear) {

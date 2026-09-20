@@ -243,13 +243,13 @@ int run_uninstall(bool yes) {
 
 void register_help(CLI::App& app, GlobalOptions& options) {
     static_cast<void>(options);
-    CLI::App* cmd = app.add_subcommand("help", "Show help (same as --help)");
+    CLI::App* cmd = app.add_subcommand("help", "Show help for a command");
     auto topic = std::make_shared<std::string>();
-    cmd->add_option("command", *topic, "show help for this command");
+    cmd->add_option("command", *topic, "Command to describe");
     cmd->callback([&app, topic] {
         if (!topic->empty()) {
             try {
-                std::fputs(app.get_subcommand(*topic)->help().c_str(), stdout);
+                std::fputs(app.get_subcommand(*topic)->help(app.get_name()).c_str(), stdout);
                 return;
             } catch (const CLI::Error&) {
                 // No such subcommand: fall through to the top-level help.
@@ -262,10 +262,9 @@ void register_help(CLI::App& app, GlobalOptions& options) {
 void register_uninstall(CLI::App& app, GlobalOptions& options) {
     static_cast<void>(options);
     auto yes = std::make_shared<bool>(false);
-    CLI::App* cmd = app.add_subcommand(
-        "uninstall",
-        "Remove wally, its on-device models, and its config (leaves your coding tools)");
-    cmd->add_flag("-y,--yes", *yes, "Delete without asking for confirmation");
+    CLI::App* cmd =
+        app.add_subcommand("uninstall", "Remove wally, its models and its config");
+    cmd->add_flag("-y,--yes", *yes, "Skip the confirmation prompt");
     cmd->callback([yes] {
         const int code = run_uninstall(*yes);
         if (code != 0) {

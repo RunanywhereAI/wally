@@ -26,13 +26,17 @@
 namespace wally {
 
 void configure_app(CLI::App& app, GlobalOptions& options) {
-    app.set_version_flag("--version,-V", std::string("wally ") + WALLY_VERSION);
+    // Set before any subcommand registers: a subcommand copies its parent's
+    // help flag at construction.
+    app.set_help_flag("-h,--help", "Show help");
+    app.set_version_flag("--version,-V", std::string("wally ") + WALLY_VERSION,
+                         "Show the wally version");
     app.require_subcommand(0, 1);
     app.fallthrough(true);
 
-    app.add_flag("--json", options.json, "Machine-readable JSON output on stdout");
+    app.add_flag("--json", options.json, "Print results as JSON");
     app.add_flag("-v,--verbose", options.verbose, "Debug logging on stderr");
-    app.add_flag("-q,--quiet", options.quiet, "Errors only on stderr");
+    app.add_flag("-q,--quiet", options.quiet, "Errors only");
     app.add_flag("--no-progress", options.no_progress, "Disable progress rendering")->group("");
     app.add_flag("--no-color", options.no_color, "Disable colored --help output")->group("");
     app.add_option("--home", options.home_override,
@@ -42,13 +46,16 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
 
     // Top-level shortcuts that run the matching command and exit, like -V for
     // version. `-un` is not a valid single-dash short (that parses as `-u -n`),
-    // so uninstall takes `-U`.
+    // so uninstall takes `-U`. Kept out of --help: the `update` and `uninstall`
+    // commands are the documented spelling.
     app.add_flag_callback(
         "-u,--update", [] { std::exit(commands::run_update(false)); },
-        "Update wally to the latest release");
+        "Update wally to the latest release")
+        ->group("");
     app.add_flag_callback(
         "-U,--uninstall", [] { std::exit(commands::run_uninstall(false)); },
-        "Uninstall wally, its models and config");
+        "Uninstall wally, its models and config")
+        ->group("");
 
     // Control-plane connection (environment / base URL / API key) is not exposed
     // as CLI flags: resolve_connection() reads RUNANYWHERE_ENVIRONMENT /
@@ -102,11 +109,11 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     commands::register_backends(app, options);     // hidden below
     commands::register_telemetry(app, options);    // hidden below
 
-    // Flat help: one "Available Commands" section, in registration order. The
-    // group is set by walking the registered subcommands (not by name), so a
-    // rename can never leave a stale string to crash the CLI (0xC0000409).
+    // Flat help: one "Commands" section, in registration order. The group is
+    // set by walking the registered subcommands (not by name), so a rename can
+    // never leave a stale string to crash the CLI (0xC0000409).
     for (CLI::App* sub : app.get_subcommands({})) {
-        if (!sub->get_name().empty()) sub->group("Available Commands");
+        if (!sub->get_name().empty()) sub->group("Commands");
     }
     // Diagnostic and advanced commands: callable, but kept out of the list.
     for (const char* hidden : {"bench", "backends", "telemetry"}) {
@@ -128,6 +135,9 @@ namespace {
 /// would miss every wrong-argument case.
 void PrintTypoHelp(const CLI::App& app) {
     const CLI::App* ctx = &app;
+    // The names above `ctx`, so its usage line reads `wally models ...` the
+    // way `wally models --help` prints it.
+    std::string parents;
     for (;;) {
         const CLI::App* next = nullptr;
         for (const CLI::App* sub : ctx->get_subcommands({})) {
@@ -137,10 +147,11 @@ void PrintTypoHelp(const CLI::App& app) {
             }
         }
         if (next == nullptr) break;
+        parents = parents.empty() ? ctx->get_name() : parents + " " + ctx->get_name();
         ctx = next;
     }
     out::error_line("You typed it wrong..! Use -h/--help on the sub command to know its options");
-    std::fputs(ctx->help().c_str(), stderr);
+    std::fputs(ctx->help(parents).c_str(), stderr);
 }
 
 /// The subcommands that hand the terminal to another tool and forward the rest
@@ -266,39 +277,26 @@ int run(int argc, char** argv) {
         }
     }
 
-    CLI::App app{""};
+    // Named "wally" outright rather than from argv[0], so the usage line reads
+    // the same whether the binary was run through the install wrapper, by full
+    // path, or as wally-cxx.
+    CLI::App app{"Run language models locally or in the cloud, and wire coding tools to them",
+                 "wally"};
     // Help is intentionally plain: keep the tree/layout, drop all color.
     static_cast<void>(no_color_requested);
     app.formatter(std::make_shared<CliFormatter>(false));
     configure_app(app, options);
-    // Every subcommand here loads a model on this machine; a hosted console
-    // model (glm-5.3-flash, ...) has no path through `run`/`llm generate` at
-    // all, and that dead end used to be the only place someone learned the
-    // cloud path exists.
-    // Example block at the end of --help. Built with computed padding so the
-    // description column lines up regardless of command length.
-    auto ex = [](const std::string& cmd, const std::string& desc) {
-        std::string line = "    " + cmd;
-        if (line.size() < 48) {
-            line.append(48 - line.size(), ' ');
-        }
-        return line + desc + "\n";
-    };
-    const std::string examples =
-        "Examples:\n"
-        "  On-device (offline):\n" +
-        ex("wally models pull qwen3-4b", "download a model") +
-        ex("wally run qwen3-4b \"write a haiku\"", "chat with it locally") +
-        ex("wally llm generate -m qwen3-4b \"hi\"", "one-shot completion") +
-        "  Cloud (hosted account models):\n" +
-        ex("wally opencode --cloud -m glm-5.3-flash", "coding agent on a hosted model") +
-        ex("wally claude-code -m glm-5.3-flash", "Claude Code on a hosted model") +
-        "  Models:\n" +
-        ex("wally models list --all", "browse the full catalog") +
-        ex("wally models show granite-4.2-8b", "details for one model") +
-        ex("wally models rm qwen3-4b", "delete a downloaded model") +
-        "\nUse \"wally [command] --help\" for more information about a command.";
-    app.footer(examples);
+    // `run` and `llm` only load models on this machine; a hosted model
+    // (glm-5.3-flash, ...) is reached through a coding tool, and this block is
+    // where a first-time reader learns that path exists.
+    app.footer(examples_footer({
+                   {"wally models pull qwen3-0.6b", "Download a model"},
+                   {"wally run qwen3-0.6b \"write a haiku\"", "Run it on this machine"},
+                   {"wally claude-code -m glm-5.3-flash", "Claude Code on a hosted model"},
+                   {"wally opencode --cloud -m glm-5.3-flash", "opencode on a hosted model"},
+                   {"wally models list --all", "Browse the catalog"},
+               }) +
+               "\n\nUse \"wally <command> --help\" for more information about a command.");
 
     // A `--` before the wrapped tool's own arguments, added for the reader, so
     // `wally claude-code --dangerously-skip-permissions` forwards the flag
@@ -313,7 +311,9 @@ int run(int argc, char** argv) {
     if (raw.size() >= 2 && raw[1] == "help") {
         if (raw.size() >= 3 && !raw[2].empty() && raw[2][0] != '-') {
             try {
-                std::fputs(app.get_subcommand(raw[2])->help().c_str(), stdout);
+                // The parent's name, so the usage line reads `wally opencode`
+                // exactly as `wally opencode --help` prints it.
+                std::fputs(app.get_subcommand(raw[2])->help(app.get_name()).c_str(), stdout);
                 shutdown();
                 return 0;
             } catch (const CLI::Error&) {

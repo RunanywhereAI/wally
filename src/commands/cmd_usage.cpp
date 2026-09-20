@@ -211,9 +211,9 @@ void register_usage(CLI::App& app, GlobalOptions& options) {
     // Lives under `account`. register_account runs first (app.cpp), so the
     // namespace exists; a reorder would trip OptionNotFound at configure time.
     CLI::App* account_cmd = app.get_subcommand("account");
-    auto* usage = account_cmd->add_subcommand("usage", "credit left, and what the last day cost");
-    usage->add_flag("--json", *as_json, "machine-readable output");
-    usage->footer("Examples:\n  wally account usage\n  wally --json account usage");
+    auto* usage =
+        account_cmd->add_subcommand("usage", "Show remaining credit and the last day's spend");
+    usage->add_flag("--json", *as_json, "Print as JSON");
     // `wally --json usage` and `wally usage --json` mean the same thing. The root
     // parser accepts the first, so reading only the command-local flag printed a
     // human table to something asking for one JSON document.

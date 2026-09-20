@@ -398,19 +398,16 @@ void register_account(CLI::App& app, GlobalOptions& options) {
     // credentials.cpp). Login() falls back to that when handed an empty string.
     const std::string console_url;
 
-    auto* login = account_cmd->add_subcommand("login", "sign in through the RunAnywhere console");
-    login->add_flag("--no-browser", *no_browser, "print the URL instead of opening it");
-    login->footer("Examples:\n  wally account login\n  wally account login --no-browser");
+    auto* login = account_cmd->add_subcommand("login", "Sign in through the browser");
+    login->add_flag("--no-browser", *no_browser, "Print the sign-in URL instead of opening it");
     login->callback([no_browser, console_url] { fail(Login(console_url, !*no_browser)); });
 
-    auto* logout = account_cmd->add_subcommand("logout", "revoke and remove the cloud session");
-    logout->footer("Examples:\n  wally account logout");
+    auto* logout = account_cmd->add_subcommand("logout", "Sign out and revoke the session");
     logout->callback([] { fail(Logout()); });
 
     auto whoami_json = std::make_shared<bool>(false);
-    auto* whoami = account_cmd->add_subcommand("whoami", "show the signed-in cloud account");
-    whoami->add_flag("--json", *whoami_json, "machine-readable output");
-    whoami->footer("Examples:\n  wally account whoami\n  wally --json account whoami");
+    auto* whoami = account_cmd->add_subcommand("whoami", "Show the signed-in account");
+    whoami->add_flag("--json", *whoami_json, "Print as JSON");
     // `wally --json account whoami` and `... whoami --json` mean the same thing;
     // see the identical fix in register_usage (cmd_usage.cpp).
     whoami->callback([whoami_json, &options] { fail(WhoAmI(*whoami_json || options.json)); });

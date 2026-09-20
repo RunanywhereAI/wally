@@ -24,7 +24,7 @@
 namespace wally::commands {
 
 void register_version(CLI::App& app, GlobalOptions& options) {
-    CLI::App* cmd = app.add_subcommand("version", "Show wally and commons versions");
+    CLI::App* cmd = app.add_subcommand("version", "Show wally and SDK versions");
     cmd->callback([&options]() {
         const rac_version_t commons = rac_get_version();
         const std::string commons_version =

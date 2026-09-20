@@ -176,7 +176,7 @@ void configure_models_delete(CLI::App *cmd, GlobalOptions &options) {
   auto ref = std::make_shared<std::string>();
   auto force = std::make_shared<bool>(false);
   cmd->add_option("model", *ref, "Model id or alias")->required();
-  cmd->add_flag("-f,--force", *force, "Do not ask for confirmation");
+  cmd->add_flag("-f,--force", *force, "Skip the confirmation prompt");
   cmd->callback([&options, ref, force]() {
     const int exit_code = run_rm(options, *ref, *force);
     if (exit_code != 0) {
