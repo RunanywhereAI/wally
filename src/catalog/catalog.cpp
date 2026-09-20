@@ -2022,8 +2022,6 @@ constexpr CatalogEntry kCatalog[] = {
     // (llama.cpp) remain the way to run these two on wally.
 };
 
-constexpr size_t kCatalogCount = sizeof(kCatalog) / sizeof(kCatalog[0]);
-
 rac_result_t register_entry(const CatalogEntry &entry) {
   // CoreML bundles (a directory of compiled .mlmodelc sub-models) don't fit the
   // URL / multi-file download-factory grammar, which rejects a bare repo ref.
@@ -2118,15 +2116,37 @@ rac_result_t register_entry(const CatalogEntry &entry) {
 
 } // namespace
 
+// LLM-only cut: the catalog surfaces language models only. Every other
+// modality's entries still live in kCatalog above, but are filtered out here,
+// so `models list`, lookups, suggestions and SDK registration all see LLMs
+// only. Delete is_llm and its four uses below to restore the full catalog.
+static bool is_llm(const CatalogEntry &entry) {
+  return entry.category == runanywhere::v1::MODEL_CATEGORY_LANGUAGE;
+}
+
 const CatalogEntry *all(size_t *count) {
+  // A contiguous, LLM-only view built once; callers get the same stable
+  // pointer + count contract they had against kCatalog.
+  static const std::vector<CatalogEntry> llm_only = [] {
+    std::vector<CatalogEntry> filtered;
+    for (const CatalogEntry &entry : kCatalog) {
+      if (is_llm(entry)) {
+        filtered.push_back(entry);
+      }
+    }
+    return filtered;
+  }();
   if (count) {
-    *count = kCatalogCount;
+    *count = llm_only.size();
   }
-  return kCatalog;
+  return llm_only.data();
 }
 
 const CatalogEntry *find(const std::string &id_or_alias) {
   for (const CatalogEntry &entry : kCatalog) {
+    if (!is_llm(entry)) {
+      continue;
+    }
     if (id_or_alias == entry.id ||
         (entry.alias && id_or_alias == entry.alias)) {
       return &entry;
@@ -2141,6 +2161,9 @@ std::vector<std::string> suggestions(const std::string &input, size_t max) {
     if (matches.size() >= max) {
       break;
     }
+    if (!is_llm(entry)) {
+      continue;
+    }
     if (std::string(entry.id).find(input) != std::string::npos ||
         (entry.alias &&
          std::string(entry.alias).find(input) != std::string::npos)) {
@@ -2153,6 +2176,9 @@ std::vector<std::string> suggestions(const std::string &input, size_t max) {
 rac_result_t register_all() {
   rac_result_t first_error = RAC_SUCCESS;
   for (const CatalogEntry &entry : kCatalog) {
+    if (!is_llm(entry)) {
+      continue;
+    }
     const rac_result_t rc = register_entry(entry);
     if (rc != RAC_SUCCESS) {
       out::status_line(
