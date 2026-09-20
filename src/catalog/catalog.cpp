@@ -1411,18 +1411,37 @@ constexpr CatalogEntry kCatalog[] = {
      "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/"
      "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
      nullptr, 0, 2020 * MB, 0, false},
-    {"lfm2-350m-q8_0", "lfm2", "LiquidAI LFM2 350M Q8_0",
+    // LiquidAI LFM2.5 family (official GGUF, Apache 2.0). Replaces the older
+    // LFM2 Q8 entry: newer version, ≤4-bit, pinned revisions.
+    {"lfm2.5-350m-q4_k_m", "lfm2.5-350m", "LiquidAI LFM2.5 350M Q4_K_M",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
-     "https://huggingface.co/LiquidAI/LFM2-350M-GGUF/resolve/main/"
-     "LFM2-350M-Q8_0.gguf",
-     nullptr, 0, 400 * MB, 2048, false},
-    {"smollm2-360m-q8_0", "smollm2", "SmolLM2 360M Q8_0",
+     "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF/resolve/"
+     "9969000761ce34de907bf20017cbfc3d52d6eaf9/"
+     "LFM2.5-350M-Q4_K_M.gguf",
+     nullptr, 0, 219 * MB, 32768, false},
+    {"lfm2.5-1.2b-instruct-q4_k_m", "lfm2.5",
+     "LiquidAI LFM2.5 1.2B Instruct Q4_K_M", v1::MODEL_CATEGORY_LANGUAGE,
+     v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
+     "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/"
+     "6767265158422fb8a19c62ceb45f16f05363615b/"
+     "LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+     nullptr, 0, 697 * MB, 32768, false},
+    {"lfm2.5-2.6b-q4_k_m", "lfm2.5-2.6b", "LiquidAI LFM2.5 2.6B Q4_K_M",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
-     "https://huggingface.co/prithivMLmods/SmolLM2-360M-GGUF/resolve/main/"
-     "SmolLM2-360M.Q8_0.gguf",
-     nullptr, 0, 386 * MB, 2048, false},
+     "https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF/resolve/"
+     "84022ce711b28455e8c4fc364ce68c00cf995875/"
+     "LFM2.5-2.6B-Q4_K_M.gguf",
+     nullptr, 0, 1597 * MB, 32768, false},
+    // SmolLM2 135M from the llama.cpp org's own GGUF (official), ≤4-bit.
+    {"smollm2-135m-q4_k_m", "smollm2", "SmolLM2 135M Q4_K_M",
+     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
+     v1::MODEL_FORMAT_GGUF,
+     "https://huggingface.co/ggml-org/SmolLM2-135M-GGUF/resolve/"
+     "44686446221a479a9227d7a895cf92930f86de8a/"
+     "SmolLM2-135M-Q4_K_M.gguf",
+     nullptr, 0, 96 * MB, 8192, false},
 
     // Google Gemma 4 family (GGUF). Licensed under Apache 2.0; preserve the
     // upstream license and attribution notices when redistributing.
@@ -1509,6 +1528,22 @@ constexpr CatalogEntry kCatalog[] = {
      "6cb34f31b11ca4c1433de1af7391dac46de4e666/"
      "granite-4.1-30b-Q4_K_M.gguf",
      nullptr, 0, 17490241472LL, 4096, false},
+
+    // IBM Granite 4.2 family (bartowski GGUF, Apache 2.0) — newest Granite.
+    {"granite-4.2-8b-q4_k_m", "granite4.2-8b", "IBM Granite 4.2 8B Q4_K_M",
+     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
+     v1::MODEL_FORMAT_GGUF,
+     "https://huggingface.co/bartowski/granite-4.2-8b-GGUF/resolve/"
+     "a592100df8fe4931c7cffbac7b28e8176a1d52da/"
+     "granite-4.2-8b-Q4_K_M.gguf",
+     nullptr, 0, 5283 * MB, 131072, false},
+    {"granite-4.2-30b-q4_k_m", "granite4.2-30b", "IBM Granite 4.2 30B Q4_K_M",
+     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
+     v1::MODEL_FORMAT_GGUF,
+     "https://huggingface.co/bartowski/granite-4.2-30b-GGUF/resolve/"
+     "1847d3b70241af9d656f382a4cf29d5c6573e584/"
+     "granite-4.2-30b-Q4_K_M.gguf",
+     nullptr, 0, 17192 * MB, 131072, false},
 
     // --- VLM (gguf + mmproj pairs) ---
     {"smolvlm2-256m-video-instruct-q8_0", "smolvlm2",
