@@ -198,10 +198,15 @@ jobs:
           kit="${GITHUB_WORKSPACE}/kit"
           bash scripts/build/fetch-kit.sh windows-arm64 "$kit"
           test -f "$kit/include/runanywhere/proto/model_types.pb.h"
+      - name: Resolve product version
+        shell: bash
+        run: |
+          echo "WALLY_VERSION=$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' versions.toml | head -1)" >> "$GITHUB_ENV"
       - uses: ./.github/actions/build-wally
         with:
           platform: windows-arm64
           kit-dir: ${{ github.workspace }}/kit
+          package: 'true'
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure -C Release
       - name: Smoke
@@ -209,6 +214,9 @@ jobs:
         env:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
         run: bash scripts/test/e2e.sh ./build/wally.exe
+      - name: Clean-room zip smoke
+        shell: pwsh
+        run: scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-${env:WALLY_VERSION}-windows-arm64.zip"
 
   windows:
     runs-on: windows-2022
@@ -239,10 +247,15 @@ jobs:
           kit="${GITHUB_WORKSPACE}/kit"
           bash scripts/build/fetch-kit.sh windows-x64 "$kit"
           test -f "$kit/include/runanywhere/proto/model_types.pb.h"
+      - name: Resolve product version
+        shell: bash
+        run: |
+          echo "WALLY_VERSION=$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' versions.toml | head -1)" >> "$GITHUB_ENV"
       - uses: ./.github/actions/build-wally
         with:
           platform: windows-x64
           kit-dir: ${{ github.workspace }}/kit
+          package: 'true'
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure -C Release
       - name: Smoke
@@ -250,3 +263,6 @@ jobs:
         env:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
         run: bash scripts/test/e2e.sh ./build/wally.exe
+      - name: Clean-room zip smoke
+        shell: pwsh
+        run: scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-${env:WALLY_VERSION}-windows-x86_64.zip"

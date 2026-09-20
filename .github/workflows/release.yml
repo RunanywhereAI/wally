@@ -135,6 +135,12 @@ jobs:
         env:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
         run: bash scripts/test/e2e.sh ./build/wally.exe
+      - name: Clean-room zip smoke
+        shell: pwsh
+        run: |
+          $ver = "${env:WALLY_VERSION}".TrimStart("v")
+          $suffix = if ("${{ matrix.variant }}" -eq "dev") { "-dev" } else { "" }
+          scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-$ver-windows-arm64$suffix.zip"
       - name: Verify archive
         shell: bash
         run: |
@@ -196,6 +202,12 @@ jobs:
         env:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
         run: bash scripts/test/e2e.sh ./build/wally.exe
+      - name: Clean-room zip smoke
+        shell: pwsh
+        run: |
+          $ver = "${env:WALLY_VERSION}".TrimStart("v")
+          $suffix = if ("${{ matrix.variant }}" -eq "dev") { "-dev" } else { "" }
+          scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-$ver-windows-x86_64$suffix.zip"
       - name: Verify archive
         shell: bash
         run: |
