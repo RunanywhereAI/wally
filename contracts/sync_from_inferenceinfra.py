@@ -88,18 +88,24 @@ def check_local(extract: Path = EXTRACT) -> None:
                 "Run: python3 contracts/sync_from_inferenceinfra.py "
                 "--from /path/to/InferenceInfra"
             )
-    if extract.resolve() == EXTRACT.resolve():
-        _run([sys.executable, str(GENERATOR), "--check"])
-    else:
-        # generate_console_binding.py reads the committed extract and has no
-        # path override, so checking the header against some other file would
-        # be meaningless. Provenance is still checked above, which is the part
-        # an alternate extract exists to exercise.
-        print(f"note: {extract} is not the committed extract; binding check skipped")
-    print(
-        f"Wally CLI lock OK ({source['commit'][:8]}, {source['branch']}, "
-        f"{source['artifact']})"
-    )
+    stamp = f"{source['commit'][:8]}, {source['branch']}, {source['artifact']}"
+    if extract.resolve() != EXTRACT.resolve():
+        # An alternate extract proves nothing about what ships. generate_console
+        # _binding.py reads the committed extract and has no path override, so
+        # the header cannot be checked against some other file -- and the
+        # committed pin was never looked at either. Say so in the words this
+        # run actually earned: "Wally CLI lock OK" means the shipping lock is
+        # good, and a run over another file must never be able to print it.
+        # The caveat goes to stderr so stdout carries only the result.
+        print(
+            f"note: {extract} is not the committed extract; "
+            "console_contract.h and the committed pin were NOT checked",
+            file=sys.stderr,
+        )
+        print(f"alternate extract provenance OK ({stamp})")
+        return
+    _run([sys.executable, str(GENERATOR), "--check"])
+    print(f"Wally CLI lock OK ({stamp})")
 
 
 def _dirty_generated() -> list[str]:
@@ -195,8 +201,9 @@ def main() -> None:
         type=Path,
         default=EXTRACT,
         help=(
-            "check provenance in this extract instead of the committed one; "
-            "lets a test exercise the refusal path whatever the committed pin says"
+            "check provenance in this extract instead of the committed one "
+            "(a testing aid: it verifies neither the committed pin nor "
+            "console_contract.h, and never reports the lock as OK)"
         ),
     )
     args = parser.parse_args()

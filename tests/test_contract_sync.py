@@ -44,6 +44,28 @@ class ContractSyncTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr + result.stdout)
         self.assertIn("Wally CLI lock OK", result.stdout)
 
+    def test_alternate_extract_passes_but_is_not_the_lock_verdict(self):
+        """The alternate-extract success branch, and the words it may not use.
+
+        Two regressions this catches. If check_local() started refusing every
+        alternate extract, the refusal tests below would all still pass and
+        nothing would notice. And if the alternate path went back to printing
+        "Wally CLI lock OK", a run that never looked at the committed pin or at
+        console_contract.h would claim the shipping lock is good.
+        """
+        document = json.loads(EXTRACT.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as directory:
+            extract = Path(directory) / "wally-cli-v1.openapi.json"
+            extract.write_text(json.dumps(document), encoding="utf-8")
+            result = _check("--extract", str(extract))
+
+        self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+        self.assertIn("alternate extract provenance OK", result.stdout)
+        # The lock verdict is reserved for the committed extract. stdout is
+        # what a script greps, so the claim must not appear there at all.
+        self.assertNotIn("Wally CLI lock OK", result.stdout)
+        self.assertIn("NOT checked", result.stderr)
+
     def _assert_refused(self, document: dict, missing: str) -> None:
         """--check must refuse `document` and name the field it wanted."""
         with tempfile.TemporaryDirectory() as directory:
