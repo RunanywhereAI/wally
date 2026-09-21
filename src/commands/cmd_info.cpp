@@ -47,8 +47,6 @@ void register_info(CLI::App& app, GlobalOptions& options) {
         const char* platform = "unknown";
 #endif
 
-        // Same rows `about` and `backends` show, so all three agree on the
-        // count (collect_backend_rows applies the llm-only listing filter).
         const auto backends = static_cast<int64_t>(collect_backend_rows().size());
 
         if (options.json) {
