@@ -20,6 +20,13 @@ namespace wally::commands {
 
 // Walk every live primitive. ONNX without RAG only advertises SEGMENT /
 // DIARIZE — omitting those made a registered onnx backend invisible.
+//
+// TEMP(llm-only cut): the report is then narrowed to engines that serve
+// GENERATE_TEXT, so `about` / `backends` do not list onnx (diarize, embed,
+// segment) or sherpa (voice) beside commands that cannot reach them. The
+// engines stay registered and still handle those primitives for anything the
+// kit routes to them; only the listing changes. Drop the filter with the
+// register_* block in src/app.cpp.
 std::map<std::string, EngineRow> collect_backend_rows() {
     std::map<std::string, EngineRow> engines;
     for (int raw = 1; raw < static_cast<int>(RAC_PRIMITIVE_COUNT); ++raw) {
@@ -44,6 +51,10 @@ std::map<std::string, EngineRow> collect_backend_rows() {
             row.priority = meta.priority;
             row.primitives.insert(rac_primitive_name(primitive));
         }
+    }
+    const std::string llm = rac_primitive_name(RAC_PRIMITIVE_GENERATE_TEXT);
+    for (auto it = engines.begin(); it != engines.end();) {
+        it = it->second.primitives.count(llm) ? std::next(it) : engines.erase(it);
     }
     return engines;
 }

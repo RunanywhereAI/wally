@@ -9,7 +9,6 @@
 
 #include "rac/core/rac_core.h"
 #include "rac/core/rac_platform_adapter.h"
-#include "rac/plugin/rac_plugin_entry.h"
 
 #include "config/cli_paths.h"
 #include "io/output.h"
@@ -48,6 +47,10 @@ void register_info(CLI::App& app, GlobalOptions& options) {
         const char* platform = "unknown";
 #endif
 
+        // Same rows `about` and `backends` show, so all three agree on the
+        // count (collect_backend_rows applies the llm-only listing filter).
+        const auto backends = static_cast<int64_t>(collect_backend_rows().size());
+
         if (options.json) {
             out::JsonWriter json;
             json.begin_object()
@@ -57,7 +60,7 @@ void register_info(CLI::App& app, GlobalOptions& options) {
                 .field("home", env.home)
                 .field("models_dir", env.models_dir)
                 .field("state_dir", paths::state_dir())
-                .field("backends", static_cast<int64_t>(rac_plugin_count()));
+                .field("backends", backends);
             if (memory_ok) {
                 json.field("memory_total_bytes", static_cast<int64_t>(memory.total_bytes))
                     .field("memory_available_bytes",
@@ -80,7 +83,7 @@ void register_info(CLI::App& app, GlobalOptions& options) {
         row("platform", platform);
         row("home", env.home);
         row("models", env.models_dir);
-        row("backends", std::to_string(rac_plugin_count()));
+        row("backends", std::to_string(backends));
         if (memory_ok) {
             row("memory", out::human_bytes(memory.available_bytes) + " available of " +
                               out::human_bytes(memory.total_bytes));
