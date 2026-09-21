@@ -1,7 +1,6 @@
 #include "test_common.h"
 
 #include <chrono>
-#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -808,46 +807,6 @@ TestResult test_deepseek_prompt_picks_headless() {
     return result;
 }
 
-// The parameter count is read off the id and drives both the
-// [harness-compatible] tag and the "too small" refusal, so a misread here
-// either hides a usable model or launches a coding tool against a 0.6B one.
-TestResult test_parameter_billions_reads_the_id() {
-    TestResult result;
-    result.test_name = "parameter_billions_reads_the_id";
-
-    struct Case {
-        const char* id;
-        double want;
-    };
-    const Case cases[] = {
-        {"bonsai-27b", 27},
-        {"mlx-bonsai-27b-1bit", 27},
-        {"qwen3.8-27b", 27},
-        {"gemma-4-26b-a4b", 26},      // the total, not the 4B active
-        {"granite-4.1-30b", 30},
-        {"lfm2.5-1.2b", 1.2},
-        {"qwen3-0.6b", 0.6},
-        {"bonsai-1.7b-q1_0", 1.7},    // the quant suffix is not a size
-        {"gemma-4-e2b", 0},           // effective size, not a `<n>b` token
-        {"smollm2-135m", 0},          // millions carry no `b`
-        {"maple-preview", 0},
-        {"glm-5.3-flash", 0},
-    };
-    for (const Case& c : cases) {
-        const double got = wally::harness::ParameterBillions(c.id);
-        if (std::abs(got - c.want) > 1e-9) {
-            result.details = std::string(c.id) + ": want " + std::to_string(c.want) + ", got " +
-                             std::to_string(got);
-            return result;
-        }
-    }
-    if (wally::harness::kHarnessMinBillions != 20.0) {
-        result.details = "the harness bar moved; update models list's note and the docs with it";
-        return result;
-    }
-    result.passed = true;
-    return result;
-}
 
 // The context a local server is started with never drops below the 8192 every
 // launch used before, and never exceeds what the catalog says the model was
@@ -878,86 +837,12 @@ TestResult test_local_context_size_respects_floor_and_model_window() {
     return result;
 }
 
-// One rule gates a local harness launch and tags `models list`: a known size of
-// 20B+ that fits in memory. Each way of failing it names its reason, so the
-// person knows whether to pick another model or another machine.
-TestResult test_harness_compatible_gates_on_size_and_memory() {
-    TestResult result;
-    result.test_name = "harness_compatible_gates_on_size_and_memory";
 
-    constexpr std::int64_t kGiB = 1024LL * 1024 * 1024;
-    const std::uint64_t ram48 = 48ULL * kGiB;
-    const std::uint64_t ram16 = 16ULL * kGiB;
-    std::string why;
-
-    // 27B at 15 GB on 48 GB: the reference case that must pass.
-    if (!wally::harness::HarnessCompatible("qwen3.8-27b", 15000 * 1024 * 1024LL, ram48, &why)) {
-        result.details = "a 27B model that fits was refused: " + why;
-        return result;
-    }
-    // Same size class, 1-bit: refused, and the reason names the quant. Both the
-    // MLX `-1bit` and llama.cpp `-q1_0` spellings.
-    for (const char* id : {"mlx-bonsai-27b-1bit", "bonsai-27b-q1_0", "bonsai-27b-q1_k"}) {
-        if (wally::harness::HarnessCompatible(id, 4800 * 1024 * 1024LL, ram48, &why) ||
-            why.find("1-bit") == std::string::npos) {
-            result.details = std::string(id) + " must be refused as 1-bit, got: " + why;
-            return result;
-        }
-    }
-    // Other low-bit quants are not caught by the 1-bit rule (ternary is 2-bit
-    // and is a separate call); `-4bit` / `-q4_k_m` / `-2bit` pass through.
-    for (const char* id : {"mlx-ternary-bonsai-27b-2bit", "mlx-qwen3.8-27b-4bit", "granite-4.2-30b-q4_k_m"}) {
-        if (wally::harness::IsOneBitQuant(id)) {
-            result.details = std::string(id) + " was misread as 1-bit";
-            return result;
-        }
-    }
-    // Too small, however well it fits.
-    if (wally::harness::HarnessCompatible("qwen3-0.6b", 335 * 1024 * 1024LL, ram48, &why) ||
-        why.find("0.6B") == std::string::npos) {
-        result.details = "a 0.6B model must be refused by size, got: " + why;
-        return result;
-    }
-    // Size not in the id: cannot be judged, so refused, and the reason says so.
-    if (wally::harness::HarnessCompatible("maple-preview", 5 * kGiB, ram48, &why) ||
-        why.find("size") == std::string::npos) {
-        result.details = "an unsized model must be refused with the reason, got: " + why;
-        return result;
-    }
-    // Big enough but does not fit: 31B at 17.1 GB needs ~21.5 GB, over 16 GB.
-    if (wally::harness::HarnessCompatible("gemma-4-31b", 17100 * 1024 * 1024LL, ram16, &why) ||
-        why.find("fit") == std::string::npos) {
-        result.details = "a model over RAM must be refused by memory, got: " + why;
-        return result;
-    }
-    // Tight is refused too: 27B at 16.1 GB needs ~20.3 GB on 24 GB (over 75%).
-    if (wally::harness::HarnessCompatible("qwen3.8-27b", 16100 * 1024 * 1024LL, 24ULL * kGiB,
-                                          &why) ||
-        why.find("swap") == std::string::npos) {
-        result.details = "a tight fit must be refused with the swap warning, got: " + why;
-        return result;
-    }
-    // The fit thresholds themselves, pinned at the boundaries the label shows.
-    using wally::harness::Fit;
-    if (wally::harness::FitFor(17100 * 1024 * 1024LL, ram16) != Fit::TooBig ||
-        wally::harness::FitFor(16100 * 1024 * 1024LL, 24ULL * kGiB) != Fit::Tight ||
-        wally::harness::FitFor(4800 * 1024 * 1024LL, ram48) != Fit::Fits ||
-        wally::harness::FitFor(0, ram48) != Fit::Unknown ||
-        wally::harness::FitFor(1, 0) != Fit::Unknown) {
-        result.details = "FitFor thresholds moved";
-        return result;
-    }
-    result.passed = true;
-    return result;
-}
 
 }  // namespace
 
 int main(int argc, char** argv) {
     TestSuite suite("wally_harness");
-    suite.add("harness_compatible_gates_on_size_and_memory",
-              test_harness_compatible_gates_on_size_and_memory);
-    suite.add("parameter_billions_reads_the_id", test_parameter_billions_reads_the_id);
     suite.add("local_context_size_respects_floor_and_model_window",
               test_local_context_size_respects_floor_and_model_window);
     suite.add("model_id_rejects_empty_and_control_characters",

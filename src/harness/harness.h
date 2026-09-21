@@ -1,6 +1,7 @@
 #ifndef WALLY_HARNESS_HARNESS_H
 #define WALLY_HARNESS_HARNESS_H
 
+#include <memory>
 #include <string>
 #include <vector>
 

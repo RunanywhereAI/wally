@@ -25,9 +25,7 @@
 #include "rac/infrastructure/model_management/rac_model_registry.h"
 
 #include "catalog/catalog.h"
-#include "cli_formatter.h"
 #include "commands/model_setup.h"
-#include "harness/local_models.h"
 #include "commands/model_labels.h"
 #include "io/output.h"
 #include "io/proto.h"
@@ -54,6 +52,7 @@ int backend_rank(v1::InferenceFramework framework) {
 
 struct GroupedRow {
     std::string id;            // merge key by default; see the override below
+    std::string size_id;       // id of the variant that set size_bytes
     std::string local_path;    // local_path of the variant backing `id`, if downloaded
     std::string name;
     v1::ModelCategory category = v1::MODEL_CATEGORY_UNSPECIFIED;
@@ -72,18 +71,6 @@ struct GroupedRow {
     // Distinct backends, ordered by (rank, label) so the join is stable.
     std::set<std::pair<int, std::string>> backends;
 };
-
-// The verdict in the palette's colors: green / yellow / red, plain when color
-// is off. Only safe in the LAST table column -- `out::table` pads by string
-// length and would miscount the escape codes anywhere else.
-std::string fit_cell(harness::Fit fit, const cli_color::Palette& pal) {
-    using harness::Fit;
-    const char* color = fit == Fit::Fits    ? pal.green
-                        : fit == Fit::Tight ? pal.yellow
-                        : fit == Fit::TooBig ? pal.red
-                                             : "";
-    return std::string(color) + harness::FitLabel(fit) + (color[0] ? pal.reset : "");
-}
 
 // A short "how do I download one?" header for the human list. The pull id
 // differs by backend, so show one example per backend this build can run:
@@ -180,6 +167,7 @@ int run_list(const GlobalOptions& options, bool show_all) {
         if (size > 0 && rank < row.size_rank) {
             row.size_rank = rank;
             row.size_bytes = size;
+            row.size_id = model.id();
         }
     }
 
@@ -195,8 +183,6 @@ int run_list(const GlobalOptions& options, bool show_all) {
         return joined;
     };
 
-    const uint64_t total_memory = harness::TotalPhysicalMemory();
-
     if (options.json) {
         out::JsonWriter json;
         json.begin_object().begin_array("models");
@@ -209,10 +195,6 @@ int run_list(const GlobalOptions& options, bool show_all) {
                 .field("backend", join_backends(row))
                 .field("size_bytes", row.size_bytes)
                 .field("downloaded", row.downloaded)
-                // fits | tight | too big | -, against this machine's RAM.
-                .field("fits", harness::FitLabel(harness::FitFor(row.size_bytes, total_memory)))
-                .field("harness_compatible",
-                       harness::HarnessCompatible(row.id, row.size_bytes, total_memory))
                 // Path of the variant `id` refers to; empty when nothing in
                 // the group is downloaded (mirrors the pre-merge shape, which
                 // callers already treat "" as "not downloaded").
@@ -226,29 +208,15 @@ int run_list(const GlobalOptions& options, bool show_all) {
 
     print_pull_examples();
 
-    const cli_color::Palette pal =
-        cli_color::make_palette(color_output_enabled(options.no_color));
-    const std::string harness_tag =
-        std::string(pal.blue) + "[harness-compatible]" + (pal.blue[0] ? pal.reset : "");
-    out::result_line(harness_tag + " marks a model big enough (" +
-                     std::to_string(static_cast<int>(harness::kHarnessMinBillions)) +
-                     "B+) for coding tools like opencode and Claude Code, and that fits here.");
-    out::result_line("");
-
     std::vector<std::vector<std::string>> rows;
     for (const std::string& key : order) {
         const GroupedRow& row = groups.at(key);
-        const harness::Fit fit = harness::FitFor(row.size_bytes, total_memory);
-        std::string verdict = fit_cell(fit, pal);
-        if (harness::HarnessCompatible(row.id, row.size_bytes, total_memory)) {
-            verdict += "  " + harness_tag;
-        }
         rows.push_back({row.id, model_labels::category(row.category),
                         join_backends(row),
                         row.size_bytes > 0
                             ? out::human_bytes(static_cast<uint64_t>(row.size_bytes))
                             : "-",
-                        row.downloaded ? "yes" : "no", verdict});
+                        row.downloaded ? "yes" : "no"});
     }
 
     if (rows.empty()) {
@@ -257,16 +225,7 @@ int run_list(const GlobalOptions& options, bool show_all) {
                                     "`wally models pull <id>`");
         return 0;
     }
-    // ON THIS MAC / ON THIS PC: whether each model fits in memory here.
-    // Last column on purpose; see fit_cell.
-    out::table({"ID", "MODALITY", "BACKEND", "SIZE", "DOWNLOADED", "RUNS HERE"}, rows);
-    if (total_memory > 0) {
-        out::result_line("");
-        out::status_line("RUNS HERE is judged against " + out::human_bytes(total_memory) +
-                         " of memory: " + std::string(pal.green) + "fits" + pal.reset + " / " +
-                         pal.yellow + "tight" + pal.reset + " (will swap under load) / " +
-                         pal.red + "too big" + pal.reset);
-    }
+    out::table({"ID", "MODALITY", "BACKEND", "SIZE", "DOWNLOADED"}, rows);
     return 0;
 }
 

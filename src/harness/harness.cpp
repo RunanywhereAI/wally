@@ -530,18 +530,14 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
             out::status_line("run `wally models pull " + model + "` to finish it");
             return false;
         }
-        // Only what `models list` tags [harness-compatible] gets a coding tool:
-        // a known size of 20B+, and weights that fit here. A small model gives
-        // edits nobody can use and the person blames the tool; one that swaps
-        // is worse. `wally run` still takes any model. Hosted models are not
-        // judged here: the console decides what it serves.
-        std::string why;
-        if (!HarnessCompatible(local->id, local->bytes, TotalPhysicalMemory(), &why)) {
-            out::error_line("model is not compatible with harnesses: " + why);
-            out::status_line("pick one marked [harness-compatible] in `wally models list --all`, "
-                             "or use a hosted model with --cloud");
-            return false;
-        }
+        // Coding tools are cloud-only this release. A local model is refused
+        // outright rather than gated: the kit's local server re-reads the whole
+        // conversation every turn and leaks a reasoning model's thinking into
+        // the reply, so an agent degrades from the second turn on. `wally run`
+        // still takes any local model; the harnesses take a hosted one.
+        out::error_line(model + " is on this machine, but coding tools run on hosted models only");
+        out::status_line("sign in and use one: `wally account login`, then `wally opencode --cloud -m glm-5.3-flash`");
+        return false;
         // Any backend the kit registered. The server's rac_llm_create(path)
         // looks the path up in the registry and routes on the framework it
         // finds ("Found model by path ... framework=7 ... Routed to plugin:
@@ -568,7 +564,13 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
         rac_server_config_t config = RAC_SERVER_CONFIG_DEFAULT;
         config.host = "127.0.0.1";
         config.port = static_cast<uint16_t>(port);
-        const std::string path = local->path.empty() ? local->dir : local->path;
+        // A single-file model (GGUF) is its file; a directory model (MLX
+        // safetensors shards, Core ML) is its directory, which is also what
+        // `wally serve` hands the server. Passing one shard of three worked only
+        // because the server resolves the path through the registry.
+        const std::string path = local->framework == "LlamaCpp" && !local->path.empty()
+                                     ? local->path
+                                     : local->dir;
         config.model_path = path.c_str();
         config.model_id = model.c_str();
         // Sized from this machine, not a constant: a coding agent's opening
