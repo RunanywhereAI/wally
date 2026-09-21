@@ -315,23 +315,49 @@ TestResult test_catalog_lookup() {
 
   size_t count = 0;
   const wally::catalog::CatalogEntry *entries = wally::catalog::all(&count);
-  if (!entries || count < 10) {
+  // all() lists only LLMs the linked kit can run (platform_supports() in
+  // src/catalog/catalog.cpp), so the floor and the probe rows track the kit
+  // macros: the public windows-arm64 kit ships QHexRT but no llama.cpp, and
+  // only the three NPU language rows survive there.
+#if defined(WALLY_HAS_LLAMACPP)
+  constexpr size_t kMinEntries = 10;
+  const char *probe_id = "qwen3-0.6b";
+  const char *probe_alias = "qwen3";
+  const char *probe_partial = "qwen";
+#elif defined(WALLY_HAS_QHEXRT)
+  constexpr size_t kMinEntries = 3;
+  const char *probe_id = "lfm2_5_230m";
+  const char *probe_alias = "lfm2-230m-npu";
+  const char *probe_partial = "lfm2";
+#else
+  constexpr size_t kMinEntries = 1;
+  const char *probe_id = nullptr;
+  const char *probe_alias = nullptr;
+  const char *probe_partial = nullptr;
+#endif
+  if (count < kMinEntries || (count > 0 && !entries)) {
     result.details = "catalog unexpectedly small";
     return result;
   }
 
-  const wally::catalog::CatalogEntry *by_id = wally::catalog::find("qwen3-0.6b");
-  const wally::catalog::CatalogEntry *by_alias = wally::catalog::find("qwen3");
-  if (!by_id || by_id != by_alias) {
-    result.details = "alias lookup should resolve to the same entry";
-    return result;
+  if (probe_id != nullptr) {
+    const wally::catalog::CatalogEntry *by_id =
+        wally::catalog::find(probe_id);
+    const wally::catalog::CatalogEntry *by_alias =
+        wally::catalog::find(probe_alias);
+    if (!by_id || by_id != by_alias) {
+      result.details = "alias lookup should resolve to the same entry";
+      return result;
+    }
   }
   if (wally::catalog::find("definitely-not-a-model") != nullptr) {
     result.details = "unknown id should return nullptr";
     return result;
   }
-  if (wally::catalog::suggestions("qwen", 3).empty()) {
-    result.details = "expected suggestions for 'qwen'";
+  if (probe_partial != nullptr &&
+      wally::catalog::suggestions(probe_partial, 3).empty()) {
+    result.details =
+        std::string("expected suggestions for '") + probe_partial + "'";
     return result;
   }
 
@@ -369,6 +395,10 @@ TestResult test_catalog_lookup() {
   }
 #endif
 
+  // maple-preview is a llama.cpp row; kits without that backend (the public
+  // windows-arm64 kit) hide it, so the pinned-bundle check only applies where
+  // the row is listed.
+#if defined(WALLY_HAS_LLAMACPP)
   const wally::catalog::CatalogEntry *maple_gguf =
       wally::catalog::find("maple-preview");
   if (!maple_gguf ||
@@ -379,6 +409,7 @@ TestResult test_catalog_lookup() {
     result.details = "maple-preview should resolve to the pinned GGUF bundle";
     return result;
   }
+#endif
 
 #if defined(__APPLE__)
   const wally::catalog::CatalogEntry *mlx_maple =
