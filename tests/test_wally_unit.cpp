@@ -317,8 +317,10 @@ TestResult test_catalog_lookup() {
   const wally::catalog::CatalogEntry *entries = wally::catalog::all(&count);
   // all() lists only LLMs the linked kit can run (platform_supports() in
   // src/catalog/catalog.cpp), so the floor and the probe rows track the kit
-  // macros: the public windows-arm64 kit ships QHexRT but no llama.cpp, and
-  // only the three NPU language rows survive there.
+  // macros. The public windows-arm64 kit has no LLM backend at all: no
+  // llama.cpp, and QHexRT reaches it only through the private overlay public
+  // CI never sees -- so neither WALLY_HAS_LLAMACPP nor WALLY_HAS_QHEXRT is
+  // defined there and the listed catalog is empty.
 #if defined(WALLY_HAS_LLAMACPP)
   constexpr size_t kMinEntries = 10;
   const char *probe_id = "qwen3-0.6b";
@@ -330,7 +332,7 @@ TestResult test_catalog_lookup() {
   const char *probe_alias = "lfm2-230m-npu";
   const char *probe_partial = "lfm2";
 #else
-  constexpr size_t kMinEntries = 1;
+  constexpr size_t kMinEntries = 0;
   const char *probe_id = nullptr;
   const char *probe_alias = nullptr;
   const char *probe_partial = nullptr;
@@ -339,6 +341,15 @@ TestResult test_catalog_lookup() {
     result.details = "catalog unexpectedly small";
     return result;
   }
+#if !defined(WALLY_HAS_LLAMACPP) && !defined(WALLY_HAS_QHEXRT) && \
+    !defined(__APPLE__)
+  // No LLM backend and no Apple engines: platform_supports() must hide every
+  // LLM row. A non-empty listing here means the kit gating broke.
+  if (count != 0) {
+    result.details = "expected an empty LLM catalog on a kit with no LLM backend";
+    return result;
+  }
+#endif
 
   if (probe_id != nullptr) {
     const wally::catalog::CatalogEntry *by_id =
