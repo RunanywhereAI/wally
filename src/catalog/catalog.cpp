@@ -1643,16 +1643,22 @@ constexpr CatalogEntry kCatalog[] = {
     // NeuRT advertises LLM + STT + EMBED + RERANK + VLM + EMBED_IMAGE + DIFFUSION; folder refs (same ModelInfo
     // path as sd15). Pass a local compiled tree to `--model` — `wally models pull` of a
     // Hugging Face repo page is HTML, not a bundle.
-    {"lfm2_5_230m_ane", "lfm2-230m-ane", "LiquidAI LFM2.5 230M",
-     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_COREML,
-     v1::MODEL_FORMAT_MLPACKAGE,
-     "https://huggingface.co/runanywhere/LFM2.5-230M_ANE", nullptr, 0, 0, 0,
-     false, 0, "", "lfm2.5-230m"},
-    {"lfm2_5_350m_ane", "lfm2-350m-ane", "LiquidAI LFM2.5 350M",
-     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_COREML,
-     v1::MODEL_FORMAT_MLPACKAGE,
-     "https://huggingface.co/runanywhere/LFM2.5-350M_ANE", nullptr, 0, 0, 0,
-     false, 0, "", "lfm2.5-350m"},
+    // TEMP(ane-cut): the two ANE LLM rows are out of the release. Both URLs
+    // are Hugging Face repo *pages* (the repos hold fp16/ and int8/ trees, no
+    // archive), so `models pull` cannot fetch them, and the public kit has no
+    // NeuRT engine to run them. Uncomment this block, the `ane-` prefix in
+    // find() below, and the test row in tests/test_wally_unit.cpp together
+    // once real artifacts exist; nothing else has to change.
+    // {"lfm2_5_230m_ane", "lfm2-230m-ane", "LiquidAI LFM2.5 230M",
+    //  v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_COREML,
+    //  v1::MODEL_FORMAT_MLPACKAGE,
+    //  "https://huggingface.co/runanywhere/LFM2.5-230M_ANE", nullptr, 0, 0, 0,
+    //  false, 0, "", "lfm2.5-230m"},
+    // {"lfm2_5_350m_ane", "lfm2-350m-ane", "LiquidAI LFM2.5 350M",
+    //  v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_COREML,
+    //  v1::MODEL_FORMAT_MLPACKAGE,
+    //  "https://huggingface.co/runanywhere/LFM2.5-350M_ANE", nullptr, 0, 0, 0,
+    //  false, 0, "", "lfm2.5-350m"},
     // The first ANE EMBEDDING row. docs/BUNDLE_CONTRACT.md listed this exact bundle as the one
     // that "loads, undrivable" — its manifest parsed and its encoder graph bound, but the SDK's
     // neurt engine filled no embedding_ops, so nothing could drive it. Gate B on an M4 Max:
@@ -2089,21 +2095,31 @@ static bool is_llm(const CatalogEntry &entry) {
   return entry.category == runanywhere::v1::MODEL_CATEGORY_LANGUAGE;
 }
 
-// MLX and the Apple Neural Engine (Core ML) are Apple-only backends. On any
-// other platform their entries are hidden and never registered, so a Windows or
-// Linux user cannot list, resolve, or download a model they could never run.
-// llama.cpp and QHexRT are gated the same way, but by the linked kit's own
-// capability macros rather than by host OS/arch: WALLY_HAS_LLAMACPP /
-// WALLY_HAS_QHEXRT come from wally_define_engine_macros() (cmake/RunAnywhereSDK.cmake),
-// set from the consumed kit's RunAnywhere_HAS_* config. The public
-// windows-arm64 kit ships no llama.cpp backend (docs/ENGINES.md), and QHexRT
-// (Snapdragon Hexagon NPU) exists only as a windows-arm64 overlay -- everywhere
-// else WALLY_HAS_QHEXRT is never defined. Reading the linked kit's own macros
-// tracks the real per-build matrix instead of guessing it from __APPLE__/_WIN32.
+// MLX is an Apple-only backend. On any other platform its entries are hidden
+// and never registered, so a Windows or Linux user cannot list, resolve, or
+// download a model they could never run.
+// llama.cpp, the Apple Neural Engine (Core ML via NeuRT) and QHexRT are gated
+// by the linked kit's own capability macros rather than by host OS/arch:
+// WALLY_HAS_LLAMACPP / WALLY_HAS_NEURT / WALLY_HAS_QHEXRT come from
+// wally_define_engine_macros() (cmake/RunAnywhereSDK.cmake), set from the
+// consumed kit's RunAnywhere_HAS_* config. The public windows-arm64 kit ships
+// no llama.cpp backend (docs/ENGINES.md); NeuRT and QHexRT are private overlay
+// packs (AGENTS.md), so the public Apple kit has no engine that can load a
+// Core ML LLM even though the host is a Mac. Gating ANE on __APPLE__ used to
+// list `ane-lfm2.5-350m` on that kit: `models pull` saved the Hugging Face repo
+// page as the model and `run` then handed the folder to MLX, which failed on a
+// missing config.json. Reading the linked kit's own macros tracks the real
+// per-build matrix instead of guessing it from __APPLE__/_WIN32.
 static bool platform_supports(runanywhere::v1::InferenceFramework framework) {
-  if (framework == runanywhere::v1::INFERENCE_FRAMEWORK_MLX ||
-      framework == runanywhere::v1::INFERENCE_FRAMEWORK_COREML) {
+  if (framework == runanywhere::v1::INFERENCE_FRAMEWORK_MLX) {
 #if defined(__APPLE__)
+    return true;
+#else
+    return false;
+#endif
+  }
+  if (framework == runanywhere::v1::INFERENCE_FRAMEWORK_COREML) {
+#if defined(WALLY_HAS_NEURT)
     return true;
 #else
     return false;
@@ -2169,7 +2185,9 @@ const CatalogEntry *find(const std::string &id_or_alias) {
     v1::InferenceFramework framework;
   } kBackendPrefixes[] = {
       {"mlx-", v1::INFERENCE_FRAMEWORK_MLX},
-      {"ane-", v1::INFERENCE_FRAMEWORK_COREML},
+      // TEMP(ane-cut): no ANE rows are listed, so `ane-<id>` resolves to
+      // nothing. Restore with the rows above.
+      // {"ane-", v1::INFERENCE_FRAMEWORK_COREML},
       {"npu-", v1::INFERENCE_FRAMEWORK_QHEXRT},
   };
   for (const auto &prefixed : kBackendPrefixes) {

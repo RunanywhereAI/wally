@@ -71,15 +71,16 @@ struct GroupedRow {
 };
 
 // A short "how do I download one?" header for the human list. The pull id
-// differs by backend, so show one example per backend this platform can run:
-// llama.cpp everywhere; on Apple also MLX and ANE. Never printed in --json.
+// differs by backend, so show one example per backend this build can run:
+// llama.cpp everywhere; on Apple also MLX. Never printed in --json.
 void print_pull_examples() {
     out::result_line("Download a model with `wally models pull <id>`:");
     out::result_line("  wally models pull qwen3-0.6b        # llama.cpp");
 #if defined(__APPLE__)
     out::result_line("  wally models pull mlx-qwen3-0.6b    # MLX (Apple GPU)");
-    out::result_line("  wally models pull ane-lfm2.5-350m   # ANE (Apple Neural Engine)");
 #endif
+    // TEMP(ane-cut): no ANE rows in the catalog, so nothing to point at.
+    // out::result_line("  wally models pull ane-lfm2.5-350m   # ANE (Apple Neural Engine)");
     out::result_line("");
 }
 

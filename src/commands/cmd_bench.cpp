@@ -790,7 +790,7 @@ void register_bench(CLI::App& app, GlobalOptions& options) {
                     "Model id, local bundle path, hf.co/... or URL (default: all "
                     "downloaded)");
     cmd->add_option("--engine", *engine,
-                    "Engine hint (neurt|coreml|ane, mlx, llamacpp, onnx, sherpa)");
+                    std::string("Engine hint (") + engine_choices() + ")");
     cmd->add_option("--trials,-n", *trials, "Measured trials per scenario (median reported)")
         ->default_val(3)
         // Range, not PositiveNumber, for the message alone. PositiveNumber

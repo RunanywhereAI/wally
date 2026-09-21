@@ -633,9 +633,11 @@ TestResult test_overlay_catalog() {
   // leave this array zero-size -- a GNU extension MSVC rejects (C2466). Size
   // it explicitly with one spare value-initialized slot the loop never reads.
   constexpr size_t kRowCount =
-#if defined(__APPLE__)
-      1 +
-#endif
+      // TEMP(ane-cut): the ANE row below is commented out with its catalog
+      // entries; count it again when they come back.
+      // #if defined(WALLY_HAS_NEURT)
+      //     1 +
+      // #endif
 #if defined(WALLY_HAS_QHEXRT)
       1 +
 #endif
@@ -647,12 +649,17 @@ TestResult test_overlay_catalog() {
       // {"sd15", "stable-diffusion-v1-5-coreml",
       //  runanywhere::v1::MODEL_CATEGORY_IMAGE_GENERATION,
       //  runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
-      // ANE (Core ML) rows exist only on Apple; the catalog hides them elsewhere.
-#if defined(__APPLE__)
-      {"lfm2-230m-ane", "lfm2_5_230m_ane",
-       runanywhere::v1::MODEL_CATEGORY_LANGUAGE,
-       runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
-#endif
+      // ANE (Core ML) rows exist only in a kit that shipped the NeuRT engine
+      // (a private overlay pack); the public Apple kit has none, so a Mac
+      // without it must not list them either. Gated on the kit macro, not on
+      // __APPLE__, for the same reason as the QHexRT rows below.
+      // TEMP(ane-cut): the rows themselves are commented out in catalog.cpp
+      // (repo-page URLs, nothing to download); restore together.
+      // #if defined(WALLY_HAS_NEURT)
+      // {"lfm2-230m-ane", "lfm2_5_230m_ane",
+      //  runanywhere::v1::MODEL_CATEGORY_LANGUAGE,
+      //  runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
+      // #endif
       // {"parakeet-tdt-v2-ane", "parakeet_tdt_0_6b_v2_ane",
       //  runanywhere::v1::MODEL_CATEGORY_SPEECH_RECOGNITION,
       //  runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
@@ -703,12 +710,14 @@ TestResult test_overlay_catalog() {
     return result;
   }
 #endif
-#if !defined(__APPLE__)
-  if (wally::catalog::find("lfm2-230m-ane") != nullptr) {
-    result.details = "lfm2-230m-ane must be hidden off Apple";
+  // Both spellings: the row's own alias and the `ane-<merge_key>` form the
+  // `models list` header used to advertise on every Mac. Unconditional while
+  // the ane-cut is in effect; re-gate on !WALLY_HAS_NEURT when it reverts.
+  if (wally::catalog::find("lfm2-230m-ane") != nullptr ||
+      wally::catalog::find("ane-lfm2.5-350m") != nullptr) {
+    result.details = "ANE rows must not be listed (ane-cut)";
     return result;
   }
-#endif
   result.passed = true;
   return result;
 }
@@ -872,8 +881,12 @@ TestResult test_engine_hint_parsing() {
       {"llama-cpp", runanywhere::v1::INFERENCE_FRAMEWORK_LLAMA_CPP},
       {"onnx", runanywhere::v1::INFERENCE_FRAMEWORK_ONNX},
       {"sherpa", runanywhere::v1::INFERENCE_FRAMEWORK_SHERPA},
+      // The Apple Neural Engine names parse only when the kit linked NeuRT;
+      // the refusal on every other build is asserted below.
+#if defined(WALLY_HAS_NEURT)
       {"neurt", runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
       {"ane", runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
+#endif
       {"qhexrt", runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
       {"npu", runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
   };
@@ -898,6 +911,25 @@ TestResult test_engine_hint_parsing() {
     result.details = "unsupported engine should fail with an actionable error";
     return result;
   }
+#if !defined(WALLY_HAS_NEURT)
+  // `--engine ane` on a build with no NeuRT used to be accepted and then fall
+  // through to MLX, which failed on a Core ML tree with a misleading
+  // "config.json not found". It must be refused here, naming the build.
+  for (const char *name : {"ane", "neurt", "coreml"}) {
+    error.clear();
+    if (wally::commands::parse_engine_hint(name, &actual, &error) ||
+        error.find("not in this build") == std::string::npos) {
+      result.details = std::string("--engine ") + name +
+                       " must be refused in a kit without NeuRT; got: " + error;
+      return result;
+    }
+  }
+  // And the help text must not advertise it either.
+  if (std::string(wally::commands::engine_choices()).find("ane") != std::string::npos) {
+    result.details = "engine_choices() lists ane in a kit without NeuRT";
+    return result;
+  }
+#endif
 
   result.passed = true;
   return result;

@@ -7,14 +7,16 @@ you want:
 
 - `wally models pull <id>` — the llama.cpp / GGUF build (macOS, Windows x64, Linux).
 - `wally models pull mlx-<id>` — the MLX build (Apple Silicon only).
-- `ane-<id>` — the Apple Neural Engine build, where one exists. It is listed,
-  not pullable: the catalog entry is a Hugging Face repo page, so `wally models
-  pull ane-<id>` would only save that page's HTML. Download the compiled Core
-  ML bundle yourself and point `--model` at the local tree.
 
-MLX and ANE builds exist on Apple Silicon only; on any other platform they are
-hidden from the catalog. The short aliases (`qwen3`, `llama3.2`, `smollm2`, …)
-still resolve.
+MLX builds exist on Apple Silicon only; on any other platform they are hidden
+from the catalog. The short aliases (`qwen3`, `llama3.2`, `smollm2`, …) still
+resolve.
+
+There are no Apple Neural Engine (`ane-<id>`) rows in this release. The NeuRT
+engine that runs them is a private overlay, not in the public kit, and the
+published Core ML repos hold directory trees rather than a downloadable
+archive. The rows are commented out in `src/catalog/catalog.cpp` under
+`TEMP(ane-cut)` and come back together with real artifacts.
 
 ### Language
 
@@ -24,7 +26,7 @@ still resolve.
 | [Meta](https://huggingface.co/meta-llama) | Llama 3.2 | `llama-3.2-3b`, `mlx-llama3.2` |
 | [Google](https://huggingface.co/google) | Gemma 4 | `gemma-4-e2b`, `mlx-gemma-4-e2b` |
 | [Hugging Face](https://huggingface.co/HuggingFaceTB) | SmolLM2 | `smollm2-135m` |
-| [Liquid AI](https://huggingface.co/LiquidAI) | LFM2.5 | `lfm2.5-350m`, `ane-lfm2.5-350m` (listed only, see above) |
+| [Liquid AI](https://huggingface.co/LiquidAI) | LFM2.5 | `lfm2.5-230m`, `lfm2.5-350m`, `lfm2.5-1.2b`, `lfm2.5-2.6b` |
 | [IBM](https://huggingface.co/ibm-granite) | Granite 4.1, Granite 4.2 | `granite-4.1-3b`, `granite-4.2-8b` |
 | [NVIDIA](https://huggingface.co/nvidia) | Nemotron | `mlx-nemotron-nano` |
 | [PrismML](https://huggingface.co/prism-ml) | Bonsai, Ternary-Bonsai | `bonsai-1.7b`, `mlx-bonsai-1.7b` |

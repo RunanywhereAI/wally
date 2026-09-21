@@ -13,7 +13,7 @@ wally llm generate --engine mlx -m mlx-qwen3 "Hello"
 wally run --engine qhexrt /path/to/lfm2_5_230m_HNPU "Hello"
 ```
 
-`--engine` accepts `mlx`, `llamacpp`, `sherpa`, `onnx`, `neurt` / `coreml` / `ane`, and `qhexrt` / `qnn` / `npu` / `hexagon`. If you omit it, commons picks the highest-priority **registered** backend that implements that primitive:
+`--engine` accepts `mlx`, `llamacpp`, `sherpa`, `onnx`, `qhexrt` / `qnn` / `npu` / `hexagon`, and, only in a build that linked the NeuRT overlay, `neurt` / `coreml` / `ane`. A build without NeuRT refuses those three with "not in this build", and each command's `--help` lists only the engines that binary has. If you omit it, commons picks the highest-priority **registered** backend that implements that primitive:
 
 | Priority | Engine | Who wins unpinned work |
 |---|---|---|
