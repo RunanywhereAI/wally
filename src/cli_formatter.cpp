@@ -22,12 +22,14 @@ constexpr const char* kBoldCyanCode = "\033[1;36m";
 constexpr const char* kBlueCode = "\033[34m";
 constexpr const char* kRedCode = "\033[1;31m";
 constexpr const char* kGreenCode = "\033[32m";
+constexpr const char* kYellowCode = "\033[33m";
 constexpr const char* kResetCode = "\033[0m";
 }  // namespace
 
 Palette make_palette(bool enabled) {
     if (!enabled) return Palette{};
-    return Palette{kBoldCode, kBoldCyanCode, kBlueCode, kRedCode, kGreenCode, kResetCode};
+    return Palette{kBoldCode, kBoldCyanCode, kBlueCode, kRedCode, kGreenCode, kYellowCode,
+                   kResetCode};
 }
 
 }  // namespace cli_color

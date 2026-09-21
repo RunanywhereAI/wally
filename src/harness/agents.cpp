@@ -22,6 +22,7 @@
 #include "account/console.h"
 #include "account/credentials.h"
 #include "harness/harness.h"
+#include "harness/local_models.h"
 #include "io/output.h"
 
 namespace wally::harness {
@@ -236,13 +237,11 @@ struct ModelLimits {
     std::int64_t output_per_mtok = 0;
 };
 
-/// The context size `harness::Resolve` starts a local server with.
-constexpr std::int64_t kLocalContextSize = 8192;
-
 ModelLimits LookupLimits(const Endpoint& endpoint, const std::string& model) {
     ModelLimits limits;
     if (endpoint.api_key.empty()) {
-        limits.context_window = kLocalContextSize;
+        // The size `harness::Resolve` started the local server with.
+        limits.context_window = LocalContextSize(model);
         return limits;
     }
 
