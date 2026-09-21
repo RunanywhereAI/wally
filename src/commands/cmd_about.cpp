@@ -81,7 +81,7 @@ void register_about(CLI::App& app, GlobalOptions& options) {
                         adapter->get_memory_info(&memory, adapter->user_data) == RAC_SUCCESS;
         }
 
-        const std::map<std::string, EngineRow> engines = collect_backend_rows();
+        const std::map<std::string, EngineRow> engines = collect_llm_backend_rows();
 
         // Which bottle this binary is: WALLY_BAKED_CONSOLE_API_URL is compiled
         // in empty for a production build and non-empty for a dev one (see

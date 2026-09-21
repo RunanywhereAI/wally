@@ -36,6 +36,8 @@
 #include "catalog/catalog.h"
 #include "catalog/model_ref.h"
 #include "commands/bench_metrics.h"
+#include "commands/commands.h"
+#include "rac/plugin/rac_primitive.h"
 #include "commands/engine_options.h"
 #include "commands/model_labels.h"
 #include "config/cli_paths.h"
@@ -3225,8 +3227,46 @@ TestResult test_ensure_installed_finds_tool_off_path() {
 #endif
 }
 
+// `wally backends` reports every registered engine (the e2e assert-backends.sh
+// expects llamacpp, onnx and sherpa on every kit); `about` and `info` show
+// only the ones that serve generate_text. Filtering the shared collector once
+// dropped onnx and sherpa from `backends` and turned Linux and Windows CI red,
+// so the two views are pinned against each other here, whatever this build
+// happens to have registered.
+TestResult test_llm_backend_rows_are_a_generate_text_subset() {
+  TestResult result;
+  result.test_name = "llm_backend_rows_are_a_generate_text_subset";
+
+  const auto all = wally::commands::collect_backend_rows();
+  const auto llm = wally::commands::collect_llm_backend_rows();
+  const std::string generate_text = rac_primitive_name(RAC_PRIMITIVE_GENERATE_TEXT);
+
+  for (const auto &[name, row] : llm) {
+    if (all.find(name) == all.end()) {
+      result.details = name + " is in the LLM view but not the full one";
+      return result;
+    }
+    if (row.primitives.count(generate_text) == 0) {
+      result.details = name + " is in the LLM view without serving generate_text";
+      return result;
+    }
+  }
+  for (const auto &[name, row] : all) {
+    const bool serves_llm = row.primitives.count(generate_text) != 0;
+    if (serves_llm != (llm.find(name) != llm.end())) {
+      result.details = name + (serves_llm ? " serves generate_text but was filtered out"
+                                          : " does not serve generate_text but was kept");
+      return result;
+    }
+  }
+  result.passed = true;
+  return result;
+}
+
 int main(int argc, char **argv) {
   TestSuite suite("wally_unit");
+  suite.add("llm_backend_rows_are_a_generate_text_subset",
+            test_llm_backend_rows_are_a_generate_text_subset);
   suite.add("json_escape", test_json_escape);
   suite.add("json_writer_shape", test_json_writer_shape);
   suite.add("json_writer_nan_is_null", test_json_writer_nan_is_null);

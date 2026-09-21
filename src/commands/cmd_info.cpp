@@ -47,7 +47,7 @@ void register_info(CLI::App& app, GlobalOptions& options) {
         const char* platform = "unknown";
 #endif
 
-        const auto backends = static_cast<int64_t>(collect_backend_rows().size());
+        const auto backends = static_cast<int64_t>(collect_llm_backend_rows().size());
 
         if (options.json) {
             out::JsonWriter json;
