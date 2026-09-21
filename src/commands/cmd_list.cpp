@@ -131,6 +131,11 @@ int run_list(const GlobalOptions& options, bool show_all) {
         if (!show_all && !is_downloaded) {
             continue;
         }
+        // LLM-only surface: a downloaded non-LLM model restored from a manifest
+        // must not reappear in the list.
+        if (model.category() != v1::MODEL_CATEGORY_LANGUAGE) {
+            continue;
+        }
         const std::string key = catalog::merge_key_for(model.id());
         auto it = groups.find(key);
         if (it == groups.end()) {

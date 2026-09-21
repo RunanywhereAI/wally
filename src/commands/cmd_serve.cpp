@@ -125,7 +125,7 @@ void register_serve(CLI::App& app, GlobalOptions& options) {
                     "Context window in tokens (default 8192)");
     cmd->add_option("--threads,-t", *threads, "Inference threads (default 4)");
     cmd->add_option("--gpu-layers,--ngl", *gpu_layers, "Layers to offload to the GPU");
-    cmd->add_flag("--cors", *cors, "Allow cross-origin browser requests");
+    cmd->add_flag("--cors", *cors, "Allow cross-origin browser requests (off by default)");
     cmd->callback([&options, ref, host, port, context, threads, gpu_layers, cors]() {
         const int exit_code = run_serve(options, *ref, *host, *port, *context, *threads,
                                         *gpu_layers, *cors);

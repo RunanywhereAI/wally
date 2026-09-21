@@ -1078,16 +1078,12 @@ TestResult test_wally_mlx_run_end_to_end() {
     wally::shutdown();
     return result;
   }
-  if (list_json.find("\"id\":\"mlx.fake.vlm\"") == std::string::npos ||
-      list_json.find("\"modality\":\"vlm\"") == std::string::npos ||
-      list_json.find("\"id\":\"mlx.fake.embed\"") == std::string::npos ||
-      list_json.find("\"modality\":\"embedding\"") == std::string::npos ||
-      list_json.find("\"id\":\"mlx.fake.stt\"") == std::string::npos ||
-      list_json.find("\"modality\":\"stt\"") == std::string::npos ||
-      list_json.find("\"backend\":\"mlx\"") == std::string::npos ||
-      list_json.find("\"id\":\"mlx.fake.tts\"") == std::string::npos ||
-      list_json.find("\"modality\":\"tts\"") == std::string::npos) {
-    result.expected = "MLX VLM/embedding/STT/TTS rows from wally list --all";
+  // The LLM-only surface lists language models only; the non-LLM fakes are still
+  // registered and exercised by the run checks below, just not shown here.
+  if (list_json.find("\"id\":\"mlx.fake.llm\"") == std::string::npos ||
+      list_json.find("\"modality\":\"llm\"") == std::string::npos ||
+      list_json.find("\"backend\":\"mlx\"") == std::string::npos) {
+    result.expected = "MLX fake LLM row present in wally models list --all";
     result.actual = list_json;
     wally::shutdown();
     return result;
