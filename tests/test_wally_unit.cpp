@@ -587,7 +587,18 @@ TestResult test_overlay_catalog() {
     runanywhere::v1::ModelCategory category;
     runanywhere::v1::InferenceFramework framework;
   };
-  const Row rows[] = {
+  // Every row is conditional, so a kit with no overlay (Windows x64) would
+  // leave this array zero-size -- a GNU extension MSVC rejects (C2466). Size
+  // it explicitly with one spare value-initialized slot the loop never reads.
+  constexpr size_t kRowCount =
+#if defined(__APPLE__)
+      1 +
+#endif
+#if defined(WALLY_HAS_QHEXRT)
+      1 +
+#endif
+      0;
+  const Row rows[kRowCount + 1] = {
       // Non-LANGUAGE overlay rows are out of scope for the LLM-only cut
       // (src/app.cpp, src/catalog/catalog.cpp) -- commented out, not
       // deleted, so they come back when the cut reverts.
@@ -629,7 +640,8 @@ TestResult test_overlay_catalog() {
       //  runanywhere::v1::MODEL_CATEGORY_IMAGE_GENERATION,
       //  runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
   };
-  for (const Row &row : rows) {
+  for (size_t i = 0; i < kRowCount; ++i) {
+    const Row &row = rows[i];
     const wally::catalog::CatalogEntry *by_alias = wally::catalog::find(row.id);
     const wally::catalog::CatalogEntry *by_id = wally::catalog::find(row.alias);
     if (!by_alias || by_alias != by_id || by_alias->category != row.category ||
