@@ -97,9 +97,16 @@ try {
 
     Write-Info "Installing Wally v$Version to $InstallDir..."
     Expand-Archive -LiteralPath $Zip -DestinationPath $Temp -Force
-    $Stem = [IO.Path]::GetFileNameWithoutExtension($AssetName)
-    $Unpacked = Join-Path $Temp "$Stem\bin"
-    if (-not (Test-Path -LiteralPath $Unpacked)) {
+    # The packager stages the tree as wally-<platform>, without the version
+    # (scripts/build/package-wally-windows.ps1, and install.sh expects the same),
+    # so the folder is not the asset name minus .zip. The versioned spelling is
+    # still accepted in case a future archive adopts it.
+    $Platform = $AssetName -replace "^wally-$([Regex]::Escape($Version))-", '' -replace '(-dev)?\.zip$', ''
+    $Unpacked = @(
+        (Join-Path $Temp "wally-$Platform\bin"),
+        (Join-Path $Temp ([IO.Path]::GetFileNameWithoutExtension($AssetName) + '\bin'))
+    ) | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'wally.exe') } | Select-Object -First 1
+    if (-not $Unpacked) {
         Fail "$AssetName does not have the layout this installer expects. Open an issue at https://github.com/$Repo/issues"
     }
 
