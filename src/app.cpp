@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <set>
@@ -25,141 +26,163 @@
 namespace wally {
 
 void configure_app(CLI::App& app, GlobalOptions& options) {
-    app.set_version_flag("--version,-V", std::string("wally ") + WALLY_VERSION);
+    // Set before any subcommand registers: a subcommand copies its parent's
+    // help flag at construction.
+    app.set_help_flag("-h,--help", "Show help");
+    app.set_version_flag("--version,-V", std::string("wally ") + WALLY_VERSION,
+                         "Show the wally version");
     app.require_subcommand(0, 1);
     app.fallthrough(true);
 
-    app.add_flag("--json", options.json, "Machine-readable JSON output on stdout");
+    app.add_flag("--json", options.json, "Print results as JSON");
     app.add_flag("-v,--verbose", options.verbose, "Debug logging on stderr");
-    app.add_flag("-q,--quiet", options.quiet, "Errors only on stderr");
+    app.add_flag("-q,--quiet", options.quiet, "Errors only");
+    // Visible in --help, unlike the control-plane flags below: all three are
+    // things a person running models day to day reaches for -- piping output
+    // into a script or log (--no-progress, --no-color) or keeping models on
+    // another disk (--home) -- not a developer-only knob for a non-default
+    // backend.
     app.add_flag("--no-progress", options.no_progress, "Disable progress rendering");
     app.add_flag("--no-color", options.no_color, "Disable colored --help output");
     app.add_option("--home", options.home_override,
-                   "RunAnywhere home directory (default: $RUNANYWHERE_HOME or "
-                   "~/.local/share/runanywhere; models live under <home>/Models)");
+                   "Where models live (default $RUNANYWHERE_HOME or ~/.local/share/runanywhere)");
 
-    // Control-plane connection. validation happens in resolve_connection().
-    // Developer/SDK-facing, not something a person reaches for day to day --
-    // group("") drops them out of the default --help listing the same way
-    // `telemetry` is hidden below, while leaving them fully parseable
-    // (flags and RUNANYWHERE_* env fallbacks both still resolve).
-    app.add_option("--environment", options.environment,
-                   "SDK environment: development (default, keyless OSS → baked staging "
-                   "backend) or production (API key + https URL).")
-        ->envname("RUNANYWHERE_ENVIRONMENT")
-        ->check(CLI::IsMember({"dev", "development", "prod", "production"}))
-        ->group("");
-    app.add_option("--base-url", options.base_url,
-                   "Backend base URL. Optional in development (baked staging URL). "
-                   "Required https for production.")
-        ->envname("RUNANYWHERE_BASE_URL")
-        ->group("");
-    app.add_option("--api-key", options.api_key,
-                   "Control-plane API key (required for production; omit for "
-                   "keyless development)")
-        ->envname("RUNANYWHERE_API_KEY")
-        ->group("");
+    // `-u`/`-U` (aliases for `update`/`uninstall`) are deliberately NOT
+    // registered as CLI11 flags here. `app.fallthrough(true)` above is
+    // inherited by every subcommand at construction, so a flag by these names
+    // anywhere in the tree is reachable from inside any subcommand's own
+    // argument list -- `wally models list -u` would climb straight back up to
+    // this app and fire the shortcut instead of erroring on an unknown
+    // `models list` option, quietly running an update in place of the
+    // requested command. `add_flag_callback` made this worse by calling
+    // std::exit() mid-parse, which also skips run()'s shutdown(). The
+    // shortcuts are still honoured, but only when `-u`/`-U`/`--update`/
+    // `--uninstall` is the entire command line -- see the argv check in
+    // run(), which reaches the normal shutdown() path. The documented
+    // spelling is still `wally update` / `wally uninstall`.
 
-    // Namespaces first (the spec grammar), then the terminal aliases, then the
-    // infrastructure commands — that is the order `--help` lists them in.
-    commands::register_llm(app, options);
-    commands::register_vlm(app, options);
-    commands::register_tool(app, options);  // must follow register_llm (extends the `llm` group)
-    commands::register_stt(app, options);
-    commands::register_tts(app, options);
-    commands::register_vad(app, options);
-    commands::register_embed(app, options);
-    commands::register_rerank(app, options);
-    commands::register_image(app, options);
-    commands::register_diarize(app, options);
-    commands::register_segment(app, options);
-    commands::register_voice(app, options);
-    commands::register_rag(app, options);
+    // Control-plane connection (environment / base URL / API key) is not exposed
+    // as CLI flags: resolve_connection() reads RUNANYWHERE_ENVIRONMENT /
+    // RUNANYWHERE_BASE_URL / RUNANYWHERE_API_KEY straight from the environment
+    // (bootstrap.cpp), so a dev build still overrides via env with no
+    // developer-only flags cluttering the surface.
+
+    // Registration order is the --help print order: run first (the primary
+    // verb), then llm and models, serve, the coding agents, the cloud account,
+    // then diagnostics and maintenance. bench/backends/telemetry are registered
+    // but hidden from the list further down.
+    commands::register_llm_aliases(app, options);  // `run`
+    commands::register_llm(app, options);          // `llm` (must precede register_tool)
+    commands::register_tool(app, options);         // attaches to `llm`
+    // TEMP(llm-only cut): every non-LLM modality is hidden from --help and from
+    // execution for this release. Re-enable the full surface by uncommenting
+    // this block as a whole -- nothing else has to change.
+    // commands::register_vlm(app, options);
+    // commands::register_stt(app, options);
+    // commands::register_tts(app, options);
+    // commands::register_vad(app, options);
+    // commands::register_embed(app, options);
+    // commands::register_rerank(app, options);
+    // commands::register_image(app, options);
+    // commands::register_diarize(app, options);
+    // commands::register_segment(app, options);
+    // commands::register_voice(app, options);
+    // commands::register_rag(app, options);
+    // commands::register_lora(app, options);
     commands::register_models(app, options);
-    commands::register_lora(app, options);
-
-    commands::register_llm_aliases(app, options);
-    commands::register_models_aliases(app, options);
-
     commands::register_serve(app, options);
-    commands::register_bench(app, options);
-    commands::register_backends(app, options);
-    commands::register_help(app, options);
-    commands::register_uninstall(app, options);
+
+    commands::register_editors(app, options);
+    commands::register_harness(app, options);      // coding agents
+    commands::register_default_models(app, options);
+
+    commands::register_account(app, options);      // account login/logout/whoami/usage
+    commands::register_usage(app, options);        // attaches `usage` under `account`
+    // `auth` (device sign-in against the control plane) is a developer path that
+    // duplicates `account login`; unregister it. Uncomment to restore.
+    // commands::register_auth(app, options);
+
     commands::register_info(app, options);
     commands::register_about(app, options);
     commands::register_version(app, options);
     commands::register_update(app, options);
-    commands::register_auth(app, options);
-    commands::register_account(app, options);
-    commands::register_usage(app, options);
-    commands::register_editors(app, options);
-    commands::register_harness(app, options);
-    commands::register_default_models(app, options);
-    commands::register_telemetry(app, options);
+    commands::register_uninstall(app, options);
+    commands::register_help(app, options);
 
-    // `--help` groups: CLI11 prints one heading per distinct group string, in
-    // the order each group is first seen (Formatter::make_subcommands), so
-    // this order is the print order. Centralized here rather than one
-    // ->group() call per register_* file: 36 top-level commands with no
-    // grouping at all used to land in a single default SUBCOMMANDS: bucket.
-    // Grouped so the split a reader cares about is visible at a glance: what
-    // runs on this machine, versus what talks to the hosted console. The
-    // coding agents sit between the two because they do both — a local model or
-    // a hosted one behind the same command — so they carry the "(local or
-    // hosted)" tag rather than landing in either camp.
-    constexpr const char* kGenerate = "Generate (on-device)";
-    constexpr const char* kModels = "On-device models";
-    constexpr const char* kAgents = "Coding agents (local or hosted)";
-    constexpr const char* kCloud = "Cloud account";
-    constexpr const char* kServe = "Serve & benchmark (on-device)";
-    constexpr const char* kAbout = "About";
-    const std::vector<std::pair<const char*, const char*>> help_groups = {
-        {"llm", kGenerate},      {"vlm", kGenerate},      {"stt", kGenerate},
-        {"tts", kGenerate},      {"vad", kGenerate},      {"embed", kGenerate},
-        {"rerank", kGenerate},   {"image", kGenerate},    {"diarize", kGenerate},
-        {"segment", kGenerate},  {"voice", kGenerate},    {"rag", kGenerate},
-        {"run", kModels},        {"chat", kModels},       {"ls", kModels},
-        {"show", kModels},       {"pull", kModels},       {"rm", kModels},
-        {"models", kModels},     {"lora", kModels},
-        {"opencode", kAgents},        {"claude-code", kAgents},
-        {"claude-desktop", kAgents},
-        {"hermes", kAgents},          {"openclaw", kAgents},
-        {"deepseek", kAgents},
-        {"default-models", kAgents},
-        {"auth", kCloud},        {"login", kCloud},       {"logout", kCloud},
-        {"whoami", kCloud},      {"usage", kCloud},
-        {"serve", kServe},       {"bench", kServe},       {"backends", kServe},
-        {"info", kAbout},        {"about", kAbout},       {"version", kAbout},
-        {"update", kAbout},
+    commands::register_bench(app, options);        // hidden below
+    commands::register_backends(app, options);     // hidden below
+    commands::register_telemetry(app, options);    // hidden below
+
+    // Grouped help, by what the reader is trying to do. Sections print in the
+    // order their first command was registered above; commands inside a
+    // section keep registration order too. A namespace (models, account) is
+    // listed as its children with full paths ("models pull"), which the
+    // formatter does when a command has visible children.
+    //
+    // Everything unnamed here is hidden from the page but still parses:
+    // `llm generate|stream|tool-call` (the explicit forms behind `run`),
+    // `info` (a terser `about`), `version` (-V), `help` (-h), and the
+    // diagnostics. Set by name with a guard, so a rename can never leave a
+    // stale string to crash the CLI (0xC0000409).
+    struct Section {
+        const char* group;
+        std::vector<const char*> names;
     };
-    // configure_app() runs ahead of run()'s own try/catch (and tests call it
-    // directly with none at all), so a typo here must never propagate as an
-    // uncaught exception -- that crashed the Windows CI binaries outright
-    // (0xC0000409, no diagnostic) the one time a name here didn't match.
-    // Report it and keep going with the default flat listing rather than
-    // taking the whole CLI down over a --help cosmetic.
-    for (const auto& [name, group] : help_groups) {
-        try {
-            app.get_subcommand(name)->group(group);
-        } catch (const CLI::OptionNotFound&) {
-            out::error_line(std::string("internal: --help grouping named an unknown "
-                                        "subcommand '") +
-                            name + "', skipping it");
-        }
+    const Section sections[] = {
+        {"Chat", {"run", "serve"}},
+        {"Models", {"models"}},
+        {"Coding tools", {"opencode", "claude-code", "claude-desktop", "hermes", "openclaw", "deepseek"}},
+        {"Account", {"account"}},
+        {"Wally", {"about", "update", "uninstall"}},
+    };
+    for (CLI::App* sub : app.get_subcommands({})) {
+        if (!sub->get_name().empty()) sub->group("");
     }
-    // Internal debug tool, not a command a user reaches for. An empty group
-    // string drops a subcommand out of the default listing entirely
-    // (Formatter::make_subcommands) while it stays fully callable —
-    // `wally telemetry --help` still works.
-    try {
-        app.get_subcommand("telemetry")->group("");
-    } catch (const CLI::OptionNotFound&) {
-        // Nothing to hide if it isn't there.
+    for (const Section& section : sections) {
+        for (const char* name : section.names) {
+            try {
+                app.get_subcommand(name)->group(section.group);
+            } catch (const CLI::OptionNotFound&) {
+                // Not registered in this build; nothing to place.
+            }
+        }
     }
 }
 
 namespace {
+
+/// Friendly reply to a parse error on a (sub)command: walk to the deepest
+/// command that actually parsed and print CLI11's own message for what went
+/// wrong, followed by that command's help, instead of stopping at the terse
+/// top-level usage line. CLI11 already tells the two cases apart correctly in
+/// e.what() -- "model is required" / "A subcommand is required" for something
+/// left out, "The following argument was not expected: -x" for something
+/// misspelled or extra -- so this only needs to walk down to where parsing
+/// actually got to; it must not attach its own "you typed it wrong" framing,
+/// which would misdescribe an omitted required argument as a typo. Handles
+/// both RequiredError and ExtrasError (their common base), detected by
+/// exception TYPE at the call site -- ExtrasError::get_name() is the app name,
+/// not "ExtrasError", so a string match on e.what() would miss cases.
+void PrintParseErrorHelp(const CLI::App& app, const CLI::ParseError& e) {
+    const CLI::App* ctx = &app;
+    // The names above `ctx`, so its usage line reads `wally models ...` the
+    // way `wally models --help` prints it.
+    std::string parents;
+    for (;;) {
+        const CLI::App* next = nullptr;
+        for (const CLI::App* sub : ctx->get_subcommands({})) {
+            if (sub->parsed()) {
+                next = sub;
+                break;
+            }
+        }
+        if (next == nullptr) break;
+        parents = parents.empty() ? ctx->get_name() : parents + " " + ctx->get_name();
+        ctx = next;
+    }
+    out::error_line(e.what());
+    std::fputs(ctx->help(parents).c_str(), stderr);
+}
 
 /// The subcommands that hand the terminal to another tool and forward the rest
 /// of the command line to it. Kept in step with register_editors and
@@ -272,6 +295,26 @@ int run(int argc, char** argv) {
     GlobalOptions options;
     RestoreStaleDesktopGateway(argc, argv);
 
+    // `-u`/`-U` top-level shortcuts, handled here instead of as CLI11 flags
+    // (see the comment in configure_app() for why) so they can be guarded to
+    // the one shape that can't be confused with a subcommand's own arguments:
+    // the entire command line is the shortcut and nothing else. Goes through
+    // the same shutdown() every other exit from run() does, unlike the old
+    // std::exit()-in-a-callback version.
+    if (argc == 2) {
+        const std::string only_arg = argv[1];
+        if (only_arg == "-u" || only_arg == "--update") {
+            const int code = commands::run_update(false);
+            shutdown();
+            return code;
+        }
+        if (only_arg == "-U" || only_arg == "--uninstall") {
+            const int code = commands::run_uninstall(false);
+            shutdown();
+            return code;
+        }
+    }
+
     // Decided ahead of CLI11's own parse: a subcommand inherits its parent's
     // formatter_ at construction time (App::App), which configure_app()
     // triggers below, so the color decision has to already be settled before
@@ -284,18 +327,22 @@ int run(int argc, char** argv) {
         }
     }
 
-    CLI::App app{"RunAnywhere on-device AI CLI — llm, vlm, stt, tts, vad, embed, rerank, "
-                 "image, rag, voice and the models that back them"};
+    // Named "wally" outright rather than from argv[0], so the usage line reads
+    // the same whether the binary was run through the install wrapper, by full
+    // path, or as wally-cxx.
+    CLI::App app{"Run models on this machine or on your RunAnywhere account", "wally"};
+    // Two colors and nothing else, on a terminal only: bold section headings,
+    // cyan for anything you can type. Piped or redirected output, --no-color
+    // and NO_COLOR all get the identical plain text.
     app.formatter(std::make_shared<CliFormatter>(color_output_enabled(no_color_requested)));
     configure_app(app, options);
-    // Every subcommand here loads a model on this machine; a hosted console
-    // model (glm-5.3-flash, ...) has no path through `run`/`llm generate` at
-    // all, and that dead end used to be the only place someone learned the
-    // cloud path exists.
-    app.footer(
-        "A model your account has on the hosted console (not this machine) runs through "
-        "`wally claude-code -m <id>` or `wally opencode --cloud -m <id>`, not "
-        "`run`/`llm generate`.");
+    // `run` only loads models on this machine; a hosted model (glm-5.3-flash,
+    // ...) is reached through a coding tool. One line for each path, so a
+    // first-time reader sees both exist and can paste either.
+    app.footer("Get started:\n"
+               "  wally models pull qwen3-0.6b && wally run qwen3-0.6b\n"
+               "  wally account login && wally opencode --cloud -m glm-5.3-flash\n"
+               "\nRun \"wally <command> --help\" for details.");
 
     // A `--` before the wrapped tool's own arguments, added for the reader, so
     // `wally claude-code --dangerously-skip-permissions` forwards the flag
@@ -310,7 +357,9 @@ int run(int argc, char** argv) {
     if (raw.size() >= 2 && raw[1] == "help") {
         if (raw.size() >= 3 && !raw[2].empty() && raw[2][0] != '-') {
             try {
-                std::fputs(app.get_subcommand(raw[2])->help().c_str(), stdout);
+                // The parent's name, so the usage line reads `wally opencode`
+                // exactly as `wally opencode --help` prints it.
+                std::fputs(app.get_subcommand(raw[2])->help(app.get_name()).c_str(), stdout);
                 shutdown();
                 return 0;
             } catch (const CLI::Error&) {
@@ -341,8 +390,14 @@ int run(int argc, char** argv) {
         exit_code = app.exit(e);
     } catch (const CLI::RuntimeError& e) {
         exit_code = (e.get_exit_code() != 0) ? e.get_exit_code() : 1;
+    } catch (const CLI::RequiredError& e) {
+        PrintParseErrorHelp(app, e);  // a required (sub)command or option was left out
+        exit_code = 2;
+    } catch (const CLI::ExtrasError& e) {
+        PrintParseErrorHelp(app, e);  // an unexpected or misspelled (sub)command or argument
+        exit_code = 2;
     } catch (const CLI::ParseError& e) {
-        app.exit(e);  // prints the usage message to stderr
+        app.exit(e);  // any other parse error: keep CLI11's own message
         exit_code = 2;
     } catch (const std::exception& e) {
         out::error_line(e.what());

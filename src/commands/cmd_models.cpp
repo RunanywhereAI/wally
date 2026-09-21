@@ -28,6 +28,7 @@
 #include "rac/infrastructure/model_management/rac_model_registry.h"
 
 #include "catalog/model_ref.h"
+#include "cli_formatter.h"
 #include "commands/engine_options.h"
 #include "commands/model_labels.h"
 #include "io/output.h"
@@ -346,19 +347,39 @@ int run_state(const GlobalOptions& options) {
 }  // namespace
 
 void register_models(CLI::App& app, GlobalOptions& options) {
-    CLI::App* ns = app.add_subcommand("models", "Manage the local model catalog");
+    CLI::App* ns = app.add_subcommand("models", "Manage local models");
     ns->require_subcommand(1);
 
-    configure_models_list(ns->add_subcommand("list", "List models, downloaded ones by default"),
-                          options);
-    configure_models_get(ns->add_subcommand("get", "Show one model's registry entry"), options);
-    configure_models_download(
-        ns->add_subcommand("download", "Fetch a model with resumable progress"), options);
-    configure_models_delete(ns->add_subcommand("delete", "Remove a model's files and registration"),
-                            options);
+    CLI::App* list_cmd =
+        ns->add_subcommand("list", "List downloaded models (--all for the catalog)");
+    list_cmd->alias("ls");
+    list_cmd->footer(examples_footer({{"wally models list --all", "Browse the whole catalog"}}));
+    configure_models_list(list_cmd, options);
 
+    CLI::App* show_cmd = ns->add_subcommand("show", "Show a model's details");
+    show_cmd->alias("get");
+    show_cmd->footer(examples_footer({{"wally models show granite-4.2-8b", ""}}));
+    configure_models_get(show_cmd, options);
+
+    CLI::App* pull_cmd = ns->add_subcommand("pull", "Download a model");
+    pull_cmd->alias("download");
+    pull_cmd->footer(examples_footer({
+        {"wally models pull qwen3-0.6b", "From the catalog"},
+        {"wally models pull hf.co/<org>/<repo>/<file>", "From Hugging Face"},
+    }));
+    configure_models_download(pull_cmd, options);
+
+    CLI::App* delete_cmd = ns->add_subcommand("rm", "Delete a downloaded model");
+    delete_cmd->footer(examples_footer({{"wally models rm qwen3-0.6b", ""}}));
+    delete_cmd->alias("remove");
+    delete_cmd->alias("delete");
+    configure_models_delete(delete_cmd, options);
+
+    // Advanced lifecycle verbs stay callable but out of the --help tree (empty
+    // group), so `models` shows just the four CRUD branches.
     CLI::App* register_cmd =
         ns->add_subcommand("register", "Add a model from a URL or hf.co ref to the registry");
+    register_cmd->group("");
     auto register_ref = std::make_shared<std::string>();
     auto register_engine = std::make_shared<std::string>();
     register_cmd->add_option("model", *register_ref, "hf.co/org/repo/file, hf:// or http(s) URL")
@@ -373,6 +394,7 @@ void register_models(CLI::App& app, GlobalOptions& options) {
     });
 
     CLI::App* load_cmd = ns->add_subcommand("load", "Load a model now instead of on first use");
+    load_cmd->group("");
     auto load_ref = std::make_shared<std::string>();
     auto load_engine = std::make_shared<std::string>();
     auto load_category = std::make_shared<std::string>();
@@ -390,6 +412,7 @@ void register_models(CLI::App& app, GlobalOptions& options) {
 
     CLI::App* unload_cmd =
         ns->add_subcommand("unload", "Free loaded models, all of them by default");
+    unload_cmd->group("");
     auto unload_category = std::make_shared<std::string>();
     unload_cmd->add_option("category", *unload_category,
                            "Only free this modality (" + category_choices() + ")");
@@ -401,6 +424,7 @@ void register_models(CLI::App& app, GlobalOptions& options) {
     });
 
     CLI::App* state_cmd = ns->add_subcommand("state", "Report resident models and disk usage");
+    state_cmd->group("");
     state_cmd->callback([&options]() {
         const int exit_code = run_state(options);
         if (exit_code != 0) {

@@ -348,7 +348,7 @@ rac_result_t resolve(const std::string &ref, Resolved *out, std::string *error,
       // (glm-5.3-flash, ...) as a typo, and `wally run`/`llm generate` only
       // ever loads a model on this machine — there is no cloud fallback here
       // to dead-end into quietly. Point at the one that exists.
-      *error += " (try `wally list --all`, an hf.co/org/repo[:quant] ref, a "
+      *error += " (try `wally models list --all`, an hf.co/org/repo[:quant] ref, a "
                 "direct URL, or a path to a local bundle directory — or, if "
                 "it's a model your account has on the hosted console, `wally "
                 "claude-code -m " +

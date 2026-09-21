@@ -20,7 +20,7 @@ EMAIL = "developer@example.test"
 # is 0 in the 24h window on purpose: SGLang does not report cached tokens for
 # glm-5.3, so zero is what a real console sends today and the row has to survive
 # it honestly rather than disappear. `timeline`, `models` and `recent` are
-# present because the console sends them; `wally usage` ignores all three.
+# present because the console sends them; `wally account usage` ignores all three.
 USAGE_WINDOWS = [
     {
         "window": "1h",
@@ -179,7 +179,7 @@ def main():
             ):
                 environment.pop(name, None)
 
-            login = run(binary, ["login", "--no-browser"], environment)
+            login = run(binary, ["account", "login", "--no-browser"], environment)
             if "ABCD-EFGH" not in login or ConsoleHandler.console_origin not in login:
                 raise AssertionError("login did not print the approval code and URL")
 
@@ -197,13 +197,13 @@ def main():
                         f"unsafe credential modes: {directory_mode:o}/{file_mode:o}"
                     )
 
-            whoami = run(binary, ["whoami"], environment)
+            whoami = run(binary, ["account", "whoami"], environment)
             if EMAIL not in whoami or "session" not in whoami or "active" not in whoami:
                 raise AssertionError("whoami did not report the active identity")
             if "plan" in whoami or "tokens" in whoami or "quota" in whoami:
                 raise AssertionError("whoami exposed launch-out-of-scope billing fields")
 
-            usage = run(binary, ["usage"], environment)
+            usage = run(binary, ["account", "usage"], environment)
             # What San asked for and nothing else: the balance, then input,
             # output, cache and money over two windows.
             for fragment in ("$18.42", "$25.00", "input", "output", "cache", "spend"):
@@ -225,9 +225,10 @@ def main():
                     raise AssertionError(f"usage still prints {banned!r}:\n{usage}")
 
             # The root flag and the command flag mean the same thing. The root
-            # parser accepts `wally --json usage`, and reading only the local
-            # flag printed a human table to something asking for one document.
-            for argv in (["usage", "--json"], ["--json", "usage"]):
+            # parser accepts `wally --json account usage`, and reading only the
+            # local flag printed a human table to something asking for one
+            # document.
+            for argv in (["account", "usage", "--json"], ["--json", "account", "usage"]):
                 combined = run(binary, argv, environment)
                 # run() concatenates stderr, where status lines and SDK logs go.
                 # The document is the one line that is a JSON object.
@@ -243,7 +244,7 @@ def main():
             # neither may be filled in from the month-wide `totals` next to it.
             ConsoleHandler.serves_windows = False
             try:
-                stale = run(binary, ["usage"], environment)
+                stale = run(binary, ["account", "usage"], environment)
             finally:
                 ConsoleHandler.serves_windows = True
             for label in ("past 1h", "past 24h"):
@@ -255,7 +256,7 @@ def main():
             if "$18.42" not in stale:
                 raise AssertionError(f"the balance is known and must still print:\n{stale}")
 
-            run(binary, ["logout"], environment)
+            run(binary, ["account", "logout"], environment)
             if list(pathlib.Path(profile).iterdir()):
                 raise AssertionError("logout did not remove the local session")
 

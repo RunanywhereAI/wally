@@ -237,15 +237,15 @@ IFS="$old_ifs"
 # being left as an instruction the person has to notice. Already signed in is a
 # no-op, and a failure is not fatal: the CLI is installed either way.
 step "Signing in"
-if wally whoami >/dev/null 2>&1; then
+if wally account whoami >/dev/null 2>&1; then
     ok "already signed in"
 elif [ ! -t 0 ] || [ ! -t 1 ]; then
     # No terminal: piped into bash over SSH, or a CI step. The browser flow
     # would try to open a browser that is not there and then block until the
     # request expires, which reads as the installer hanging.
-    warn "not an interactive terminal — run \`wally login\` yourself"
+    warn "not an interactive terminal — run \`wally account login\` yourself"
 else
-    wally login || warn "sign-in did not finish. Run \`wally login\` when you are ready."
+    wally account login || warn "sign-in did not finish. Run \`wally account login\` when you are ready."
 fi
 
 # --- summary ----------------------------------------------------------------
@@ -258,6 +258,6 @@ printf '   %s└─────────────────────�
 
 printf '   %sNext:%s\n' "$B" "$R"
 printf '     wally opencode --cloud -m glm-5.3-flash   code against a hosted model\n'
-printf '     wally usage                               credit left and what you spent\n'
-printf '     wally pull qwen3-0.6b                     download a model to this machine\n'
+printf '     wally account usage                       credit left and what you spent\n'
+printf '     wally models pull qwen3-0.6b              download a model to this machine\n'
 printf '   In Claude Code, ask: %s"get me started with RunAnywhere Wally"%s\n\n' "$DIM" "$R"

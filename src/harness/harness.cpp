@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <cstring>
@@ -35,6 +36,7 @@ using wally_socklen_t = socklen_t;
 #include "io/output.h"
 #include "bootstrap.h"
 #include "harness/catalog_models.h"
+#include "catalog/catalog.h"
 #include "harness/local_models.h"
 
 namespace wally::harness {
@@ -364,7 +366,7 @@ long long EpochSeconds() {
         .count();
 }
 
-/// The refresh half of the same dance `wally usage` uses: exchange the refresh
+/// The refresh half of the same dance `wally account usage` uses: exchange the refresh
 /// token for a new access token and persist it, so later commands in the same
 /// session do not pay for the refresh again.
 bool RefreshSession(const account::ConsoleClient& console, account::Credentials* credentials,
@@ -374,7 +376,7 @@ bool RefreshSession(const account::ConsoleClient& console, account::Credentials*
     }
     if (credentials->refresh_token.empty()) {
         if (error != nullptr) {
-            *error = "the cloud session cannot be refreshed; run `wally login`";
+            *error = "the cloud session cannot be refreshed; run `wally account login`";
         }
         return false;
     }
@@ -485,31 +487,65 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
     std::string console_url;
     bool serving = false;
 
-    const LocalModel* local = nullptr;
-    const std::vector<LocalModel> installed = LocalModels(env.home);
-    for (const LocalModel& candidate : installed) {
-        // Completeness used to be checked against the catalog's file list.
-        // The walk cannot do that, and does not need to: it only yields a
-        // directory that already holds weights or a download manifest, and the
-        // load below is what actually decides whether the model opens.
-        if (candidate.id == model) {
-            local = &candidate;
-            break;
+    // The names a person types (`bonsai-27b`, `mlx-qwen3-0.6b`, `qwen3`) are
+    // catalog ids, aliases and `models list` merge keys; the directory on disk
+    // is the registry id (`mlx-qwen3-0.6b-4bit`). Accept every spelling the
+    // catalog does, the same way `run` and `models pull` do, and prefer a
+    // downloaded variant of a merged row over one that is not here.
+    std::vector<std::string> wanted{model};
+    if (const catalog::CatalogEntry* entry = catalog::find(model)) {
+        wanted.push_back(entry->id);
+    }
+    size_t count = 0;
+    const catalog::CatalogEntry* all = catalog::all(&count);
+    for (size_t i = 0; i < count; ++i) {
+        if (catalog::merge_key_for(all[i].id) == model) {
+            wanted.push_back(all[i].id);
         }
     }
 
+    // First spelling wins, except that a directory with no weight file in it
+    // (a cancelled pull leaves the manifest and a `.part`) loses to any variant
+    // whose weights are actually there. Beyond that the load below is what
+    // decides whether the model opens; the walk cannot judge completeness.
+    const LocalModel* local = nullptr;
+    const std::vector<LocalModel> installed = LocalModels(env.home);
+    for (const std::string& id : wanted) {
+        for (const LocalModel& candidate : installed) {
+            if (candidate.id != id) continue;
+            const bool has_weights = !candidate.path.empty() || candidate.framework == "CoreML";
+            if (local == nullptr || (has_weights && local->path.empty())) {
+                local = &candidate;
+            }
+        }
+        if (local != nullptr && !local->path.empty()) break;
+    }
+
     if (local != nullptr) {
-        // The server creates its handle with rac_llm_create(path), which routes
-        // on the path alone rather than asking the registry what framework the
-        // model belongs to. An MLX directory does not look like anything it
-        // recognises, so it lands on llama.cpp and fails to load. Saying so
-        // beats starting a server that answers every request with an error.
-        if (local->framework != "LlamaCpp") {
-            out::error_line(model + " runs on " + local->framework +
-                       ", and the local server can only serve LlamaCpp models today");
-            out::status_line("use a GGUF model here, or point at an upstream one");
+        // A directory with the manifest but no weights is a pull that did not
+        // finish. Serving it fails inside llama.cpp with "No .gguf file found",
+        // which reads as a bug; say what it is instead.
+        if (local->path.empty() && local->framework != "CoreML") {
+            out::error_line(model + " is on this machine but incomplete (a cancelled download?)");
+            out::status_line("run `wally models pull " + model + "` to finish it");
             return false;
         }
+        // Coding tools are cloud-only this release. A local model is refused
+        // outright rather than gated: the kit's local server re-reads the whole
+        // conversation every turn and leaks a reasoning model's thinking into
+        // the reply, so an agent degrades from the second turn on. `wally run`
+        // still takes any local model; the harnesses take a hosted one.
+        out::error_line(model + " is on this machine, but coding tools run on hosted models only");
+        out::status_line("sign in and use one: `wally account login`, then `wally opencode --cloud -m glm-5.3-flash`");
+        return false;
+        // Any backend the kit registered. The server's rac_llm_create(path)
+        // looks the path up in the registry and routes on the framework it
+        // finds ("Found model by path ... framework=7 ... Routed to plugin:
+        // mlx", kit 0.20.37), so an MLX directory reaches MLX the same way a
+        // GGUF reaches llama.cpp. An older kit routed on the path alone and
+        // this used to refuse anything but LlamaCpp here; the load below is
+        // now the honest gate, and it fails loudly for a framework this
+        // binary does not have.
         const int port = FreePort();
         if (port == 0) {
             out::error_line("could not find a free port for the local server");
@@ -528,13 +564,21 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
         rac_server_config_t config = RAC_SERVER_CONFIG_DEFAULT;
         config.host = "127.0.0.1";
         config.port = static_cast<uint16_t>(port);
-        const std::string path = local->path.empty() ? local->dir : local->path;
+        // A single-file model (GGUF) is its file; a directory model (MLX
+        // safetensors shards, Core ML) is its directory, which is also what
+        // `wally serve` hands the server. Passing one shard of three worked only
+        // because the server resolves the path through the registry.
+        const std::string path = local->framework == "LlamaCpp" && !local->path.empty()
+                                     ? local->path
+                                     : local->dir;
         config.model_path = path.c_str();
         config.model_id = model.c_str();
-        // The per-run context setting went with the old CLI; the server default
-        // it fell back to is what every run used in practice anyway.
-        config.context_size = 8192;
-        out::status_line("serving " + model + " on 127.0.0.1:" + std::to_string(port));
+        // Sized from this machine, not a constant: a coding agent's opening
+        // request is a 15k-token system prompt, and the fixed 8k this used to
+        // pass rejected it. See LocalContextSize.
+        config.context_size = static_cast<int32_t>(LocalContextSize(local->id));
+        out::status_line("serving " + model + " on 127.0.0.1:" + std::to_string(port) + " (" +
+                         std::to_string(config.context_size) + " token context)");
         if (rac_server_start(&config) != RAC_SUCCESS) {
             out::error_line("the local server would not start for " + model);
             return false;
@@ -569,8 +613,8 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
         // hand-written credentials.json satisfies it with any non-empty
         // string. Everything past this point is destructive to a caller's
         // running app or session, so confirm the session against the console
-        // first — the same identity check `wally whoami` makes, with the same
-        // refresh-on-401 dance `wally usage` uses.
+        // first — the same identity check `wally account whoami` makes, with the
+        // same refresh-on-401 dance `wally account usage` uses.
         const account::ConsoleClient console;
         std::string email;
         std::string verify_error;
@@ -630,18 +674,18 @@ bool EnsureInstalled(const std::string& tool) {
 
 void ReportCloudSessionInvalid(const std::string& model) {
     // Stderr, on its own line: a red "Error:" a person cannot miss, and the
-    // action `wally login` highlighted so the fix stands out. Color is dropped
+    // action `wally account login` highlighted so the fix stands out. Color is dropped
     // under NO_COLOR or when stderr is not a terminal.
     const cli_color::Palette pal = cli_color::make_palette(color_output_enabled(false));
     out::status_line(std::string(pal.red) + "Error:" + pal.reset + " You cannot use " + model +
-                     ", your cloud session is no longer valid, do: " + pal.bold_cyan + "wally login" +
+                     ", your cloud session is no longer valid, do: " + pal.bold_cyan + "wally account login" +
                      pal.reset + " and try again");
 }
 
 void ReportNotSignedIn() {
     const cli_color::Palette pal = cli_color::make_palette(color_output_enabled(false));
     out::status_line(std::string(pal.red) + "Error:" + pal.reset +
-                     " You are not logged in, log in with " + pal.bold_cyan + "wally login" +
+                     " You are not logged in, log in with " + pal.bold_cyan + "wally account login" +
                      pal.reset);
 }
 

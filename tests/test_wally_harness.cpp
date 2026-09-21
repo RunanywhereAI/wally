@@ -11,6 +11,7 @@
 #include "account/credentials.h"
 #include "harness/agents.h"
 #include "harness/harness.h"
+#include "harness/local_models.h"
 
 namespace {
 
@@ -709,9 +710,10 @@ TestResult test_hermes_argv_pins_provider_and_model_ahead_of_the_rest() {
 }
 
 // dsh reads our provider out of a settings document it is pointed at, so the
-// document is the contract. A missing apiKeyEnv on an upstream route fails
-// every request with MISSING_CREDENTIAL; a present one on a loopback route
-// does the same, because there is no key to resolve.
+// document is the contract. A missing apiKeyEnv fails every turn with "No API
+// key for provider: runanywhere" (dsh 0.1.5), on a loopback route as much as
+// an upstream one, so the reference is always present and the launcher puts a
+// placeholder in the variable for a local server.
 TestResult test_deepseek_settings_carry_the_route() {
     TestResult result;
     result.test_name = "deepseek_settings_carry_the_route";
@@ -736,9 +738,9 @@ TestResult test_deepseek_settings_carry_the_route() {
     }
 
     const Json local = Json::parse(wally::harness::BuildDeepSeekSettings(
-        "http://127.0.0.1:52431/v1", "", {{"qwen3-0.6b", 8192, 0, 0, 0}}));
-    if (local["llm-pi-ai"]["providers"]["runanywhere"].contains("apiKeyEnv")) {
-        result.details = "a keyless local route must not name a reference that resolves to nothing";
+        "http://127.0.0.1:52431/v1", "RUNANYWHERE_API_KEY", {{"qwen3-0.6b", 8192, 0, 0, 0}}));
+    if (local["llm-pi-ai"]["providers"]["runanywhere"]["apiKeyEnv"] != "RUNANYWHERE_API_KEY") {
+        result.details = "a local route must still name the key reference, or dsh refuses the turn";
         return result;
     }
 
@@ -805,10 +807,44 @@ TestResult test_deepseek_prompt_picks_headless() {
     return result;
 }
 
+
+// The context a local server is started with never drops below the 8192 every
+// launch used before, and never exceeds what the catalog says the model was
+// trained on. The RAM tier in between depends on the machine, so only the two
+// bounds and the unknown-model path are pinned here.
+TestResult test_local_context_size_respects_floor_and_model_window() {
+    TestResult result;
+    result.test_name = "local_context_size_respects_floor_and_model_window";
+
+    // qwen3-0.6b's catalog window is 4096, below the floor: the floor wins.
+    if (wally::harness::LocalContextSize("qwen3-0.6b") != 8192) {
+        result.details = "a model window under 8192 must not pull the server below the floor";
+        return result;
+    }
+    // A model the catalog has never heard of gets the machine's tier, which is
+    // at least the floor and a power of two the server accepts.
+    const std::int64_t unknown = wally::harness::LocalContextSize("hf.co/someone/some-model");
+    if (unknown < 8192 || (unknown & (unknown - 1)) != 0) {
+        result.details = "an unknown model must get the RAM tier, >= 8192 and a power of two";
+        return result;
+    }
+    // A catalog model is never given more than the tier an unknown one gets.
+    if (wally::harness::LocalContextSize("bonsai-27b") > unknown) {
+        result.details = "a catalog model must not exceed the machine's tier";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+
+
 }  // namespace
 
 int main(int argc, char** argv) {
     TestSuite suite("wally_harness");
+    suite.add("local_context_size_respects_floor_and_model_window",
+              test_local_context_size_respects_floor_and_model_window);
     suite.add("model_id_rejects_empty_and_control_characters",
               test_model_id_rejects_empty_and_control_characters);
     suite.add("model_id_rejects_xml_and_path_structural_characters",

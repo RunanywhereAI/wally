@@ -96,8 +96,9 @@ built with namespace isolation. Never `find_package(Protobuf)` against Homebrew.
 
 ## Command surface
 
-Dual grammar: spec namespaces (`llm generate`, `models download`) plus terminal
-aliases (`run`, `pull`, `stt`). One `configure_*` wires both. See
+Dual grammar: spec namespaces (`llm generate`, `models download`) plus the
+terminal alias `run`. Model verbs (`list`/`pull`/`rm`/`show`/`default`) live
+under `models` only — no top-level shortcut. One `configure_*` wires both. See
 `src/commands/commands.h`.
 
 Do not reintroduce FetchContent of the SDK, a second inference backend tree,

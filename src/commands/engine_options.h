@@ -23,6 +23,11 @@ bool parse_engine_hint(const std::string& engine,
                        runanywhere::v1::InferenceFramework* out_framework,
                        std::string* error);
 
+/// The `--engine` values this build accepts, for help text: "mlx, llamacpp,
+/// onnx, sherpa", with NeuRT and QHexRT names added only when the kit linked
+/// them. Keeps every command's help in step with parse_engine_hint().
+const char* engine_choices();
+
 bool resolve_engine_hint(const std::string& engine, EngineHintResolution* out_resolution,
                          std::string* error);
 

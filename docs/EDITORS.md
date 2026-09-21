@@ -94,13 +94,13 @@ enough.
 A model you have not downloaded can still answer, if the console serves it:
 
 ```bash
-wally login
-wally whoami
+wally account login
+wally account whoami
 wally run gemma-4-31b-it "why is the sky blue"
 ```
 
-`wally login` opens the console in a browser and waits for you to approve the
-machine. `wally logout` deletes the session.
+`wally account login` opens the console in a browser and waits for you to
+approve the machine. `wally account logout` deletes the session.
 
 Where the credential is kept depends on the platform, and `WALLY_PROFILE_DIR`
 moves it anywhere:
@@ -114,6 +114,7 @@ moves it anywhere:
 `WALLY_CONSOLE_WEB_URL` at the page that approves the sign-in. Those are two
 different hosts; see [AGENTS.md](../AGENTS.md).
 
-This is separate from `wally auth login`, which signs a device in with an API
-key rather than a browser. Most people want `wally login`.
+`wally auth login`, which signed a device in with an API key rather than a
+browser, is not registered in this release; the browser flow above is the only
+way in.
 

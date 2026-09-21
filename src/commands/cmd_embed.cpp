@@ -276,9 +276,9 @@ void register_embed(CLI::App& app, GlobalOptions& options) {
                     "Embedding model to use (default: " + std::string(kDefaultEmbeddingModel) + ")")
         ->default_val(kDefaultEmbeddingModel);
     cmd->add_option("--engine", *engine,
-                    "Engine hint (neurt|coreml|ane, mlx, llamacpp, onnx, sherpa, qhexrt). "
-                    "Honoured for catalog models too, not just URL/HF refs. Omit to let "
-                    "catalog framework / plugin priority pick.");
+                    std::string("Engine hint (") + engine_choices() +
+                        "). Honoured for catalog models too, not just URL/HF refs. Omit to "
+                        "let catalog framework / plugin priority pick.");
     cmd->add_option("--text,-t", *option_texts,
                     "Embed this text too; repeat to batch several");
     cmd->add_option("--normalize", *normalize, "Scale vectors to unit length or leave them raw")

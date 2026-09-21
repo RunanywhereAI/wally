@@ -53,7 +53,7 @@ namespace {
 
 namespace v1 = runanywhere::v1;
 
-constexpr const char* kDefaultRagLlm = "smollm2-360m-q8_0";
+constexpr const char* kDefaultRagLlm = "smollm2-135m";
 constexpr const char* kDefaultRagEmbed = "all-minilm-l6-v2";
 
 bool read_text_file(const std::string& path, std::string* out, std::string* error) {

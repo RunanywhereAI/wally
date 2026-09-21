@@ -26,6 +26,7 @@
 
 #include "bootstrap.h"
 #include "catalog/model_ref.h"
+#include "cli_formatter.h"
 #include "commands/engine_options.h"
 #include "io/output.h"
 #include "io/proto.h"
@@ -253,15 +254,16 @@ int run_tool_call(const GlobalOptions& options, const ToolCallParams& params) {
 void configure_tool_call(CLI::App* cmd, GlobalOptions& options) {
     auto params = std::make_shared<ToolCallParams>();
     cmd->add_option("prompt", params->prompt, "What to ask the model")->required();
-    cmd->add_option("--model,-m", params->model, "Model to use for the tool-calling loop")
+    cmd->add_option("--model,-m", params->model,
+                    "Model to use (default " + std::string(kDefaultToolModel) + ")")
         ->default_val(kDefaultToolModel);
-    cmd->add_option("--engine", params->engine, "Pin a specific inference engine");
+    cmd->add_option("--engine", params->engine, "Engine to run on");
     cmd->add_option("--tool-choice", params->tool_choice,
-                    "How the model may call tools: auto|required|none|specific");
+                    "When the model may call tools: auto, required, none, specific");
     cmd->add_option("--force-tool", params->force_tool,
                     "Force one tool by name (implies --tool-choice specific)");
     cmd->add_option("--max-tool-calls", params->max_tool_calls,
-                    "Maximum host tool executions per turn");
+                    "Cap on tool calls per turn (default 3)");
     cmd->callback([&options, params]() {
         const int exit_code = run_tool_call(options, *params);
         if (exit_code != 0) {
@@ -277,9 +279,11 @@ void register_tool(CLI::App& app, GlobalOptions& options) {
     // that register_llm() already created (app.cpp registers llm first).
     CLI::App* ns = app.get_subcommand("llm");
     configure_tool_call(
-        ns->add_subcommand("tool-call",
-                           "Run the tool-calling loop with built-in demo tools (get_weather, "
-                           "calculate)"),
+        ns->add_subcommand("tool-call", "Try tool calling with two demo tools")
+            ->footer(examples_footer({
+                {"wally llm tool-call \"weather in Paris?\"", "Calls get_weather"},
+                {"wally llm tool-call \"what is 19 * 23?\"", "Calls calculate"},
+            })),
         options);
 }
 

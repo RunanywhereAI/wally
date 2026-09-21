@@ -575,7 +575,7 @@ rac_result_t bootstrap(const GlobalOptions &options, Bootstrapped *out) {
       if (!std::filesystem::exists(home, exists_ec)) {
         out::status_line("warning: --home '" + home +
                          "' does not exist yet; it will be created empty "
-                         "(pass the right path, or `wally pull` into this one)");
+                         "(pass the right path, or `wally models pull` into this one)");
       }
     }
 

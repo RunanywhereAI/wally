@@ -11,10 +11,9 @@ Override only when you mean it:
 ```bash
 wally llm generate --engine mlx -m mlx-qwen3 "Hello"
 wally run --engine qhexrt /path/to/lfm2_5_230m_HNPU "Hello"
-wally image generate --engine neurt --prompt "a red cube" --out out.png
 ```
 
-`--engine` accepts `mlx`, `llamacpp`, `sherpa`, `onnx`, `neurt` / `coreml` / `ane`, and `qhexrt` / `qnn` / `npu` / `hexagon`. If you omit it, commons picks the highest-priority **registered** backend that implements that primitive:
+`--engine` accepts `mlx`, `llamacpp`, `sherpa`, `onnx`, `qhexrt` / `qnn` / `npu` / `hexagon`, and, only in a build that linked the NeuRT overlay, `neurt` / `coreml` / `ane`. A build without NeuRT refuses those three with "not in this build", and each command's `--help` lists only the engines that binary has. If you omit it, commons picks the highest-priority **registered** backend that implements that primitive:
 
 | Priority | Engine | Who wins unpinned work |
 |---|---|---|
@@ -47,15 +46,7 @@ Yes = this engine implements the primitive. Try = a catalog id that `wally pull`
 | Modality | Command | llama.cpp | MLX | Sherpa | ONNX | NeuRT | QHexRT |
 |---|---|---|---|---|---|---|---|
 | LLM | `wally run` / `llm generate` | yes · `smollm2`, `qwen3` | yes · `mlx-qwen3` | — | — | yes · `lfm2-230m-ane` local Core ML tree | yes · `lfm2-230m-npu` local `*_HNPU` |
-| VLM | `wally vlm generate --image` | yes · `smolvlm2` | yes · `mlx-qwen2-vl` | — | — | — | yes · `internvl-1b-npu` local HNPU |
-| TTS | `wally tts synthesize -o out.wav` | — | yes · `mlx-soprano` | yes · `piper` | — | — | yes · `kitten-micro-npu` local HNPU |
-| STT | `wally stt transcribe audio.wav` | — | yes · `mlx-qwen3-asr` | yes · `whisper-tiny` | — | yes · `parakeet-tdt-v2-ane` local Core ML | yes · `whisper-base-npu` local HNPU |
-| VAD | `wally vad detect audio.wav` | — | — | yes | yes · `silero` | — | — |
-| Embeddings | `wally embed` | yes · `nemotron-3-embed` | yes · `mlx-qwen3-embed` | — | yes · `minilm` | — | yes · `embeddinggemma-npu` local HNPU |
-| Rerank | `wally rerank -d …` | yes · `bge-reranker` | — | — | — | — | yes · `nv-rerank-npu` local HNPU |
-| Segmentation | `wally segment image.ppm` (binary P6 PPM) | — | — | — | yes · `segformer` | — | — |
-| Diarization | `wally diarize audio.wav` | — | — | — | yes · `sortformer` | — | — |
-| Image gen | `wally image generate --prompt … --out …` | — | — | — | — | yes · `sd15` (compiled Core ML zip, not the HF repo HTML) | yes · `cosmos3-diffusion-npu` local HNPU |
+
 
 MLX registers with a one-line `-811` then Swift callbacks install it — that warning is expected. `image generate` is compiled only when NeuRT is linked; `--prompt` and `--out` are required (not a positional prompt). `--steps 4` is enough for a smoke PNG.
 
