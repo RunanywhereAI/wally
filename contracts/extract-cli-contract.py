@@ -93,6 +93,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Provenance is all-or-nothing. sync_from_inferenceinfra.py --check rejects
+    # an extract whose x-runanywhere-source is missing any of repository /
+    # commit / branch / artifact, so stamping a commit with no branch (or the
+    # reverse) writes a pin that cannot pass its own gate -- and the failure
+    # surfaces later, in CI, rather than here where the mistake was made.
+    if bool(args.source_commit) != bool(args.source_branch):
+        parser.error(
+            "--source-commit and --source-branch go together: pass both to stamp "
+            "provenance, or neither to write an unstamped extract"
+        )
+
     source = json.loads(args.source.read_text(encoding="utf-8"))
     components = source["components"]
 

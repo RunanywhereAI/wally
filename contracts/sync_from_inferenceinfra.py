@@ -26,6 +26,9 @@ EXTRACTOR = ROOT / "extract-cli-contract.py"
 GENERATOR = ROOT / "generate_console_binding.py"
 EXTRACT = ROOT / "wally-cli-v1.openapi.json"
 CONTROL_PLANE = "contracts/control-plane-v1.openapi.json"
+# The two files a sync regenerates from scratch. Named once so the destination
+# guard and the error message cannot drift apart.
+GENERATED = ("contracts/wally-cli-v1.openapi.json", "src/account/console_contract.h")
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -41,32 +44,78 @@ def _git(cwd: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _pointed_names(repo: Path, namespace: str) -> list[str]:
+    """Short names of the refs under `namespace` that point at HEAD."""
+    pointed = _git(
+        repo,
+        "for-each-ref",
+        "--format=%(refname:short)",
+        "--points-at",
+        "HEAD",
+        namespace,
+    )
+    return [line.strip() for line in pointed.splitlines() if line.strip()]
+
+
+def _strip_remote(name: str) -> str:
+    """`origin/feature/cli-sync` -> `feature/cli-sync`; `origin/HEAD` -> ``.
+
+    Only the remote name comes off. The rest is the branch, slashes included.
+    `origin/HEAD` is the remote's symbolic default and names no branch of its
+    own, so it is dropped rather than reported as a branch called "HEAD".
+    """
+    _, separator, rest = name.partition("/")
+    if not separator or rest in {"", "HEAD"}:
+        return ""
+    return rest
+
+
 def _run(argv: list[str]) -> None:
     result = subprocess.run(argv, cwd=REPO, check=False)
     if result.returncode != 0:
         raise SystemExit(result.returncode)
 
 
-def check_local() -> None:
-    if not EXTRACT.is_file():
-        raise SystemExit(f"missing {EXTRACT}")
-    document = json.loads(EXTRACT.read_text(encoding="utf-8"))
+def check_local(extract: Path = EXTRACT) -> None:
+    if not extract.is_file():
+        raise SystemExit(f"missing {extract}")
+    document = json.loads(extract.read_text(encoding="utf-8"))
     source = document.get("x-runanywhere-source") or {}
     for key in ("repository", "commit", "branch", "artifact"):
         if not source.get(key):
             raise SystemExit(
-                f"{EXTRACT.name} is missing x-runanywhere-source.{key}. "
+                f"{extract.name} is missing x-runanywhere-source.{key}. "
                 "Run: python3 contracts/sync_from_inferenceinfra.py "
                 "--from /path/to/InferenceInfra"
             )
-    _run([sys.executable, str(GENERATOR), "--check"])
+    if extract.resolve() == EXTRACT.resolve():
+        _run([sys.executable, str(GENERATOR), "--check"])
+    else:
+        # generate_console_binding.py reads the committed extract and has no
+        # path override, so checking the header against some other file would
+        # be meaningless. Provenance is still checked above, which is the part
+        # an alternate extract exists to exercise.
+        print(f"note: {extract} is not the committed extract; binding check skipped")
     print(
         f"Wally CLI lock OK ({source['commit'][:8]}, {source['branch']}, "
         f"{source['artifact']})"
     )
 
 
-def sync_from(from_repo: Path) -> None:
+def _dirty_generated() -> list[str]:
+    """The generated files that differ from HEAD in this repo, if any.
+
+    `diff --name-only HEAD` rather than `status --porcelain` on purpose: it
+    emits bare paths, covering staged and unstaged edits alike, with no status
+    columns to parse. (_git strips the output, which would eat porcelain's
+    leading column and silently truncate the first path.) Both files are
+    tracked, so nothing is missed by not reporting untracked entries.
+    """
+    changed = _git(REPO, "diff", "--name-only", "HEAD", "--", *GENERATED)
+    return [line.strip() for line in changed.splitlines() if line.strip()]
+
+
+def sync_from(from_repo: Path, force: bool = False) -> None:
     if not from_repo.is_dir():
         raise SystemExit(f"--from {from_repo} is not a directory")
     dirty = _git(from_repo, "status", "--porcelain")
@@ -75,6 +124,18 @@ def sync_from(from_repo: Path) -> None:
             f"--from {from_repo} has a dirty working tree. Commit or stash "
             "before syncing so the stamped commit is a real InferenceInfra revision."
         )
+    # A sync rewrites both generated files from the source contract, so any
+    # uncommitted edit sitting in them is destroyed with no way back. The
+    # source tree is already refused when dirty for the same class of reason;
+    # the destination gets the same courtesy rather than a silent overwrite.
+    if not force:
+        clobbered = _dirty_generated()
+        if clobbered:
+            raise SystemExit(
+                "these generated files have uncommitted changes and a sync would "
+                "overwrite them:\n  " + "\n  ".join(clobbered) + "\n"
+                "Commit or stash them first, or pass --force to overwrite."
+            )
     source = from_repo / CONTROL_PLANE
     if not source.is_file():
         raise SystemExit(f"missing {source}")
@@ -84,22 +145,21 @@ def sync_from(from_repo: Path) -> None:
         # Detached checkout (CI worktree, `git worktree add --detach`). Prefer
         # development/main when this commit is on them so the pin names a real
         # branch instead of "HEAD".
-        pointed = _git(
-            from_repo,
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "--points-at",
-            "HEAD",
-            "refs/heads",
-            "refs/remotes",
-        )
-        names = [line.strip() for line in pointed.splitlines() if line.strip()]
+        # Local heads first: their short name IS the branch name, slashes and
+        # all. A remote ref carries a remote prefix on top of that, so it needs
+        # one -- and only one -- leading segment removed.
+        heads = _pointed_names(from_repo, "refs/heads")
+        remotes = [_strip_remote(name) for name in _pointed_names(from_repo, "refs/remotes")]
+        names = heads + [name for name in remotes if name]
         for candidate in ("development", "main"):
-            if candidate in names or any(name.endswith("/" + candidate) for name in names):
+            if candidate in names:
                 branch = candidate
                 break
         else:
-            branch = names[0].rsplit("/", 1)[-1] if names else "detached"
+            # Whatever ref actually points here, named in full. Splitting on
+            # "/" here would report `feature/cli-sync` as `cli-sync`, so the
+            # pin would name a branch that does not exist.
+            branch = names[0] if names else "detached"
     _run(
         [
             sys.executable,
@@ -125,13 +185,27 @@ def main() -> None:
         action="store_true",
         help="fail if the committed pin is stale (hermetic without --from)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite generated files that have uncommitted changes",
+    )
+    parser.add_argument(
+        "--extract",
+        type=Path,
+        default=EXTRACT,
+        help=(
+            "check provenance in this extract instead of the committed one; "
+            "lets a test exercise the refusal path whatever the committed pin says"
+        ),
+    )
     args = parser.parse_args()
     if args.from_repo is None and not args.check:
         parser.error("pass --from <InferenceInfra checkout> and/or --check")
     if args.from_repo is not None:
-        sync_from(args.from_repo.resolve())
+        sync_from(args.from_repo.resolve(), force=args.force)
     if args.check:
-        check_local()
+        check_local(args.extract)
 
 
 if __name__ == "__main__":

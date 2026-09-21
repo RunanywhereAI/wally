@@ -96,6 +96,12 @@ python3 contracts/sync_from_inferenceinfra.py --from /path/to/InferenceInfra
 is enforced on the InferenceInfra PR (`consumer-impact`); this repo cannot
 read that private source from CI.
 
+A sync rewrites both generated files, so it refuses to start when either one
+has uncommitted changes rather than destroying them; commit or stash first, or
+pass `--force`. The same all-or-nothing rule applies to provenance: the
+extractor takes `--source-commit` and `--source-branch` together or not at all,
+because half a stamp writes a pin that cannot pass `--check`.
+
 Consistency with the SDK is `idl/SCHEMA_LOCK`, copied into the kit as
 `share/runanywhere/SCHEMA_LOCK` and pinned here as `WALLY_PINNED_IDL_SCHEMA_SHA256`.
 Configure fails if the kit's lock does not match (`cmake/RunAnywhereSDK.cmake`).
