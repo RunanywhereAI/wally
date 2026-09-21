@@ -81,9 +81,26 @@ turns it into `src/account/console_contract.h` (typed requests and responses,
 DO NOT EDIT), which `console.cpp` uses instead of hand-built JSON. Requests
 serialize strictly; responses read tolerantly (a missing field defaults, a wrong
 type or unknown enum value still fails) so the CLI survives a server that lags
-the contract. `test_wally_contract` and the CI `--check` fail the build if the
-header, the pin, and the artifact drift. To re-vendor: run the extractor against
-a newer source contract, run the generator, commit all three together.
+the contract. `test_wally_contract` and
+`python3 contracts/sync_from_inferenceinfra.py --check` fail the build if the
+header, the pin, and the artifact drift.
+
+To re-vendor from an InferenceInfra checkout (records the source commit on the
+extract):
+
+```bash
+python3 contracts/sync_from_inferenceinfra.py --from /path/to/InferenceInfra
+```
+
+`--check` without `--from` is hermetic. Freshness against InferenceInfra HEAD
+is enforced on the InferenceInfra PR (`consumer-impact`); this repo cannot
+read that private source from CI.
+
+A sync rewrites both generated files, so it refuses to start when either one
+has uncommitted changes rather than destroying them; commit or stash first, or
+pass `--force`. The same all-or-nothing rule applies to provenance: the
+extractor takes `--source-commit` and `--source-branch` together or not at all,
+because half a stamp writes a pin that cannot pass `--check`.
 
 Consistency with the SDK is `idl/SCHEMA_LOCK`, copied into the kit as
 `share/runanywhere/SCHEMA_LOCK` and pinned here as `WALLY_PINNED_IDL_SCHEMA_SHA256`.

@@ -56,7 +56,11 @@ jobs:
         # at run time) without depending on shellcheck knowing every case.
         run: bash scripts/test/test-install-cross-shell.sh
       - name: Console binding matches its pinned contract
-        run: python3 contracts/generate_console_binding.py --check
+        run: |
+          set -euo pipefail
+          python3 tests/test_contract_sync.py
+          python3 contracts/generate_console_binding.py --check
+          python3 contracts/sync_from_inferenceinfra.py --check
       - name: Versions consistent with versions.toml
         run: python3 scripts/ci/check-versions.py
       - name: No retired model ids in user-facing text
