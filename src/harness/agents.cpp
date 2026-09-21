@@ -476,13 +476,15 @@ std::string BuildDeepSeekSettings(const std::string& base_url, const std::string
     nlohmann::json provider = {{"displayName", "RunAnywhere"},
                                {"api", "openai-completions"},
                                {"baseURL", base_url},
-                               {"models", std::move(entries)}};
-    // Omitted for a local server: an absent reference leaves the route keyless,
-    // which is what a loopback endpoint wants. A reference that resolves to
-    // nothing would fail every request with MISSING_CREDENTIAL instead.
-    if (!key_variable.empty()) {
-        provider["apiKeyEnv"] = key_variable;
-    }
+                               {"models", std::move(entries)},
+                               // Always referenced, local server included. This used to
+                               // be omitted for a loopback endpoint on the theory that
+                               // no reference meant a keyless route; dsh 0.1.5 instead
+                               // refuses the turn with "No API key for provider:
+                               // runanywhere" before any request is made. The variable
+                               // carries a placeholder for a local server, which ignores
+                               // the Authorization header anyway.
+                               {"apiKeyEnv", key_variable}};
     const nlohmann::json settings = {
         {"llm-pi-ai", {{"providers", {{kProviderId, provider}}}}}};
     return settings.dump();
@@ -622,26 +624,24 @@ int LaunchAgent(const Agent& agent, const std::string& model,
                 out::status_line("context window: " +
                                  std::to_string(catalog.front().context_window) + " tokens");
             }
-            const std::string key_variable =
-                endpoint.api_key.empty() ? std::string() : std::string(kDeepSeekKeyVariable);
-
             std::string failure;
-            if (!settings.Write(BuildDeepSeekSettings(endpoint.base_url, key_variable, catalog),
-                                &failure) ||
+            if (!settings.Write(
+                    BuildDeepSeekSettings(endpoint.base_url, kDeepSeekKeyVariable, catalog),
+                    &failure) ||
                 !config.Write(BuildDeepSeekPatch(settings.path(), model), &failure, ".yml")) {
                 out::error_line(failure);
                 Release(endpoint);
                 return 1;
             }
 
-            std::unique_ptr<ScopedEnv> key;
-            if (!key_variable.empty()) {
-                key = std::make_unique<ScopedEnv>(kDeepSeekKeyVariable, endpoint.api_key);
-                if (!key->applied()) {
-                    out::error_line("could not set the endpoint for " + std::string(agent.id));
-                    Release(endpoint);
-                    return 1;
-                }
+            // The real key for a hosted model; a placeholder for a local server,
+            // which dsh insists on having and the server never reads.
+            const ScopedEnv key(kDeepSeekKeyVariable,
+                                endpoint.api_key.empty() ? "local" : endpoint.api_key);
+            if (!key.applied()) {
+                out::error_line("could not set the endpoint for " + std::string(agent.id));
+                Release(endpoint);
+                return 1;
             }
 
             // `--patch` belongs to the launcher, so it goes ahead of anything
