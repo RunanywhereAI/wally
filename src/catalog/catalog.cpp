@@ -1425,7 +1425,7 @@ constexpr CatalogEntry kCatalog[] = {
      "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/"
      "f1bfb127c64f7072bdd2cad55f258b9c8b2910fe/"
      "Qwen3.8-27B-Q4_K_M.gguf",
-     nullptr, 0, 17106775008LL, 4096, true, 0, "", "qwen3.8-27b"},
+     nullptr, 0, 17106775008LL, 262144, true, 0, "", "qwen3.8-27b"},
 
     // IBM Granite 4.1 family (Apache 2.0).
     {"granite-4.1-3b", "granite4.1-3b", "IBM Granite 4.1 3B",
@@ -1896,7 +1896,7 @@ constexpr CatalogEntry kCatalog[] = {
     {"mlx-qwen3.8-27b-4bit", "mlx-qwen3.8-27b", "Qwen3.8 27B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxQwen3_8_27BFiles, 13,
-     16054541349LL, 4096, true, 0, "", "qwen3.8-27b"},
+     16054541349LL, 262144, true, 0, "", "qwen3.8-27b"},
 
     // IBM Granite 4.1 family (MLX). config.json model_type "granite",
     // registered in mlx-swift-lm 3.31.5's LLMTypeRegistry.
