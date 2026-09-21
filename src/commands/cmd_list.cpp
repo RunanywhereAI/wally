@@ -50,12 +50,21 @@ int backend_rank(v1::InferenceFramework framework) {
 }
 
 struct GroupedRow {
-    std::string id;
+    std::string id;            // merge key by default; see the override below
+    std::string local_path;    // local_path of the variant backing `id`, if downloaded
     std::string name;
     v1::ModelCategory category = v1::MODEL_CATEGORY_UNSPECIFIED;
     int64_t size_bytes = 0;
     int name_rank = INT_MAX;   // rank of the variant that set name/category
     int size_rank = INT_MAX;   // rank of the variant that set a positive size
+    // Rank of the downloaded variant currently backing `id`/`local_path`
+    // (INT_MAX = none downloaded yet). The merge key is always a real, listed
+    // catalog id (today, the llama.cpp variant's own), so it is a fine default
+    // for a row nothing has been downloaded for. But once some other backend
+    // is the one actually on disk, printing the bare merge key left
+    // `models show/rm/pull` silently resolving to that other, undownloaded
+    // variant instead — so a downloaded variant's own id always wins here.
+    int id_rank = INT_MAX;
     bool downloaded = false;
     // Distinct backends, ordered by (rank, label) so the join is stable.
     std::set<std::pair<int, std::string>> backends;
@@ -109,9 +118,10 @@ int run_list(const GlobalOptions& options, bool show_all) {
         }
     }
 
-    // Collapse per-backend variants of the same model into one row, keyed by the
-    // catalog merge_key (a non-catalog id keys as itself). Insertion order is
-    // kept so the list reads the same as the registry.
+    // Collapse per-backend variants of the same model into one row, grouped by
+    // the catalog merge_key (a non-catalog id groups with itself). `row.id`
+    // starts as that merge key but can be displaced — see `GroupedRow::id_rank`.
+    // Insertion order is kept so the list reads the same as the registry.
     std::vector<std::string> order;
     std::unordered_map<std::string, GroupedRow> groups;
     for (const v1::ModelInfo& model : all_models.models()) {
@@ -133,6 +143,13 @@ int run_list(const GlobalOptions& options, bool show_all) {
         const int rank = backend_rank(model.framework());
         row.backends.insert({rank, model_labels::short_backend(model.framework())});
         row.downloaded = row.downloaded || is_downloaded;
+        // A downloaded variant's own id/local_path always displaces the merge
+        // key default, best rank first among downloaded variants.
+        if (is_downloaded && rank < row.id_rank) {
+            row.id_rank = rank;
+            row.id = model.id();
+            row.local_path = model.local_path();
+        }
         if (rank < row.name_rank) {
             row.name_rank = rank;
             row.name = model.name();
@@ -169,6 +186,10 @@ int run_list(const GlobalOptions& options, bool show_all) {
                 .field("backend", join_backends(row))
                 .field("size_bytes", row.size_bytes)
                 .field("downloaded", row.downloaded)
+                // Path of the variant `id` refers to; empty when nothing in
+                // the group is downloaded (mirrors the pre-merge shape, which
+                // callers already treat "" as "not downloaded").
+                .field("local_path", row.local_path)
                 .end_object();
         }
         json.end_array().end_object();

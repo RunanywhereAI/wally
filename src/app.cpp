@@ -37,25 +37,30 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     app.add_flag("--json", options.json, "Print results as JSON");
     app.add_flag("-v,--verbose", options.verbose, "Debug logging on stderr");
     app.add_flag("-q,--quiet", options.quiet, "Errors only");
-    app.add_flag("--no-progress", options.no_progress, "Disable progress rendering")->group("");
-    app.add_flag("--no-color", options.no_color, "Disable colored --help output")->group("");
+    // Visible in --help, unlike the control-plane flags below: all three are
+    // things a person running models day to day reaches for -- piping output
+    // into a script or log (--no-progress, --no-color) or keeping models on
+    // another disk (--home) -- not a developer-only knob for a non-default
+    // backend.
+    app.add_flag("--no-progress", options.no_progress, "Disable progress rendering");
+    app.add_flag("--no-color", options.no_color, "Disable colored --help output");
     app.add_option("--home", options.home_override,
                    "RunAnywhere home directory (default: $RUNANYWHERE_HOME or "
-                   "~/.local/share/runanywhere; models live under <home>/Models)")
-        ->group("");
+                   "~/.local/share/runanywhere; models live under <home>/Models)");
 
-    // Top-level shortcuts that run the matching command and exit, like -V for
-    // version. `-un` is not a valid single-dash short (that parses as `-u -n`),
-    // so uninstall takes `-U`. Kept out of --help: the `update` and `uninstall`
-    // commands are the documented spelling.
-    app.add_flag_callback(
-        "-u,--update", [] { std::exit(commands::run_update(false)); },
-        "Update wally to the latest release")
-        ->group("");
-    app.add_flag_callback(
-        "-U,--uninstall", [] { std::exit(commands::run_uninstall(false)); },
-        "Uninstall wally, its models and config")
-        ->group("");
+    // `-u`/`-U` (aliases for `update`/`uninstall`) are deliberately NOT
+    // registered as CLI11 flags here. `app.fallthrough(true)` above is
+    // inherited by every subcommand at construction, so a flag by these names
+    // anywhere in the tree is reachable from inside any subcommand's own
+    // argument list -- `wally models list -u` would climb straight back up to
+    // this app and fire the shortcut instead of erroring on an unknown
+    // `models list` option, quietly running an update in place of the
+    // requested command. `add_flag_callback` made this worse by calling
+    // std::exit() mid-parse, which also skips run()'s shutdown(). The
+    // shortcuts are still honoured, but only when `-u`/`-U`/`--update`/
+    // `--uninstall` is the entire command line -- see the argv check in
+    // run(), which reaches the normal shutdown() path. The documented
+    // spelling is still `wally update` / `wally uninstall`.
 
     // Control-plane connection (environment / base URL / API key) is not exposed
     // as CLI flags: resolve_connection() reads RUNANYWHERE_ENVIRONMENT /
@@ -127,13 +132,19 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
 
 namespace {
 
-/// Friendly reply to a missing or wrong (sub)command: walk to the deepest
-/// command that actually parsed and print its help, instead of CLI11's terse
-/// "A subcommand is required" / "The following argument was not expected" line.
-/// Detected by exception TYPE at the call site (RequiredError / ExtrasError) --
-/// ExtrasError::get_name() is the app name, not "ExtrasError", so a string match
-/// would miss every wrong-argument case.
-void PrintTypoHelp(const CLI::App& app) {
+/// Friendly reply to a parse error on a (sub)command: walk to the deepest
+/// command that actually parsed and print CLI11's own message for what went
+/// wrong, followed by that command's help, instead of stopping at the terse
+/// top-level usage line. CLI11 already tells the two cases apart correctly in
+/// e.what() -- "model is required" / "A subcommand is required" for something
+/// left out, "The following argument was not expected: -x" for something
+/// misspelled or extra -- so this only needs to walk down to where parsing
+/// actually got to; it must not attach its own "you typed it wrong" framing,
+/// which would misdescribe an omitted required argument as a typo. Handles
+/// both RequiredError and ExtrasError (their common base), detected by
+/// exception TYPE at the call site -- ExtrasError::get_name() is the app name,
+/// not "ExtrasError", so a string match on e.what() would miss cases.
+void PrintParseErrorHelp(const CLI::App& app, const CLI::ParseError& e) {
     const CLI::App* ctx = &app;
     // The names above `ctx`, so its usage line reads `wally models ...` the
     // way `wally models --help` prints it.
@@ -150,7 +161,7 @@ void PrintTypoHelp(const CLI::App& app) {
         parents = parents.empty() ? ctx->get_name() : parents + " " + ctx->get_name();
         ctx = next;
     }
-    out::error_line("You typed it wrong..! Use -h/--help on the sub command to know its options");
+    out::error_line(e.what());
     std::fputs(ctx->help(parents).c_str(), stderr);
 }
 
@@ -265,6 +276,26 @@ int run(int argc, char** argv) {
     GlobalOptions options;
     RestoreStaleDesktopGateway(argc, argv);
 
+    // `-u`/`-U` top-level shortcuts, handled here instead of as CLI11 flags
+    // (see the comment in configure_app() for why) so they can be guarded to
+    // the one shape that can't be confused with a subcommand's own arguments:
+    // the entire command line is the shortcut and nothing else. Goes through
+    // the same shutdown() every other exit from run() does, unlike the old
+    // std::exit()-in-a-callback version.
+    if (argc == 2) {
+        const std::string only_arg = argv[1];
+        if (only_arg == "-u" || only_arg == "--update") {
+            const int code = commands::run_update(false);
+            shutdown();
+            return code;
+        }
+        if (only_arg == "-U" || only_arg == "--uninstall") {
+            const int code = commands::run_uninstall(false);
+            shutdown();
+            return code;
+        }
+    }
+
     // Decided ahead of CLI11's own parse: a subcommand inherits its parent's
     // formatter_ at construction time (App::App), which configure_app()
     // triggers below, so the color decision has to already be settled before
@@ -344,11 +375,11 @@ int run(int argc, char** argv) {
         exit_code = app.exit(e);
     } catch (const CLI::RuntimeError& e) {
         exit_code = (e.get_exit_code() != 0) ? e.get_exit_code() : 1;
-    } catch (const CLI::RequiredError&) {
-        PrintTypoHelp(app);  // missing required (sub)command
+    } catch (const CLI::RequiredError& e) {
+        PrintParseErrorHelp(app, e);  // a required (sub)command or option was left out
         exit_code = 2;
-    } catch (const CLI::ExtrasError&) {
-        PrintTypoHelp(app);  // an unexpected / wrong (sub)command or argument
+    } catch (const CLI::ExtrasError& e) {
+        PrintParseErrorHelp(app, e);  // an unexpected or misspelled (sub)command or argument
         exit_code = 2;
     } catch (const CLI::ParseError& e) {
         app.exit(e);  // any other parse error: keep CLI11's own message

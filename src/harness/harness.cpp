@@ -364,7 +364,7 @@ long long EpochSeconds() {
         .count();
 }
 
-/// The refresh half of the same dance `wally usage` uses: exchange the refresh
+/// The refresh half of the same dance `wally account usage` uses: exchange the refresh
 /// token for a new access token and persist it, so later commands in the same
 /// session do not pay for the refresh again.
 bool RefreshSession(const account::ConsoleClient& console, account::Credentials* credentials,
@@ -374,7 +374,7 @@ bool RefreshSession(const account::ConsoleClient& console, account::Credentials*
     }
     if (credentials->refresh_token.empty()) {
         if (error != nullptr) {
-            *error = "the cloud session cannot be refreshed; run `wally login`";
+            *error = "the cloud session cannot be refreshed; run `wally account login`";
         }
         return false;
     }
@@ -569,8 +569,8 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
         // hand-written credentials.json satisfies it with any non-empty
         // string. Everything past this point is destructive to a caller's
         // running app or session, so confirm the session against the console
-        // first — the same identity check `wally whoami` makes, with the same
-        // refresh-on-401 dance `wally usage` uses.
+        // first — the same identity check `wally account whoami` makes, with the
+        // same refresh-on-401 dance `wally account usage` uses.
         const account::ConsoleClient console;
         std::string email;
         std::string verify_error;
@@ -630,18 +630,18 @@ bool EnsureInstalled(const std::string& tool) {
 
 void ReportCloudSessionInvalid(const std::string& model) {
     // Stderr, on its own line: a red "Error:" a person cannot miss, and the
-    // action `wally login` highlighted so the fix stands out. Color is dropped
+    // action `wally account login` highlighted so the fix stands out. Color is dropped
     // under NO_COLOR or when stderr is not a terminal.
     const cli_color::Palette pal = cli_color::make_palette(color_output_enabled(false));
     out::status_line(std::string(pal.red) + "Error:" + pal.reset + " You cannot use " + model +
-                     ", your cloud session is no longer valid, do: " + pal.bold_cyan + "wally login" +
+                     ", your cloud session is no longer valid, do: " + pal.bold_cyan + "wally account login" +
                      pal.reset + " and try again");
 }
 
 void ReportNotSignedIn() {
     const cli_color::Palette pal = cli_color::make_palette(color_output_enabled(false));
     out::status_line(std::string(pal.red) + "Error:" + pal.reset +
-                     " You are not logged in, log in with " + pal.bold_cyan + "wally login" +
+                     " You are not logged in, log in with " + pal.bold_cyan + "wally account login" +
                      pal.reset);
 }
 

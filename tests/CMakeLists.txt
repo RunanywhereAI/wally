@@ -4,6 +4,12 @@ enable_testing()
 add_executable(test_wally_unit test_wally_unit.cpp)
 target_include_directories(test_wally_unit PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_unit PRIVATE wally_core nlohmann_json::nlohmann_json)
+# The catalog hides rows whose backend this kit did not ship (see
+# platform_supports() in src/catalog/catalog.cpp), and the unit tests assert on
+# exactly that. wally_core gets these macros PRIVATE, so without this line the
+# test TU cannot see which engines are present and would assert the wrong half
+# of the matrix -- e.g. expecting a QHexRT row on a kit that has no QHexRT.
+wally_define_engine_macros(test_wally_unit)
 wally_stage_windows_runtime_dlls(test_wally_unit)
 add_test(NAME wally_unit_tests COMMAND test_wally_unit --run-all)
 

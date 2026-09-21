@@ -154,7 +154,18 @@ CliFormatter::CliFormatter(bool color_enabled) {
 std::string CliFormatter::make_help(const CLI::App* app, std::string name,
                                     CLI::AppFormatMode mode) const {
     if (mode == CLI::AppFormatMode::Sub) {
-        return CLI::Formatter::make_help(app, name, mode);
+        // `--help-all` renders a child command through this Sub path (see
+        // make_subcommands below), which lands in CLI11's own make_expanded.
+        // That ends with make_footer(app), and make_footer is suppressed
+        // below so the *top-level* render can print the footer verbatim
+        // instead of reflowed as a paragraph -- so append it here too, or a
+        // child's Examples: block never shows up under --help-all.
+        std::string help = CLI::Formatter::make_help(app, name, mode);
+        const std::string footer = app->get_footer();
+        if (!footer.empty()) {
+            help += '\n' + footer + '\n';
+        }
+        return help;
     }
     std::stringstream out;
     out << make_description(app);
@@ -234,10 +245,6 @@ std::string CliFormatter::make_subcommands(const CLI::App* app, CLI::AppFormatMo
     return out.str();
 }
 
-std::string CliFormatter::make_subcommand(const CLI::App* sub) const {
-    return make_subcommand_indented(sub, "  ");
-}
-
 std::string CliFormatter::make_footer(const CLI::App* /*app*/) const {
     return "";
 }
@@ -257,6 +264,10 @@ std::string CliFormatter::make_option_opts(const CLI::Option* opt) const {
         const std::string type = simplify_type_name(opt->get_type_name());
         if (!type.empty()) out += " " + type;
         if (opt->get_expected_max() == CLI::detail::expected_max_vector_size) out += " ...";
+        // CLI11's own Formatter::make_option_opts appends this too; drop it
+        // here and a required() option (e.g. -m, --model TEXT) reads as
+        // optional in --help.
+        if (opt->get_required()) out += " " + get_label("REQUIRED");
     }
     return out;
 }

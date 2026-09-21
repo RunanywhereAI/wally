@@ -45,6 +45,22 @@
 #include "io/output.h"
 #include "io/proto.h"
 
+// LLM-only cut (src/app.cpp): every non-LLM modality's register_*() call is
+// commented out there for this release, so a subcommand like `diarize` or
+// `rerank` is not registered at all. An unregistered subcommand fails CLI11's
+// parse with the same ExtrasError -> exit 2 that a real argument-validation
+// failure (missing --model, bad numeric option, unknown flag, ...) would
+// also produce, so a test that only asserts "exit code == 2" can no longer
+// tell the two apart -- it stays green whether or not the argument surface it
+// names is ever reached. Guard that now-meaningless coverage with this flag
+// instead of `/* */` (cannot nest) or a body swapped for
+// `result.passed = true; return result;` (a silent, permanent green pass).
+// Disabled tests are left out of `main()`'s suite.add() entirely rather than
+// reported as a pass or fail, since TestResult/TestSuite (test_common.h) have
+// no separate "skipped" status. Flip to 0 -- together with reverting the
+// matching src/app.cpp registration comments -- to bring the coverage back.
+#define WALLY_LLM_ONLY_CUT 1
+
 namespace {
 
 // setenv/unsetenv helper that restores prior state on scope exit.
@@ -342,6 +358,15 @@ TestResult test_catalog_lookup() {
     result.details = "mlx-qwen3 should be a complete MLX language bundle";
     return result;
   }
+#else
+  // The inverse of the Apple assertion above: platform_supports()
+  // (src/catalog/catalog.cpp) hides every MLX row off Apple, so the same id
+  // must resolve to nothing here. Pins the hiding behavior on every
+  // non-Apple platform, not just where MLX is visible.
+  if (wally::catalog::find("mlx-qwen3") != nullptr) {
+    result.details = "mlx-qwen3 should be hidden off Apple";
+    return result;
+  }
 #endif
 
   const wally::catalog::CatalogEntry *maple_gguf =
@@ -578,9 +603,16 @@ TestResult test_overlay_catalog() {
       // {"parakeet-tdt-v2-ane", "parakeet_tdt_0_6b_v2_ane",
       //  runanywhere::v1::MODEL_CATEGORY_SPEECH_RECOGNITION,
       //  runanywhere::v1::INFERENCE_FRAMEWORK_COREML},
+      // QHexRT rows exist only in a kit that shipped the Hexagon NPU overlay
+      // (Windows ARM64); platform_supports() hides them everywhere else, the
+      // same way it hides the ANE rows above off Apple. Gated on the kit macro
+      // rather than on the OS so this tracks the real matrix -- see
+      // wally_define_engine_macros() in tests/CMakeLists.txt.
+#if defined(WALLY_HAS_QHEXRT)
       {"lfm2-230m-npu", "lfm2_5_230m",
        runanywhere::v1::MODEL_CATEGORY_LANGUAGE,
        runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
+#endif
       // {"whisper-base-npu", "whisper_base",
       //  runanywhere::v1::MODEL_CATEGORY_SPEECH_RECOGNITION,
       //  runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT},
@@ -607,6 +639,22 @@ TestResult test_overlay_catalog() {
       return result;
     }
   }
+  // The other half of the gate: a backend this kit did not ship must not be
+  // listed or resolvable, or a user would be offered a model this binary can
+  // never run. Without this, a regression in platform_supports() would only
+  // show up on the one platform that has the overlay.
+#if !defined(WALLY_HAS_QHEXRT)
+  if (wally::catalog::find("lfm2-230m-npu") != nullptr) {
+    result.details = "lfm2-230m-npu must be hidden in a kit without QHexRT";
+    return result;
+  }
+#endif
+#if !defined(__APPLE__)
+  if (wally::catalog::find("lfm2-230m-ane") != nullptr) {
+    result.details = "lfm2-230m-ane must be hidden off Apple";
+    return result;
+  }
+#endif
   result.passed = true;
   return result;
 }
@@ -1128,6 +1176,18 @@ TestResult test_mlx_catalog_registration() {
     return result;
   }
   */
+#else
+  // The inverse of the Apple assertions above: register_all()
+  // (src/catalog/catalog.cpp) skips every MLX row off Apple via
+  // platform_supports(), so a registry lookup for one must fail here. Pins
+  // the hiding behavior on every non-Apple platform, not just where MLX
+  // registration is visible.
+  runanywhere::v1::ModelInfo mlx_model;
+  std::string mlx_error;
+  if (get_registered_model("mlx-qwen3-0.6b-4bit", &mlx_model, &mlx_error)) {
+    result.details = "mlx-qwen3-0.6b-4bit should not be registered off Apple";
+    return result;
+  }
 #endif  // defined(__APPLE__)
 
   result.passed = true;
@@ -1242,16 +1302,16 @@ int run_wally(const std::vector<std::string> &args) {
   return wally::run(static_cast<int>(argv.size()), argv.data());
 }
 
+// register_diarize() is commented out in src/app.cpp for the LLM-only cut, so
+// the subcommand these introspection assertions target does not exist.
+// Excluded from the suite (see WALLY_LLM_ONLY_CUT above) rather than kept as
+// a body-less `result.passed = true`, which would report a bare, permanent
+// green pass.
+#if !WALLY_LLM_ONLY_CUT
 TestResult test_diarize_arg_surface() {
   TestResult result;
   result.test_name = "diarize_arg_surface";
 
-  // register_diarize() is commented out in src/app.cpp for the LLM-only cut,
-  // so the subcommand it asserts on is unreachable. Body commented out, not
-  // deleted, so it comes back when the cut reverts.
-  result.passed = true;
-  return result;
-  /*
   wally::GlobalOptions options;
   CLI::App app{"wally test app"};
   wally::configure_app(app, options);
@@ -1296,9 +1356,19 @@ TestResult test_diarize_arg_surface() {
 
   result.passed = true;
   return result;
-  */
 }
+#endif  // !WALLY_LLM_ONLY_CUT
 
+// The five exit2 tests below (missing --model, missing audio, non-existent
+// audio, non-numeric option, unknown flag) each only assert `exit code == 2`.
+// With register_diarize() commented out in src/app.cpp, `wally diarize ...`
+// is itself an unrecognized subcommand, which CLI11 also fails via
+// ExtrasError -> exit 2 -- before any of the diarize-specific argument
+// validation they name is ever reached. Left compiled in, they would stay
+// green even if diarize's argument parsing regressed or the command were
+// deleted outright, so they are excluded from the suite along with the rest
+// of the diarize coverage (see WALLY_LLM_ONLY_CUT above).
+#if !WALLY_LLM_ONLY_CUT
 TestResult test_diarize_missing_model_exit2() {
   TestResult result;
   result.test_name = "diarize_missing_model_exit2";
@@ -1402,6 +1472,7 @@ TestResult test_diarize_unknown_flag_exit2() {
   result.passed = true;
   return result;
 }
+#endif  // !WALLY_LLM_ONLY_CUT
 
 // ===========================================================================
 // image_io helpers (write_png / read_ppm) — the segment command's PNG encoder
@@ -2335,6 +2406,12 @@ TestResult test_run_max_tokens_negative_exit2() {
     return result;
 }
 
+// Same spurious-pass mechanism as the diarize exit2 tests above (see
+// WALLY_LLM_ONLY_CUT): register_rerank() is also commented out in
+// src/app.cpp, so `wally rerank ...` is an unrecognized subcommand that fails
+// with ExtrasError -> exit 2 before `--top-n`'s own validation ever runs.
+// Excluded from the suite rather than left to pass for the wrong reason.
+#if !WALLY_LLM_ONLY_CUT
 TestResult test_rerank_top_n_zero_exit2() {
     TestResult result;
     result.test_name = "rerank_top_n_zero_exit2";
@@ -2366,6 +2443,7 @@ TestResult test_rerank_top_n_negative_exit2() {
     result.passed = true;
     return result;
 }
+#endif  // !WALLY_LLM_ONLY_CUT
 
 TestResult test_bench_zero_trials_exit2() {
     TestResult result;
@@ -3076,6 +3154,10 @@ int main(int argc, char **argv) {
   suite.add("engine_hint_parsing", test_engine_hint_parsing);
   suite.add("mlx_catalog_registration", test_mlx_catalog_registration);
   suite.add("hf_ref_registration", test_hf_ref_registration);
+  // diarize coverage is unregistered under the LLM-only cut (see
+  // WALLY_LLM_ONLY_CUT above the includes) -- the functions themselves are
+  // not compiled in that configuration, so they cannot be registered either.
+#if !WALLY_LLM_ONLY_CUT
   suite.add("diarize_arg_surface", test_diarize_arg_surface);
   suite.add("diarize_missing_model_exit2", test_diarize_missing_model_exit2);
   suite.add("diarize_missing_audio_exit2", test_diarize_missing_audio_exit2);
@@ -3083,6 +3165,7 @@ int main(int argc, char **argv) {
   suite.add("diarize_numeric_option_typing_exit2",
             test_diarize_numeric_option_typing_exit2);
   suite.add("diarize_unknown_flag_exit2", test_diarize_unknown_flag_exit2);
+#endif  // !WALLY_LLM_ONLY_CUT
   suite.add("read_ppm_errors", test_read_ppm_errors);
   suite.add("read_ppm_happy_path", test_read_ppm_happy_path);
   suite.add("read_ppm_header_lexing", test_read_ppm_header_lexing);
@@ -3094,8 +3177,12 @@ int main(int argc, char **argv) {
   suite.add("bench_metrics_consume_only", test_bench_metrics_consume_only);
   suite.add("run_max_tokens_zero_exit2", test_run_max_tokens_zero_exit2);
   suite.add("run_max_tokens_negative_exit2", test_run_max_tokens_negative_exit2);
+  // rerank coverage is unregistered under the LLM-only cut, same as diarize
+  // above (see WALLY_LLM_ONLY_CUT).
+#if !WALLY_LLM_ONLY_CUT
   suite.add("rerank_top_n_zero_exit2", test_rerank_top_n_zero_exit2);
   suite.add("rerank_top_n_negative_exit2", test_rerank_top_n_negative_exit2);
+#endif  // !WALLY_LLM_ONLY_CUT
   suite.add("bench_negative_trials_exit2", test_bench_negative_trials_exit2);
   suite.add("bench_zero_trials_exit2", test_bench_zero_trials_exit2);
   suite.add("models_ls_is_primary_name", test_models_ls_is_primary_name);

@@ -1,10 +1,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include "account/console.h"
 #include "account/credentials.h"
+#include "cli_formatter.h"
 #include "commands/commands.h"
 #include "io/output.h"
 
@@ -44,7 +46,7 @@ bool RefreshSession(const account::ConsoleClient& client, account::Credentials* 
                     std::string* error) {
     if (credentials->refresh_token.empty()) {
         if (error != nullptr) {
-            *error = "the cloud session cannot be refreshed; run `wally login`";
+            *error = "the cloud session cannot be refreshed; run `wally account login`";
         }
         return false;
     }
@@ -153,7 +155,7 @@ int Usage(bool as_json) {
         return 1;
     }
     if (!credentials.signed_in()) {
-        out::error_line("not signed in — run `wally login`");
+        out::error_line("not signed in — run `wally account login`");
         return 1;
     }
 
@@ -183,7 +185,7 @@ int Usage(bool as_json) {
             // was is not something we know — and sending someone to re-login
             // over a revoked key wastes the trip.
             out::error_line("the console rejected this session (" + refresh_failure +
-                            "); run `wally login`");
+                            "); run `wally account login`");
             return 1;
         }
         usage = account::Usage{};
@@ -209,11 +211,30 @@ void register_usage(CLI::App& app, GlobalOptions& options) {
     auto as_json = std::make_shared<bool>(false);
 
     // Lives under `account`. register_account runs first (app.cpp), so the
-    // namespace exists; a reorder would trip OptionNotFound at configure time.
-    CLI::App* account_cmd = app.get_subcommand("account");
+    // namespace normally exists by now, but that ordering is only a comment
+    // over there, not something the type system enforces. A future reorder,
+    // or any other caller that reaches for register_usage on its own, would
+    // otherwise hit CLI11's bare OptionNotFound here — and configure_app()
+    // runs ahead of wally_run_main's own try/catch, so nothing downstream
+    // would catch it either. Guard the lookup the same way app.cpp guards its
+    // own get_subcommand(hidden) calls, and say plainly what went wrong
+    // instead of crashing on an unhandled exception.
+    CLI::App* account_cmd = nullptr;
+    try {
+        account_cmd = app.get_subcommand("account");
+    } catch (const CLI::OptionNotFound&) {
+        out::error_line(
+            "internal error: register_usage() ran before register_account() registered "
+            "the `account` command");
+        std::exit(1);
+    }
     auto* usage =
         account_cmd->add_subcommand("usage", "Show remaining credit and the last day's spend");
     usage->add_flag("--json", *as_json, "Print as JSON");
+    usage->footer(examples_footer({
+        {"wally account usage", ""},
+        {"wally --json account usage", ""},
+    }));
     // `wally --json usage` and `wally usage --json` mean the same thing. The root
     // parser accepts the first, so reading only the command-local flag printed a
     // human table to something asking for one JSON document.

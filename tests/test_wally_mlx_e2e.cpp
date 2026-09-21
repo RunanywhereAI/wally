@@ -977,6 +977,12 @@ TestResult test_mlx_callback_bridge_all_slots() {
   return result;
 }
 
+// TEMP(llm-only cut): embed/STT/TTS are unregistered in src/app.cpp (see the
+// "TEMP(llm-only cut)" block there), so the sections of the test below that
+// drive them cannot run. Flip WALLY_LLM_ONLY_CUT to 0 (here and in the
+// sibling tests) when the full surface returns.
+#define WALLY_LLM_ONLY_CUT 1
+
 TestResult test_wally_mlx_run_end_to_end() {
   TestResult result;
   result.test_name = "wally_mlx_run_end_to_end";
@@ -1003,7 +1009,8 @@ TestResult test_wally_mlx_run_end_to_end() {
   }
 
   const std::filesystem::path input_wav = home / "input.wav";
-  // Only referenced by the commented-out TTS block below (LLM-only cut).
+  // Only referenced inside the TTS section guarded by WALLY_LLM_ONLY_CUT
+  // below; keep [[maybe_unused]] only as long as that section stays disabled.
   [[maybe_unused]] const std::filesystem::path output_wav = home / "output.wav";
   const std::filesystem::path input_image = home / "image.rgb";
   if (!write_file(input_image, "fake image")) {
@@ -1154,10 +1161,16 @@ TestResult test_wally_mlx_run_end_to_end() {
   }
 
   // embed/stt/tts are standalone top-level commands (register_embed/
-  // register_stt/register_tts) commented out in src/app.cpp for the
-  // LLM-only cut -- commented out here too, not deleted, so this comes back
-  // when the cut reverts. `run`'s LLM/VLM coverage above is unaffected: it
-  // goes through register_llm_aliases, which the cut does not touch.
+  // register_stt/register_tts). `run`'s LLM/VLM coverage above is
+  // unaffected: it goes through register_llm_aliases, which the LLM-only
+  // cut does not touch.
+#if WALLY_LLM_ONLY_CUT
+  // TEMP(llm-only cut): register_embed/register_stt/register_tts are
+  // commented out in src/app.cpp, so the sections below cannot run. This
+  // early return (shutdown + the create_count==2 gate) stands in for them
+  // and must go away in the same flip: reverting is WALLY_LLM_ONLY_CUT -> 0,
+  // which drops this whole branch and compiles the real embed/STT/TTS
+  // assertions under #else below instead -- no separate cleanup step.
   wally::shutdown();
   if (g_mlx_state.create_count != 2 || g_mlx_state.initialize_count != 2) {
     result.details =
@@ -1167,7 +1180,7 @@ TestResult test_wally_mlx_run_end_to_end() {
 
   result.passed = true;
   return result;
-  /*
+#else
   std::string embed_json;
   if (!run_cli_or_fail({"wally", "--json", "--no-progress", "--home",
                         home.string(), "embed", "Hello MLX embeddings",
@@ -1274,7 +1287,7 @@ TestResult test_wally_mlx_run_end_to_end() {
 
   result.passed = true;
   return result;
-  */
+#endif  // WALLY_LLM_ONLY_CUT
 }
 
 } // namespace

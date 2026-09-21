@@ -83,7 +83,7 @@ bool EnsureInstalled(const std::string& tool);
 /// harness a person launched.
 void ReportCloudSessionInvalid(const std::string& model);
 
-/// The one shared "you are not signed in" error, in red with `wally login`
+/// The one shared "you are not signed in" error, in red with `wally account login`
 /// highlighted, for when no session is stored at all (as opposed to an expired
 /// one). Same look as ReportCloudSessionInvalid.
 void ReportNotSignedIn();

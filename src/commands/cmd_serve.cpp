@@ -105,11 +105,11 @@ int run_serve(const GlobalOptions& options, const std::string& ref, const std::s
 
 void register_serve(CLI::App& app, GlobalOptions& options) {
     CLI::App* cmd = app.add_subcommand("serve", "Serve a model over an OpenAI-compatible API");
+#if defined(WALLY_HAS_SERVER)
     cmd->footer(examples_footer({
         {"wally serve qwen3-0.6b", ""},
         {"wally serve granite-4.2-8b --port 8000", ""},
     }));
-#if defined(WALLY_HAS_SERVER)
     auto ref = std::make_shared<std::string>();
     auto host = std::make_shared<std::string>("127.0.0.1");
     auto port = std::make_shared<uint16_t>(8080);

@@ -5,7 +5,7 @@
 #     harness  a coding agent you have installed (default: opencode)
 #     model    the model to launch (default: glm-5.3-flash)
 #
-# Requires: you are signed in (`wally login`) and the chosen harness is installed.
+# Requires: you are signed in (`wally account login`) and the chosen harness is installed.
 #
 # It seeds a *stale* catalog cache that is populated but missing the model, then
 # launches the harness. Because the model is missing, wally runs the recovery:

@@ -1,15 +1,19 @@
 ---
 name: wally-device-e2e
-description: Run engine-agnostic wally modality e2e on Apple Neural Engine (NeuRT) and Snapdragon Hexagon NPU (QHexRT) devices. Use when adding overlay backends, proving LLM/STT/TTS/VLM/embed/diffusion on device, or when a PC only has one modality's bundles on disk.
+description: Run wally's LLM e2e on Apple Neural Engine (NeuRT) and Snapdragon Hexagon NPU (QHexRT) devices. Use when adding overlay backends, proving LLM inference on device, or when a PC only has one backend's bundles on disk. Non-LLM modalities (STT/TTS/VLM/embed/image/VAD/rerank/segment/diarize) are deferred while the LLM-only cut is in effect.
 ---
 
 # Wally device modality e2e
 
 Do not write per-engine tests. The harness is `scripts/test/e2e-modalities.sh`,
-called from `scripts/test/e2e.sh`. Keys are **primitives** (`llm`, `stt`, `tts`,
-`vlm`, `embed`, `image`, `vad`, `rerank`, `segment`). wally picks the engine
-from catalog framework, local path, or plugin priority. `--engine` is an
-override (`WALLY_E2E_ENGINE`), never a required test input.
+called from `scripts/test/e2e.sh`, keyed by primitive (`llm`, `stt`, `tts`,
+`vlm`, `embed`, `image`, `vad`, `rerank`, `segment`, `diarize`). This build's
+LLM-only cut (`src/app.cpp`) registers only the `llm` command — every other
+primitive's wally subcommand is commented out, so pointing the harness at one
+now fails with "no such command", not a skip. Run `llm` only until that cut is
+lifted. wally picks the engine from catalog framework, local path, or plugin
+priority. `--engine` is an override (`WALLY_E2E_ENGINE`), never a required
+test input.
 
 ## Run
 
@@ -17,22 +21,22 @@ override (`WALLY_E2E_ENGINE`), never a required test input.
 # Public CI (modelless): skip every modality
 bash scripts/test/e2e.sh /path/to/wally
 
-# Device: discover whatever is already on disk, then run each primitive
+# Device: discover whatever is already on disk, then run llm
 export RUNANYWHERE_HOME=/path/to/home          # already-pulled OSS models
 export WALLY_E2E_MODEL_ROOTS=/path/to/hnpu:/path/to/coreml
 bash scripts/test/e2e-modalities.sh /path/to/wally
 
-# Or pin one primitive (path or catalog id)
+# Or pin the model explicitly (path or catalog id)
 WALLY_E2E_LLM=/path/to/lfm2_5_230m_HNPU \
-WALLY_E2E_STT=/path/to/whisper_base_HNPU \
-WALLY_E2E_TTS=/path/to/kitten_micro_0_8_HNPU \
-WALLY_E2E_EMBED=/path/to/embeddinggemma_300m_HNPU \
   bash scripts/test/e2e-modalities.sh /path/to/wally
 ```
 
-`WALLY_E2E_AUTO=1` pulls small OSS catalog defaults the **registered** backends
-can run (`smollm2`, `whisper-tiny`, `piper`, `minilm`, `silero`, `mlx-qwen3`,
-…). Never enable AUTO in public CI.
+`WALLY_E2E_AUTO=1` also sets defaults for `stt`/`tts`/`vlm`/`embed`/`vad`/
+`rerank`/`segment`/`image` (`whisper-tiny`, `piper`, `minilm`, …); on this
+LLM-only cut every one of those now fails with "no such command" instead of
+skipping, since their wally subcommand does not exist. Only the `llm` default
+(`smollm2` / `mlx-qwen3`) actually runs — treat any other AUTO failure as the
+disabled command, not your change. Never enable AUTO in public CI.
 
 ## Local model ids
 
@@ -59,15 +63,10 @@ model was selected and the command failed.
   `...\lib\hexagon-v81\unsigned` path. Nested `%QNN_SDK_ROOT%` in `cmd /c set`
   does not expand. Copy `QnnHtp*.dll` next to `wally.exe`. FastRPC ~90s then
   user-driver fallback is normal. Use a `.bat`, not nested `cmd /c`.
-- **NeuRT image:** `--prompt` and `--out` required; `--steps 4` for smoke.
-  Compiled zip, not the HF repo HTML. Tree needs `TextEncoder.mlmodelc` /
-  `Unet.mlmodelc` / `VAEDecoder.mlmodelc`.
-- **llama.cpp VLM:** do **not** add a literal `<image>` in the prompt — the
-  SDK inserts `mtmd_default_marker()`. An extra `<image>` makes
-  `mtmd_tokenize` see 0 media markers. A tiny PNG can `bad_alloc` in
-  SmolVLM2 after the 512×512 warmup; skip or pass a real photo via
-  `WALLY_E2E_VLM`.
-- **segment:** binary P6 PPM, not PNG.
-- STT has no `--engine` flag; put `-m` before the wav.
+
+Non-LLM overlay coverage (NeuRT image generation, llama.cpp VLM, segment, STT)
+is deferred, not deleted: those primitives run through this same harness once
+`src/app.cpp`'s LLM-only cut is uncommented, but until then their wally
+subcommands do not exist, so this skill does not instruct running them.
 
 See `wally-e2e` for bottle/backends assertions and Apple MLX host link flags.

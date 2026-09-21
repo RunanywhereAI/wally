@@ -1266,7 +1266,13 @@ constexpr int64_t MB = 1024LL * 1024LL;
 // test rig's LlamaCpp/qwen3-0.6b layout).
 constexpr CatalogEntry kCatalog[] = {
     // --- LLM (LlamaCpp / GGUF) ---
-    {"qwen3-0.6b", "qwen3", "Qwen3 0.6B", v1::MODEL_CATEGORY_LANGUAGE,
+    // Name carries Q8_0 on purpose: this is the one GGUF artifact in the
+    // catalog above 4-bit (verbatim from the consumer apps and matches the
+    // Linux test rig's layout -- see the file comment above kCatalog), so the
+    // display name must not claim the same "just the size" naming the <=4-bit
+    // entries use. Swap the URL for a verified <=4-bit artifact instead of
+    // relabeling if this is ever tightened to match the rest of the catalog.
+    {"qwen3-0.6b", "qwen3", "Qwen3 0.6B Q8_0", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/"
      "Qwen3-0.6B-Q8_0.gguf",
@@ -1615,8 +1621,14 @@ constexpr CatalogEntry kCatalog[] = {
     // --- Image generation (CoreML diffusion; Apple only) ---
     // Apple-optimized Stable Diffusion 1.5. Id matches the built-in diffusion
     // model registry (diffusion_model_registry.cpp) and the Swift facade's
-    // canonical `.imageGeneration` model, so `wally image generate` resolves it
-    // and `wally models list` shows it. The palettized CoreML bundle is a directory of
+    // canonical `.imageGeneration` model, so `wally image generate` resolves
+    // and auto-pulls it through that SDK-side registry regardless of this
+    // catalog. IMAGE_GENERATION is not is_llm(), so the LLM-only cut means
+    // this entry is never registered by register_all() and never appears in
+    // `wally models list` (with or without --all), nor does it resolve
+    // through `wally models pull <id>` -- it stays here only as the
+    // documented source of its metadata for `wally image generate`'s default.
+    // The palettized CoreML bundle is a directory of
     // compiled .mlmodelc sub-models served by the `coreml` engine; a
     // pre-fetched bundle can also be passed to `--model` as a local path.
     // The Hugging Face *repo page* is HTML (~160 KB) and is not a model.
@@ -1778,11 +1790,14 @@ constexpr CatalogEntry kCatalog[] = {
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
      kMlxTernaryBonsai8B2BitFiles, 6, 2303661704LL, 4096, true, 0, "",
      "ternary-bonsai-8b"},
+    // merge_key matches the bare id, same as every other Ternary-Bonsai size
+    // above (1.7b/4b/8b) -- not the "mlx-" prefixed alias -- so a future GGUF
+    // Ternary-Bonsai-27B row merges into this one row instead of listing twice.
     {"mlx-ternary-bonsai-27b-2bit", "mlx-ternary-bonsai-27b",
      "Ternary-Bonsai 27B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
      kMlxTernaryBonsai27B2BitFiles, 8, 8490785104LL, 4096, true, 0, "",
-     "mlx-ternary-bonsai-27b"},
+     "ternary-bonsai-27b"},
     {"mlx-llama-3.2-1b-instruct-4bit", "mlx-llama3.2",
      "Llama 3.2 1B Instruct", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
@@ -1974,13 +1989,15 @@ rac_result_t register_entry(const CatalogEntry &entry) {
   // CoreML bundles (a directory of compiled .mlmodelc sub-models) don't fit the
   // URL / multi-file download-factory grammar, which rejects a bare repo ref.
   // Register the ModelInfo directly so the id resolves in the general registry
-  // (and `wally models list` shows it); the bundle itself is fetched by the diffusion
-  // pipeline or supplied to `wally image --model <local path>`.
+  // (and `wally models list --all` shows it, since it is catalog-only until
+  // downloaded); the bundle itself is fetched by the diffusion pipeline or
+  // supplied to `wally image --model <local path>`.
   if (entry.framework == v1::INFERENCE_FRAMEWORK_COREML ||
       entry.framework == v1::INFERENCE_FRAMEWORK_QHEXRT) {
     // CoreML bundles and QHexRT HNPU folders don't fit the single-file
-    // download-factory grammar. Register ModelInfo so `wally models list` / `wally run`
-    // resolve the id; the tree is fetched by the engine or passed as a local path.
+    // download-factory grammar. Register ModelInfo so `wally models list --all`
+    // / `wally run` resolve the id; the tree is fetched by the engine or passed
+    // as a local path.
     v1::ModelInfo model;
     model.set_id(entry.id);
     model.set_name(entry.name);
@@ -2075,15 +2092,38 @@ static bool is_llm(const CatalogEntry &entry) {
 // MLX and the Apple Neural Engine (Core ML) are Apple-only backends. On any
 // other platform their entries are hidden and never registered, so a Windows or
 // Linux user cannot list, resolve, or download a model they could never run.
-// llama.cpp is everywhere; QHexRT (Windows NPU) is left to its own engine gate.
+// llama.cpp and QHexRT are gated the same way, but by the linked kit's own
+// capability macros rather than by host OS/arch: WALLY_HAS_LLAMACPP /
+// WALLY_HAS_QHEXRT come from wally_define_engine_macros() (cmake/RunAnywhereSDK.cmake),
+// set from the consumed kit's RunAnywhere_HAS_* config. The public
+// windows-arm64 kit ships no llama.cpp backend (docs/ENGINES.md), and QHexRT
+// (Snapdragon Hexagon NPU) exists only as a windows-arm64 overlay -- everywhere
+// else WALLY_HAS_QHEXRT is never defined. Reading the linked kit's own macros
+// tracks the real per-build matrix instead of guessing it from __APPLE__/_WIN32.
 static bool platform_supports(runanywhere::v1::InferenceFramework framework) {
+  if (framework == runanywhere::v1::INFERENCE_FRAMEWORK_MLX ||
+      framework == runanywhere::v1::INFERENCE_FRAMEWORK_COREML) {
 #if defined(__APPLE__)
-  (void)framework;
-  return true;
+    return true;
 #else
-  return framework != runanywhere::v1::INFERENCE_FRAMEWORK_MLX &&
-         framework != runanywhere::v1::INFERENCE_FRAMEWORK_COREML;
+    return false;
 #endif
+  }
+  if (framework == runanywhere::v1::INFERENCE_FRAMEWORK_LLAMA_CPP) {
+#if defined(WALLY_HAS_LLAMACPP)
+    return true;
+#else
+    return false;
+#endif
+  }
+  if (framework == runanywhere::v1::INFERENCE_FRAMEWORK_QHEXRT) {
+#if defined(WALLY_HAS_QHEXRT)
+    return true;
+#else
+    return false;
+#endif
+  }
+  return true;
 }
 
 // The one predicate every surface filters on: an LLM this platform can run.

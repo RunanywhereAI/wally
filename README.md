@@ -4,9 +4,9 @@
 
 **Run open models on your own machine, or hosted when the job outgrows it.**
 
-Chat, vision, speech and embeddings from one terminal command. Local models
-never leave your device. Hosted ones run on RunAnywhere Cloud and are billed
-against your own credit.
+Chat with a language model from one terminal command. Local models never leave
+your device. Hosted ones run on RunAnywhere Cloud and are billed against your
+own credit.
 
 <br clear="right">
 
@@ -70,8 +70,7 @@ commands work with a model on your machine, and `claude-desktop`, `hermes` and
 | `wally opencode` / `wally claude-code` | start a coding agent on a model |
 | `wally update` | update wally to the latest release |
 
-`wally --help` and `wally <command> --help` cover the rest, including vision,
-speech, embeddings and image generation.
+`wally --help` and `wally <command> --help` cover the rest.
 
 ## Build from source
 

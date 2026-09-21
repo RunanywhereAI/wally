@@ -41,7 +41,9 @@ wally() { "$BIN" --home "$HOME_DIR" "$@"; }
 
 pass=0
 fail=0
+skip=0
 failed_names=()
+skipped_names=()
 check() {
   local name="$1"
   local log="$LOG_DIR/${name}.log"
@@ -56,6 +58,21 @@ check() {
   fi
 }
 
+# TEMP(llm-only cut): the non-LLM modality commands (tts/stt/vad/voice) are
+# commented out of src/app.cpp and not registered for this release, so their
+# checks below cannot pass or meaningfully fail -- they would just error out
+# on "no such command". Report them as skipped instead of running them, so a
+# green summary here is never mistaken for coverage of that surface. Switch
+# the call sites back to `check` when register_vlm/register_stt/register_tts/
+# register_voice are uncommented in src/app.cpp.
+skip_case() {
+  local name="$1"
+  local reason="$2"
+  echo "  ${name}... SKIP ($reason)"
+  skip=$((skip + 1))
+  skipped_names+=("$name")
+}
+
 smoke_version() { wally version | grep -E 'wally|[0-9]+\.[0-9]+'; }
 
 smoke_backends() {
@@ -66,7 +83,7 @@ smoke_backends() {
   echo "$out" | grep -qiE "sherpa|onnx"
 }
 
-smoke_list_all() { wally list --all; }
+smoke_list_all() { wally models list --all; }
 
 smoke_info_json() {
   wally --json info | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("wally") or d.get("version")'
@@ -114,6 +131,10 @@ llm_one_shot() {
   test -n "$out"
 }
 
+# TEMP(llm-only cut): tts/stt are commented out of src/app.cpp for this
+# release. Kept here, unreachable via `check`, so this comes back verbatim
+# once register_tts/register_stt are uncommented -- nothing else has to
+# change.
 tts_stt_roundtrip() {
   wally --no-progress pull piper || wally --no-progress pull piper-en
   wally tts --text "RunAnywhere runs models on device." --output /tmp/wally-e2e-tts.wav
@@ -125,12 +146,18 @@ tts_stt_roundtrip() {
   echo "$transcript" | grep -iE "run|anywhere|models|device"
 }
 
+# TEMP(llm-only cut): vad is commented out of src/app.cpp for this release.
+# Kept here, unreachable via `check`, so this comes back verbatim once
+# register_vad is uncommented -- nothing else has to change.
 vad_segments() {
   wally --no-progress pull piper || wally --no-progress pull piper-en
   wally tts --text "Testing voice activity detection." --output /tmp/wally-e2e-vad.wav
   wally --json vad --input /tmp/wally-e2e-vad.wav | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("segments") or d.get("speech") or isinstance(d, (dict, list))'
 }
 
+# TEMP(llm-only cut): voice is commented out of src/app.cpp for this release.
+# Kept here, unreachable via `check`, so this comes back verbatim once
+# register_voice is uncommented -- nothing else has to change.
 voice_turn() {
   wally --no-progress pull piper || wally --no-progress pull piper-en
   wally --no-progress pull whisper-tiny
@@ -192,14 +219,17 @@ else
   echo
   echo "==> Real inference (canonical-layout models)"
   check llm_one_shot
-  check tts_stt_roundtrip
-  check vad_segments
-  check voice_turn
+  skip_case tts_stt_roundtrip "tts/stt disabled for llm-only cut"
+  skip_case vad_segments "vad disabled for llm-only cut"
+  skip_case voice_turn "voice disabled for llm-only cut"
   check serve_health
 fi
 
 echo
-echo "Summary: $pass passed, $fail failed"
+echo "Summary: $pass passed, $fail failed, $skip skipped"
+if [[ "$skip" -gt 0 ]]; then
+  echo "Skipped: ${skipped_names[*]}"
+fi
 if [[ "$fail" -gt 0 ]]; then
   echo "Failed: ${failed_names[*]}"
   echo "Logs: $LOG_DIR"

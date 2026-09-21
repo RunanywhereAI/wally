@@ -66,7 +66,6 @@ class CliFormatter : public CLI::Formatter {
     CLI11_NODISCARD std::string make_group(std::string group, bool is_positional,
                                             std::vector<const CLI::Option*> opts) const override;
     std::string make_subcommands(const CLI::App* app, CLI::AppFormatMode mode) const override;
-    std::string make_subcommand(const CLI::App* sub) const override;
     // The footer is printed verbatim by make_help; CLI11's own make_footer
     // would reflow it as a paragraph and collapse the example columns.
     std::string make_footer(const CLI::App* app) const override;

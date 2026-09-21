@@ -21,6 +21,7 @@
 #include "account/console.h"
 #include "account/credentials.h"
 #include "account/model_cache.h"
+#include "cli_formatter.h"
 #include "commands/commands.h"
 #include "io/output.h"
 
@@ -166,7 +167,7 @@ bool RefreshSession(const account::ConsoleClient& client, account::Credentials* 
                     std::string* error) {
     if (credentials->refresh_token.empty()) {
         if (error != nullptr) {
-            *error = "the cloud session cannot be refreshed; run `wally login`";
+            *error = "the cloud session cannot be refreshed; run `wally account login`";
         }
         return false;
     }
@@ -334,7 +335,7 @@ int WhoAmI(bool as_json) {
         return 1;
     }
     if (!credentials.signed_in()) {
-        out::error_line("not signed in — run `wally login`");
+        out::error_line("not signed in — run `wally account login`");
         return 1;
     }
 
@@ -400,14 +401,23 @@ void register_account(CLI::App& app, GlobalOptions& options) {
 
     auto* login = account_cmd->add_subcommand("login", "Sign in through the browser");
     login->add_flag("--no-browser", *no_browser, "Print the sign-in URL instead of opening it");
+    login->footer(examples_footer({
+        {"wally account login", ""},
+        {"wally account login --no-browser", ""},
+    }));
     login->callback([no_browser, console_url] { fail(Login(console_url, !*no_browser)); });
 
     auto* logout = account_cmd->add_subcommand("logout", "Sign out and revoke the session");
+    logout->footer(examples_footer({{"wally account logout", ""}}));
     logout->callback([] { fail(Logout()); });
 
     auto whoami_json = std::make_shared<bool>(false);
     auto* whoami = account_cmd->add_subcommand("whoami", "Show the signed-in account");
     whoami->add_flag("--json", *whoami_json, "Print as JSON");
+    whoami->footer(examples_footer({
+        {"wally account whoami", ""},
+        {"wally --json account whoami", ""},
+    }));
     // `wally --json account whoami` and `... whoami --json` mean the same thing;
     // see the identical fix in register_usage (cmd_usage.cpp).
     whoami->callback([whoami_json, &options] { fail(WhoAmI(*whoami_json || options.json)); });

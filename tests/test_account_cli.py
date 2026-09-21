@@ -20,7 +20,7 @@ EMAIL = "developer@example.test"
 # is 0 in the 24h window on purpose: SGLang does not report cached tokens for
 # glm-5.3, so zero is what a real console sends today and the row has to survive
 # it honestly rather than disappear. `timeline`, `models` and `recent` are
-# present because the console sends them; `wally usage` ignores all three.
+# present because the console sends them; `wally account usage` ignores all three.
 USAGE_WINDOWS = [
     {
         "window": "1h",
@@ -225,8 +225,9 @@ def main():
                     raise AssertionError(f"usage still prints {banned!r}:\n{usage}")
 
             # The root flag and the command flag mean the same thing. The root
-            # parser accepts `wally --json usage`, and reading only the local
-            # flag printed a human table to something asking for one document.
+            # parser accepts `wally --json account usage`, and reading only the
+            # local flag printed a human table to something asking for one
+            # document.
             for argv in (["account", "usage", "--json"], ["--json", "account", "usage"]):
                 combined = run(binary, argv, environment)
                 # run() concatenates stderr, where status lines and SDK logs go.

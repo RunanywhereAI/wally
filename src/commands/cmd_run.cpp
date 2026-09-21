@@ -694,7 +694,7 @@ void add_generation_options(CLI::App* cmd, const std::shared_ptr<RunParams>& par
     cmd->add_option("--lora", params->lora, "LoRA adapter (.gguf) to attach");
     cmd->add_option("--lora-scale", params->lora_scale, "LoRA strength (default 1.0)");
     cmd->add_option("--engine", params->engine,
-                    "Engine to run on (mlx, llamacpp, onnx, sherpa, neurt, qhexrt)");
+                    "Engine to run on (neurt|coreml|ane, mlx, llamacpp, onnx, sherpa, qhexrt)");
     cmd->add_option("--temperature,--temp", params->temperature,
                     "Sampling temperature (0 = engine default)");
     cmd->add_option("--top-p", params->top_p, "Keep the smallest token set above this probability");

@@ -36,7 +36,18 @@ void register_default_models(CLI::App& app, GlobalOptions& options) {
 
     // Lives under `models` (`wally models default`). register_models runs first
     // (app.cpp), so the namespace exists; a reorder would trip OptionNotFound.
-    CLI::App* models = app.get_subcommand("models");
+    // Registering here (rather than after app.cpp's group-normalizing loop)
+    // also matters for --help: `default` inherits the same default group as
+    // `list`/`show`/`pull`/`rm` only because it is added before that loop
+    // runs, the same way app.cpp guards its own get_subcommand(hidden)
+    // lookups: a startup crash from a future reorder is worse than silently
+    // skipping this subcommand.
+    CLI::App* models = nullptr;
+    try {
+        models = app.get_subcommand("models");
+    } catch (const CLI::OptionNotFound&) {
+        return;
+    }
     CLI::App* cmd =
         models->add_subcommand("default", "Show or set the default model for coding tools");
     cmd->add_option("model", *model, "Model id to save as the default (omit to show it)");
