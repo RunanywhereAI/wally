@@ -229,6 +229,7 @@
           "timeout",
           "bad_request",
           "control_plane_overloaded",
+          "default_key_unavailable",
           "expired_api_key",
           "gateway_unavailable",
           "idempotency_key_reused",
@@ -1646,7 +1647,7 @@
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
     "branch": "development",
-    "commit": "29654ea8bd5577b1d776fcdd9fd7f4551cb07bec",
+    "commit": "1f68d21d1ebb6f0e34eae43d8cf315a9763320f3",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

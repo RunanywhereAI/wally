@@ -17,7 +17,7 @@
 namespace wally::account::contract {
 
 // SHA-256 of contracts/wally-cli-v1.openapi.json this header was built from.
-inline constexpr char kContractSha256[] = "1c4b1bcf942dfb770cce290916573318d3b3d7175b5dc2b9cfea753b7a380cb2";
+inline constexpr char kContractSha256[] = "b865dc4dc6f389bf89674a1cc73115cd7db10b82e4d9f6d415e969cd1a2c5bd6";
 
 enum class ApiErrorCode {
     kInvalidRequest,
@@ -35,6 +35,7 @@ enum class ApiErrorCode {
     kTimeout,
     kBadRequest,
     kControlPlaneOverloaded,
+    kDefaultKeyUnavailable,
     kExpiredApiKey,
     kGatewayUnavailable,
     kIdempotencyKeyReused,
@@ -73,6 +74,7 @@ inline void from_json(const nlohmann::json& j, ApiErrorCode& value) {
     if (raw == "timeout") { value = ApiErrorCode::kTimeout; return; }
     if (raw == "bad_request") { value = ApiErrorCode::kBadRequest; return; }
     if (raw == "control_plane_overloaded") { value = ApiErrorCode::kControlPlaneOverloaded; return; }
+    if (raw == "default_key_unavailable") { value = ApiErrorCode::kDefaultKeyUnavailable; return; }
     if (raw == "expired_api_key") { value = ApiErrorCode::kExpiredApiKey; return; }
     if (raw == "gateway_unavailable") { value = ApiErrorCode::kGatewayUnavailable; return; }
     if (raw == "idempotency_key_reused") { value = ApiErrorCode::kIdempotencyKeyReused; return; }
@@ -112,6 +114,7 @@ inline void to_json(nlohmann::json& j, const ApiErrorCode& value) {
         case ApiErrorCode::kTimeout: j = "timeout"; return;
         case ApiErrorCode::kBadRequest: j = "bad_request"; return;
         case ApiErrorCode::kControlPlaneOverloaded: j = "control_plane_overloaded"; return;
+        case ApiErrorCode::kDefaultKeyUnavailable: j = "default_key_unavailable"; return;
         case ApiErrorCode::kExpiredApiKey: j = "expired_api_key"; return;
         case ApiErrorCode::kGatewayUnavailable: j = "gateway_unavailable"; return;
         case ApiErrorCode::kIdempotencyKeyReused: j = "idempotency_key_reused"; return;
