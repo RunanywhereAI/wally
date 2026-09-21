@@ -43,6 +43,7 @@
 #include "vlm_options.pb.h"
 
 #include "catalog/model_ref.h"
+#include "cli_formatter.h"
 #include "commands/engine_options.h"
 #include "config/cli_paths.h"
 #include "io/output.h"
@@ -684,51 +685,60 @@ void add_generation_options(CLI::App* cmd, const std::shared_ptr<RunParams>& par
                            ModelArg model_arg, bool vlm) {
     (void)vlm;
     if (model_arg == ModelArg::Option) {
-        cmd->add_option("--model,-m", params->model,
-                        "Model to generate with; downloads and loads it when absent");
+        cmd->add_option("--model,-m", params->model, "Model to use (downloaded if missing)");
     } else {
         cmd->add_option("model", params->model, "Model id, alias, hf.co/... ref or URL")
             ->required();
     }
-    cmd->add_option("--system-prompt,--system", params->system_prompt,
-                    "Steer the model with a system instruction");
-    cmd->add_option("--lora", params->lora,
-                    "Attach a LoRA adapter (.gguf) before generating");
-    cmd->add_option("--lora-scale", params->lora_scale,
-                    "How strongly the LoRA applies (default 1.0)");
+    cmd->add_option("--system-prompt,--system", params->system_prompt, "System prompt");
+    cmd->add_option("--lora", params->lora, "LoRA adapter (.gguf) to attach");
+    cmd->add_option("--lora-scale", params->lora_scale, "LoRA strength (default 1.0)");
     cmd->add_option("--engine", params->engine,
-                    "Engine hint (neurt|coreml|ane, mlx, llamacpp, onnx, sherpa, qhexrt). "
-                    "Honoured for catalog models too, not just URL/HF refs. Omit to let "
-                    "catalog framework / plugin priority pick.");
+                    std::string("Engine to run on (") + engine_choices() + ")");
+    // The sampling knobs and the thinking switches get their own headings in
+    // --help, so the page reads as three short lists instead of one of twenty.
+    // Group names are plain strings CLI11 prints in first-seen order, so
+    // "Options" (the rows above) comes first, then these two.
+    const char* kSampling = "Sampling";
+    const char* kReasoning = "Reasoning";
     cmd->add_option("--temperature,--temp", params->temperature,
-                    "Raise for more random sampling (0 = engine default)");
-    cmd->add_option("--top-p", params->top_p, "Keep the smallest token set above this probability");
-    cmd->add_option("--top-k", params->top_k, "Sample from this many highest-probability tokens");
-    cmd->add_option("--min-p", params->min_p, "Drop tokens below this share of the top token");
+                    "Sampling temperature (0 = engine default)")
+        ->group(kSampling);
+    cmd->add_option("--top-p", params->top_p, "Keep the smallest token set above this probability")
+        ->group(kSampling);
+    cmd->add_option("--top-k", params->top_k, "Sample from this many highest-probability tokens")
+        ->group(kSampling);
+    cmd->add_option("--min-p", params->min_p, "Drop tokens below this share of the top token")
+        ->group(kSampling);
     cmd->add_option("--repetition-penalty", params->repetition_penalty,
-                    "Penalize tokens already present in the context");
-    cmd->add_option("--seed", params->seed, "Fix the RNG for a repeatable answer");
+                    "Penalize tokens already in the context")
+        ->group(kSampling);
+    cmd->add_option("--seed", params->seed, "Fix the RNG for a repeatable answer")->group(kSampling);
     cmd->add_option("--frequency-penalty", params->frequency_penalty,
-                    "Penalize tokens by how often they have appeared");
+                    "Penalize tokens by how often they appeared")
+        ->group(kSampling);
     cmd->add_option("--presence-penalty", params->presence_penalty,
-                    "Penalize tokens that appeared at all");
-    cmd->add_option("--stop", params->stop_sequences,
-                    "Stop as soon as this text is produced (repeat for several)");
+                    "Penalize tokens that appeared at all")
+        ->group(kSampling);
+    cmd->add_option("--stop", params->stop_sequences, "Stop at this text (repeat for several)")
+        ->group(kSampling);
     cmd->add_option("--max-output-tokens,--max-tokens", params->max_output_tokens,
-                    "Cap the generated tokens (default 1024)")
+                    "Cap on generated tokens (default 1024)")
         // Range, not PositiveNumber, for the message alone (mirrors
         // cmd_bench.cpp's --trials): 0 or negative used to reach the engine
         // as-is and read as "no cap" — full/whole-context output — instead of
         // the usage error a nonsensical budget should be.
-        ->check(CLI::Range(1, std::numeric_limits<int32_t>::max()));
-    cmd->add_option("--reasoning", params->reasoning,
-                    "Turn the model's thinking phase on or off (default on)")
-        ->check(CLI::IsMember({"on", "off"}));
+        ->check(CLI::Range(1, std::numeric_limits<int32_t>::max()))
+        ->group(kSampling);
+    cmd->add_option("--reasoning", params->reasoning, "Model thinking phase (default on)")
+        ->check(CLI::IsMember({"on", "off"}))
+        ->group(kReasoning);
     cmd->add_flag("--show-thinking,!--hide-thinking", params->show_thinking,
-                  "Stream thought tokens to stderr (default on)");
+                  "Print thinking tokens on stderr (default on)")
+        ->group(kReasoning);
     cmd->add_flag_callback(
-        "--no-think", [params]() { params->reasoning = "off"; },
-        "Older spelling of `--reasoning off`");
+           "--no-think", [params]() { params->reasoning = "off"; }, "Same as --reasoning off")
+        ->group(kReasoning);
 }
 
 }  // namespace
@@ -738,12 +748,12 @@ void configure_llm(CLI::App* cmd, GlobalOptions& options, LlmVerb verb, ModelArg
     auto prompt = std::make_shared<std::string>();
     add_generation_options(cmd, params, model_arg, false);
     cmd->add_option("prompt", *prompt,
-                    verb == LlmVerb::Chat ? "First prompt (omit for the interactive REPL)"
+                    verb == LlmVerb::Chat ? "Prompt to answer (omit for an interactive chat)"
                                           : "Prompt to complete (omit to read stdin)");
     if (verb == LlmVerb::Chat) {
         // The REPL and VLM paths share one implementation; `run --image` stays
         // the documented alias of `vlm generate`.
-        cmd->add_option("--image", params->image, "Describe this image instead (VLM models)")
+        cmd->add_option("--image", params->image, "Ask about this image instead (vision models)")
             ->check(CLI::ExistingFile);
     }
     cmd->callback([&options, verb, params, prompt]() {
@@ -773,10 +783,19 @@ void configure_vlm_generate(CLI::App* cmd, GlobalOptions& options) {
 void register_llm(CLI::App& app, GlobalOptions& options) {
     CLI::App* ns = app.add_subcommand("llm", "Generate text with a language model");
     ns->require_subcommand(1);
-    configure_llm(ns->add_subcommand("generate", "Complete a prompt and print the result"),
-                  options, LlmVerb::Generate, ModelArg::Option);
-    configure_llm(ns->add_subcommand("stream", "Complete a prompt, printing tokens as they arrive"),
-                  options, LlmVerb::Stream, ModelArg::Option);
+    configure_llm(
+        ns->add_subcommand("generate", "Complete a prompt, printed when done")
+            ->footer(examples_footer({
+                {"wally llm generate -m qwen3-0.6b \"explain tunnelling\"", ""},
+                {"echo \"summarise this\" | wally llm generate -m qwen3-0.6b", ""},
+            })),
+        options, LlmVerb::Generate, ModelArg::Option);
+    configure_llm(
+        ns->add_subcommand("stream", "Complete a prompt, printed as it arrives")
+            ->footer(examples_footer({
+                {"wally llm stream -m qwen3-0.6b \"tell me a short story\"", ""},
+            })),
+        options, LlmVerb::Stream, ModelArg::Option);
 }
 
 void register_vlm(CLI::App& app, GlobalOptions& options) {
@@ -787,11 +806,14 @@ void register_vlm(CLI::App& app, GlobalOptions& options) {
 }
 
 void register_llm_aliases(CLI::App& app, GlobalOptions& options) {
-    configure_llm(app.add_subcommand("run", "Chat with a model (alias of `llm stream`)"), options,
-                  LlmVerb::Chat, ModelArg::Positional);
-    configure_llm(
-        app.add_subcommand("chat", "Start an interactive session (alias of `llm stream`)"),
-        options, LlmVerb::Chat, ModelArg::Positional);
+    // `run` is the interactive model runner (prompt, or a REPL when omitted).
+    // `llm generate` / `llm stream` are the explicit, manual entry points.
+    configure_llm(app.add_subcommand("run", "Run a model")
+                      ->footer(examples_footer({
+                          {"wally run qwen3-0.6b", "Chat interactively"},
+                          {"wally run qwen3-0.6b \"write a haiku\"", "Answer one prompt"},
+                      })),
+                  options, LlmVerb::Chat, ModelArg::Positional);
 }
 
 }  // namespace wally::commands

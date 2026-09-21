@@ -48,6 +48,10 @@ struct CatalogEntry {
   bool supports_thinking;
   int64_t memory_required_bytes = 0; // 0 = unknown/not applicable
   const char *cua_profile = ""; // Computer-Use-Agent profile id ("" = none)
+  // Shared base for the same model across backends (llama.cpp / MLX / ANE / NPU).
+  // nullptr → the row stands alone under its own id. `models list` groups by this
+  // and joins the backends into one row (e.g. "mlx/llama.cpp").
+  const char *merge_key = nullptr;
 };
 
 /** All built-in entries. */
@@ -58,6 +62,14 @@ const CatalogEntry *find(const std::string &id_or_alias);
 
 /** Closest-match candidates for error messages (substring match, ≤ max). */
 std::vector<std::string> suggestions(const std::string &input, size_t max);
+
+/**
+ * The merge base for a registry id: the entry's merge_key when set, else the id
+ * itself (unchanged when the id is not a catalog entry). Raw exact lookup with no
+ * platform preference — used by `models list` to collapse a model's per-backend
+ * variants into one row.
+ */
+std::string merge_key_for(const std::string &id);
 
 /**
  * Register every entry with the global model registry. Logs (does not fail

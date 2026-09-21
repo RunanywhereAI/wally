@@ -1,9 +1,14 @@
 #include "harness/local_models.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <string_view>
 #include <system_error>
+
+#include "rac/core/rac_platform_adapter.h"
+
+#include "catalog/catalog.h"
 
 namespace wally::harness {
 namespace {
@@ -105,6 +110,41 @@ std::vector<LocalModel> LocalModels(const std::string& home) {
     std::sort(models.begin(), models.end(),
               [](const LocalModel& a, const LocalModel& b) { return a.id < b.id; });
     return models;
+}
+
+std::int64_t LocalContextSize(const std::string& model_id) {
+    constexpr std::int64_t kFloor = 8192;
+    constexpr std::int64_t kGiB = 1024LL * 1024 * 1024;
+
+    // Physical memory decides the tier. On Apple Silicon this is the unified
+    // pool the GPU draws from too, which is why it stands in for VRAM here.
+    std::int64_t tier = kFloor;
+    const rac_platform_adapter_t* adapter = rac_get_platform_adapter();
+    rac_memory_info_t memory{};
+    if (adapter != nullptr && adapter->get_memory_info != nullptr &&
+        adapter->get_memory_info(&memory, adapter->user_data) == RAC_SUCCESS &&
+        memory.total_bytes > 0) {
+        const std::int64_t total = static_cast<std::int64_t>(memory.total_bytes);
+        if (total >= 48 * kGiB) {
+            tier = 65536;
+        } else if (total >= 24 * kGiB) {
+            tier = 32768;
+        } else if (total >= 12 * kGiB) {
+            tier = 16384;
+        }
+    }
+
+    // The model's own window caps it: asking llama.cpp for more than the model
+    // was trained on stretches RoPE and degrades every answer. 0 means the
+    // catalog does not know, and a model that is not in the catalog at all
+    // (an hf.co ref, a hand-placed folder) gets the tier as is.
+    std::int64_t window = tier;
+    if (const catalog::CatalogEntry* entry = catalog::find(model_id)) {
+        if (entry->context_length > 0) {
+            window = std::min(tier, static_cast<std::int64_t>(entry->context_length));
+        }
+    }
+    return std::max(kFloor, window);
 }
 
 }  // namespace wally::harness

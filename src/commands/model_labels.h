@@ -81,6 +81,25 @@ inline const char* backend(v1::InferenceFramework framework) {
     }
 }
 
+// Compact backend tags for the merged `models list` BACKEND column, where one
+// model's per-backend variants collapse to a single row (e.g. "mlx/llama.cpp").
+inline const char* short_backend(v1::InferenceFramework framework) {
+    switch (framework) {
+        case v1::INFERENCE_FRAMEWORK_MLX:
+            return "mlx";
+        case v1::INFERENCE_FRAMEWORK_LLAMA_CPP:
+            return "llama.cpp";
+        case v1::INFERENCE_FRAMEWORK_COREML:
+            return "ane";
+        case v1::INFERENCE_FRAMEWORK_QHEXRT:
+            return "npu";
+        case v1::INFERENCE_FRAMEWORK_ONNX:
+            return "onnx";
+        default:
+            return backend(framework);
+    }
+}
+
 inline const char* format(v1::ModelFormat format) {
     switch (format) {
         case v1::MODEL_FORMAT_GGUF:

@@ -65,6 +65,11 @@ void register_backends(CLI::App& app, GlobalOptions& options);
 void register_help(CLI::App& app, GlobalOptions& options);
 void register_uninstall(CLI::App& app, GlobalOptions& options);
 
+// Actions shared by their subcommands and the top-level `-u/--update` and
+// `--uninstall` flags. Return a process exit code (0 on success).
+int run_update(bool nightly);
+int run_uninstall(bool yes);
+
 /** One registered engine, folded across every primitive it advertises. */
 struct EngineRow {
     std::string display_name;
@@ -79,6 +84,16 @@ struct EngineRow {
  * shared by `wally backends` and `wally about`.
  */
 std::map<std::string, EngineRow> collect_backend_rows();
+
+/**
+ * The rows `about` and `info` show: collect_backend_rows() narrowed to engines
+ * that serve generate_text. TEMP(llm-only cut): onnx (diarize, embed, segment)
+ * and sherpa (voice) stay registered and keep answering what the kit routes to
+ * them, but listing them beside commands that cannot reach them only raises
+ * questions. `wally backends` is the diagnostic and keeps the full list, which
+ * is also what the e2e `assert-backends.sh` checks.
+ */
+std::map<std::string, EngineRow> collect_llm_backend_rows();
 void register_serve(CLI::App& app, GlobalOptions& options);
 void register_bench(CLI::App& app, GlobalOptions& options);
 void register_auth(CLI::App& app, GlobalOptions& options);

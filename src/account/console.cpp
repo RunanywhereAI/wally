@@ -481,7 +481,7 @@ void HttpError(const char* operation, const std::string& origin, const HttpRespo
         *error = wait >= 0 ? "Wally Cloud is busy - try again in " + std::to_string(wait) + "s"
                            : "Wally Cloud is busy - try again in a moment";
     } else if (status == 401 || status == 403) {
-        *error = "your cloud session is no longer valid - run `wally login`";
+        *error = "your cloud session is no longer valid - run `wally account login`";
     } else if (status == 404) {
         *error = "Wally Cloud has no such endpoint";
     } else if (status >= 500) {

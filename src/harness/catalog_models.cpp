@@ -1,5 +1,7 @@
 #include "harness/catalog_models.h"
 
+#include "harness/local_models.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -9,7 +11,6 @@ namespace wally::harness {
 namespace {
 
 /// The context size `harness::Resolve` starts a local server with.
-constexpr std::int64_t kLocalContextSize = 8192;
 
 /// Moves the entry whose id is `primary` to the front, or inserts a bare one
 /// when the catalog did not carry it — the launched model is always selectable.
@@ -67,7 +68,7 @@ std::vector<CatalogModel> CatalogModels(const std::string& console_url,
 
 std::vector<CatalogModel> CatalogModels(const Endpoint& endpoint, const std::string& primary) {
     if (endpoint.api_key.empty()) {
-        return {CatalogModel{primary, kLocalContextSize, 0, 0, 0}};
+        return {CatalogModel{primary, LocalContextSize(primary), 0, 0, 0}};
     }
     return CatalogModels(endpoint.console_url, endpoint.api_key, primary);
 }

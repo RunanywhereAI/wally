@@ -34,10 +34,28 @@ void register_default_models(CLI::App& app, GlobalOptions& options) {
     auto model = std::make_shared<std::string>();
     auto clear = std::make_shared<bool>(false);
 
-    CLI::App* cmd = app.add_subcommand(
-        "default-models", "Set the model a harness uses when you pass no -m");
-    cmd->add_option("model", *model, "a model id to make the default, e.g. glm-5.3-flash");
-    cmd->add_flag("--clear", *clear, "remove the saved default");
+    // Lives under `models` (`wally models default`). register_models runs first
+    // (app.cpp), so the namespace exists; a reorder would trip OptionNotFound.
+    // Registering here (rather than after app.cpp's group-normalizing loop)
+    // also matters for --help: `default` inherits the same default group as
+    // `list`/`show`/`pull`/`rm` only because it is added before that loop
+    // runs, the same way app.cpp guards its own get_subcommand(hidden)
+    // lookups: a startup crash from a future reorder is worse than silently
+    // skipping this subcommand.
+    CLI::App* models = nullptr;
+    try {
+        models = app.get_subcommand("models");
+    } catch (const CLI::OptionNotFound&) {
+        return;
+    }
+    CLI::App* cmd =
+        models->add_subcommand("default", "Show or set the default model for coding tools");
+    cmd->add_option("model", *model, "Model id to save as the default (omit to show it)");
+    cmd->add_flag("--clear", *clear, "Forget the saved default");
+    cmd->footer(examples_footer({
+        {"wally models default glm-5.3-flash", ""},
+        {"wally models default --clear", ""},
+    }));
 
     cmd->callback([model, clear] {
         if (*clear) {

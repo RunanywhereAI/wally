@@ -3,15 +3,15 @@
 class Wally < Formula
   desc "Run language, speech and image models on your own machine"
   homepage "https://github.com/RunanywhereAI/wally"
-  version "0.5.10"
+  version "0.6.0"
   license "MIT"
 
   # macOS arm64 ships the Swift MLX host
   # (llama.cpp + ONNX + Sherpa + MLX). Linux is not in this cut.
   on_macos do
     on_arm do
-      url "https://github.com/RunanywhereAI/wally/releases/download/v0.5.10/wally-0.5.10-macos-arm64.tar.gz"
-      # Placeholder -- the v0.5.10 release has not published a wally-named asset
+      url "https://github.com/RunanywhereAI/wally/releases/download/v0.6.0/wally-0.6.0-macos-arm64.tar.gz"
+      # Placeholder -- the v0.6.0 release has not published a wally-named asset
       # yet. scripts/release/update-tap.sh re-stamps this from the real release
       # checksum; a stale value here fails brew install's own hash check
       # rather than installing something unverified.
@@ -31,14 +31,13 @@ class Wally < Formula
         ~/.local/share/runanywhere
 
       Getting started:
-        wally list                    downloaded models
-        wally pull qwen3-0.6b         download one
-        wally run qwen3-0.6b          talk to it
-        wally run qwen3-0.6b "hi"     ask once and exit
+        wally models list             downloaded models
+        wally models pull qwen3       download one
+        wally run qwen3               talk to it
+        wally run qwen3 "hi"          ask once and exit
 
       Also:
-        wally tts "hello"             speak text
-        wally stt recording.wav       transcribe audio
+        wally account login           sign in
         wally backends                which engines this build linked
     EOS
   end

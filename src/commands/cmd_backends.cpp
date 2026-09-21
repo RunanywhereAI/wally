@@ -5,6 +5,7 @@
 
 #include "commands/commands.h"
 
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
@@ -44,6 +45,15 @@ std::map<std::string, EngineRow> collect_backend_rows() {
             row.priority = meta.priority;
             row.primitives.insert(rac_primitive_name(primitive));
         }
+    }
+    return engines;
+}
+
+std::map<std::string, EngineRow> collect_llm_backend_rows() {
+    std::map<std::string, EngineRow> engines = collect_backend_rows();
+    const std::string llm = rac_primitive_name(RAC_PRIMITIVE_GENERATE_TEXT);
+    for (auto it = engines.begin(); it != engines.end();) {
+        it = it->second.primitives.count(llm) ? std::next(it) : engines.erase(it);
     }
     return engines;
 }

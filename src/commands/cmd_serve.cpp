@@ -21,6 +21,7 @@
 #include "rac/server/rac_server.h"
 #endif
 
+#include "cli_formatter.h"
 #include "commands/model_setup.h"
 #include "io/output.h"
 
@@ -103,9 +104,12 @@ int run_serve(const GlobalOptions& options, const std::string& ref, const std::s
 }  // namespace
 
 void register_serve(CLI::App& app, GlobalOptions& options) {
-    CLI::App* cmd =
-        app.add_subcommand("serve", "Serve a model over an OpenAI-compatible HTTP API");
+    CLI::App* cmd = app.add_subcommand("serve", "Serve a model over an OpenAI-compatible API");
 #if defined(WALLY_HAS_SERVER)
+    cmd->footer(examples_footer({
+        {"wally serve qwen3-0.6b", ""},
+        {"wally serve granite-4.2-8b --port 8000", ""},
+    }));
     auto ref = std::make_shared<std::string>();
     auto host = std::make_shared<std::string>("127.0.0.1");
     auto port = std::make_shared<uint16_t>(8080);
@@ -114,13 +118,13 @@ void register_serve(CLI::App& app, GlobalOptions& options) {
     auto gpu_layers = std::make_shared<int32_t>(0);
     auto cors = std::make_shared<bool>(false);
     cmd->add_option("model", *ref,
-                    "LLM to serve (default: " + std::string(kDefaultServeModel) + ")");
-    cmd->add_option("--host,-H", *host, "Bind to this address (default 127.0.0.1)");
-    cmd->add_option("--port,-p", *port, "Listen on this port (default 8080)");
+                    "Model to serve (default " + std::string(kDefaultServeModel) + ")");
+    cmd->add_option("--host,-H", *host, "Address to bind (default 127.0.0.1)");
+    cmd->add_option("--port,-p", *port, "Port to listen on (default 8080)");
     cmd->add_option("--context-length,--context,-c", *context,
-                    "Size the context window in tokens (default 8192)");
-    cmd->add_option("--threads,-t", *threads, "Run inference on this many threads (default 4)");
-    cmd->add_option("--gpu-layers,--ngl", *gpu_layers, "Offload this many layers to the GPU");
+                    "Context window in tokens (default 8192)");
+    cmd->add_option("--threads,-t", *threads, "Inference threads (default 4)");
+    cmd->add_option("--gpu-layers,--ngl", *gpu_layers, "Layers to offload to the GPU");
     cmd->add_flag("--cors", *cors, "Allow cross-origin browser requests (off by default)");
     cmd->callback([&options, ref, host, port, context, threads, gpu_layers, cors]() {
         const int exit_code = run_serve(options, *ref, *host, *port, *context, *threads,

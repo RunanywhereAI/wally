@@ -1,7 +1,7 @@
 #include "cli_formatter.h"
 
 #include <algorithm>
-#include <cmath>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -32,15 +32,6 @@ Palette make_palette(bool enabled) {
 
 }  // namespace cli_color
 
-namespace {
-
-std::string colorize(const std::string& text, const char* code, bool enabled) {
-    if (!enabled || text.empty()) return text;
-    return std::string(code) + text + cli_color::kResetCode;
-}
-
-}  // namespace
-
 bool color_output_enabled(bool no_color_flag) {
     if (no_color_flag) return false;
     if (std::getenv("NO_COLOR") != nullptr) return false;
@@ -51,12 +42,175 @@ bool color_output_enabled(bool no_color_flag) {
 #endif
 }
 
-CliFormatter::CliFormatter(bool color_enabled) : color_enabled_(color_enabled) {}
+namespace {
+
+// Where an example's note starts: two spaces of indent plus the longest
+// command the help carries, with a gap after it.
+constexpr std::size_t kExampleNoteColumn = 48;
+
+// Shortest gap between a row's left column and its description.
+constexpr std::size_t kColumnGap = 2;
+
+// Sentence-case headings for CLI11's upper-case defaults. Groups a command
+// registers itself pass through unchanged.
+std::string heading_for(const std::string& group) {
+    if (group == "OPTIONS") return "Options";
+    if (group == "SUBCOMMANDS") return "Commands";
+    return group;
+}
+
+// CLI11 renders a `!--hide-thinking` flag as `--hide-thinking{false}`; the
+// brace suffix is noise to a reader.
+std::string strip_flag_default(const std::string& name) {
+    const std::size_t brace = name.find('{');
+    return brace == std::string::npos ? name : name.substr(0, brace);
+}
+
+// `TEXT:FILE` -> `FILE`, `TEXT:{on,off}` -> `{on,off}`, and a validator
+// description such as `INT:INT in [1 - 2147483647]` -> `INT`.
+std::string simplify_type_name(const std::string& type_name) {
+    const std::size_t colon = type_name.find(':');
+    if (colon == std::string::npos) return type_name;
+    const std::string suffix = type_name.substr(colon + 1);
+    if (!suffix.empty() && suffix.front() == '{') return suffix;
+    const bool one_word = std::all_of(suffix.begin(), suffix.end(), [](unsigned char c) {
+        return std::isupper(c) != 0;
+    });
+    return one_word && !suffix.empty() ? suffix : type_name.substr(0, colon);
+}
+
+// Strips trailing whitespace from every line, collapses runs of blank lines to
+// one, drops leading blank lines and ends with exactly one newline.
+std::string tidy(const std::string& text) {
+    std::string out;
+    std::istringstream in(text);
+    std::string line;
+    bool previous_blank = true;  // suppresses blank lines at the top
+    while (std::getline(in, line)) {
+        const std::size_t end = line.find_last_not_of(" \t\r");
+        line = end == std::string::npos ? std::string() : line.substr(0, end + 1);
+        if (line.empty()) {
+            if (previous_blank) continue;
+            previous_blank = true;
+        } else {
+            previous_blank = false;
+        }
+        out += line;
+        out += '\n';
+    }
+    while (out.size() >= 2 && out[out.size() - 1] == '\n' && out[out.size() - 2] == '\n') {
+        out.pop_back();
+    }
+    return out;
+}
+
+// Left column padded to the description column, or the description dropped to
+// the next line when the left column is too wide to leave a gap. `left` is the
+// plain text and is what the padding is measured from; `left_shown` is what is
+// printed, and may carry color codes (setw would count those as visible
+// characters and under-pad the description column).
+void stream_row(std::stringstream& out, const std::string& left, const std::string& left_shown,
+                const std::string& desc, std::size_t column_width, std::size_t right_width) {
+    out << left_shown;
+    if (desc.empty()) {
+        out << '\n';
+        return;
+    }
+    bool skip_first_line_prefix = true;
+    if (left.length() + kColumnGap <= column_width) {
+        out << std::string(column_width - left.length(), ' ');
+    } else {
+        out << '\n';
+        skip_first_line_prefix = false;
+    }
+    CLI::detail::streamOutAsParagraph(out, desc, right_width, std::string(column_width, ' '),
+                                      skip_first_line_prefix);
+    out << '\n';
+}
+
+std::string colorize(const std::string& text, const char* code, bool enabled) {
+    if (!enabled || text.empty()) return text;
+    return std::string(code) + text + cli_color::kResetCode;
+}
+
+// A command that is listed as its children rather than as itself: a namespace
+// like `models` or `account`, where "models pull" is the thing you type.
+bool has_visible_children(const CLI::App* app) {
+    for (const CLI::App* child : app->get_subcommands({})) {
+        if (!child->get_name().empty() && !child->get_group().empty()) return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+std::string examples_footer(const std::vector<Example>& rows) {
+    std::string out = "Examples:";
+    for (const Example& row : rows) {
+        std::string line = "  " + row.command;
+        if (!row.note.empty()) {
+            line.append(line.size() + kColumnGap <= kExampleNoteColumn ? kExampleNoteColumn - line.size()
+                                                                       : kColumnGap,
+                        ' ');
+            line += row.note;
+        }
+        out += '\n' + line;
+    }
+    return out;
+}
+
+CliFormatter::CliFormatter(bool color_enabled) : color_enabled_(color_enabled) {
+    label("POSITIONALS", "Arguments");
+    label("SUBCOMMAND", "COMMAND");
+    label("SUBCOMMANDS", "COMMANDS");
+}
+
+std::string CliFormatter::make_help(const CLI::App* app, std::string name,
+                                    CLI::AppFormatMode mode) const {
+    if (mode == CLI::AppFormatMode::Sub) {
+        // `--help-all` renders a child command through this Sub path (see
+        // make_subcommands below), which lands in CLI11's own make_expanded.
+        // That ends with make_footer(app), and make_footer is suppressed
+        // below so the *top-level* render can print the footer verbatim
+        // instead of reflowed as a paragraph -- so append it here too, or a
+        // child's Examples: block never shows up under --help-all.
+        std::string help = CLI::Formatter::make_help(app, name, mode);
+        const std::string footer = app->get_footer();
+        if (!footer.empty()) {
+            help += '\n' + footer + '\n';
+        }
+        return help;
+    }
+    std::stringstream out;
+    out << make_description(app);
+    out << make_usage(app, name);
+    out << make_positionals(app);
+    if (app->get_parent() == nullptr) {
+        // Root page: the commands are what someone came for; the global flags
+        // are the same on every page and go last.
+        out << make_subcommands(app, mode);
+        out << make_groups(app, mode);
+    } else {
+        out << make_groups(app, mode);
+        out << make_subcommands(app, mode);
+    }
+    const std::string footer = app->get_footer();
+    if (!footer.empty()) {
+        out << '\n' << footer << '\n';
+    }
+    return tidy(out.str());
+}
+
+std::string CliFormatter::make_usage(const CLI::App* app, std::string name) const {
+    std::string usage = CLI::Formatter::make_usage(app, name);
+    usage.erase(0, usage.find_first_not_of('\n'));
+    return "Usage: " + usage;
+}
 
 std::string CliFormatter::make_group(std::string group, bool is_positional,
                                       std::vector<const CLI::Option*> opts) const {
     std::stringstream out;
-    out << "\n" << colorize(group, cli_color::kBoldCode, color_enabled_) << ":\n";
+    out << "\n" << colorize(heading_for(group), cli_color::kBoldCode, color_enabled_) << ":\n";
     for (const CLI::Option* opt : opts) {
         out << make_option(opt, is_positional);
     }
@@ -67,8 +221,7 @@ std::string CliFormatter::make_subcommands(const CLI::App* app, CLI::AppFormatMo
     std::stringstream out;
     std::vector<const CLI::App*> subcommands = app->get_subcommands({});
 
-    // Make a list in definition order of the groups seen (mirrors
-    // CLI::Formatter::make_subcommands -- only the heading gets color here).
+    // Groups in definition order, as CLI::Formatter::make_subcommands does.
     std::vector<std::string> subcmd_groups_seen;
     for (const CLI::App* com : subcommands) {
         if (com->get_name().empty()) {
@@ -88,150 +241,86 @@ std::string CliFormatter::make_subcommands(const CLI::App* app, CLI::AppFormatMo
     }
 
     for (const std::string& group : subcmd_groups_seen) {
-        out << '\n' << colorize(group, cli_color::kBoldCode, color_enabled_) << ":\n";
+        out << '\n' << colorize(heading_for(group), cli_color::kBoldCode, color_enabled_) << ":\n";
         std::vector<const CLI::App*> subcommands_group = app->get_subcommands([&group](const CLI::App* sub_app) {
             return CLI::detail::to_lower(sub_app->get_group()) == CLI::detail::to_lower(group);
         });
         for (const CLI::App* new_com : subcommands_group) {
             if (new_com->get_name().empty()) continue;
-            if (mode != CLI::AppFormatMode::All) {
-                out << make_subcommand(new_com);
-            } else {
+            if (mode == CLI::AppFormatMode::All) {
                 out << new_com->help(new_com->get_name(), CLI::AppFormatMode::Sub);
                 out << '\n';
+                continue;
+            }
+            // A namespace is listed as its children with the full path
+            // ("models pull"), so what the reader sees is what they type; the
+            // parent row alone is not a runnable command. A child hidden with an
+            // empty group (models load/unload/...) is left out, same as at the
+            // top. A leaf prints as itself.
+            if (has_visible_children(new_com)) {
+                for (const CLI::App* child : new_com->get_subcommands({})) {
+                    if (child->get_name().empty() || child->get_group().empty()) continue;
+                    out << make_subcommand_indented(child, "  " + new_com->get_name() + " ");
+                }
+            } else {
+                out << make_subcommand_indented(new_com, "  ");
             }
         }
     }
-
     return out.str();
 }
 
-std::string CliFormatter::make_subcommand(const CLI::App* sub) const {
-    std::stringstream out;
-    const std::string suffix = sub->get_required() ? " " + get_label("REQUIRED") : "";
-    const std::string plain_name = "  " + sub->get_display_name(true) + suffix;
+std::string CliFormatter::make_footer(const CLI::App* /*app*/) const {
+    return "";
+}
 
-    out << colorize("  " + sub->get_display_name(true), cli_color::kBoldCyanCode, color_enabled_) << suffix;
-    if (plain_name.length() < get_column_width()) {
-        out << std::string(get_column_width() - plain_name.length(), ' ');
-    }
-    CLI::detail::streamOutAsParagraph(out, sub->get_description(), get_right_column_width(),
-                                      std::string(get_column_width(), ' '), true);
-    out << '\n';
+std::string CliFormatter::make_subcommand_indented(const CLI::App* sub, const std::string& indent) const {
+    std::stringstream out;
+    // Primary name only (no ", alias" tail): the tree reads cleaner, and the
+    // aliases still resolve on the command line.
+    const std::string left = indent + sub->get_display_name(false);
+    stream_row(out, left, colorize(left, cli_color::kBoldCyanCode, color_enabled_), sub->get_description(),
+               get_column_width(), get_right_column_width());
     return out.str();
+}
+
+std::string CliFormatter::make_option_opts(const CLI::Option* opt) const {
+    std::string out;
+    if (opt->get_type_size() != 0) {
+        const std::string type = simplify_type_name(opt->get_type_name());
+        if (!type.empty()) out += " " + type;
+        if (opt->get_expected_max() == CLI::detail::expected_max_vector_size) out += " ...";
+        // CLI11's own Formatter::make_option_opts appends this too; drop it
+        // here and a required() option (e.g. -m, --model TEXT) reads as
+        // optional in --help.
+        if (opt->get_required()) out += " " + get_label("REQUIRED");
+    }
+    return out;
 }
 
 std::string CliFormatter::make_option(const CLI::Option* opt, bool is_positional) const {
     std::stringstream out;
-    const std::size_t column_width = get_column_width();
-
+    std::string names;  // the typeable part, colored
+    std::string opts;   // value type and markers, plain
     if (is_positional) {
-        const std::string plain_left = "  " + make_option_name(opt, true) + make_option_opts(opt);
-        const std::string desc = make_option_desc(opt);
-
-        out << colorize("  " + make_option_name(opt, true), cli_color::kBoldCyanCode, color_enabled_) << make_option_opts(opt);
-        if (plain_left.length() < column_width) {
-            out << std::string(column_width - plain_left.length(), ' ');
-        }
-
-        if (!desc.empty()) {
-            bool skip_first_line_prefix = true;
-            if (plain_left.length() >= column_width) {
-                out << '\n';
-                skip_first_line_prefix = false;
-            }
-            CLI::detail::streamOutAsParagraph(out, desc, get_right_column_width(), std::string(column_width, ' '),
-                                              skip_first_line_prefix);
-        }
-        out << '\n';
-        return out.str();
-    }
-
-    // Non-positional: same short-name / long-name column split as
-    // CLI::Formatter::make_option, reproduced here because coloring the name
-    // and padding it with std::setw don't mix -- setw counts the ANSI escape
-    // bytes as visible characters and under-pads the description column.
-    // `visible_length` tracks what setw would have measured on the plain
-    // (uncolored) text so the layout stays identical either way.
-    const std::string names_combined = make_option_name(opt, false);
-    const std::string opts_text = make_option_opts(opt);
-    const std::string desc = make_option_desc(opt);
-
-    const auto names = CLI::detail::split(names_combined, ',');
-    std::vector<std::string> short_names_v;
-    std::vector<std::string> long_names_v;
-    std::for_each(names.begin(), names.end(), [&short_names_v, &long_names_v](const std::string& name) {
-        if (name.find("--", 0) != std::string::npos)
-            long_names_v.push_back(name);
-        else
-            short_names_v.push_back(name);
-    });
-
-    const std::string short_names = CLI::detail::join(short_names_v, ", ");
-    const std::string long_names = CLI::detail::join(long_names_v, ", ");
-
-    const auto short_column_width = static_cast<int>(column_width / 3);
-    const auto long_column_width =
-        static_cast<int>(std::ceil(static_cast<float>(column_width) / 3.0f * 2.0f));
-    int short_over_size = 0;
-    std::size_t visible_length = 0;
-
-    if (!short_names.empty()) {
-        std::string plain_short = "  " + short_names;
-        if (long_names.empty() && !opts_text.empty()) plain_short += opts_text;
-        if (!long_names.empty()) plain_short += ",";
-        if (static_cast<int>(plain_short.length()) >= short_column_width) {
-            plain_short += " ";
-            short_over_size = static_cast<int>(plain_short.length()) - short_column_width;
-        }
-
-        const std::string colored_name = colorize("  " + short_names, cli_color::kBoldCyanCode, color_enabled_);
-        const std::string trailer = plain_short.substr(2 + short_names.length());
-        out << colored_name << trailer;
-        visible_length += plain_short.length();
-        if (static_cast<int>(plain_short.length()) < short_column_width) {
-            const std::size_t pad = static_cast<std::size_t>(short_column_width) - plain_short.length();
-            out << std::string(pad, ' ');
-            visible_length += pad;
-        }
+        // The usage line already says which arguments are required and which
+        // are repeatable, so a positional row is just its name.
+        names = "  " + make_option_name(opt, true);
     } else {
-        out << std::string(static_cast<std::size_t>(short_column_width), ' ');
-        visible_length += static_cast<std::size_t>(short_column_width);
-    }
-
-    short_over_size = (std::min)(short_over_size, long_column_width);
-    const auto adjusted_long_width = long_column_width - short_over_size;
-
-    if (!long_names.empty()) {
-        std::string plain_long = long_names;
-        if (!opts_text.empty()) plain_long += opts_text;
-        if (static_cast<int>(plain_long.length()) >= adjusted_long_width) plain_long += " ";
-
-        const std::string colored_name = colorize(long_names, cli_color::kBoldCyanCode, color_enabled_);
-        const std::string trailer = plain_long.substr(long_names.length());
-        out << colored_name << trailer;
-        visible_length += plain_long.length();
-        if (static_cast<int>(plain_long.length()) < adjusted_long_width) {
-            const std::size_t pad = static_cast<std::size_t>(adjusted_long_width) - plain_long.length();
-            out << std::string(pad, ' ');
-            visible_length += pad;
+        // "-m, --model TEXT". A long-only option sits under the long column so
+        // every long name lines up: "      --json".
+        std::vector<std::string> short_names;
+        std::vector<std::string> long_names;
+        for (const std::string& name : CLI::detail::split(make_option_name(opt, false), ',')) {
+            (name.rfind("--", 0) == 0 ? long_names : short_names).push_back(strip_flag_default(name));
         }
-    } else {
-        out << std::string(static_cast<std::size_t>(adjusted_long_width), ' ');
-        visible_length += static_cast<std::size_t>(adjusted_long_width);
+        names = short_names.empty() ? "      " : "  " + CLI::detail::join(short_names, ", ");
+        if (!short_names.empty() && !long_names.empty()) names += ", ";
+        names += CLI::detail::join(long_names, ", ");
+        opts = make_option_opts(opt);
     }
-
-    if (!desc.empty()) {
-        bool skip_first_line_prefix = true;
-        if (visible_length > column_width) {
-            out << '\n';
-            skip_first_line_prefix = false;
-        }
-        CLI::detail::streamOutAsParagraph(out, desc, get_right_column_width(), std::string(column_width, ' '),
-                                          skip_first_line_prefix);
-    }
-
-    out << '\n';
+    stream_row(out, names + opts, colorize(names, cli_color::kBoldCyanCode, color_enabled_) + opts,
+               make_option_desc(opt), get_column_width(), get_right_column_width());
     return out.str();
 }
 

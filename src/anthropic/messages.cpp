@@ -645,10 +645,6 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
                 "application/json");
             return;
         }
-        if (raw->verbose) {
-            out::status_line("anthropic: POST /v1/messages, " +
-                        std::to_string(request.body.size()) + " bytes");
-        }
         Json parsed;
         try {
             parsed = Json::parse(request.body);
@@ -657,6 +653,15 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
             response.set_content(translate::ErrorBody("invalid_request_error", error.what()),
                                  "application/json");
             return;
+        }
+        if (raw->verbose) {
+            // The id the app asked for and the one that will answer, side by
+            // side: this is the line that shows a picker choice being honoured
+            // or silently collapsing onto the launched default.
+            const std::string requested = parsed.value("model", std::string("<none>"));
+            out::status_line("anthropic: POST /v1/messages, " +
+                             std::to_string(request.body.size()) + " bytes, model " + requested +
+                             " -> " + EffectiveModel(*raw, parsed));
         }
         try {
             if (parsed.value("stream", false)) {

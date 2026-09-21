@@ -21,6 +21,7 @@
 #include "account/console.h"
 #include "account/credentials.h"
 #include "account/model_cache.h"
+#include "cli_formatter.h"
 #include "commands/commands.h"
 #include "io/output.h"
 
@@ -166,7 +167,7 @@ bool RefreshSession(const account::ConsoleClient& client, account::Credentials* 
                     std::string* error) {
     if (credentials->refresh_token.empty()) {
         if (error != nullptr) {
-            *error = "the cloud session cannot be refreshed; run `wally login`";
+            *error = "the cloud session cannot be refreshed; run `wally account login`";
         }
         return false;
     }
@@ -334,7 +335,7 @@ int WhoAmI(bool as_json) {
         return 1;
     }
     if (!credentials.signed_in()) {
-        out::error_line("not signed in — run `wally login`");
+        out::error_line("not signed in — run `wally account login`");
         return 1;
     }
 
@@ -388,24 +389,37 @@ int WhoAmI(bool as_json) {
 }  // namespace
 
 void register_account(CLI::App& app, GlobalOptions& options) {
-    auto no_browser = std::make_shared<bool>(false);
-    auto console_url = std::make_shared<std::string>();
-    auto* login = app.add_subcommand("login", "sign in through the RunAnywhere console");
-    login->add_flag("--no-browser", *no_browser, "print the URL instead of opening it");
-    login
-        ->add_option("--console-url", *console_url,
-                     "console API origin (default: " + account::DefaultConsoleUrl() + ")")
-        ->envname("WALLY_CONSOLE_URL");
-    login->callback([no_browser, console_url] { fail(Login(*console_url, !*no_browser)); });
+    CLI::App* account_cmd =
+        app.add_subcommand("account", "Manage your RunAnywhere cloud account");
+    account_cmd->require_subcommand(1);
 
-    auto* logout = app.add_subcommand("logout", "revoke and remove the cloud session");
+    auto no_browser = std::make_shared<bool>(false);
+    // The console origin is not a user-facing flag: it comes from the baked
+    // default, or WALLY_CONSOLE_URL for a dev build (read directly in
+    // credentials.cpp). Login() falls back to that when handed an empty string.
+    const std::string console_url;
+
+    auto* login = account_cmd->add_subcommand("login", "Sign in through the browser");
+    login->add_flag("--no-browser", *no_browser, "Print the sign-in URL instead of opening it");
+    login->footer(examples_footer({
+        {"wally account login", ""},
+        {"wally account login --no-browser", ""},
+    }));
+    login->callback([no_browser, console_url] { fail(Login(console_url, !*no_browser)); });
+
+    auto* logout = account_cmd->add_subcommand("logout", "Sign out and revoke the session");
+    logout->footer(examples_footer({{"wally account logout", ""}}));
     logout->callback([] { fail(Logout()); });
 
     auto whoami_json = std::make_shared<bool>(false);
-    auto* whoami = app.add_subcommand("whoami", "show the signed-in cloud account");
-    whoami->add_flag("--json", *whoami_json, "machine-readable output");
-    // `wally --json whoami` and `wally whoami --json` mean the same thing; see
-    // the identical fix in register_usage (cmd_usage.cpp).
+    auto* whoami = account_cmd->add_subcommand("whoami", "Show the signed-in account");
+    whoami->add_flag("--json", *whoami_json, "Print as JSON");
+    whoami->footer(examples_footer({
+        {"wally account whoami", ""},
+        {"wally --json account whoami", ""},
+    }));
+    // `wally --json account whoami` and `... whoami --json` mean the same thing;
+    // see the identical fix in register_usage (cmd_usage.cpp).
     whoami->callback([whoami_json, &options] { fail(WhoAmI(*whoami_json || options.json)); });
 }
 

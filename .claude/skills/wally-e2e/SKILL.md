@@ -181,14 +181,6 @@ Mac; ARM64 MSVC + QHexRT overlay on Snapdragon).
   `arm64-windows-static` into the kit `lib/` before linking (fixed in the
   SDK packager for the *next* kit; do not retag 0.20.28). Wally already
   links kit `libcurl.lib` when present.
-- **`wally image generate` needs `--prompt` and `--out`**, not a positional
-  prompt. `--steps 4` is enough for a smoke PNG. Help exists on the public
-  bottle; real generate is compiled only with `WALLY_HAS_NEURT`.
-- **`sd15` catalog URL must be the compiled zip**, not the HF repo page
-  (HTML ~160 KB). Unzip to a tree with `TextEncoder.mlmodelc` /
-  `Unet.mlmodelc` / `VAEDecoder.mlmodelc` and pass that directory. COREML
-  / QHEXRT catalog rows register `ModelInfo` (folder), not the single-file
-  download factory — `wally pull sd15` is not a substitute for the zip.
 - Published product bottles: macOS `wally-$V-macos-arm64.tar.gz`, Windows
   **x64** zip. There is no public Windows ARM64 bottle; NPU is overlay-only.
 - **The private QHexRT overlay tarball used to ship zero skel files** (only

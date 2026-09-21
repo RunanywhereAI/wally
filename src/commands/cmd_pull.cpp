@@ -1,8 +1,8 @@
 /**
  * @file cmd_pull.cpp
- * @brief `wally models download <model|hf.co/...|url>` (alias `wally pull`) —
- *        download via the commons orchestrator: plan → start → progress
- *        callback → terminal state.
+ * @brief `wally models pull <model|hf.co/...|url>` (alias `wally models
+ *        download`) — download via the commons orchestrator: plan → start →
+ *        progress callback → terminal state.
  *
  * SIGINT cancels the task (partial bytes preserved → re-pull resumes via the
  * plan's can_resume path). Exit codes: 0 done, 1 failure, 130 user cancel.
@@ -86,7 +86,7 @@ int pull_model_flow(const GlobalOptions &options, const std::string &model_id) {
 
   // bootstrap() registers the catalog; it does not rescan what is on disk. So
   // registry_status() below can still read DOWNLOADED for a model whose files
-  // were deleted since, and `wally pull` would report success without fetching
+  // were deleted since, and `wally models pull` would report success without fetching
   // anything. A refresh failure is not fatal here: the download path that
   // follows is the fallback, and refusing to pull because a rescan failed would
   // be worse than pulling something already present.
@@ -298,8 +298,7 @@ void configure_models_download(CLI::App *cmd, GlobalOptions &options) {
   cmd->add_option("model", *ref, "Model id, alias, hf.co/org/repo/file or URL")
       ->required();
   cmd->add_option("--engine", *engine,
-                  "Engine hint (neurt|coreml|ane, mlx, llamacpp, onnx, sherpa). Honoured for "
-                  "catalog models too, not just URL/HF refs.");
+                  std::string("Engine to fetch for (") + engine_choices() + ")");
   cmd->callback([&options, ref, engine]() {
     Bootstrapped env;
     if (bootstrap(options, &env) != RAC_SUCCESS) {

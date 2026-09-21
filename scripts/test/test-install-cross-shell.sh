@@ -56,15 +56,26 @@ UNAME
 chmod +x "$STUB/uname"
 
 # A good fixture: a release tarball whose bin/wally answers --version,
-# whoami and login the way the real binary does, plus a matching sha256.
+# `account whoami` and `account login` the way the real binary does, plus a
+# matching sha256.
+#
+# The nesting matters. `whoami`/`login` moved under `account`, so a fake that
+# still matched on $1 alone saw `account`, fell off the end of the case, and
+# exited 0 -- which install.sh reads as "already signed in", so every run
+# skipped the sign-in branches this fixture exists to exercise. Dispatching on
+# the real two-token grammar puts them back under test. The `*)` arm is the
+# other half: an invocation this stub does not know is a hard error, the way
+# the real CLI exits 2 on an unknown command, so if install.sh ever drifts back
+# to the flat spelling the test fails loudly instead of silently passing.
 GOOD="$WORK/fixture-good"
 mkdir -p "$GOOD/wally-macos-arm64/bin"
 cat > "$GOOD/wally-macos-arm64/bin/wally" <<'WALLY'
 #!/bin/sh
-case "$1" in
-    --version) echo "wally 1.2.3 (stub)" ;;
-    whoami)    exit 1 ;;
-    login)     echo "stub login ok" ;;
+case "$1 $2" in
+    "--version ") echo "wally 1.2.3 (stub)" ;;
+    "account whoami") exit 1 ;;
+    "account login")  echo "stub login ok" ;;
+    *) echo "stub wally: unexpected invocation: $*" >&2; exit 2 ;;
 esac
 WALLY
 chmod +x "$GOOD/wally-macos-arm64/bin/wally"

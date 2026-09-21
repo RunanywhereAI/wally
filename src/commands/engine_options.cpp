@@ -27,10 +27,21 @@ bool parse_engine_hint(const std::string& engine,
     // files are and there is no NEURT value in InferenceFramework. `coreml` is
     // accepted as an alias: it is the engine's former name and remains the honest
     // name of the framework, so a user typing either means the same thing.
+    // Only a kit that linked NeuRT can honour it (bootstrap.cpp registers the
+    // plugin under the same macro); anywhere else the name is refused up front
+    // rather than letting the load fall through to MLX and fail on a Core ML
+    // tree with a confusing "config.json not found".
     if (normalized == "neurt" || normalized == "coreml" || normalized == "core-ml" ||
         normalized == "ane") {
+#if defined(WALLY_HAS_NEURT)
         *out_framework = runanywhere::v1::INFERENCE_FRAMEWORK_COREML;
         return true;
+#else
+        if (error) {
+            *error = "engine '" + engine + "' (Apple Neural Engine) is not in this build";
+        }
+        return false;
+#endif
     }
     if (normalized == "llamacpp" || normalized == "llama.cpp" || normalized == "llama_cpp" ||
         normalized == "llama-cpp") {
@@ -54,6 +65,20 @@ bool parse_engine_hint(const std::string& engine,
         *error = "unsupported engine '" + engine + "'";
     }
     return false;
+}
+
+const char* engine_choices() {
+    // Built from the same kit macros parse_engine_hint() gates on, so a help
+    // page never advertises an engine this binary cannot register.
+    return
+#if defined(WALLY_HAS_NEURT)
+        "neurt|coreml|ane, "
+#endif
+        "mlx, llamacpp, onnx, sherpa"
+#if defined(WALLY_HAS_QHEXRT)
+        ", qhexrt"
+#endif
+        ;
 }
 
 bool resolve_engine_hint(const std::string& engine, EngineHintResolution* out_resolution,

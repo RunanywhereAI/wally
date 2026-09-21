@@ -1,7 +1,7 @@
 /**
  * @file cmd_show.cpp
- * @brief `wally models get <model>` (alias `wally show`) — registry entry
- *        details.
+ * @brief `wally models show <model>` (alias `wally models get`) — registry
+ *        entry details.
  */
 
 #include "commands/commands.h"

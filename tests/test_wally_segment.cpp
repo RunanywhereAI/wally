@@ -361,7 +361,17 @@ TestResult test_segment_usage_errors() {
 // Structural wiring of register_segment — positive spec assertion with ZERO
 // callback execution (the only way to verify the happy-path option spec without
 // a segmentation model). Uses CLI11 introspection on the registered subcommand.
+//
+// TEMP(llm-only cut): register_segment() is commented out in src/app.cpp, so
+// the subcommand this test asserts on is unreachable. Flip
+// WALLY_LLM_ONLY_CUT to 0 (here and in the sibling tests) when the full
+// surface returns. While it is 1, this test is left OUT of the suite (see
+// main() below) instead of reporting a bare `passed = true` -- ctest must not
+// show a green test that asserts nothing.
 // -----------------------------------------------------------------------------
+#define WALLY_LLM_ONLY_CUT 1
+
+#if !WALLY_LLM_ONLY_CUT
 TestResult test_segment_option_spec() {
   TestResult result;
   result.test_name = "segment_option_spec";
@@ -411,6 +421,7 @@ TestResult test_segment_option_spec() {
   result.passed = true;
   return result;
 }
+#endif  // !WALLY_LLM_ONLY_CUT
 
 // -----------------------------------------------------------------------------
 // --json output-shape guard (mirrors test_json_writer_shape).
@@ -498,7 +509,12 @@ int main(int argc, char** argv) {
   suite.add("read_ppm", test_read_ppm);
   suite.add("write_png_smoke", test_write_png_smoke);
   suite.add("segment_usage_errors", test_segment_usage_errors);
+#if !WALLY_LLM_ONLY_CUT
+  // Not added while the cut is active: an unregistered test cannot report a
+  // false ctest PASS (see the TEMP(llm-only cut) comment on
+  // test_segment_option_spec above).
   suite.add("segment_option_spec", test_segment_option_spec);
+#endif
   suite.add("segment_json_shape", test_segment_json_shape);
   return suite.run(argc, argv);
 }
