@@ -8,10 +8,16 @@ OpenAPI document, `wally-cli-v1.openapi.json`, which is what gets pinned and fed
 to `generate_console_binding.py`.
 
     python3 contracts/extract-cli-contract.py \\
-        ../RA-Cloud-WorkSpace/InferenceInfra/contracts/control-plane-v1.openapi.json
+        ../InferenceInfra/contracts/control-plane-v1.openapi.json
+
+    python3 contracts/extract-cli-contract.py SOURCE.json \\
+        --output contracts/wally-cli-v1.openapi.json \\
+        --source-commit SHA --source-branch development
 
 Run this only when re-vendoring after the upstream contract changes; then run
-generate_console_binding.py and commit both outputs together.
+generate_console_binding.py and commit both outputs together. Prefer
+contracts/sync_from_inferenceinfra.py, which wraps both steps and records
+the InferenceInfra source commit.
 """
 
 from __future__ import annotations
@@ -72,7 +78,31 @@ def _refs(value: object, out: set[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="path to control-plane-v1.openapi.json")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=OUT,
+        help="extract destination (default: contracts/wally-cli-v1.openapi.json)",
+    )
+    parser.add_argument("--source-commit", default="", help="InferenceInfra commit to stamp")
+    parser.add_argument("--source-branch", default="", help="InferenceInfra branch to stamp")
+    parser.add_argument(
+        "--source-repository",
+        default="RunanywhereAI/InferenceInfra",
+        help="InferenceInfra repository to stamp",
+    )
     args = parser.parse_args()
+
+    # Provenance is all-or-nothing. sync_from_inferenceinfra.py --check rejects
+    # an extract whose x-runanywhere-source is missing any of repository /
+    # commit / branch / artifact, so stamping a commit with no branch (or the
+    # reverse) writes a pin that cannot pass its own gate -- and the failure
+    # surfaces later, in CI, rather than here where the mistake was made.
+    if bool(args.source_commit) != bool(args.source_branch):
+        parser.error(
+            "--source-commit and --source-branch go together: pass both to stamp "
+            "provenance, or neither to write an unstamped extract"
+        )
 
     source = json.loads(args.source.read_text(encoding="utf-8"))
     components = source["components"]
@@ -141,6 +171,13 @@ def main() -> None:
         "paths": paths,
         "components": {section: extracted_components[section] for section in sorted(extracted_components)},
     }
+    if args.source_commit:
+        extract["x-runanywhere-source"] = {
+            "repository": args.source_repository,
+            "commit": args.source_commit,
+            "branch": args.source_branch,
+            "artifact": "contracts/control-plane-v1.openapi.json",
+        }
     # Self-contained means self-contained: every $ref in the extract resolves
     # inside the extract.
     dangling: set[str] = set()
@@ -148,9 +185,10 @@ def main() -> None:
     unresolved = sorted(key for key in dangling if key not in closure)
     if unresolved:
         raise SystemExit(f"extract would carry dangling references: {unresolved}")
-    OUT.write_text(json.dumps(extract, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(extract, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     operations = sum(1 for methods in paths.values() for method in methods if method in HTTP_METHODS)
-    print(f"wrote {OUT}: {operations} operations, {len(closure)} components")
+    print(f"wrote {args.output}: {operations} operations, {len(closure)} components")
 
 
 if __name__ == "__main__":
