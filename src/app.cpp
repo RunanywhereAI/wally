@@ -45,8 +45,7 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     app.add_flag("--no-progress", options.no_progress, "Disable progress rendering");
     app.add_flag("--no-color", options.no_color, "Disable colored --help output");
     app.add_option("--home", options.home_override,
-                   "RunAnywhere home directory (default: $RUNANYWHERE_HOME or "
-                   "~/.local/share/runanywhere; models live under <home>/Models)");
+                   "Where models live (default $RUNANYWHERE_HOME or ~/.local/share/runanywhere)");
 
     // `-u`/`-U` (aliases for `update`/`uninstall`) are deliberately NOT
     // registered as CLI11 flags here. `app.fallthrough(true)` above is
@@ -114,18 +113,38 @@ void configure_app(CLI::App& app, GlobalOptions& options) {
     commands::register_backends(app, options);     // hidden below
     commands::register_telemetry(app, options);    // hidden below
 
-    // Flat help: one "Commands" section, in registration order. The group is
-    // set by walking the registered subcommands (not by name), so a rename can
-    // never leave a stale string to crash the CLI (0xC0000409).
+    // Grouped help, by what the reader is trying to do. Sections print in the
+    // order their first command was registered above; commands inside a
+    // section keep registration order too. A namespace (models, account) is
+    // listed as its children with full paths ("models pull"), which the
+    // formatter does when a command has visible children.
+    //
+    // Everything unnamed here is hidden from the page but still parses:
+    // `llm generate|stream|tool-call` (the explicit forms behind `run`),
+    // `info` (a terser `about`), `version` (-V), `help` (-h), and the
+    // diagnostics. Set by name with a guard, so a rename can never leave a
+    // stale string to crash the CLI (0xC0000409).
+    struct Section {
+        const char* group;
+        std::vector<const char*> names;
+    };
+    const Section sections[] = {
+        {"Chat", {"run", "serve"}},
+        {"Models", {"models"}},
+        {"Coding tools", {"opencode", "claude-code", "claude-desktop", "hermes", "openclaw", "deepseek"}},
+        {"Account", {"account"}},
+        {"Wally", {"about", "update", "uninstall"}},
+    };
     for (CLI::App* sub : app.get_subcommands({})) {
-        if (!sub->get_name().empty()) sub->group("Commands");
+        if (!sub->get_name().empty()) sub->group("");
     }
-    // Diagnostic and advanced commands: callable, but kept out of the list.
-    for (const char* hidden : {"bench", "backends", "telemetry"}) {
-        try {
-            app.get_subcommand(hidden)->group("");
-        } catch (const CLI::OptionNotFound&) {
-            // Nothing to hide if it isn't there.
+    for (const Section& section : sections) {
+        for (const char* name : section.names) {
+            try {
+                app.get_subcommand(name)->group(section.group);
+            } catch (const CLI::OptionNotFound&) {
+                // Not registered in this build; nothing to place.
+            }
         }
     }
 }
@@ -311,23 +330,19 @@ int run(int argc, char** argv) {
     // Named "wally" outright rather than from argv[0], so the usage line reads
     // the same whether the binary was run through the install wrapper, by full
     // path, or as wally-cxx.
-    CLI::App app{"Run language models locally or in the cloud, and wire coding tools to them",
-                 "wally"};
-    // Help is intentionally plain: keep the tree/layout, drop all color.
-    static_cast<void>(no_color_requested);
-    app.formatter(std::make_shared<CliFormatter>(false));
+    CLI::App app{"Run models on this machine or on your RunAnywhere account", "wally"};
+    // Two colors and nothing else, on a terminal only: bold section headings,
+    // cyan for anything you can type. Piped or redirected output, --no-color
+    // and NO_COLOR all get the identical plain text.
+    app.formatter(std::make_shared<CliFormatter>(color_output_enabled(no_color_requested)));
     configure_app(app, options);
-    // `run` and `llm` only load models on this machine; a hosted model
-    // (glm-5.3-flash, ...) is reached through a coding tool, and this block is
-    // where a first-time reader learns that path exists.
-    app.footer(examples_footer({
-                   {"wally models pull qwen3-0.6b", "Download a model"},
-                   {"wally run qwen3-0.6b \"write a haiku\"", "Run it on this machine"},
-                   {"wally claude-code -m glm-5.3-flash", "Claude Code on a hosted model"},
-                   {"wally opencode --cloud -m glm-5.3-flash", "opencode on a hosted model"},
-                   {"wally models list --all", "Browse the catalog"},
-               }) +
-               "\n\nUse \"wally <command> --help\" for more information about a command.");
+    // `run` only loads models on this machine; a hosted model (glm-5.3-flash,
+    // ...) is reached through a coding tool. One line for each path, so a
+    // first-time reader sees both exist and can paste either.
+    app.footer("Get started:\n"
+               "  wally models pull qwen3-0.6b && wally run qwen3-0.6b\n"
+               "  wally account login && wally opencode --cloud -m glm-5.3-flash\n"
+               "\nRun \"wally <command> --help\" for details.");
 
     // A `--` before the wrapped tool's own arguments, added for the reader, so
     // `wally claude-code --dangerously-skip-permissions` forwards the flag

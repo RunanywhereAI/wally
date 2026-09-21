@@ -62,7 +62,7 @@ void heading(const cli_color::Palette& pal, const std::string& title) {
 
 void register_about(CLI::App& app, GlobalOptions& options) {
     CLI::App* cmd =
-        app.add_subcommand("about", "Show product, system, runtime, paths, and account details");
+        app.add_subcommand("about", "Versions, backends, paths and account");
     cmd->callback([&options]() {
         Bootstrapped env;
         if (bootstrap(options, &env) != RAC_SUCCESS) {

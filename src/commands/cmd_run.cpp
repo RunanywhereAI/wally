@@ -694,33 +694,51 @@ void add_generation_options(CLI::App* cmd, const std::shared_ptr<RunParams>& par
     cmd->add_option("--lora", params->lora, "LoRA adapter (.gguf) to attach");
     cmd->add_option("--lora-scale", params->lora_scale, "LoRA strength (default 1.0)");
     cmd->add_option("--engine", params->engine,
-                    "Engine to run on (neurt|coreml|ane, mlx, llamacpp, onnx, sherpa, qhexrt)");
+                    std::string("Engine to run on (") + engine_choices() + ")");
+    // The sampling knobs and the thinking switches get their own headings in
+    // --help, so the page reads as three short lists instead of one of twenty.
+    // Group names are plain strings CLI11 prints in first-seen order, so
+    // "Options" (the rows above) comes first, then these two.
+    const char* kSampling = "Sampling";
+    const char* kReasoning = "Reasoning";
     cmd->add_option("--temperature,--temp", params->temperature,
-                    "Sampling temperature (0 = engine default)");
-    cmd->add_option("--top-p", params->top_p, "Keep the smallest token set above this probability");
-    cmd->add_option("--top-k", params->top_k, "Sample from this many highest-probability tokens");
-    cmd->add_option("--min-p", params->min_p, "Drop tokens below this share of the top token");
+                    "Sampling temperature (0 = engine default)")
+        ->group(kSampling);
+    cmd->add_option("--top-p", params->top_p, "Keep the smallest token set above this probability")
+        ->group(kSampling);
+    cmd->add_option("--top-k", params->top_k, "Sample from this many highest-probability tokens")
+        ->group(kSampling);
+    cmd->add_option("--min-p", params->min_p, "Drop tokens below this share of the top token")
+        ->group(kSampling);
     cmd->add_option("--repetition-penalty", params->repetition_penalty,
-                    "Penalize tokens already in the context");
-    cmd->add_option("--seed", params->seed, "Fix the RNG for a repeatable answer");
+                    "Penalize tokens already in the context")
+        ->group(kSampling);
+    cmd->add_option("--seed", params->seed, "Fix the RNG for a repeatable answer")->group(kSampling);
     cmd->add_option("--frequency-penalty", params->frequency_penalty,
-                    "Penalize tokens by how often they appeared");
+                    "Penalize tokens by how often they appeared")
+        ->group(kSampling);
     cmd->add_option("--presence-penalty", params->presence_penalty,
-                    "Penalize tokens that appeared at all");
-    cmd->add_option("--stop", params->stop_sequences, "Stop at this text (repeat for several)");
+                    "Penalize tokens that appeared at all")
+        ->group(kSampling);
+    cmd->add_option("--stop", params->stop_sequences, "Stop at this text (repeat for several)")
+        ->group(kSampling);
     cmd->add_option("--max-output-tokens,--max-tokens", params->max_output_tokens,
                     "Cap on generated tokens (default 1024)")
         // Range, not PositiveNumber, for the message alone (mirrors
         // cmd_bench.cpp's --trials): 0 or negative used to reach the engine
         // as-is and read as "no cap" — full/whole-context output — instead of
         // the usage error a nonsensical budget should be.
-        ->check(CLI::Range(1, std::numeric_limits<int32_t>::max()));
+        ->check(CLI::Range(1, std::numeric_limits<int32_t>::max()))
+        ->group(kSampling);
     cmd->add_option("--reasoning", params->reasoning, "Model thinking phase (default on)")
-        ->check(CLI::IsMember({"on", "off"}));
+        ->check(CLI::IsMember({"on", "off"}))
+        ->group(kReasoning);
     cmd->add_flag("--show-thinking,!--hide-thinking", params->show_thinking,
-                  "Print thinking tokens on stderr (default on)");
+                  "Print thinking tokens on stderr (default on)")
+        ->group(kReasoning);
     cmd->add_flag_callback(
-        "--no-think", [params]() { params->reasoning = "off"; }, "Same as --reasoning off");
+           "--no-think", [params]() { params->reasoning = "off"; }, "Same as --reasoning off")
+        ->group(kReasoning);
 }
 
 }  // namespace

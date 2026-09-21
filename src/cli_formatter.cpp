@@ -105,10 +105,13 @@ std::string tidy(const std::string& text) {
 }
 
 // Left column padded to the description column, or the description dropped to
-// the next line when the left column is too wide to leave a gap.
-void stream_row(std::stringstream& out, const std::string& left, const std::string& desc,
-                std::size_t column_width, std::size_t right_width) {
-    out << left;
+// the next line when the left column is too wide to leave a gap. `left` is the
+// plain text and is what the padding is measured from; `left_shown` is what is
+// printed, and may carry color codes (setw would count those as visible
+// characters and under-pad the description column).
+void stream_row(std::stringstream& out, const std::string& left, const std::string& left_shown,
+                const std::string& desc, std::size_t column_width, std::size_t right_width) {
+    out << left_shown;
     if (desc.empty()) {
         out << '\n';
         return;
@@ -123,6 +126,20 @@ void stream_row(std::stringstream& out, const std::string& left, const std::stri
     CLI::detail::streamOutAsParagraph(out, desc, right_width, std::string(column_width, ' '),
                                       skip_first_line_prefix);
     out << '\n';
+}
+
+std::string colorize(const std::string& text, const char* code, bool enabled) {
+    if (!enabled || text.empty()) return text;
+    return std::string(code) + text + cli_color::kResetCode;
+}
+
+// A command that is listed as its children rather than as itself: a namespace
+// like `models` or `account`, where "models pull" is the thing you type.
+bool has_visible_children(const CLI::App* app) {
+    for (const CLI::App* child : app->get_subcommands({})) {
+        if (!child->get_name().empty() && !child->get_group().empty()) return true;
+    }
+    return false;
 }
 
 }  // namespace
@@ -142,10 +159,7 @@ std::string examples_footer(const std::vector<Example>& rows) {
     return out;
 }
 
-CliFormatter::CliFormatter(bool color_enabled) {
-    // Help is plain by decision; the flag is kept so the call site reads the
-    // same as the palette helpers above.
-    static_cast<void>(color_enabled);
+CliFormatter::CliFormatter(bool color_enabled) : color_enabled_(color_enabled) {
     label("POSITIONALS", "Arguments");
     label("SUBCOMMAND", "COMMAND");
     label("SUBCOMMANDS", "COMMANDS");
@@ -171,8 +185,15 @@ std::string CliFormatter::make_help(const CLI::App* app, std::string name,
     out << make_description(app);
     out << make_usage(app, name);
     out << make_positionals(app);
-    out << make_groups(app, mode);
-    out << make_subcommands(app, mode);
+    if (app->get_parent() == nullptr) {
+        // Root page: the commands are what someone came for; the global flags
+        // are the same on every page and go last.
+        out << make_subcommands(app, mode);
+        out << make_groups(app, mode);
+    } else {
+        out << make_groups(app, mode);
+        out << make_subcommands(app, mode);
+    }
     const std::string footer = app->get_footer();
     if (!footer.empty()) {
         out << '\n' << footer << '\n';
@@ -189,7 +210,7 @@ std::string CliFormatter::make_usage(const CLI::App* app, std::string name) cons
 std::string CliFormatter::make_group(std::string group, bool is_positional,
                                       std::vector<const CLI::Option*> opts) const {
     std::stringstream out;
-    out << "\n" << heading_for(group) << ":\n";
+    out << "\n" << colorize(heading_for(group), cli_color::kBoldCode, color_enabled_) << ":\n";
     for (const CLI::Option* opt : opts) {
         out << make_option(opt, is_positional);
     }
@@ -220,7 +241,7 @@ std::string CliFormatter::make_subcommands(const CLI::App* app, CLI::AppFormatMo
     }
 
     for (const std::string& group : subcmd_groups_seen) {
-        out << '\n' << heading_for(group) << ":\n";
+        out << '\n' << colorize(heading_for(group), cli_color::kBoldCode, color_enabled_) << ":\n";
         std::vector<const CLI::App*> subcommands_group = app->get_subcommands([&group](const CLI::App* sub_app) {
             return CLI::detail::to_lower(sub_app->get_group()) == CLI::detail::to_lower(group);
         });
@@ -231,14 +252,18 @@ std::string CliFormatter::make_subcommands(const CLI::App* app, CLI::AppFormatMo
                 out << '\n';
                 continue;
             }
-            out << make_subcommand_indented(new_com, "  ");
-            // One level of nesting: a command's own subcommands print as
-            // branches beneath it, marked with "> " so the nesting is obvious.
-            // A subcommand hidden with an empty group (models load/unload/...)
-            // is left out, same as at the top.
-            for (const CLI::App* child : new_com->get_subcommands({})) {
-                if (child->get_name().empty() || child->get_group().empty()) continue;
-                out << make_subcommand_indented(child, "    > ");
+            // A namespace is listed as its children with the full path
+            // ("models pull"), so what the reader sees is what they type; the
+            // parent row alone is not a runnable command. A child hidden with an
+            // empty group (models load/unload/...) is left out, same as at the
+            // top. A leaf prints as itself.
+            if (has_visible_children(new_com)) {
+                for (const CLI::App* child : new_com->get_subcommands({})) {
+                    if (child->get_name().empty() || child->get_group().empty()) continue;
+                    out << make_subcommand_indented(child, "  " + new_com->get_name() + " ");
+                }
+            } else {
+                out << make_subcommand_indented(new_com, "  ");
             }
         }
     }
@@ -253,8 +278,9 @@ std::string CliFormatter::make_subcommand_indented(const CLI::App* sub, const st
     std::stringstream out;
     // Primary name only (no ", alias" tail): the tree reads cleaner, and the
     // aliases still resolve on the command line.
-    stream_row(out, indent + sub->get_display_name(false), sub->get_description(), get_column_width(),
-               get_right_column_width());
+    const std::string left = indent + sub->get_display_name(false);
+    stream_row(out, left, colorize(left, cli_color::kBoldCyanCode, color_enabled_), sub->get_description(),
+               get_column_width(), get_right_column_width());
     return out.str();
 }
 
@@ -274,11 +300,12 @@ std::string CliFormatter::make_option_opts(const CLI::Option* opt) const {
 
 std::string CliFormatter::make_option(const CLI::Option* opt, bool is_positional) const {
     std::stringstream out;
-    std::string left;
+    std::string names;  // the typeable part, colored
+    std::string opts;   // value type and markers, plain
     if (is_positional) {
         // The usage line already says which arguments are required and which
         // are repeatable, so a positional row is just its name.
-        left = "  " + make_option_name(opt, true);
+        names = "  " + make_option_name(opt, true);
     } else {
         // "-m, --model TEXT". A long-only option sits under the long column so
         // every long name lines up: "      --json".
@@ -287,12 +314,13 @@ std::string CliFormatter::make_option(const CLI::Option* opt, bool is_positional
         for (const std::string& name : CLI::detail::split(make_option_name(opt, false), ',')) {
             (name.rfind("--", 0) == 0 ? long_names : short_names).push_back(strip_flag_default(name));
         }
-        left = short_names.empty() ? "      " : "  " + CLI::detail::join(short_names, ", ");
-        if (!short_names.empty() && !long_names.empty()) left += ", ";
-        left += CLI::detail::join(long_names, ", ");
-        left += make_option_opts(opt);
+        names = short_names.empty() ? "      " : "  " + CLI::detail::join(short_names, ", ");
+        if (!short_names.empty() && !long_names.empty()) names += ", ";
+        names += CLI::detail::join(long_names, ", ");
+        opts = make_option_opts(opt);
     }
-    stream_row(out, left, make_option_desc(opt), get_column_width(), get_right_column_width());
+    stream_row(out, names + opts, colorize(names, cli_color::kBoldCyanCode, color_enabled_) + opts,
+               make_option_desc(opt), get_column_width(), get_right_column_width());
     return out.str();
 }
 

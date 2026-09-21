@@ -1,8 +1,10 @@
 /**
  * @file cli_formatter.h
- * @brief Plain-text `--help` layout for wally: a `Usage:` line, sentence-case
- * section headings, one `-m, --model TEXT` column for options, a nested
- * command tree, and a verbatim `Examples:` footer. No color.
+ * @brief `--help` layout for wally: a `Usage:` line, sentence-case section
+ * headings, one `-m, --model TEXT` column for options, commands grouped by
+ * intent with namespaces shown as full paths (`models pull`), and a verbatim
+ * `Examples:` footer. On a terminal, headings are bold and anything typeable
+ * is cyan; anywhere else the text is plain and byte-identical.
  */
 
 #ifndef WALLY_CLI_FORMATTER_H
@@ -20,8 +22,8 @@ namespace wally {
 // redirected output (CI logs, `| cat`, a file) always gets plain text.
 bool color_output_enabled(bool no_color_flag);
 
-// The palette other output (`wally about`, the default-model notice) styles
-// itself with. `--help` itself is always plain.
+// The palette `--help` and other output (`wally about`, the default-model
+// notice) style themselves with, so every surface uses the same two colors.
 namespace cli_color {
 
 // Every field is "" when color is disabled, so a caller can always splice
@@ -80,6 +82,9 @@ class CliFormatter : public CLI::Formatter {
     // description column is the same for every row regardless of indent, which
     // is what keeps the two levels aligned.
     std::string make_subcommand_indented(const CLI::App* sub, const std::string& indent) const;
+
+    // Bold headings and cyan names when true; identical plain text when false.
+    bool color_enabled_;
 };
 
 }  // namespace wally
