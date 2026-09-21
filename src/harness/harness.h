@@ -78,6 +78,12 @@ void Release(const Endpoint& endpoint);
 /// else, which is the only thing a person without the tool needs to see.
 bool EnsureInstalled(const std::string& tool);
 
+#if defined(_WIN32)
+/// Quotes one argument so a Windows child re-parses it as a single token; the
+/// _spawn* family joins argv into a command line without quoting.
+std::string QuoteWindowsArg(const std::string& arg);
+#endif
+
 /// Prints the one shared "cloud session is no longer valid" error, in red, that
 /// every harness shows when a hosted `model` cannot be used because the session
 /// failed verification. One phrasing, one place, so it reads the same whichever

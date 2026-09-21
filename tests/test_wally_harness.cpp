@@ -841,6 +841,33 @@ TestResult test_local_context_size_respects_floor_and_model_window() {
 
 }  // namespace
 
+#if defined(_WIN32)
+TestResult test_windows_args_survive_the_spawn_command_line() {
+    TestResult result;
+    result.test_name = "windows_args_survive_the_spawn_command_line";
+
+    const struct {
+        const char* in;
+        const char* want;
+    } cases[] = {
+        {"plain", "plain"},
+        {"", "\"\""},
+        {"fix the tests", "\"fix the tests\""},
+        {"say \"hi\"", "\"say \\\"hi\\\"\""},
+        {"C:\dir with space\\", "\"C:\dir with space\\\\\""},
+    };
+    for (const auto& c : cases) {
+        const std::string got = wally::harness::QuoteWindowsArg(c.in);
+        if (got != c.want) {
+            result.details = std::string("QuoteWindowsArg(") + c.in + ") = " + got + ", want " + c.want;
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+#endif
+
 int main(int argc, char** argv) {
     TestSuite suite("wally_harness");
     suite.add("local_context_size_respects_floor_and_model_window",
@@ -881,5 +908,9 @@ int main(int argc, char** argv) {
     suite.add("deepseek_prompt_picks_headless", test_deepseek_prompt_picks_headless);
     suite.add("hermes_argv_pins_provider_and_model_ahead_of_the_rest",
               test_hermes_argv_pins_provider_and_model_ahead_of_the_rest);
+#if defined(_WIN32)
+    suite.add("windows_args_survive_the_spawn_command_line",
+              test_windows_args_survive_the_spawn_command_line);
+#endif
     return suite.run(argc, argv);
 }

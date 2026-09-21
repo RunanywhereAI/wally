@@ -40,6 +40,42 @@ using wally_socklen_t = socklen_t;
 #include "harness/local_models.h"
 
 namespace wally::harness {
+
+#if defined(_WIN32)
+// Quote one argument so the child re-parses it as a single token. The _spawn*
+// family joins argv into a command line WITHOUT quoting, so an argument that
+// contains a space would otherwise arrive split in two. Rules per the
+// documented MSVCRT parser: double the run of backslashes that precedes a quote
+// (or the closing quote), and backslash-escape embedded quotes. The POSIX path
+// needs none of this -- execvp hands argv to the child verbatim.
+std::string QuoteWindowsArg(const std::string& arg) {
+    if (!arg.empty() && arg.find_first_of(" \t\n\v\"") == std::string::npos) {
+        return arg;
+    }
+    std::string quoted = "\"";
+    for (std::size_t i = 0;; ++i) {
+        std::size_t backslashes = 0;
+        while (i < arg.size() && arg[i] == '\\') {
+            ++i;
+            ++backslashes;
+        }
+        if (i == arg.size()) {
+            quoted.append(backslashes * 2, '\\');
+            break;
+        }
+        if (arg[i] == '"') {
+            quoted.append(backslashes * 2 + 1, '\\');
+            quoted.push_back('"');
+        } else {
+            quoted.append(backslashes, '\\');
+            quoted.push_back(arg[i]);
+        }
+    }
+    quoted.push_back('"');
+    return quoted;
+}
+#endif
+
 namespace {
 
 
@@ -323,6 +359,18 @@ int Spawn(const std::string& tool, const std::vector<std::string>& args) {
     argv.push_back(nullptr);
 
 #if defined(_WIN32)
+    // _spawnvp joins argv with bare spaces, so quote each piece or a prompt such
+    // as "fix the tests" reaches the tool as three separate arguments.
+    std::vector<std::string> quoted;
+    quoted.reserve(owned.size());
+    for (const std::string& piece : owned) {
+        quoted.push_back(QuoteWindowsArg(piece));
+    }
+    argv.clear();
+    for (std::string& piece : quoted) {
+        argv.push_back(piece.data());
+    }
+    argv.push_back(nullptr);
     const intptr_t rc = _spawnvp(_P_WAIT, tool.c_str(), argv.data());
     if (rc < 0) {
         out::error_line(tool + " is not on PATH");
