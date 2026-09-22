@@ -1,6 +1,7 @@
 #include "account/credentials.h"
 
 #include "account/baked_endpoints.h"
+#include "config/cli_paths.h"
 
 #include <algorithm>
 #include <cctype>
@@ -669,7 +670,9 @@ std::string ProfileDirectory() {
         return override_dir;
     }
 #if defined(_WIN32)
-    const std::string home = HomeDirectory();
+    // LOCALAPPDATA is backslash-separated and the suffix is not; fold it the way
+    // paths::normalize_dir does so `wally account login` prints one style.
+    const std::string home = paths::normalize_dir(HomeDirectory());
     return home.empty() ? std::string() : home + "/RunAnywhere/Wally";
 #else
     const std::string xdg = Env("XDG_CONFIG_HOME");
