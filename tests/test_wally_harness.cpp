@@ -841,6 +841,78 @@ TestResult test_local_context_size_respects_floor_and_model_window() {
 
 }  // namespace
 
+TestResult test_batch_command_line_quotes_and_rejects() {
+    TestResult result;
+    result.test_name = "batch_command_line_quotes_and_rejects";
+    using wally::harness::BuildBatchCommandLine;
+
+    std::string command_line;
+    std::string error;
+    // A .cmd target with a spaced prompt: the script and the arg each stay one
+    // quoted token, wrapped in the outer pair cmd's /s strips.
+    if (!BuildBatchCommandLine("C:\\tools\\claude.cmd", {"fix the tests"}, &command_line, &error)) {
+        result.details = "expected a safe build, got error: " + error;
+        return result;
+    }
+    const std::string want =
+        "cmd.exe /d /s /c \"\"C:\\tools\\claude.cmd\" \"fix the tests\"\"";
+    if (command_line != want) {
+        result.details = "got [" + command_line + "] want [" + want + "]";
+        return result;
+    }
+    // A trailing backslash in the path is doubled so it cannot escape the
+    // closing quote when the child re-parses the line.
+    if (!BuildBatchCommandLine("C:\\dir\\", {}, &command_line, &error) ||
+        command_line.find("\"C:\\dir\\\\\"") == std::string::npos) {
+        result.details = "trailing backslash in a path must be doubled: " + command_line;
+        return result;
+    }
+    // Metacharacters are literal inside the quotes, so an ampersand or pipe is
+    // not a second command — quoted, not rejected.
+    if (!BuildBatchCommandLine("t.cmd", {"a&b|c"}, &command_line, &error) ||
+        command_line.find("\"a&b|c\"") == std::string::npos) {
+        result.details = "metacharacter arg should be quoted, not rejected: " + command_line;
+        return result;
+    }
+    // Characters cmd cannot be protected from are refused, not run.
+    for (const std::string& dangerous : {std::string("50%done"), std::string("say \"hi\""),
+                                         std::string("two\nlines")}) {
+        if (BuildBatchCommandLine("t.cmd", {dangerous}, &command_line, &error)) {
+            result.details = "expected refusal for arg: " + dangerous;
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+
+#if defined(_WIN32)
+TestResult test_windows_args_survive_the_spawn_command_line() {
+    TestResult result;
+    result.test_name = "windows_args_survive_the_spawn_command_line";
+
+    const struct {
+        const char* in;
+        const char* want;
+    } cases[] = {
+        {"plain", "plain"},
+        {"", "\"\""},
+        {"fix the tests", "\"fix the tests\""},
+        {"say \"hi\"", "\"say \\\"hi\\\"\""},
+        {"C:\dir with space\\", "\"C:\dir with space\\\\\""},
+    };
+    for (const auto& c : cases) {
+        const std::string got = wally::harness::QuoteWindowsArg(c.in);
+        if (got != c.want) {
+            result.details = std::string("QuoteWindowsArg(") + c.in + ") = " + got + ", want " + c.want;
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+#endif
+
 int main(int argc, char** argv) {
     TestSuite suite("wally_harness");
     suite.add("local_context_size_respects_floor_and_model_window",
@@ -881,5 +953,11 @@ int main(int argc, char** argv) {
     suite.add("deepseek_prompt_picks_headless", test_deepseek_prompt_picks_headless);
     suite.add("hermes_argv_pins_provider_and_model_ahead_of_the_rest",
               test_hermes_argv_pins_provider_and_model_ahead_of_the_rest);
+    suite.add("batch_command_line_quotes_and_rejects",
+              test_batch_command_line_quotes_and_rejects);
+#if defined(_WIN32)
+    suite.add("windows_args_survive_the_spawn_command_line",
+              test_windows_args_survive_the_spawn_command_line);
+#endif
     return suite.run(argc, argv);
 }

@@ -13,6 +13,12 @@
 #if defined(_WIN32)
 #include <process.h>
 #include <winsock2.h>
+// windows.h after winsock2.h, never before: the reverse order pulls in the
+// Winsock 1 declarations and they clash. Needed for CreateProcessW, which is
+// how a .cmd/.bat target is launched (the _spawn* family cannot).
+#include <windows.h>
+#include <algorithm>
+#include <cctype>
 // Winsock spells these differently: a socket is an unsigned SOCKET rather than
 // a file descriptor, and getsockname takes an int length rather than socklen_t.
 using wally_socklen_t = int;
@@ -40,6 +46,94 @@ using wally_socklen_t = socklen_t;
 #include "harness/local_models.h"
 
 namespace wally::harness {
+
+#if defined(_WIN32)
+// Quote one argument so the child re-parses it as a single token. The _spawn*
+// family joins argv into a command line WITHOUT quoting, so an argument that
+// contains a space would otherwise arrive split in two. Rules per the
+// documented MSVCRT parser: double the run of backslashes that precedes a quote
+// (or the closing quote), and backslash-escape embedded quotes. The POSIX path
+// needs none of this -- execvp hands argv to the child verbatim.
+std::string QuoteWindowsArg(const std::string& arg) {
+    if (!arg.empty() && arg.find_first_of(" \t\n\v\"") == std::string::npos) {
+        return arg;
+    }
+    std::string quoted = "\"";
+    for (std::size_t i = 0;; ++i) {
+        std::size_t backslashes = 0;
+        while (i < arg.size() && arg[i] == '\\') {
+            ++i;
+            ++backslashes;
+        }
+        if (i == arg.size()) {
+            quoted.append(backslashes * 2, '\\');
+            break;
+        }
+        if (arg[i] == '"') {
+            quoted.append(backslashes * 2 + 1, '\\');
+            quoted.push_back('"');
+        } else {
+            quoted.append(backslashes, '\\');
+            quoted.push_back(arg[i]);
+        }
+    }
+    quoted.push_back('"');
+    return quoted;
+}
+#endif
+
+// Builds the command line that runs a Windows batch target through cmd.exe. See
+// the header for the contract. Deliberately free of Windows headers so the
+// escaping — the security-sensitive part — is unit-tested on every platform.
+bool BuildBatchCommandLine(const std::string& script, const std::vector<std::string>& args,
+                           std::string* command_line, std::string* error) {
+    // cmd.exe reprocesses metacharacters that CreateProcess passes through, so a
+    // batch target reopens the injection hole that quoting for a normal child
+    // closes (CVE-2024-24576). A double quote, a percent (environment
+    // expansion), and CR/LF cannot be neutralised inside a cmd-quoted token, so
+    // a token carrying one is refused rather than run.
+    const auto offending = [](const std::string& token) -> const char* {
+        for (const char c : token) {
+            if (c == '"') return "a double quote";
+            if (c == '%') return "a percent sign";
+            if (c == '\r') return "a carriage return";
+            if (c == '\n') return "a newline";
+        }
+        return nullptr;
+    };
+    // Wrap a token (already known to hold no double quote) so both cmd.exe and
+    // the target's C runtime read it as one literal: the quotes make cmd treat
+    // & | < > ( ) ^ as text, and doubling a trailing backslash run stops the
+    // closing quote being escaped when the child re-parses the line.
+    const auto quote = [](const std::string& token) {
+        std::size_t trailing = 0;
+        while (trailing < token.size() && token[token.size() - 1 - trailing] == '\\') {
+            ++trailing;
+        }
+        return "\"" + token + std::string(trailing, '\\') + "\"";
+    };
+
+    if (const char* bad = offending(script)) {
+        if (error != nullptr) *error = std::string("cannot launch this tool: its path holds ") + bad;
+        return false;
+    }
+    std::string inner = quote(script);
+    for (const std::string& arg : args) {
+        if (const char* bad = offending(arg)) {
+            if (error != nullptr) {
+                *error = std::string("cannot pass ") + bad + " to a Windows .cmd/.bat tool";
+            }
+            return false;
+        }
+        inner += ' ';
+        inner += quote(arg);
+    }
+    // /d skips any AutoRun, /s makes cmd strip exactly the one outer quote pair
+    // added here and run the remainder verbatim, /c runs and exits.
+    if (command_line != nullptr) *command_line = "cmd.exe /d /s /c \"" + inner + "\"";
+    return true;
+}
+
 namespace {
 
 
@@ -304,6 +398,75 @@ void PrependToPath(const std::filesystem::path& dir) {
 #endif
 }
 
+#if defined(_WIN32)
+/// The resolved file `tool` runs as, searched along PATH in the same
+/// preference order `_spawnvp` uses (native `.exe` before an npm `.cmd`/`.bat`
+/// shim). Empty when nothing matches. Used to learn a target's extension before
+/// launching it, since a batch file needs the command processor.
+std::filesystem::path ResolveOnPath(const std::string& tool) {
+    const char* path = std::getenv("PATH");
+    if (path == nullptr) {
+        return {};
+    }
+    const std::string haystack(path);
+    std::size_t at = 0;
+    while (at <= haystack.size()) {
+        const std::size_t end = haystack.find(kPathSeparator, at);
+        const std::string dir =
+            haystack.substr(at, end == std::string::npos ? std::string::npos : end - at);
+        if (!dir.empty()) {
+            for (const std::string& name : ExecutableNames(tool)) {
+                std::error_code ec;
+                const std::filesystem::path candidate = std::filesystem::path(dir) / name;
+                if (std::filesystem::is_regular_file(candidate, ec) ||
+                    std::filesystem::is_symlink(candidate, ec)) {
+                    return candidate;
+                }
+            }
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        at = end + 1;
+    }
+    return {};
+}
+
+std::wstring WidenUtf8(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+    const int size =
+        MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    std::wstring wide(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), size);
+    return wide;
+}
+
+/// Runs a fully-formed command line through CreateProcessW and waits for it,
+/// returning the child's exit code. Used for the batch path, where _spawnvp's
+/// own argv joining would fight the quoting the command processor needs.
+int SpawnCommandLine(const std::string& tool, const std::string& command_line) {
+    std::wstring wide = WidenUtf8(command_line);
+    std::vector<wchar_t> buffer(wide.begin(), wide.end());
+    buffer.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (CreateProcessW(nullptr, buffer.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup,
+                       &process) == 0) {
+        out::error_line(tool + " could not be launched");
+        return 127;
+    }
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(process.hProcess, &code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return static_cast<int>(code);
+}
+#endif
+
 int Spawn(const std::string& tool, const std::vector<std::string>& args) {
     // Checked before the fork, not after: a failed exec happens in the child,
     // where the only thing it can report back is the exit code a shell uses
@@ -323,6 +486,36 @@ int Spawn(const std::string& tool, const std::vector<std::string>& args) {
     argv.push_back(nullptr);
 
 #if defined(_WIN32)
+    // A .cmd/.bat target — an npm-installed CLI is a `tool.cmd` shim — cannot be
+    // launched through CreateProcess, which is what _spawnvp uses: it resolves
+    // the script and then fails to start it. Route those through the command
+    // processor instead; a native `.exe` keeps the direct spawn.
+    const std::filesystem::path resolved = ResolveOnPath(tool);
+    std::string extension = resolved.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension == ".cmd" || extension == ".bat") {
+        std::string command_line;
+        std::string error;
+        if (!BuildBatchCommandLine(resolved.string(), args, &command_line, &error)) {
+            out::error_line(tool + ": " + error);
+            return 1;
+        }
+        return SpawnCommandLine(tool, command_line);
+    }
+
+    // _spawnvp joins argv with bare spaces, so quote each piece or a prompt such
+    // as "fix the tests" reaches the tool as three separate arguments.
+    std::vector<std::string> quoted;
+    quoted.reserve(owned.size());
+    for (const std::string& piece : owned) {
+        quoted.push_back(QuoteWindowsArg(piece));
+    }
+    argv.clear();
+    for (std::string& piece : quoted) {
+        argv.push_back(piece.data());
+    }
+    argv.push_back(nullptr);
     const intptr_t rc = _spawnvp(_P_WAIT, tool.c_str(), argv.data());
     if (rc < 0) {
         out::error_line(tool + " is not on PATH");

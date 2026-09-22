@@ -89,41 +89,6 @@ void MissingOpenCode() {
     out::status_line("install it with `npm i -g opencode-ai`, then run this again");
 }
 
-#if defined(_WIN32)
-// Quote one argument so the child re-parses it as a single token. The _spawn*
-// family joins argv into a command line WITHOUT quoting, so an argument that
-// contains a space would otherwise arrive split in two. Rules per the
-// documented MSVCRT parser: double the run of backslashes that precedes a quote
-// (or the closing quote), and backslash-escape embedded quotes. The POSIX path
-// needs none of this -- execvp hands argv to the child verbatim.
-std::string QuoteWindowsArg(const std::string& arg) {
-    if (!arg.empty() && arg.find_first_of(" \t\n\v\"") == std::string::npos) {
-        return arg;
-    }
-    std::string quoted = "\"";
-    for (std::size_t i = 0;; ++i) {
-        std::size_t backslashes = 0;
-        while (i < arg.size() && arg[i] == '\\') {
-            ++i;
-            ++backslashes;
-        }
-        if (i == arg.size()) {
-            quoted.append(backslashes * 2, '\\');
-            break;
-        }
-        if (arg[i] == '"') {
-            quoted.append(backslashes * 2 + 1, '\\');
-            quoted.push_back('"');
-        } else {
-            quoted.append(backslashes, '\\');
-            quoted.push_back(arg[i]);
-        }
-    }
-    quoted.push_back('"');
-    return quoted;
-}
-#endif
-
 int Spawn(const std::string& executable, const std::vector<std::string>& arguments) {
 #if defined(_WIN32)
     std::vector<std::string> owned;

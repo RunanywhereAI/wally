@@ -289,6 +289,9 @@ list_json_file="${workdir}/models.json"
 if "${WALLY}" --json models list >"${list_json_file}" 2>/dev/null; then
   if [[ -s "${list_json_file}" && -n "${python_bin}" ]]; then
     while IFS=$'\t' read -r mod ref; do
+      # Windows Python writes text-mode stdout as CRLF; the \r would otherwise
+      # ride along into the model id and make wally report it as unknown.
+      ref="${ref%$'\r'}"
       [[ -n "${mod}" && -n "${ref}" ]] || continue
       set_mod "${mod}" "${ref}"
     done < <("${python_bin}" - "${list_json_file}" <<'PY'
