@@ -17,13 +17,10 @@ permissions:
 env:
   WALLY_VERSION: ${{ github.event.inputs.version || github.ref_name }}
 
-# Every platform builds two bottles from one kit: `prod` (empty bake -> the
-# production console defaults in credentials.cpp) and `dev` (dev console
-# endpoints baked from the WALLY_DEV_* repo variables, so a dev build targets
-# the dev backend with no env vars). The bake reaches the configure step as
-# environment only — never on the command line, never in committed source. The
-# configure→build→package sequence lives in .github/actions/build-wally; e2e
-# runs on the binary it produced, so the bottle is built exactly once.
+# Every platform builds one bottle from one kit: `prod` (empty bake -> the
+# production console defaults in credentials.cpp). The configure→build→package
+# sequence lives in .github/actions/build-wally; e2e runs on the binary it
+# produced, so the bottle is built exactly once.
 jobs:
   macos:
     # SDK Package.swift is swift-tools-version 6.2 (Xcode 26).
@@ -32,11 +29,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [prod, dev]
+        variant: [prod]
     env:
       WALLY_SDK_SWIFT_PATH: ${{ github.workspace }}/.deps/runanywhere-sdks
-      WALLY_BAKED_CONSOLE_API_URL: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_API_URL || '' }}
-      WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_WEB_ORIGIN || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,10 +74,9 @@ jobs:
       - name: Verify archive
         run: |
           VERSION="${WALLY_VERSION#v}"
-          suffix=""; [ "${{ matrix.variant }}" = dev ] && suffix="-dev"
           python3 scripts/release/verify-release-assets.py \
-            "dist/wally-${VERSION}-macos-arm64${suffix}.tar.gz" \
-            "dist/wally-${VERSION}-macos-arm64${suffix}.tar.gz.sha256"
+            "dist/wally-${VERSION}-macos-arm64.tar.gz" \
+            "dist/wally-${VERSION}-macos-arm64.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: wally-macos-arm64-${{ matrix.variant }}
@@ -94,10 +88,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [prod, dev]
-    env:
-      WALLY_BAKED_CONSOLE_API_URL: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_API_URL || '' }}
-      WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_WEB_ORIGIN || '' }}
+        variant: [prod]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -139,16 +130,14 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${env:WALLY_VERSION}".TrimStart("v")
-          $suffix = if ("${{ matrix.variant }}" -eq "dev") { "-dev" } else { "" }
-          scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-$ver-windows-arm64$suffix.zip"
+          scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-$ver-windows-arm64.zip"
       - name: Verify archive
         shell: bash
         run: |
           ver="${WALLY_VERSION#v}"
-          suffix=""; [ "${{ matrix.variant }}" = dev ] && suffix="-dev"
           python scripts/release/verify-release-assets.py \
-            "dist/wally-$ver-windows-arm64$suffix.zip" \
-            "dist/wally-$ver-windows-arm64$suffix.zip.sha256"
+            "dist/wally-$ver-windows-arm64.zip" \
+            "dist/wally-$ver-windows-arm64.zip.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: wally-windows-arm64-${{ matrix.variant }}
@@ -163,10 +152,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [prod, dev]
-    env:
-      WALLY_BAKED_CONSOLE_API_URL: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_API_URL || '' }}
-      WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_WEB_ORIGIN || '' }}
+        variant: [prod]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -206,16 +192,14 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${env:WALLY_VERSION}".TrimStart("v")
-          $suffix = if ("${{ matrix.variant }}" -eq "dev") { "-dev" } else { "" }
-          scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-$ver-windows-x86_64$suffix.zip"
+          scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-$ver-windows-x86_64.zip"
       - name: Verify archive
         shell: bash
         run: |
           ver="${WALLY_VERSION#v}"
-          suffix=""; [ "${{ matrix.variant }}" = dev ] && suffix="-dev"
           python scripts/release/verify-release-assets.py \
-            "dist/wally-$ver-windows-x86_64$suffix.zip" \
-            "dist/wally-$ver-windows-x86_64$suffix.zip.sha256"
+            "dist/wally-$ver-windows-x86_64.zip" \
+            "dist/wally-$ver-windows-x86_64.zip.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: wally-windows-x64-${{ matrix.variant }}
@@ -230,10 +214,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [prod, dev]
-    env:
-      WALLY_BAKED_CONSOLE_API_URL: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_API_URL || '' }}
-      WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ matrix.variant == 'dev' && vars.WALLY_DEV_CONSOLE_WEB_ORIGIN || '' }}
+        variant: [prod]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -271,10 +252,9 @@ jobs:
       - name: Verify archive
         run: |
           VERSION="${WALLY_VERSION#v}"
-          suffix=""; [ "${{ matrix.variant }}" = dev ] && suffix="-dev"
           python3 scripts/release/verify-release-assets.py \
-            "dist/wally-${VERSION}-linux-x86_64${suffix}.tar.gz" \
-            "dist/wally-${VERSION}-linux-x86_64${suffix}.tar.gz.sha256"
+            "dist/wally-${VERSION}-linux-x86_64.tar.gz" \
+            "dist/wally-${VERSION}-linux-x86_64.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: wally-linux-x86_64-${{ matrix.variant }}
@@ -295,26 +275,24 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${WALLY_VERSION#v}"
-          # Both bottles of every platform: prod (no suffix) and dev (-dev).
-          for suffix in "" "-dev"; do
-            python3 scripts/release/verify-release-assets.py \
-              "artifacts/wally-${VERSION}-macos-arm64${suffix}.tar.gz" \
-              "artifacts/wally-${VERSION}-macos-arm64${suffix}.tar.gz.sha256"
-            python3 scripts/release/verify-release-assets.py \
-              "artifacts/wally-${VERSION}-windows-x86_64${suffix}.zip" \
-              "artifacts/wally-${VERSION}-windows-x86_64${suffix}.zip.sha256"
-            python3 scripts/release/verify-release-assets.py \
-              "artifacts/wally-${VERSION}-windows-arm64${suffix}.zip" \
-              "artifacts/wally-${VERSION}-windows-arm64${suffix}.zip.sha256"
-            python3 scripts/release/verify-release-assets.py \
-              "artifacts/wally-${VERSION}-linux-x86_64${suffix}.tar.gz" \
-              "artifacts/wally-${VERSION}-linux-x86_64${suffix}.tar.gz.sha256"
-          done
+          # One bottle per platform.
+          python3 scripts/release/verify-release-assets.py \
+            "artifacts/wally-${VERSION}-macos-arm64.tar.gz" \
+            "artifacts/wally-${VERSION}-macos-arm64.tar.gz.sha256"
+          python3 scripts/release/verify-release-assets.py \
+            "artifacts/wally-${VERSION}-windows-x86_64.zip" \
+            "artifacts/wally-${VERSION}-windows-x86_64.zip.sha256"
+          python3 scripts/release/verify-release-assets.py \
+            "artifacts/wally-${VERSION}-windows-arm64.zip" \
+            "artifacts/wally-${VERSION}-windows-arm64.zip.sha256"
+          python3 scripts/release/verify-release-assets.py \
+            "artifacts/wally-${VERSION}-linux-x86_64.tar.gz" \
+            "artifacts/wally-${VERSION}-linux-x86_64.tar.gz.sha256"
       - name: Generate Homebrew formula update
         run: |
           set -euo pipefail
           VERSION="${WALLY_VERSION#v}"
-          # Homebrew ships the production bottle; the dev bottle is not tapped.
+          # Homebrew ships the production bottle.
           sidecar="artifacts/wally-${VERSION}-macos-arm64.tar.gz.sha256"
           digest=$(awk 'NF == 2 { print $1 }' "$sidecar")
           [[ "$digest" =~ ^[0-9a-f]{64}$ ]]

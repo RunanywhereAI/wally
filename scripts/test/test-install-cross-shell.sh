@@ -127,7 +127,7 @@ run_case() {
 }
 
 for case_name in happy-path unsupported-platform bad-checksum failed-release-lookup \
-                 update-already-latest update-available; do
+                 update-already-latest update-available nightly-rejected; do
     extra=""
     case "$case_name" in
         happy-path)             stub="$GOOD";   os="Darwin"; arch="arm64"  ;;
@@ -138,6 +138,8 @@ for case_name in happy-path unsupported-platform bad-checksum failed-release-loo
         update-already-latest)  stub="$GOOD";   os="Darwin"; arch="arm64"; extra="--version=1.2.3" ;;
         # `wally update` from an older build: proceeds to the full install.
         update-available)       stub="$GOOD";   os="Darwin"; arch="arm64"; extra="--version=1.0.0" ;;
+        # nightly/--nightly must fail clearly, not silently fall back to prod.
+        nightly-rejected)       stub="$GOOD";   os="Darwin"; arch="arm64"; extra="nightly" ;;
     esac
     bash_out="$(run_case bash "$stub" "$os" "$arch" "$extra")"
     dash_out="$(run_case dash "$stub" "$os" "$arch" "$extra")"
@@ -147,4 +149,21 @@ for case_name in happy-path unsupported-platform bad-checksum failed-release-loo
 done
 
 [ "$fails" -eq 0 ] || { printf '%d comparison(s) failed\n' "$fails" >&2; exit 1; }
+
+# Extra structural check: nightly-rejected must exit non-zero and mention "error"
+nightly_out="$(run_case bash "$GOOD" Darwin arm64 nightly)"
+nightly_exit="$(printf '%s\n' "$nightly_out" | head -1)"
+nightly_body="$(printf '%s\n' "$nightly_out" | tail -n +2)"
+if [ "$nightly_exit" = "1" ]; then
+    printf 'ok   nightly-rejected: exits 1\n'
+else
+    printf 'FAIL nightly-rejected: expected exit 1, got %s\n' "$nightly_exit"
+    fails=$((fails + 1))
+fi
+case "$nightly_body" in
+    *error:*) printf 'ok   nightly-rejected: error message printed\n' ;;
+    *) printf 'FAIL nightly-rejected: no "error:" in output: %s\n' "$nightly_body"; fails=$((fails + 1)) ;;
+esac
+
+[ "$fails" -eq 0 ] || { printf '%d check(s) failed\n' "$fails" >&2; exit 1; }
 printf 'all cross-shell cases byte-identical\n'

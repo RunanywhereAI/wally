@@ -11,12 +11,7 @@ set -eu
 # that finds them, so a plain extract-and-symlink keeps every engine working.
 #
 # Usage:
-#   curl -fsSL <install.sh> | sh                 # production build
-#   curl -fsSL <install.sh> | sh -s -- nightly   # nightly (dev-endpoint) build
-#
-# `nightly` (or --nightly) installs the -dev bottle, which is baked to talk to
-# the development console and APIs. Same binary otherwise; it only changes which
-# backend it points at, so it does not disturb the production install path.
+#   curl -fsSL <install.sh> | sh
 REPO="RunanywhereAI/wally"
 LIB_DIR="${HOME}/.local/lib/wally"
 BIN_DIR="${HOME}/.local/bin"
@@ -58,13 +53,12 @@ skill_target_dirs() {
 }
 
 # --- arguments --------------------------------------------------------------
-NIGHTLY=0
 # The version the caller already has, passed by `wally update` so the script can
 # tell it apart from a fresh install and skip the download when nothing is newer.
 CURRENT_VERSION=""
 for arg in "$@"; do
     case "$arg" in
-        nightly|--nightly) NIGHTLY=1 ;;
+        nightly|--nightly) fail "nightly/dev installs are no longer published; this installer only supports production releases" ;;
         --version=*) CURRENT_VERSION="${arg#--version=}" ;;
         # Debug-only: print the resolved skill targets and exit before any
         # network work. Exercised by scripts/test/test-install-skill-dirs.sh.
@@ -72,11 +66,7 @@ for arg in "$@"; do
     esac
 done
 
-if [ "$NIGHTLY" = 1 ]; then
-    SUFFIX="-dev"; CHANNEL="nightly (development endpoints)"
-else
-    SUFFIX="";     CHANNEL="production"
-fi
+CHANNEL="production"
 
 banner
 printf '   %sInstalling the %s%s%s build%s\n\n' "$DIM" "$R$B" "$CHANNEL" "$R$DIM" "$R"
@@ -116,7 +106,7 @@ case "${os}/${arch}" in
 esac
 ok "${PLATFORM}"
 
-ASSET="wally-${VERSION}-${PLATFORM}${SUFFIX}.tar.gz"
+ASSET="wally-${VERSION}-${PLATFORM}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
 
 tmp=$(mktemp -d)

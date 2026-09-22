@@ -85,6 +85,23 @@ void Release(const Endpoint& endpoint);
 /// else, which is the only thing a person without the tool needs to see.
 bool EnsureInstalled(const std::string& tool);
 
+#if defined(_WIN32)
+/// Quotes one argument so a Windows child re-parses it as a single token; the
+/// _spawn* family joins argv into a command line without quoting.
+std::string QuoteWindowsArg(const std::string& arg);
+#endif
+
+/// Builds the command line that runs a Windows batch (`.cmd`/`.bat`) `script`
+/// through cmd.exe, forwarding `args`. Windows cannot launch a batch file
+/// through CreateProcess directly, and cmd.exe re-enables the command injection
+/// that quoting for a normal child closes, so a token holding a character that
+/// cannot be made safe for the command processor — a double quote, a percent,
+/// or a CR/LF — is refused through `error` rather than run (CVE-2024-24576). On
+/// success `command_line` holds `cmd.exe /d /s /c "…"`. Kept free of Windows
+/// headers so the escaping can be tested on any platform.
+bool BuildBatchCommandLine(const std::string& script, const std::vector<std::string>& args,
+                           std::string* command_line, std::string* error);
+
 /// Prints the one shared "cloud session is no longer valid" error, in red, that
 /// every harness shows when a hosted `model` cannot be used because the session
 /// failed verification. One phrasing, one place, so it reads the same whichever
