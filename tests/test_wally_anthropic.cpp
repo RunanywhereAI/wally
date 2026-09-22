@@ -628,8 +628,10 @@ TestResult test_a_local_endpoint_is_never_cancelled() {
 // #81. The wrapper exits right after the editor abandoned a stream (app quit):
 // Stop() must let the cancel go out before returning -- the fake sits on its
 // answer for 500 ms, so an un-joined Stop() would return without it -- and
-// must still return within the bound (3 s per queued cancel), not after
-// waiting for the engine's first token.
+// must still return within the bounded cancel window, not after waiting for
+// the engine's first token. Windows' socket shutdown reaches the 3 s cancel
+// bound plus the 500 ms reply delay and one scheduler tick, so keep 1 s of
+// timing slack without weakening the behavioral assertions.
 TestResult test_stop_sends_the_last_cancel_before_returning() {
     TestResult result;
     result.test_name = "stop_sends_the_last_cancel_before_returning";
@@ -651,7 +653,7 @@ TestResult test_stop_sends_the_last_cancel_before_returning() {
         result.details = "Stop() returned without sending the abandoned request's cancel";
         return result;
     }
-    if (took > std::chrono::milliseconds(3500)) {
+    if (took > std::chrono::milliseconds(4500)) {
         result.details = "Stop() took " + std::to_string(took.count()) + " ms";
         return result;
     }
