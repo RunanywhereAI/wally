@@ -374,6 +374,18 @@ TestResult test_catalog_lookup() {
     return result;
   }
 
+#if defined(WALLY_HAS_LLAMACPP)
+  const wally::catalog::CatalogEntry *qwen_harness =
+      wally::catalog::find("qwen3-4b-instruct");
+  if (!qwen_harness || !qwen_harness->harness_compatible ||
+      qwen_harness->context_length != 262144 ||
+      wally::catalog::find("qwen3-1.7b") != nullptr) {
+    result.details =
+        "only the certified Qwen3 4B GGUF row should remain harness-compatible";
+    return result;
+  }
+#endif
+
   // Multi-file entries (VLM pairs, embeddings) must carry ≥2 required files.
   // smolvlm2 is a VLM, out of scope for the LLM-only cut (src/app.cpp,
   // src/catalog/catalog.cpp) -- commented out, not deleted, so it comes back
@@ -395,6 +407,16 @@ TestResult test_catalog_lookup() {
       mlx_llm->files == nullptr || mlx_llm->file_count != 9 ||
       !mlx_llm->supports_thinking) {
     result.details = "mlx-qwen3 should be a complete MLX language bundle";
+    return result;
+  }
+  const wally::catalog::CatalogEntry *mlx_qwen_harness =
+      wally::catalog::find("mlx-qwen3-4b-instruct");
+  if (!mlx_qwen_harness || !mlx_qwen_harness->harness_compatible ||
+      mlx_qwen_harness->file_count != 11 ||
+      mlx_qwen_harness->context_length != 262144 ||
+      wally::catalog::find("mlx-qwen3-1.7b") != nullptr) {
+    result.details =
+        "only the certified Qwen3 4B MLX row should remain harness-compatible";
     return result;
   }
 #else

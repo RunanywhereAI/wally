@@ -339,10 +339,11 @@ int run(int argc, char** argv) {
     // Show the download, chat, and coding-tool paths together. Each example
     // can be pasted, including its explanatory shell comment.
     app.footer(examples_footer({
-        {"wally models pull qwen3-0.6b && wally run qwen3-0.6b",
+        {"wally models pull qwen3-4b-instruct-2507 && "
+         "wally run qwen3-4b-instruct-2507",
          "Download a local model and chat on this machine"},
-        {"wally opencode -m qwen3-0.6b",
-         "Use the downloaded model in a coding tool"},
+        {"wally opencode -m qwen3-4b-instruct-2507",
+         "Use the certified local model in a coding tool"},
         {"wally account login && wally opencode --cloud -m glm-5.3-flash",
          "Sign in and use a cloud model"},
     }, "Get started") + "\n\nRun \"wally <command> --help\" for details.");

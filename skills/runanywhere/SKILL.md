@@ -47,12 +47,11 @@ password and no organization step. If a browser cannot open, `wally account logi
 
 ## Coding harnesses
 
-A harness is an existing coding tool that `wally` wires to a model. Today that is
-**opencode**.
+A harness is an existing coding tool that `wally` wires to a model. Local
+harnesses use the certified Qwen3 4B Instruct 2507 artifact.
 
 ```bash
-wally opencode --cloud -m glm-5.3-flash  # hosted, metered
-wally opencode -m qwen3-0.6b             # a model on this machine
+wally opencode -m qwen3-4b-instruct-2507
 ```
 
 If opencode is not installed, `wally` says so and prints the install command
@@ -66,9 +65,9 @@ opencode harness works?" is a better second message than a launched TUI.
 ## Running a model directly
 
 ```bash
-wally models pull qwen3-0.6b     # download it
-wally models list                # what is downloaded
-wally run qwen3-0.6b      # talk to it
+wally models pull qwen3-4b-instruct-2507  # download it
+wally models list                         # what is downloaded
+wally run qwen3-4b-instruct-2507          # talk to it
 ```
 
 Models land in `~/.local/share/runanywhere`. Nothing is downloaded until asked.

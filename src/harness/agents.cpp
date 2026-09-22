@@ -528,7 +528,7 @@ int LaunchAgent(const Agent& agent, const std::string& model,
     }
 
     Endpoint endpoint;
-    if (!Resolve(model, &endpoint, options)) {
+    if (!Resolve(model, &endpoint, options, agent.id)) {
         return 1;
     }
     const std::vector<std::string> child_args = EffectiveArgs(agent, args);

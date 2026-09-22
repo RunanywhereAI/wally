@@ -54,7 +54,8 @@ class HelpCliTests(unittest.TestCase):
         help_text = self.run_help("--help")
         self.assertNotIn("\x1b", help_text)
         self.assertIn("  # Download a local model", help_text)
-        self.assertIn("\n  wally opencode -m qwen3-0.6b\n", help_text)
+        self.assertIn(
+            "\n  wally opencode -m qwen3-4b-instruct-2507\n", help_text)
         self.assertIn("\n  wally account login && wally opencode --cloud -m glm-5.3-flash\n", help_text)
         for line in help_text.splitlines():
             self.assertEqual(line, line.rstrip())

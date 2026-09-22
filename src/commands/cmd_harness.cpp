@@ -30,10 +30,11 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
     auto cloud = std::make_shared<bool>(false);
     auto* opencode = app.add_subcommand("opencode", "Open OpenCode with a local or cloud model");
     opencode->footer(examples_footer({
-        {"wally models pull qwen3-0.6b", "Download a local model once"},
-        {"wally opencode -m qwen3-0.6b", "Start OpenCode with the local model"},
+        {"wally models pull qwen3-4b-instruct-2507", "Download the certified local model once"},
+        {"wally opencode -m qwen3-4b-instruct-2507",
+         "Start OpenCode with the certified local model"},
         {"wally opencode --cloud -m glm-5.3-flash", "Use a cloud model after wally account login"},
-        {"wally opencode -m qwen3-0.6b -- run \"explain this project\"",
+        {"wally opencode -m qwen3-4b-instruct-2507 -- run \"explain this project\"",
          "Pass arguments through to OpenCode after --"},
     }));
     // A named option rather than a positional: with two positionals there is no
@@ -76,8 +77,10 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
         auto* command = app.add_subcommand(agent.id, agent.summary);
         const std::string invocation = "wally " + std::string(agent.id);
         command->footer(examples_footer({
-            {"wally models pull qwen3-0.6b", "Download a local model once"},
-            {invocation + " -m qwen3-0.6b", "Start the tool with the local model"},
+            {"wally models pull qwen3-4b-instruct-2507",
+             "Download the certified local model once"},
+            {invocation + " -m qwen3-4b-instruct-2507",
+             "Start the tool with the certified local model"},
             {invocation + " -m glm-5.3-flash", "Use a cloud model after wally account login"},
         }));
         command->add_option("-m,--model", *agent_model,

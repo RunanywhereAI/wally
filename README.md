@@ -42,21 +42,18 @@ works too:
 wally models pull hf.co/Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf
 ```
 
-## Use a hosted model in your coding agent
+## Use the certified local model in your coding agent
 
-Sign in once. The terminal shows a code and you approve it in the browser, so
-you never paste a key.
+Download Qwen3 4B once, then launch any supported harness against it:
 
 ```bash
-wally account login
-wally opencode --cloud -m glm-5.3-flash
-wally claude-code -m glm-5.3-flash
-wally account usage         # credit left and recent spend
+wally models pull qwen3-4b-instruct-2507
+wally opencode -m qwen3-4b-instruct-2507
+wally claude-code -m qwen3-4b-instruct-2507
 ```
 
-Hosted models today are `glm-5.3-flash`, `qwen3.8-27b` and `gemma-4`. The same
-commands work with a model on your machine, and `claude-desktop`, `hermes` and
-`openclaw` are wired the same way.
+`claude-desktop`, `deepseek`, `hermes` and `openclaw` are wired the same way.
+Other local models are not certified for coding harnesses and are rejected.
 
 ## Commands you'll use
 

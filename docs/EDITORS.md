@@ -8,10 +8,10 @@ One command points a tool at a model and starts it. There is nothing to
 configure by hand:
 
 ```bash
-wally claude-code -m qwen3-0.6b
-wally hermes -m qwen3-0.6b
-wally deepseek -m glm-5.3-flash
-wally openclaw -m gemma-4-31b-it
+wally claude-code -m qwen3-4b-instruct-2507
+wally hermes -m qwen3-4b-instruct-2507
+wally deepseek -m qwen3-4b-instruct-2507
+wally openclaw -m qwen3-4b-instruct-2507
 ```
 
 The model can be one on this machine or one the console serves. Without `-m` the
@@ -95,24 +95,31 @@ enough.
 Download a model once, then pass its ID to a harness. No account login is needed:
 
 ```bash
-wally models pull qwen3-0.6b --engine llamacpp
-wally opencode -m qwen3-0.6b
-wally deepseek -m qwen3-0.6b "explain this project"
+wally models pull qwen3-4b-instruct-2507 --engine llamacpp
+wally opencode -m qwen3-4b-instruct-2507
+wally deepseek -m qwen3-4b-instruct-2507 "explain this project"
 
-# Apple Silicon: the same model family through MLX
-wally models pull mlx-qwen3-0.6b
-wally opencode -m mlx-qwen3-0.6b
+# Apple Silicon: the same certified model through MLX
+wally models pull mlx-qwen3-4b-instruct-2507
+wally opencode -m mlx-qwen3-4b-instruct-2507
 ```
 
 Wally starts the SDK's OpenAI-compatible server on a free `127.0.0.1` port,
 loads the selected local model, and hands that endpoint to the tool. The server
 stops when the tool exits. Each session serves one model; its configured context
-and bounded output budget are included in the tool configuration. A small model
-is useful for testing the connection, but its ability to choose tools and solve
-coding tasks depends on the model.
+and bounded output budget are included in the tool configuration. Local coding
+harnesses are intentionally gated to this certified Qwen3 4B artifact. Other
+local models are rejected because their tool calls and long-context behavior
+have not been certified.
+
+When the certified model is missing, an interactive harness command asks
+whether to download it and continues launching after the pull completes. The
+default is No. Non-interactive commands never wait for input; they print the
+equivalent `wally models pull <id>` command and exit.
 
 If you use a separate model directory, pass the same `--home` for downloading
-and launching, for example `wally --home /path/to/storage opencode -m qwen3-0.6b`.
+and launching, for example
+`wally --home /path/to/storage opencode -m qwen3-4b-instruct-2507`.
 An incomplete download reports how to finish the pull. To force a hosted model
 in OpenCode even when a local copy exists, use `wally opencode --cloud -m <id>`.
 

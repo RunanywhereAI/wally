@@ -364,13 +364,14 @@ void register_models(CLI::App& app, GlobalOptions& options) {
     CLI::App* pull_cmd = ns->add_subcommand("pull", "Download a model");
     pull_cmd->alias("download");
     pull_cmd->footer(examples_footer({
-        {"wally models pull qwen3-0.6b", "From the catalog"},
+        {"wally models pull qwen3-4b-instruct-2507", "Certified for coding harnesses"},
         {"wally models pull hf.co/<org>/<repo>/<file>", "From Hugging Face"},
     }));
     configure_models_download(pull_cmd, options);
 
     CLI::App* delete_cmd = ns->add_subcommand("rm", "Delete a downloaded model");
-    delete_cmd->footer(examples_footer({{"wally models rm qwen3-0.6b", ""}}));
+    delete_cmd->footer(
+        examples_footer({{"wally models rm qwen3-4b-instruct-2507", ""}}));
     delete_cmd->alias("remove");
     delete_cmd->alias("delete");
     configure_models_delete(delete_cmd, options);

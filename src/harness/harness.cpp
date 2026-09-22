@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -39,6 +40,7 @@ using wally_socklen_t = socklen_t;
 #include "catalog/catalog.h"
 #include "harness/local_models.h"
 #include "harness/opencode.h"
+#include "util/term.h"
 
 namespace wally::harness {
 namespace {
@@ -92,6 +94,16 @@ int FreePort() {
 }
 
 constexpr const char* kConfigVariable = "OPENCODE_CONFIG_CONTENT";
+
+bool ConfirmModelPull(const std::string& model) {
+    std::fprintf(stderr, "%s is not installed. Download it now? [y/N] ",
+                 model.c_str());
+    std::fflush(stderr);
+    std::string answer;
+    return std::getline(std::cin, answer) &&
+           !answer.empty() &&
+           (answer.front() == 'y' || answer.front() == 'Y');
+}
 
 void SetConfigVariable(const std::string& value) {
 #if defined(_WIN32)
@@ -463,7 +475,8 @@ bool VerifyCloudSession(const account::ConsoleClient& console, account::Credenti
     return true;
 }
 
-bool Resolve(const std::string& model, Endpoint* endpoint, const GlobalOptions& options) {
+bool Resolve(const std::string& model, Endpoint* endpoint, const GlobalOptions& options,
+             const std::string& harness_command) {
     if (endpoint == nullptr || model.empty()) {
         return false;
     }
@@ -485,11 +498,12 @@ bool Resolve(const std::string& model, Endpoint* endpoint, const GlobalOptions& 
     bool serving = false;
     std::int64_t context_window = 0;
 
-    // The names a person types (`bonsai-27b`, `mlx-qwen3-0.6b`, `qwen3`) are
+    // The names a person types (`qwen3-4b-instruct-2507`,
+    // `mlx-qwen3-4b-instruct-2507`, `qwen3-4b-instruct`) are
     // catalog ids, aliases and `models list` merge keys; the directory on disk
-    // is the registry id (`mlx-qwen3-0.6b-4bit`). Accept every spelling the
-    // catalog does, the same way `run` and `models pull` do, and prefer a
-    // downloaded variant of a merged row over one that is not here.
+    // is the registry id (`mlx-qwen3-4b-instruct-2507-4bit`). Accept every
+    // spelling the catalog does, the same way `run` and `models pull` do, and
+    // prefer a downloaded variant of a merged row over one that is not here.
     std::vector<std::string> wanted{model};
     if (const catalog::CatalogEntry* entry = catalog::find(model)) {
         wanted.push_back(entry->id);
@@ -520,6 +534,17 @@ bool Resolve(const std::string& model, Endpoint* endpoint, const GlobalOptions& 
     }
 
     if (local != nullptr) {
+        const catalog::CatalogEntry* local_entry = catalog::find(local->id);
+        if (local_entry == nullptr || !local_entry->harness_compatible) {
+            out::error_line(
+                "This model is not certified for coding harnesses. Tool calls or long-context "
+                "operation may fail.");
+            const std::string command =
+                harness_command.empty() ? "opencode" : harness_command;
+            out::status_line("Try: wally " + command +
+                             " -m qwen3-4b-instruct-2507");
+            return false;
+        }
         // A directory with the manifest but no weights is a pull that did not
         // finish. Serving it fails inside llama.cpp with "No .gguf file found",
         // which reads as a bug; say what it is instead.
@@ -585,6 +610,25 @@ bool Resolve(const std::string& model, Endpoint* endpoint, const GlobalOptions& 
         base_url = "http://127.0.0.1:" + std::to_string(port) + "/v1";
 #endif  // WALLY_HAS_SERVER
     } else {
+        const catalog::CatalogEntry* requested = catalog::find(model);
+        if (requested != nullptr && requested->harness_compatible) {
+            if (!term::stdin_is_tty()) {
+                out::error_line(model + " is not downloaded on this machine");
+                out::status_line("run `wally models pull " + model +
+                                 "` first (using the same --home)");
+                return false;
+            }
+            if (!ConfirmModelPull(model)) {
+                out::status_line("download cancelled; run `wally models pull " +
+                                 model + "` when ready");
+                return false;
+            }
+            if (commands::pull_model_flow(options, requested->id) != 0) {
+                return false;
+            }
+            return Resolve(model, endpoint, options, harness_command);
+        }
+
         account::Credentials credentials;
         std::string load_error;
         if (!account::Load(&credentials, &load_error)) {
@@ -734,7 +778,7 @@ int Launch(const std::string& tool, const std::string& model,
     }
 
     Endpoint endpoint;
-    if (!Resolve(model, &endpoint, options)) {
+    if (!Resolve(model, &endpoint, options, tool)) {
         return 1;
     }
 

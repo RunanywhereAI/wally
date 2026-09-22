@@ -301,9 +301,10 @@ std::int64_t CloudContextWindow(const std::string& model) {
 /// Worth having beyond debugging: it is how anything that speaks the Anthropic
 /// API but is not on the list above gets wired up, without wally needing to know
 /// that tool exists.
-int Serve(const std::string& model, const GlobalOptions& options) {
+int Serve(const Editor& editor, const std::string& model,
+          const GlobalOptions& options) {
     harness::Endpoint endpoint;
-    if (!harness::Resolve(model, &endpoint, options)) {
+    if (!harness::Resolve(model, &endpoint, options, editor.id)) {
         return 1;
     }
     anthropic::Shim shim;
@@ -359,7 +360,7 @@ int Run(const Editor& editor, const std::string& model,
     }
 
     harness::Endpoint endpoint;
-    if (!harness::Resolve(model, &endpoint, options)) {
+    if (!harness::Resolve(model, &endpoint, options, editor.id)) {
         return 1;
     }
 
@@ -549,7 +550,8 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
         auto* command = app.add_subcommand(editor.id, editor.summary);
         const std::string invocation = "wally " + std::string(editor.id);
         command->footer(examples_footer({
-            {invocation + " -m qwen3-0.6b", "A model on this machine"},
+            {invocation + " -m qwen3-4b-instruct-2507",
+             "The certified local coding model"},
             {invocation + " -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
         }));
         command->add_option("-m,--model", *model,
@@ -595,7 +597,7 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
                 return;
             }
             const std::string effective = ResolveDefaultModel(*model, options.no_color);
-            fail(*serve ? Serve(effective, options)
+            fail(*serve ? Serve(editor, effective, options)
                         : Run(editor, effective, *rest, options));
         });
     }

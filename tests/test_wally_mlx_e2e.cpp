@@ -1088,6 +1088,17 @@ TestResult test_wally_mlx_run_end_to_end() {
     wally::shutdown();
     return result;
   }
+  if (list_json.find("\"id\":\"qwen3-4b-instruct-2507\"") == std::string::npos ||
+      list_json.find("\"id\":\"qwen3-1.7b\"") != std::string::npos ||
+      list_json.find("\"id\":\"mlx-qwen3-4b-instruct-2507-4bit\"") !=
+          std::string::npos ||
+      list_json.find("\"id\":\"mlx-qwen3-1.7b-4bit\"") != std::string::npos ||
+      list_json.find("\"harness_compatible\":true") == std::string::npos) {
+    result.expected = "certified harness models and compatibility metadata in models list";
+    result.actual = list_json;
+    wally::shutdown();
+    return result;
+  }
 
   std::string run_json;
   if (!run_cli_or_fail({"wally", "--json", "--no-progress", "--home",

@@ -200,6 +200,42 @@ constexpr CatalogFile kMlxQwen3_06BFiles[] = {
      "vocab.json", true},
 };
 
+constexpr CatalogFile kMlxQwen3_4BInstruct2507Files[] = {
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/added_tokens.json",
+     "added_tokens.json", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/chat_template.jinja",
+     "chat_template.jinja", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/config.json",
+     "config.json", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/generation_config.json",
+     "generation_config.json", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/merges.txt",
+     "merges.txt", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/model.safetensors",
+     "model.safetensors", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/model.safetensors.index.json",
+     "model.safetensors.index.json", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/special_tokens_map.json",
+     "special_tokens_map.json", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/tokenizer.json",
+     "tokenizer.json", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/tokenizer_config.json",
+     "tokenizer_config.json", true},
+    {"https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/"
+     "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/vocab.json",
+     "vocab.json", true},
+};
+
 constexpr CatalogFile kMlxMaplePreviewFiles[] = {
     {"https://huggingface.co/deepgrove/maple-preview-2bit-mlx/resolve/"
      "d0a7314d6bf14c880201b599d7a701cfbc8717e6/added_tokens.json",
@@ -1279,6 +1315,13 @@ constexpr CatalogEntry kCatalog[] = {
      "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/"
      "Qwen3-0.6B-Q8_0.gguf",
      nullptr, 0, 639 * MB, 32768, true, 0, "", "qwen3-0.6b"},
+    {"qwen3-4b-instruct-2507", "qwen3-4b-instruct", "Qwen3 4B Instruct 2507 Q8_0",
+     v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
+     v1::MODEL_FORMAT_GGUF,
+     "https://huggingface.co/ggml-org/Qwen3-4B-Instruct-2507-Q8_0-GGUF/resolve/"
+     "e6f794d44f9395d0184a966c27b5ae99ea356fcb/"
+     "qwen3-4b-instruct-2507-q8_0.gguf",
+     nullptr, 0, 4300000000LL, 262144, false, 0, "", "qwen3-4b-instruct-2507", true},
     // RunAnywhere's canonical-based llama.cpp fork supports PrismML's Q1_0
     // Bonsai artifacts. Ternary-Bonsai uses the explicitly canonical
     // Q2_0_g64 artifacts below; legacy 128-value Q2_0 remains unsupported.
@@ -1436,7 +1479,7 @@ constexpr CatalogEntry kCatalog[] = {
      "https://huggingface.co/unsloth/granite-4.1-3b-GGUF/resolve/"
      "5b88826e4b80789548180f8faab39c5cf68772c9/"
      "granite-4.1-3b-Q4_K_M.gguf",
-     nullptr, 0, 2099502400LL, 4096, false, 0, "", "granite-4.1-3b"},
+     nullptr, 0, 2099502400LL, 131072, false, 0, "", "granite-4.1-3b"},
     {"granite-4.1-8b", "granite4.1-8b", "IBM Granite 4.1 8B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_LLAMA_CPP,
      v1::MODEL_FORMAT_GGUF,
@@ -1742,6 +1785,11 @@ constexpr CatalogEntry kCatalog[] = {
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxQwen3_06BFiles, 9, 351383618,
      32768, true, 0, "", "qwen3-0.6b"},
+    {"mlx-qwen3-4b-instruct-2507-4bit", "mlx-qwen3-4b-instruct",
+     "Qwen3 4B Instruct 2507", v1::MODEL_CATEGORY_LANGUAGE,
+     v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
+     kMlxQwen3_4BInstruct2507Files, 11, 2315000000LL, 262144, false, 0, "",
+     "qwen3-4b-instruct-2507", true},
     {"mlx-maple-preview-2bit", "mlx-maple-preview",
      "DeepGrove Maple Preview", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
@@ -1905,7 +1953,7 @@ constexpr CatalogEntry kCatalog[] = {
     {"mlx-granite-4.1-3b-4bit", "mlx-granite4.1-3b",
      "IBM Granite 4.1 3B", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,
-     kMlxGranite4_1_3BFiles, 7, 2127162429LL, 4096, false, 0, "",
+     kMlxGranite4_1_3BFiles, 7, 2127162429LL, 131072, false, 0, "",
      "granite-4.1-3b"},
     // A real, official mlx-community 8B 4-bit quant does exist (Apache-2.0,
     // model_type "granite") — verified via HF API this session, despite the

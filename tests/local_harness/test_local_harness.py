@@ -26,7 +26,7 @@ class Console(BaseHTTPRequestHandler):
         if self.path == "/v1/me":
             body = {"email": "harness@example.test"}
         elif self.path == "/v1/models":
-            body = {"data": [{"id": "qwen3-0.6b", "context_window": 32768,
+            body = {"data": [{"id": "qwen3-4b-instruct-2507", "context_window": 262144,
                               "max_output_tokens": 4096}]}
         elif self.path == "/v1/models/catalog":
             body = {"models": []}
@@ -59,9 +59,9 @@ def main():
             for name in ("opencode", "dsh", "hermes", "openclaw", "claude"):
                 target = bins / (name + (".exe" if os.name == "nt" else ""))
                 shutil.copy2(child, target)
-            weights_dir = models_home / "Models" / "LlamaCpp" / "qwen3-0.6b"
+            weights_dir = models_home / "Models" / "LlamaCpp" / "qwen3-4b-instruct-2507"
             weights_dir.mkdir(parents=True)
-            weights = weights_dir / "Qwen3-0.6B-Q8_0.gguf"
+            weights = weights_dir / "qwen3-4b-instruct-2507-q8_0.gguf"
             weights.write_bytes(b"GGUF fixture; the registered test plugin owns loading")
             env = {k: v for k, v in os.environ.items()
                    if not k.startswith(("RUNANYWHERE_", "WALLY_", "ANTHROPIC_", "CLAUDE_", "HERMES_", "OPENCLAW_", "OPENCODE_"))}
@@ -85,9 +85,13 @@ def main():
                 child_report = json.loads((root / "child.json").read_text()) if (root / "child.json").exists() else None
                 return result, backend, child_report
 
-            for tool, model in (("opencode", "qwen3"), ("opencode", "qwen3-0.6b"),
-                                ("deepseek", "qwen3"), ("openclaw", "qwen3"),
-                                ("hermes", "qwen3"), ("claude-code", "qwen3")):
+            for tool, model in (
+                    ("opencode", "qwen3-4b-instruct"),
+                    ("opencode", "qwen3-4b-instruct-2507"),
+                    ("deepseek", "qwen3-4b-instruct"),
+                    ("openclaw", "qwen3-4b-instruct"),
+                    ("hermes", "qwen3-4b-instruct"),
+                    ("claude-code", "qwen3-4b-instruct")):
                 extra = {"WALLY_TEST_CHILD_EXIT": "37"} if tool == "deepseek" else None
                 expected = 37 if tool == "deepseek" else 0
                 _, backend, captured = invoke([tool, "-m", model, "--", "prompt with spaces"], expected, extra)
@@ -110,7 +114,30 @@ def main():
                     assert connection.connect_ex((address.hostname, address.port)) != 0, captured
                 print(f"PASS local {tool} ({model}): HTTP, launch arguments, teardown")
 
-            result, backend, captured = invoke(["opencode", "-m", "qwen3"], 1,
+            uncertified_dir = models_home / "Models" / "LlamaCpp" / "qwen3-0.6b"
+            uncertified_dir.mkdir(parents=True)
+            (uncertified_dir / "Qwen3-0.6B-Q8_0.gguf").write_bytes(b"GGUF fixture")
+            for report in (root / "child.json", root / "backend.json"):
+                report.unlink(missing_ok=True)
+            rejected = subprocess.run(
+                [str(binary), "--home", str(models_home), "opencode", "-m", "qwen3-0.6b"],
+                env=env, text=True, capture_output=True, timeout=20)
+            assert rejected.returncode == 1, rejected
+            assert (
+                "This model is not certified for coding harnesses. "
+                "Tool calls or long-context operation may fail."
+            ) in rejected.stderr, rejected.stderr
+            assert (
+                "Try: wally opencode -m qwen3-4b-instruct-2507"
+            ) in rejected.stderr, rejected.stderr
+            assert not (root / "child.json").exists()
+            if (root / "backend.json").exists():
+                rejected_backend = json.loads((root / "backend.json").read_text())
+                assert rejected_backend["created"] == 0, rejected_backend
+            shutil.rmtree(uncertified_dir)
+            print("PASS uncertified local model is rejected before server startup")
+
+            result, backend, captured = invoke(["opencode", "-m", "qwen3-4b-instruct"], 1,
                                                {"WALLY_TEST_FAIL_LOAD": "1"})
             assert captured is None and backend["destroyed"] == backend["created"] == 1, backend
             assert "would not start" in result.stderr and "models pull" in result.stderr, result.stderr
@@ -118,24 +145,27 @@ def main():
 
             weights.unlink()
             (weights_dir / ".rac-manifest.binpb").write_bytes(b"incomplete manifest fixture")
-            result, backend, captured = invoke(["opencode", "-m", "qwen3"], 1)
+            result, backend, captured = invoke(
+                ["opencode", "-m", "qwen3-4b-instruct"], 1)
             assert "incomplete" in result.stderr and "models pull" in result.stderr, result.stderr
             assert backend["created"] == 0 and captured is None
             shutil.rmtree(weights_dir)
-            result, backend, captured = invoke(["opencode", "-m", "qwen3"], 1)
+            result, backend, captured = invoke(
+                ["opencode", "-m", "qwen3-4b-instruct"], 1)
             assert "not downloaded" in result.stderr and "models pull" in result.stderr, result.stderr
             assert backend["created"] == 0 and captured is None
             print("PASS incomplete and missing models have pull guidance")
 
-            # Empty local cache is not evidence that a signed-in cloud model is
-            # unavailable, even when its id also appears in the local catalog.
-            _, backend, captured = invoke(["opencode", "-m", "qwen3-0.6b"],
+            # An explicit --cloud bypasses the local auto-pull prompt even when
+            # the id also appears in the local catalog.
+            _, backend, captured = invoke(
+                ["opencode", "--cloud", "-m", "qwen3-4b-instruct-2507"],
                                           extra={"WALLY_TEST_PASSTHROUGH": "1",
                                                  "WALLY_TEST_SEED_CLOUD": "test-cloud-token"})
             assert backend["created"] == 0
             provider = json.loads(captured["inherited_config"])["provider"]["runanywhere"]
             assert provider["options"] == {"baseURL": origin + "/v1", "apiKey": "test-cloud-token"}
-            print("PASS uncached hosted model preserves cloud launch")
+            print("PASS explicit cloud launch bypasses local auto-pull")
     finally:
         console.shutdown()
         console.server_close()

@@ -73,7 +73,8 @@ bool VerifyCloudSession(const account::ConsoleClient& console, account::Credenti
 /// destructive (quitting a running editor) must not do it until this returns
 /// true.
 bool Resolve(const std::string& model, Endpoint* endpoint,
-             const GlobalOptions& options = {});
+             const GlobalOptions& options = {},
+             const std::string& harness_command = {});
 
 /// Stops whatever `Resolve` started. Safe on an endpoint it did not serve.
 void Release(const Endpoint& endpoint);

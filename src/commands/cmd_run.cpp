@@ -786,14 +786,15 @@ void register_llm(CLI::App& app, GlobalOptions& options) {
     configure_llm(
         ns->add_subcommand("generate", "Complete a prompt, printed when done")
             ->footer(examples_footer({
-                {"wally llm generate -m qwen3-0.6b \"explain tunnelling\"", ""},
-                {"echo \"summarise this\" | wally llm generate -m qwen3-0.6b", ""},
+                {"wally llm generate -m qwen3-4b-instruct-2507 \"explain tunnelling\"", ""},
+                {"echo \"summarise this\" | "
+                 "wally llm generate -m qwen3-4b-instruct-2507", ""},
             })),
         options, LlmVerb::Generate, ModelArg::Option);
     configure_llm(
         ns->add_subcommand("stream", "Complete a prompt, printed as it arrives")
             ->footer(examples_footer({
-                {"wally llm stream -m qwen3-0.6b \"tell me a short story\"", ""},
+                {"wally llm stream -m qwen3-4b-instruct-2507 \"tell me a short story\"", ""},
             })),
         options, LlmVerb::Stream, ModelArg::Option);
 }
@@ -810,8 +811,9 @@ void register_llm_aliases(CLI::App& app, GlobalOptions& options) {
     // `llm generate` / `llm stream` are the explicit, manual entry points.
     configure_llm(app.add_subcommand("run", "Run a model")
                       ->footer(examples_footer({
-                          {"wally run qwen3-0.6b", "Chat interactively"},
-                          {"wally run qwen3-0.6b \"write a haiku\"", "Answer one prompt"},
+                          {"wally run qwen3-4b-instruct-2507", "Chat interactively"},
+                          {"wally run qwen3-4b-instruct-2507 \"write a haiku\"",
+                           "Answer one prompt"},
                       })),
                   options, LlmVerb::Chat, ModelArg::Positional);
 }
