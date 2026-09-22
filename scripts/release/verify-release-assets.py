@@ -12,13 +12,10 @@ import tarfile
 import zipfile
 
 
-# The dev bottle differs only in an added `-dev` before the extension; its
-# staged root is still wally-<platform> (package scripts keep them identical so
-# install extracts both the same), so `platform` must exclude the channel.
 ASSET = re.compile(
     r"^wally-(?P<version>[0-9]+\.[0-9]+\.[0-9]+)-"
     r"(?P<platform>macos-arm64|linux-x86_64|windows-x86_64|windows-arm64)"
-    r"(?P<channel>-dev)?\.(?P<suffix>tar\.gz|zip)$"
+    r"\.(?P<suffix>tar\.gz|zip)$"
 )
 MAX_MEMBERS = 100_000
 MAX_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
