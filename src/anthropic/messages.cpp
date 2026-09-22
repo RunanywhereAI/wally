@@ -14,6 +14,7 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -348,6 +349,12 @@ void HandleNonStreaming(Runtime& runtime, const httplib::Request& editor, const 
 /// across a single slot, which bounds read-ahead and keeps backpressure on a
 /// long stream.
 struct StreamPipe {
+    enum class ReadResult {
+        Chunk,
+        KeepAlive,
+        Finished,
+    };
+
     std::mutex mutex;
     std::condition_variable changed;
     std::thread worker;
@@ -372,16 +379,19 @@ struct StreamPipe {
         }
     }
 
-    bool Read(std::string* next) {
+    ReadResult Read(std::string* next) {
         std::unique_lock<std::mutex> lock(mutex);
-        changed.wait(lock, [&] { return !chunk.empty() || finished; });
+        if (!changed.wait_for(lock, std::chrono::seconds(1),
+                              [&] { return !chunk.empty() || finished; })) {
+            return ReadResult::KeepAlive;
+        }
         if (chunk.empty()) {
-            return false;
+            return ReadResult::Finished;
         }
         *next = std::move(chunk);
         chunk.clear();
         changed.notify_all();
-        return true;
+        return ReadResult::Chunk;
     }
 };
 
@@ -544,7 +554,18 @@ void HandleStreaming(Runtime& runtime, const httplib::Request& editor, const Jso
             };
 
             std::string bytes;
-            while (pipe->Read(&bytes)) {
+            for (;;) {
+                const StreamPipe::ReadResult read = pipe->Read(&bytes);
+                if (read == StreamPipe::ReadResult::Finished) {
+                    break;
+                }
+                if (read == StreamPipe::ReadResult::KeepAlive) {
+                    static constexpr std::string_view keepalive = ": keepalive\n\n";
+                    if (!sink.write(keepalive.data(), keepalive.size())) {
+                        return false;
+                    }
+                    continue;
+                }
                 if (!receive(bytes.data(), bytes.size())) {
                     return false;
                 }
