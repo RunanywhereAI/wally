@@ -336,14 +336,12 @@ int run(int argc, char** argv) {
     // and NO_COLOR all get the identical plain text.
     app.formatter(std::make_shared<CliFormatter>(color_output_enabled(no_color_requested)));
     configure_app(app, options);
-    // Show the download, chat, and coding-tool paths together. Each example
+    // Show the local chat and hosted coding-tool paths together. Each example
     // can be pasted, including its explanatory shell comment.
     app.footer(examples_footer({
         {"wally models pull qwen3-4b-instruct-2507 && "
          "wally run qwen3-4b-instruct-2507",
          "Download a local model and chat on this machine"},
-        {"wally opencode -m qwen3-4b-instruct-2507",
-         "Use the certified local model in a coding tool"},
         {"wally account login && wally opencode --cloud -m glm-5.3-flash",
          "Sign in and use a cloud model"},
     }, "Get started") + "\n\nRun \"wally <command> --help\" for details.");
