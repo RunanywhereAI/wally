@@ -23,11 +23,12 @@ kit_sha256_linux_x64 = "4fa3c045df3747e72696738200736bacba471f3ee9c2ed641abb514d
 
 [swift]
 # The Apple MLX host's Swift SDK: sdk_package_version pins swift/Package.swift,
-# sdk_ci_ref is the runanywhere-sdks tag ci.yml/release.yml check out. Both move
+# sdk_ci_ref is the complete runanywhere-sdks checkout ref (tag or commit SHA)
+# used by ci.yml/release.yml. Keep the leading v on tags. Both move
 # on their own cadence, distinct from the C++ kit above.
 sdk_package_version = "0.20.25"
 tools_version = "6.0"
-sdk_ci_ref = "0.20.31"
+sdk_ci_ref = "v0.20.31"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.

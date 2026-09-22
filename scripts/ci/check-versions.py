@@ -15,6 +15,7 @@ Run from anywhere in the repo. Exits non-zero on the first mismatch.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -43,22 +44,116 @@ def read_toml_section(name: str) -> dict[str, str]:
     return dict(re.findall(r'^\s*(\w+)\s*=\s*"([^"]*)"', body.group(1), re.M))
 
 
+def yaml_scalar(value: str) -> str:
+    """Read the literal scalars used by checkout inputs, without a YAML dependency.
+
+    Checkout inputs here use ordinary block mappings. Unsupported dynamic,
+    folded or flow values fail comparison instead of disappearing from the gate.
+    """
+    value = value.strip()
+    if value.startswith('"'):
+        try:
+            parsed, end = json.JSONDecoder().raw_decode(value)
+        except ValueError:
+            return value
+        if isinstance(parsed, str) and (not value[end:].strip() or value[end:].lstrip().startswith("#")):
+            return parsed
+        return value
+    if value.startswith("'"):
+        match = re.fullmatch(r"'((?:[^']|'')*)'\s*(?:#.*)?", value)
+        return match.group(1).replace("''", "'") if match else value
+    return re.split(r"\s+#", value, maxsplit=1)[0].strip()
+
+
+def workflow_steps(text: str):
+    """Yield direct step blocks; text inside run scripts is not another step."""
+    steps_indent = None
+    step_indent = None
+    block = []
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(stripped)
+        if steps_indent is not None:
+            # YAML permits an indentless sequence directly under `steps:`.
+            if indent < steps_indent or (indent == steps_indent and not stripped.startswith("- ")):
+                if block:
+                    yield block
+                steps_indent = step_indent = None
+                block = []
+            else:
+                if step_indent is None and stripped.startswith("- "):
+                    step_indent = indent
+                if indent == step_indent and stripped.startswith("- "):
+                    if block:
+                        yield block
+                    block = [(number, indent + 2, stripped[2:])]
+                elif block:
+                    block.append((number, indent, stripped))
+                continue
+        if re.fullmatch(r"steps:\s*(?:#.*)?", stripped):
+            steps_indent = indent
+    if block:
+        yield block
+
+
+def check_sdk_checkout_refs(text: str, expected: str, label: str) -> list[str]:
+    """Check every SDK checkout's complete literal ref, never other repositories."""
+    failures = []
+    sdk_checkouts = 0
+    for block in workflow_steps(text):
+        top_indent = block[0][1]
+        uses = ""
+        inputs = {}
+        duplicate_inputs = set()
+        in_with = False
+        input_indent = None
+        for number, indent, field in block:
+            if indent == top_indent:
+                in_with = bool(re.fullmatch(r"with:\s*(?:#.*)?", field))
+                input_indent = None
+                if field.startswith("uses:"):
+                    uses = yaml_scalar(field[len("uses:"):])
+            elif in_with and indent > top_indent:
+                if input_indent is None:
+                    input_indent = indent
+                match = re.fullmatch(r"(repository|ref):\s*(.*)", field)
+                if indent == input_indent and match:
+                    key, value = match.groups()
+                    if key in inputs:
+                        duplicate_inputs.add(key)
+                    inputs[key] = yaml_scalar(value)
+        if not uses.lower().startswith("actions/checkout@"):
+            continue
+        if inputs.get("repository", "").lower() != "runanywhereai/runanywhere-sdks":
+            continue
+        sdk_checkouts += 1
+        location = f"{label}:{block[0][0]}"
+        if duplicate_inputs:
+            failures.append(f"{location}: duplicate SDK checkout input(s): {', '.join(sorted(duplicate_inputs))}")
+        ref = inputs.get("ref", "")
+        if not ref or ref in ("null", "~"):
+            failures.append(f"{location}: runanywhere-sdks checkout is missing an explicit ref")
+        elif ref != expected or "${{" in ref:
+            failures.append(f"{location}: runanywhere-sdks ref {ref!r} != versions.toml {expected!r}")
+    if sdk_checkouts == 0:
+        failures.append(f"{label}: no explicit actions/checkout for RunanywhereAI/runanywhere-sdks found")
+    return failures
+
+
 def main() -> None:
     product = read_toml_value("version")
     swift_pin = read_toml_value("sdk_package_version")
     ci_ref = read_toml_value("sdk_ci_ref")
     failures: list[str] = []
 
-    # The workflows that build the Apple MLX host check out runanywhere-sdks at
-    # a tag. Both must name the tracked ref, so a bump here reaches CI and the
-    # release together.
+    # Compare complete checkout refs: a commit SHA, a release tag, or a
+    # prerelease tag must all be checked exactly. Only the SDK checkout's ref
+    # belongs to this pin; other repositories may use their own refs.
     for workflow in ("ci.yml", "release.yml"):
-        path = ROOT / ".github" / "workflows" / workflow
-        text = path.read_text(encoding="utf-8")
-        if "runanywhere-sdks" in text:
-            for ref in re.findall(r"ref:\s*v([0-9]+\.[0-9]+\.[0-9]+)", text):
-                if ref != ci_ref:
-                    failures.append(f"{path}: runanywhere-sdks ref v{ref} != versions.toml v{ci_ref}")
+        path = WORKFLOWS / workflow
+        failures.extend(check_sdk_checkout_refs(path.read_text(encoding="utf-8"), ci_ref, str(path)))
 
     # The formula's version line, and every release URL it builds, must name the
     # product version. update-tap.sh re-stamps these from a real release; this

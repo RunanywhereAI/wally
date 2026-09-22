@@ -62,7 +62,9 @@ jobs:
           python3 contracts/generate_console_binding.py --check
           python3 contracts/sync_from_inferenceinfra.py --check
       - name: Versions consistent with versions.toml
-        run: python3 scripts/ci/check-versions.py
+        run: |
+          python3 tests/test_versions.py
+          python3 scripts/ci/check-versions.py
       - name: No retired model ids in user-facing text
         run: |
           set -euo pipefail
