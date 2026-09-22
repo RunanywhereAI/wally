@@ -71,6 +71,12 @@ if [[ "$(uname -s)" == Darwin ]]; then
     echo "  cmake --build with WALLY_APPLE_MLX_HOST=ON, or scripts/build/build-mlx.sh" >&2
     exit 1
   fi
+  if [[ ! -s "${BUILD}/mlx.metallib" ]]; then
+    echo "error: macOS bottle requires mlx.metallib for launches through install symlinks." >&2
+    echo "  rebuild with scripts/build/build-mlx.sh" >&2
+    exit 1
+  fi
+  cp "${BUILD}/mlx.metallib" "${STAGE}/bin/mlx.metallib"
 fi
 
 copy_kit_runtime() {

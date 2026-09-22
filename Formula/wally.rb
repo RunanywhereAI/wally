@@ -21,6 +21,7 @@ class Wally < Formula
 
   def install
     bin.install "bin/wally"
+    bin.install "bin/mlx.metallib" if File.file?("bin/mlx.metallib")
     bin.install Dir["bin/*.bundle"] if Dir["bin/*.bundle"].any?
     lib.install Dir["lib/*"] if Dir["lib/*"].any?
   end

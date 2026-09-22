@@ -97,4 +97,14 @@ for bundle in "${PRODUCTS}"/*.bundle; do
     cp -R "${bundle}" "${dest}"
 done
 shopt -u nullglob
+# MLX's SwiftPM bundle lookup uses NSBundle.mainBundle, which follows the
+# public launch symlink rather than the installed executable. Its supported
+# colocated mlx.metallib lookup uses dladdr and resolves the physical binary.
+# Keep the bundle for SwiftPM and stage the same shaders for installed launches.
+metallib="${BUILD}/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib"
+[[ -s "${metallib}" ]] || {
+    echo "error: MLX build did not produce default.metallib" >&2
+    exit 1
+}
+cp "${metallib}" "${BUILD}/mlx.metallib"
 echo "built ${BUILD}/wally"
