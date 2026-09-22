@@ -445,13 +445,8 @@ int Spawn(const std::string& tool, const std::vector<std::string>& args) {
     }
 
     std::vector<std::string> owned;
-#if defined(_WIN32)
-    owned.push_back(QuoteWindowsArg(tool));
-    for (const auto& arg : args) owned.push_back(QuoteWindowsArg(arg));
-#else
     owned.push_back(tool);
     owned.insert(owned.end(), args.begin(), args.end());
-#endif
     std::vector<char*> argv;
     argv.reserve(owned.size() + 1);
     for (std::string& piece : owned) {
