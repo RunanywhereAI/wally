@@ -156,7 +156,7 @@ std::vector<std::string> HermesArgv(const std::string& model,
 /// same contract as `wally opencode`. Nothing wally writes outlives the child:
 /// the environment is restored and any config file is deleted on the way out.
 int LaunchAgent(const Agent& agent, const std::string& model,
-                const std::vector<std::string>& args);
+                const std::vector<std::string>& args, const GlobalOptions& options = {});
 
 }  // namespace wally::harness
 

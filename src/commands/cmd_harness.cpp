@@ -60,7 +60,7 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
             fail(harness::LaunchOpenCodeCloud(effective, *rest));
             return;
         }
-        fail(harness::Launch("opencode", effective, *rest));
+        fail(harness::Launch("opencode", effective, *rest, options));
     });
 
     // The OpenAI-shaped agents, one subcommand per row of the table. They need
@@ -89,7 +89,7 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
                 return;
             }
             fail(harness::LaunchAgent(agent, ResolveDefaultModel(*agent_model, options.no_color),
-                                      *agent_rest));
+                                      *agent_rest, options));
         });
     }
 }

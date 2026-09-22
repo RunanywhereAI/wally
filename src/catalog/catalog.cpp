@@ -1272,11 +1272,13 @@ constexpr CatalogEntry kCatalog[] = {
     // display name must not claim the same "just the size" naming the <=4-bit
     // entries use. Swap the URL for a verified <=4-bit artifact instead of
     // relabeling if this is ever tightened to match the rest of the catalog.
+    // Native context: https://huggingface.co/Qwen/Qwen3-0.6B (Model Overview).
+    // 4096 was a generation default, not the model's context window.
     {"qwen3-0.6b", "qwen3", "Qwen3 0.6B Q8_0", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_LLAMA_CPP, v1::MODEL_FORMAT_GGUF,
      "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/"
      "Qwen3-0.6B-Q8_0.gguf",
-     nullptr, 0, 639 * MB, 4096, true, 0, "", "qwen3-0.6b"},
+     nullptr, 0, 639 * MB, 32768, true, 0, "", "qwen3-0.6b"},
     // RunAnywhere's canonical-based llama.cpp fork supports PrismML's Q1_0
     // Bonsai artifacts. Ternary-Bonsai uses the explicitly canonical
     // Q2_0_g64 artifacts below; legacy 128-value Q2_0 remains unsupported.
@@ -1739,7 +1741,7 @@ constexpr CatalogEntry kCatalog[] = {
     {"mlx-qwen3-0.6b-4bit", "mlx-qwen3", "Qwen3 0.6B",
      v1::MODEL_CATEGORY_LANGUAGE, v1::INFERENCE_FRAMEWORK_MLX,
      v1::MODEL_FORMAT_SAFETENSORS, nullptr, kMlxQwen3_06BFiles, 9, 351383618,
-     4096, true, 0, "", "qwen3-0.6b"},
+     32768, true, 0, "", "qwen3-0.6b"},
     {"mlx-maple-preview-2bit", "mlx-maple-preview",
      "DeepGrove Maple Preview", v1::MODEL_CATEGORY_LANGUAGE,
      v1::INFERENCE_FRAMEWORK_MLX, v1::MODEL_FORMAT_SAFETENSORS, nullptr,

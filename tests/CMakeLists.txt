@@ -105,3 +105,5 @@ if(APPLE AND RunAnywhere_HAS_MLX)
     wally_stage_windows_runtime_dlls(test_wally_mlx_e2e)
     add_test(NAME wally_mlx_e2e_tests COMMAND test_wally_mlx_e2e --run-all)
 endif()
+
+add_subdirectory(local_harness)

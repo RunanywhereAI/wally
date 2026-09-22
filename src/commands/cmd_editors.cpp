@@ -301,13 +301,13 @@ std::int64_t CloudContextWindow(const std::string& model) {
 /// Worth having beyond debugging: it is how anything that speaks the Anthropic
 /// API but is not on the list above gets wired up, without wally needing to know
 /// that tool exists.
-int Serve(const std::string& model, bool verbose) {
+int Serve(const std::string& model, const GlobalOptions& options) {
     harness::Endpoint endpoint;
-    if (!harness::Resolve(model, &endpoint)) {
+    if (!harness::Resolve(model, &endpoint, options)) {
         return 1;
     }
     anthropic::Shim shim;
-    if (!anthropic::Start(endpoint, model, &shim, verbose)) {
+    if (!anthropic::Start(endpoint, model, &shim, options.verbose)) {
         harness::Release(endpoint);
         return 1;
     }
@@ -335,7 +335,7 @@ int Restore(const Editor& editor) {
 }
 
 int Run(const Editor& editor, const std::string& model,
-        const std::vector<std::string>& args, bool verbose) {
+        const std::vector<std::string>& args, const GlobalOptions& options) {
     const bool is_bundle = editor.bundle[0] != '\0';
     std::string bundle;
     if (is_bundle) {
@@ -359,7 +359,7 @@ int Run(const Editor& editor, const std::string& model,
     }
 
     harness::Endpoint endpoint;
-    if (!harness::Resolve(model, &endpoint)) {
+    if (!harness::Resolve(model, &endpoint, options)) {
         return 1;
     }
 
@@ -385,7 +385,7 @@ int Run(const Editor& editor, const std::string& model,
     }
 
     anthropic::Shim shim;
-    if (!anthropic::Start(endpoint, model, &shim, verbose, advertised, desktop_aliases)) {
+    if (!anthropic::Start(endpoint, model, &shim, options.verbose, advertised, desktop_aliases)) {
         harness::Release(endpoint);
         return 1;
     }
@@ -436,13 +436,12 @@ int Run(const Editor& editor, const std::string& model,
         // so there is no claude.ai session to collide with (no warning) but their
         // settings and memory still apply. See PrepareClaudeConfigDir.
         const ScopedEnv config_dir("CLAUDE_CONFIG_DIR", PrepareClaudeConfigDir());
-        // The real context window, for an upstream model, so Claude Code's
-        // auto-compaction fires at the model's limit rather than its own guess.
-        // Only for a hosted model (a local one is not in `/v1/models`), and only
-        // when the catalog actually answered — a miss just launches as before.
+        // Claude Code budgets against the local server's configured window,
+        // or the hosted catalog when available.
         std::optional<ScopedEnv> context_window;
-        if (!endpoint.serving) {
-            const std::int64_t context = CloudContextWindow(model);
+        {
+            const std::int64_t context = endpoint.serving ? endpoint.context_window
+                                                         : CloudContextWindow(model);
             if (context > 0) {
                 context_window.emplace("CLAUDE_CODE_MAX_CONTEXT_TOKENS", std::to_string(context));
                 out::status_line("context window: " + std::to_string(context) + " tokens");
@@ -596,8 +595,8 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
                 return;
             }
             const std::string effective = ResolveDefaultModel(*model, options.no_color);
-            fail(*serve ? Serve(effective, options.verbose)
-                        : Run(editor, effective, *rest, options.verbose));
+            fail(*serve ? Serve(effective, options)
+                        : Run(editor, effective, *rest, options));
         });
     }
 }

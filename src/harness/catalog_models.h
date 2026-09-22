@@ -44,7 +44,8 @@ std::vector<CatalogModel> CatalogModels(const std::string& console_url,
 
 /// The same, resolved from a launch `endpoint`. A local endpoint (empty
 /// `api_key`) has no catalog, so it yields just `primary` at the context size a
-/// local server is started with.
+/// local server was started with, and an output budget that leaves room for
+/// the coding prompt and conversation.
 std::vector<CatalogModel> CatalogModels(const Endpoint& endpoint, const std::string& primary);
 
 }  // namespace wally::harness
