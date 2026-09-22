@@ -201,7 +201,7 @@ bool ConsumesFollowingValue(const std::string& token) {
 bool IsWallyFlag(const std::string& token) {
     return token == "-m" || token == "--model" || token.rfind("--model=", 0) == 0 ||
            token.rfind("-m=", 0) == 0 || token == "--serve" || token == "--restore" ||
-           token == "--cloud";
+           token == "--cloud" || token == "-h" || token == "--help";
 }
 
 }  // namespace
@@ -336,24 +336,25 @@ int run(int argc, char** argv) {
     // and NO_COLOR all get the identical plain text.
     app.formatter(std::make_shared<CliFormatter>(color_output_enabled(no_color_requested)));
     configure_app(app, options);
-    // `run` only loads models on this machine; a hosted model (glm-5.3-flash,
-    // ...) is reached through a coding tool. One line for each path, so a
-    // first-time reader sees both exist and can paste either.
-    app.footer("Get started:\n"
-               "  wally models pull qwen3-0.6b && wally run qwen3-0.6b\n"
-               "  wally account login && wally opencode --cloud -m glm-5.3-flash\n"
-               "\nRun \"wally <command> --help\" for details.");
+    // Show the download, chat, and coding-tool paths together. Each example
+    // can be pasted, including its explanatory shell comment.
+    app.footer(examples_footer({
+        {"wally models pull qwen3-0.6b && wally run qwen3-0.6b",
+         "Download a local model and chat on this machine"},
+        {"wally opencode -m qwen3-0.6b",
+         "Use the downloaded model in a coding tool"},
+        {"wally account login && wally opencode --cloud -m glm-5.3-flash",
+         "Sign in and use a cloud model"},
+    }, "Get started") + "\n\nRun \"wally <command> --help\" for details.");
 
     // A `--` before the wrapped tool's own arguments, added for the reader, so
     // `wally claude-code --dangerously-skip-permissions` forwards the flag
     // instead of failing on it. Kept alive for the whole parse below.
     std::vector<std::string> raw(argv, argv + argc);
     // `wally help [command]` is a plain-word alias for `--help`, answered here
-    // before the parse. Routing it through app.parse() instead would hand
-    // `wally help opencode` to SplitPassthroughArgv, which inserts a `--` and
-    // forwards the `--help` to the wrapped tool rather than describing the wally
-    // command. Prints to stdout as `--help` does, and reaches shutdown() the
-    // same way the CallForHelp path below does.
+    // before the parse so the named command is looked up without invoking
+    // its callback. Prints to stdout as `--help` does, and reaches shutdown()
+    // the same way the CallForHelp path below does.
     if (raw.size() >= 2 && raw[1] == "help") {
         if (raw.size() >= 3 && !raw[2].empty() && raw[2][0] != '-') {
             try {

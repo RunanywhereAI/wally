@@ -28,10 +28,13 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
     auto model = std::make_shared<std::string>();
     auto rest = std::make_shared<std::vector<std::string>>();
     auto cloud = std::make_shared<bool>(false);
-    auto* opencode = app.add_subcommand("opencode", "Open opencode with a model");
+    auto* opencode = app.add_subcommand("opencode", "Open OpenCode with a local or cloud model");
     opencode->footer(examples_footer({
-        {"wally opencode -m qwen3-0.6b", "A model on this machine"},
-        {"wally opencode --cloud -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
+        {"wally models pull qwen3-0.6b", "Download a local model once"},
+        {"wally opencode -m qwen3-0.6b", "Start OpenCode with the local model"},
+        {"wally opencode --cloud -m glm-5.3-flash", "Use a cloud model after wally account login"},
+        {"wally opencode -m qwen3-0.6b -- run \"explain this project\"",
+         "Pass arguments through to OpenCode after --"},
     }));
     // A named option rather than a positional: with two positionals there is no
     // way to tell `wally opencode run` asking for passthrough from someone
@@ -73,8 +76,9 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
         auto* command = app.add_subcommand(agent.id, agent.summary);
         const std::string invocation = "wally " + std::string(agent.id);
         command->footer(examples_footer({
-            {invocation + " -m qwen3-0.6b", "A model on this machine"},
-            {invocation + " -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
+            {"wally models pull qwen3-0.6b", "Download a local model once"},
+            {invocation + " -m qwen3-0.6b", "Start the tool with the local model"},
+            {invocation + " -m glm-5.3-flash", "Use a cloud model after wally account login"},
         }));
         command->add_option("-m,--model", *agent_model,
                             "A model on this machine, or a hosted one from your account");

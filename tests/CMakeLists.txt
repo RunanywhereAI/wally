@@ -1,6 +1,16 @@
 # CLI parse/REPL/output tests. Proto headers come from the kit via wally_core.
 enable_testing()
 
+# Help rendering is independent of the SDK: exercise its layout and terminal
+# palette without initializing a backend or needing models/network access.
+add_executable(test_wally_formatter test_wally_formatter.cpp ../src/cli_formatter.cpp)
+target_include_directories(test_wally_formatter PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/CLI11")
+target_compile_definitions(test_wally_formatter PRIVATE CLI11_HAS_CODECVT=0)
+add_test(NAME wally_formatter_tests COMMAND test_wally_formatter --run-all)
+
 add_executable(test_wally_unit test_wally_unit.cpp)
 target_include_directories(test_wally_unit PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_unit PRIVATE wally_core nlohmann_json::nlohmann_json)
@@ -74,6 +84,11 @@ add_test(NAME wally_net_call_tests COMMAND test_wally_net_call --run-all)
 set_tests_properties(wally_net_call_tests PROPERTIES TIMEOUT 60)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(
+    NAME wally_help_cli_e2e
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_help_cli.py"
+            "$<TARGET_FILE:wally>")
+set_tests_properties(wally_help_cli_e2e PROPERTIES TIMEOUT 120)
 add_test(
     NAME wally_account_cli_e2e
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_account_cli.py"

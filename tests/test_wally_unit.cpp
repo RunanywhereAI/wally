@@ -2857,6 +2857,13 @@ TestResult test_passthrough_argv_split() {
       // Only wally flags: nothing to forward, no -- added.
       {{"wally", "claude-code", "-m", "glm-5.3-flash"},
        {"wally", "claude-code", "-m", "glm-5.3-flash"}},
+      // Help before tool arguments belongs to wally, even without a model or
+      // an installed harness. An explicit -- still requests the tool's help.
+      {{"wally", "opencode", "--help"}, {"wally", "opencode", "--help"}},
+      {{"wally", "claude-code", "-m", "qwen3-0.6b", "-h"},
+       {"wally", "claude-code", "-m", "qwen3-0.6b", "-h"}},
+      {{"wally", "opencode", "--", "--help"}, {"wally", "opencode", "--", "--help"}},
+      {{"wally", "opencode", "run", "--help"}, {"wally", "opencode", "--", "run", "--help"}},
       // Not a passthrough command: untouched.
       {{"wally", "run", "qwen3-0.6b", "hi"}, {"wally", "run", "qwen3-0.6b", "hi"}},
   };

@@ -35,6 +35,9 @@ Palette make_palette(bool enabled) {
 bool color_output_enabled(bool no_color_flag) {
     if (no_color_flag) return false;
     if (std::getenv("NO_COLOR") != nullptr) return false;
+    if (const char* term = std::getenv("TERM")) {
+        if (std::string(term) == "dumb") return false;
+    }
 #ifdef _WIN32
     return _isatty(_fileno(stdout)) != 0;
 #else
@@ -44,9 +47,9 @@ bool color_output_enabled(bool no_color_flag) {
 
 namespace {
 
-// Where an example's note starts: two spaces of indent plus the longest
-// command the help carries, with a gap after it.
-constexpr std::size_t kExampleNoteColumn = 48;
+// Help remains readable in an ordinary 80-column terminal. Commands in
+// examples stay intact so copying them never inserts a line break mid-argument.
+constexpr std::size_t kHelpWidth = 80;
 
 // Shortest gap between a row's left column and its description.
 constexpr std::size_t kColumnGap = 2;
@@ -144,25 +147,31 @@ bool has_visible_children(const CLI::App* app) {
 
 }  // namespace
 
-std::string examples_footer(const std::vector<Example>& rows) {
-    std::string out = "Examples:";
+std::string examples_footer(const std::vector<Example>& rows, const std::string& heading) {
+    std::stringstream out;
+    out << heading << ":";
+    bool first = true;
     for (const Example& row : rows) {
-        std::string line = "  " + row.command;
+        out << (first ? "\n" : "\n\n");
+        first = false;
         if (!row.note.empty()) {
-            line.append(line.size() + kColumnGap <= kExampleNoteColumn ? kExampleNoteColumn - line.size()
-                                                                       : kColumnGap,
-                        ' ');
-            line += row.note;
+            // A note is a shell comment on its own line: the entire example
+            // can be pasted, and a long explanation never crowds the command.
+            CLI::detail::streamOutAsParagraph(out, row.note, kHelpWidth - 4, "  # ");
+            out << '\n';
         }
-        out += '\n' + line;
+        out << "  " << row.command;
     }
-    return out;
+    std::string footer = tidy(out.str());
+    if (!footer.empty()) footer.pop_back();  // the caller supplies the final newline
+    return footer;
 }
 
 CliFormatter::CliFormatter(bool color_enabled) : color_enabled_(color_enabled) {
     label("POSITIONALS", "Arguments");
     label("SUBCOMMAND", "COMMAND");
     label("SUBCOMMANDS", "COMMANDS");
+    right_column_width(kHelpWidth - get_column_width());
 }
 
 std::string CliFormatter::make_help(const CLI::App* app, std::string name,
@@ -177,9 +186,9 @@ std::string CliFormatter::make_help(const CLI::App* app, std::string name,
         std::string help = CLI::Formatter::make_help(app, name, mode);
         const std::string footer = app->get_footer();
         if (!footer.empty()) {
-            help += '\n' + footer + '\n';
+            help += '\n' + style_footer(footer) + '\n';
         }
-        return help;
+        return tidy(help);
     }
     std::stringstream out;
     out << make_description(app);
@@ -196,7 +205,7 @@ std::string CliFormatter::make_help(const CLI::App* app, std::string name,
     }
     const std::string footer = app->get_footer();
     if (!footer.empty()) {
-        out << '\n' << footer << '\n';
+        out << '\n' << style_footer(footer) << '\n';
     }
     return tidy(out.str());
 }
@@ -204,7 +213,24 @@ std::string CliFormatter::make_help(const CLI::App* app, std::string name,
 std::string CliFormatter::make_usage(const CLI::App* app, std::string name) const {
     std::string usage = CLI::Formatter::make_usage(app, name);
     usage.erase(0, usage.find_first_not_of('\n'));
-    return "Usage: " + usage;
+    return colorize("Usage:", cli_color::kBoldCode, color_enabled_) + " " + usage;
+}
+
+std::string CliFormatter::style_footer(const std::string& footer) const {
+    std::stringstream out;
+    std::istringstream in(footer);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.front() != ' ' && line.back() == ':') {
+            out << colorize(line, cli_color::kBoldCode, color_enabled_);
+        } else if (line.rfind("  ", 0) == 0 && line.rfind("  # ", 0) != 0) {
+            out << colorize(line, cli_color::kBoldCyanCode, color_enabled_);
+        } else {
+            out << line;
+        }
+        out << '\n';
+    }
+    return out.str();
 }
 
 std::string CliFormatter::make_group(std::string group, bool is_positional,
