@@ -815,12 +815,33 @@ TestResult test_local_context_size_respects_floor_and_model_window() {
     TestResult result;
     result.test_name = "local_context_size_respects_floor_and_model_window";
     const std::int64_t tier = wally::harness::LocalContextSize("unknown-test-model");
-    const auto qwen = wally::harness::LocalContextSize("qwen3-0.6b");
-    if (tier < 8192 || qwen != std::min<std::int64_t>(tier, 32768) ||
-        wally::harness::LocalContextSize("bonsai-27b") > 4096) {
-        result.details = "catalog windows must cap the memory tier, including windows below 8k";
+    if (tier < 8192) {
+        result.details = "unknown models must retain the minimum memory tier";
         return result;
     }
+    // A public Windows ARM64 kit ships no llama.cpp. The same catalog filter
+    // used by `models list` then makes these GGUF ids unknown, so their honest
+    // fallback is the memory tier rather than an unsupported backend's limits.
+#if defined(WALLY_HAS_LLAMACPP)
+    const auto qwen_expected = std::min<std::int64_t>(tier, 32768);
+    constexpr std::int64_t bonsai_expected = 4096;
+#else
+    const auto qwen_expected = tier;
+    const auto bonsai_expected = tier;
+#endif
+    if (wally::harness::LocalContextSize("qwen3-0.6b") != qwen_expected ||
+        wally::harness::LocalContextSize("bonsai-27b") != bonsai_expected) {
+        result.details = "enabled catalog models must cap the memory tier; unavailable models use the tier";
+        return result;
+    }
+#if defined(WALLY_HAS_MLX)
+    if (wally::harness::LocalContextSize("mlx-qwen3-0.6b-4bit") !=
+            std::min<std::int64_t>(tier, 32768) ||
+        wally::harness::LocalContextSize("mlx-bonsai-27b-1bit") != 4096) {
+        result.details = "MLX context caps must match the enabled catalog";
+        return result;
+    }
+#endif
     result.passed = true;
     return result;
 }

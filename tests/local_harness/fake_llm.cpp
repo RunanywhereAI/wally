@@ -1,10 +1,13 @@
 // Real CLI + SDK HTTP server, deterministic inference only. This binary is
 // never installed or shipped with Wally.
 #include "app.h"
+#include "account/credentials.h"
 #include "rac/features/llm/rac_llm_service.h"
 #include "rac/plugin/rac_plugin_entry.h"
 #include "rac/server/rac_server.h"
 
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -113,6 +116,21 @@ std::optional<std::string> Environment(const char* name) {
 int main(int argc, char** argv) {
     rac_logger_set_min_level(RAC_LOG_ERROR);
     if (rac_plugin_register(&engine) != RAC_SUCCESS) return 90;
+    if (const char* token = std::getenv("WALLY_TEST_SEED_CLOUD")) {
+        // Exercise the production platform store: Windows uses a DPAPI blob
+        // named credentials.dat, while POSIX uses a protected JSON document.
+        wally::account::Credentials credentials;
+        credentials.console_url = wally::account::DefaultConsoleUrl();
+        credentials.email = "harness@example.test";
+        credentials.access_token = token;
+        credentials.expires_at = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count() + 3600;
+        std::string error;
+        if (!wally::account::Save(credentials, &error)) {
+            std::fprintf(stderr, "fixture credential setup failed: %s\n", error.c_str());
+            return 92;
+        }
+    }
     // Register before CLI parsing; pre-bootstrapping here would mask --home
     // regressions in the production launch path.
     std::map<std::string, std::optional<std::string>> original;

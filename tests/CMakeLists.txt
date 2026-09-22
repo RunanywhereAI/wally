@@ -54,6 +54,7 @@ add_test(NAME wally_editor_env_tests COMMAND test_wally_editor_env --run-all)
 add_executable(test_wally_harness test_wally_harness.cpp)
 target_include_directories(test_wally_harness PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(test_wally_harness PRIVATE wally_core nlohmann_json::nlohmann_json)
+wally_define_engine_macros(test_wally_harness)
 wally_stage_windows_runtime_dlls(test_wally_harness)
 add_test(NAME wally_harness_tests COMMAND test_wally_harness --run-all)
 

@@ -14,7 +14,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -130,11 +129,9 @@ def main():
 
             # Empty local cache is not evidence that a signed-in cloud model is
             # unavailable, even when its id also appears in the local catalog.
-            (profile / "credentials.json").write_text(json.dumps({"console_url": origin,
-                "email": "harness@example.test", "access_token": "test-cloud-token",
-                "refresh_token": "", "expires_at": int(time.time()) + 3600}))
             _, backend, captured = invoke(["opencode", "-m", "qwen3-0.6b"],
-                                          extra={"WALLY_TEST_PASSTHROUGH": "1"})
+                                          extra={"WALLY_TEST_PASSTHROUGH": "1",
+                                                 "WALLY_TEST_SEED_CLOUD": "test-cloud-token"})
             assert backend["created"] == 0
             provider = json.loads(captured["inherited_config"])["provider"]["runanywhere"]
             assert provider["options"] == {"baseURL": origin + "/v1", "apiKey": "test-cloud-token"}
