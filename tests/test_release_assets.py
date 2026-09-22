@@ -60,16 +60,16 @@ class ReleaseAssetTests(unittest.TestCase):
                 bundle.writestr("wally-windows-arm64/bin/wally.exe", b"binary")
             VERIFY.verify(archive, self.sidecar(archive))
 
-    def test_valid_dev_bottle_shares_the_platform_root(self) -> None:
-        # The -dev bottle only adds -dev to the filename; its staged root stays
-        # wally-<platform>. This is the exact asset name the release verify
-        # rejected before the channel group was added.
+    def test_rejects_dev_bottle_name(self) -> None:
+        # The -dev suffix is no longer published; the verifier must reject it
+        # so a stale dev artifact cannot accidentally land in a production release.
         with tempfile.TemporaryDirectory() as temporary:
             archive = pathlib.Path(temporary) / "wally-0.5.3-macos-arm64-dev.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
                 self.add_tar_file(bundle, "wally-macos-arm64/README.md", b"readme", 0o644)
                 self.add_tar_file(bundle, "wally-macos-arm64/bin/wally", b"binary", 0o755)
-            VERIFY.verify(archive, self.sidecar(archive))
+            with self.assertRaisesRegex(VERIFY.VerificationError, "unsupported release asset name"):
+                VERIFY.verify(archive, self.sidecar(archive))
 
     def test_valid_windows_archive_with_backslash_members(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
