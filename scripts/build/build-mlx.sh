@@ -33,7 +33,16 @@ fi
 flags=()
 while IFS= read -r entry; do
     [[ -n "${entry}" ]] || continue
-    flags+=("${entry}")
+    # CMake emits clang's -Wl, form, but Swift 6.4 rejects it. Both drivers
+    # accept -Xlinker once per linker argument, including rpaths.
+    if [[ "${entry}" == -Wl,* ]]; then
+        IFS=',' read -r -a linker_args <<< "${entry#-Wl,}"
+        for linker_arg in "${linker_args[@]}"; do
+            flags+=("-Xlinker" "${linker_arg}")
+        done
+    else
+        flags+=("${entry}")
+    fi
 done < "${BUILD}/wally-link-flags.txt"
 
 # The published runanywhere-swift tarball does not export RunAnywhereMLXRuntime
@@ -53,14 +62,14 @@ fi
 
 cd "${ROOT}/swift"
 xcode_log="${BUILD}/xcodebuild-mlx.log"
-# Bare .a paths are ignored by SwiftPM's swiftc; -Wl,-force_load is not.
+# Bare .a paths are ignored by SwiftPM's swiftc; explicit -force_load is not.
 # Only plugin backends are force-loaded (static registrars). The rest of the
 # C++ objects, including llama-common, are a regular archive so download.cpp.o
 # is not pulled (it references cpp-httplib methods the kit never emitted).
 # Comments must not sit in a `\` continuation — they cut the command in half.
 plugin_ldflags=()
 if [[ -f "${BUILD}/libwally_plugins.a" ]]; then
-    plugin_ldflags+=("-Wl,-force_load,${BUILD}/libwally_plugins.a")
+    plugin_ldflags+=("-Xlinker" "-force_load" "-Xlinker" "${BUILD}/libwally_plugins.a")
 fi
 set +e
 RUNANYWHERE_BUILD_MLX_DISTRIBUTION_FRAMEWORK=1 \
