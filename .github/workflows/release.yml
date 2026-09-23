@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
           repository: RunanywhereAI/runanywhere-sdks
-          ref: v0.20.31
+          ref: v0.20.37
           path: .deps/runanywhere-sdks
       - name: Install ninja
         run: brew install ninja
@@ -224,7 +224,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev
+          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev patchelf
       - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
         with:
           key: ccache-release-linux-x64

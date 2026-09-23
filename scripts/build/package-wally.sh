@@ -140,9 +140,17 @@ case "${PLATFORM}" in
     codesign --verify --strict "${STAGE}/bin/wally"
     ;;
   linux-*)
-    if command -v patchelf >/dev/null; then
-      patchelf --set-rpath "\$ORIGIN/../lib" "${STAGE}/bin/wally"
-    fi
+    command -v patchelf >/dev/null 2>&1 || {
+      echo "error: patchelf is required to package a relocatable Linux bottle" >&2
+      exit 1
+    }
+    patchelf --set-rpath "\$ORIGIN/../lib" "${STAGE}/bin/wally"
+    # DT_RUNPATH is not transitive: wally finding Sherpa does not help Sherpa
+    # find ONNX Runtime beside it. Give every packaged shared object its own
+    # sibling lookup so the archive runs without LD_LIBRARY_PATH.
+    while IFS= read -r -d '' lib; do
+      patchelf --set-rpath "\$ORIGIN" "${lib}"
+    done < <(find "${STAGE}/lib" -type f -name '*.so*' -print0)
     ;;
 esac
 

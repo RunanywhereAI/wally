@@ -12,23 +12,23 @@ version = "0.6.0"
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.
 kit_version = "0.20.37"
-kit_release_tag = "cpp-desktop-v0.20.37"
-idl_version = "1.2.0"
-idl_schema_sha256 = "571199c430eead0638472fc55355513831aeb2139e6fee5d5cd841f1b01d5a43"
+kit_release_tag = "v0.20.37"
+idl_version = "1.3.0"
+idl_schema_sha256 = "9dcf42f472090813edc5b76c8d4711b9e32813f29808a657baf317f5ad07d473"
 idl_protoc_version = "35.1"
-kit_sha256_macos_arm64 = "d0cdcee4217d251742bc9bc0790d3377123b7dda644e5671ae79de42c852b56b"
-kit_sha256_windows_x64 = "017a2ff1814d8261444338399d6984d5eb17442bae0da0c7525f942bdd58cca9"
-kit_sha256_windows_arm64 = "36372f8e6e404a2cb25f22aae5b372eef64e9f05ca58b985a1c872610c2b3e65"
-kit_sha256_linux_x64 = "4fa3c045df3747e72696738200736bacba471f3ee9c2ed641abb514d761fde11"
+kit_sha256_macos_arm64 = "6e1f02a242300b712d759884b98cf7f0334288d7a57c5a1613dfdc5cb401be54"
+kit_sha256_windows_x64 = "e1aa6a110527a796ce2c54f6e4e3cce19bfb69694fd623ffa839f4e600769820"
+kit_sha256_windows_arm64 = "6166db03f31582cd327c2f92ecd36f65b57f311b8fcfb2996187801919384606"
+kit_sha256_linux_x64 = "87eac4f74c5768cb4d1cec2cd7f6914a30106b52b2677d0cf4e694996e288f1e"
 
 [swift]
 # The Apple MLX host's Swift SDK: sdk_package_version pins swift/Package.swift,
 # sdk_ci_ref is the complete runanywhere-sdks checkout ref (tag or commit SHA)
 # used by ci.yml/release.yml. Keep the leading v on tags. Both move
 # on their own cadence, distinct from the C++ kit above.
-sdk_package_version = "0.20.25"
+sdk_package_version = "0.20.37"
 tools_version = "6.0"
-sdk_ci_ref = "v0.20.31"
+sdk_ci_ref = "v0.20.37"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
