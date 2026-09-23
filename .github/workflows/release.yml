@@ -209,7 +209,9 @@ jobs:
           if-no-files-found: error
 
   linux:
-    runs-on: ubuntu-24.04
+    # Release compatibility floor. Ubuntu 24.04 produced a bottle requiring
+    # GLIBC_2.38 and GLIBCXX_3.4.31/32, which fails on Ubuntu 22.04.
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     strategy:
       fail-fast: false

@@ -130,7 +130,9 @@ jobs:
         run: bash scripts/test/e2e.sh ./build/wally
 
   linux:
-    runs-on: ubuntu-24.04
+    # Match the oldest supported Linux release baseline. Building on 24.04
+    # silently introduced GLIBC_2.38 / GLIBCXX_3.4.31+ requirements.
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
