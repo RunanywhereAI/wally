@@ -151,6 +151,7 @@ case "${PLATFORM}" in
     while IFS= read -r -d '' lib; do
       patchelf --set-rpath "\$ORIGIN" "${lib}"
     done < <(find "${STAGE}/lib" -type f -name '*.so*' -print0)
+    find "${STAGE}/lib" -type f -name '*.so*' -exec chmod 0644 {} +
     ;;
 esac
 
