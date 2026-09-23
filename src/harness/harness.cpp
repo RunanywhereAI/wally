@@ -139,6 +139,7 @@ bool BuildBatchCommandLine(const std::string& script, const std::vector<std::str
 
 namespace {
 
+constexpr int32_t kMinimumCodingHarnessContext = 16384;
 
 /// A port nothing is listening on, found by letting the OS pick one and giving
 /// it straight back. There is a race between closing and the server binding,
@@ -748,8 +749,9 @@ bool Resolve(const std::string& model, Endpoint* endpoint, const GlobalOptions& 
         config.threads = 0;  // Let the backend choose for this machine.
         config.enable_cors = RAC_FALSE;
         config.verbose = options.verbose ? RAC_TRUE : RAC_FALSE;
-        out::status_line("serving " + model + " on 127.0.0.1:" + std::to_string(port) + " (" +
-                         std::to_string(config.context_size) + " token context)");
+        out::status_line("loading " + model + " on 127.0.0.1:" + std::to_string(port) +
+                         " (requesting " + std::to_string(config.context_size) +
+                         " token context)");
         const rac_result_t started = rac_server_start(&config);
         if (started != RAC_SUCCESS) {
             out::error_line("the local server would not start for " + model + ": " +
@@ -758,8 +760,32 @@ bool Resolve(const std::string& model, Endpoint* endpoint, const GlobalOptions& 
                              "with `wally models pull " + model + "` (using the same --home)");
             return false;
         }
+        int32_t loaded_context = 0;
+        const rac_result_t context_result = rac_server_get_context_length(&loaded_context);
+        if (context_result == RAC_SUCCESS) {
+            if (loaded_context < kMinimumCodingHarnessContext) {
+                rac_server_stop();
+                out::error_line("This model can use a " + std::to_string(loaded_context) +
+                                "-token context on this machine, but coding harnesses require at "
+                                "least " +
+                                std::to_string(kMinimumCodingHarnessContext) + " tokens.");
+                out::status_line(
+                    "Use a machine with more available memory, or run it directly with "
+                    "`wally run " + model + "`.");
+                return false;
+            }
+            if (loaded_context != config.context_size) {
+                out::status_line("this machine allocated " + std::to_string(loaded_context) +
+                                 " tokens from the requested " +
+                                 std::to_string(config.context_size));
+            }
+            context_window = loaded_context;
+        } else {
+            out::status_line(
+                "Wally could not determine the loaded context; using the requested limit");
+            context_window = config.context_size;
+        }
         serving = true;
-        context_window = config.context_size;
         base_url = "http://127.0.0.1:" + std::to_string(port) + "/v1";
 #endif  // WALLY_HAS_SERVER
     } else {
