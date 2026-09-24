@@ -121,7 +121,10 @@ def normaliser(home, console):
                 return "<TS>"
             return match.group(0)
 
-        return re.sub(r"\b\d{10,13}\b", ts, text)
+        text = re.sub(r"\b\d{10,13}\b", ts, text)
+        # Free memory moves between any two runs on a live machine.
+        text = re.sub(r'"memory_available_bytes":\d+', '"memory_available_bytes":<MEM>', text)
+        return re.sub(r"\d+(\.\d+)? [KMGT]?B available", "<MEM> available", text)
 
     return norm
 
