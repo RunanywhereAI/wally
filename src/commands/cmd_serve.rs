@@ -41,20 +41,26 @@ static SERVE_STOP: AtomicBool = AtomicBool::new(false);
 /// Literal mirror of `RAC_SERVER_CONFIG_DEFAULT` from rac_server.h. See the
 /// module doc comment for why this cannot reference the bindgen extern
 /// static directly.
+///
+/// `host` and `cors_origins` point at `'static` C string literals rather
+/// than null: the header default is the string `"127.0.0.1"` / `"*"`, not
+/// `RAC_NULL`, and `run_serve` always overrides `host` from the CLI but
+/// never touches `cors_origins`, so a null default there would reach
+/// `rac_server_start` unlike the header's C++ callers.
 #[cfg(wally_has_server)]
 fn default_server_config() -> sys::rac_server_config_t {
     sys::rac_server_config_t {
-        host: std::ptr::null(), // header default: "127.0.0.1" (set below from CLI)
-        port: 8080,             // header default: 8080
+        host: c"127.0.0.1".as_ptr(), // header default: "127.0.0.1" (overridden below from CLI)
+        port: 8080,                  // header default: 8080
         model_path: std::ptr::null(), // header default: RAC_NULL (required, set below)
-        model_id: std::ptr::null(), // header default: RAC_NULL (set below)
-        context_size: 8192,     // header default: 8192
-        threads: 4,             // header default: 4
-        gpu_layers: i32::MIN,   // header default: RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO (INT32_MIN)
+        model_id: std::ptr::null(),  // header default: RAC_NULL (set below)
+        context_size: 8192,          // header default: 8192
+        threads: 4,                  // header default: 4
+        gpu_layers: i32::MIN,        // header default: RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO (INT32_MIN)
         enable_cors: sys::RAC_TRUE as sys::rac_bool_t, // header default: RAC_TRUE
-        cors_origins: std::ptr::null(), // header default: "*" (left null; server treats null as its own "*")
-        request_timeout_seconds: 300,   // header default: 300 (5 minutes)
-        max_concurrent_requests: 4,     // header default: 4
+        cors_origins: c"*".as_ptr(), // header default: "*" (never overridden by this CLI)
+        request_timeout_seconds: 300, // header default: 300 (5 minutes)
+        max_concurrent_requests: 4,  // header default: 4
         verbose: sys::RAC_FALSE as sys::rac_bool_t, // header default: RAC_FALSE
     }
 }
@@ -276,5 +282,38 @@ pub fn register_serve(app: &mut App) {
             error_line("this wally build does not include the server (RAC_BUILD_SERVER=OFF)");
             1
         });
+    }
+}
+
+#[cfg(all(test, wally_has_server))]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+
+    // Pins default_server_config() to rac_server.h's RAC_SERVER_CONFIG_DEFAULT
+    // field by field. host and cors_origins previously defaulted to null,
+    // which read as "unset" rather than the header's actual "127.0.0.1" /
+    // "*" string literals -- host is always overridden by the CLI before
+    // rac_server_start(), but cors_origins never is, so that mismatch would
+    // have reached the SDK call.
+    #[test]
+    fn default_server_config_matches_header_default() {
+        let config = default_server_config();
+        // SAFETY: default_server_config() sets host/cors_origins to static
+        // NUL-terminated string literals.
+        unsafe {
+            assert_eq!(CStr::from_ptr(config.host).to_str().unwrap(), "127.0.0.1");
+            assert_eq!(CStr::from_ptr(config.cors_origins).to_str().unwrap(), "*");
+        }
+        assert_eq!(config.port, 8080);
+        assert!(config.model_path.is_null());
+        assert!(config.model_id.is_null());
+        assert_eq!(config.context_size, 8192);
+        assert_eq!(config.threads, 4);
+        assert_eq!(config.gpu_layers, i32::MIN); // RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO
+        assert_eq!(config.enable_cors, sys::RAC_TRUE as sys::rac_bool_t);
+        assert_eq!(config.request_timeout_seconds, 300);
+        assert_eq!(config.max_concurrent_requests, 4);
+        assert_eq!(config.verbose, sys::RAC_FALSE as sys::rac_bool_t);
     }
 }

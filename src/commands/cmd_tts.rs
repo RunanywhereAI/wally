@@ -21,6 +21,23 @@ use crate::sys;
 
 const DEFAULT_VOICE: &str = "vits-piper-en_US-lessac-medium";
 
+/// Literal mirror of `RAC_TTS_OPTIONS_DEFAULT` from rac_tts_types.h:
+/// header-only `static const` (internal C linkage per translation unit), so
+/// there is no symbol to link against from Rust.
+fn default_tts_options() -> sys::rac_tts_options_t {
+    sys::rac_tts_options_t {
+        voice: std::ptr::null(),     // header default: RAC_NULL (overridden below)
+        language: c"en-US".as_ptr(), // header default: "en-US" (overridden below)
+        rate: 1.0,                   // header default: 1.0 (overridden below)
+        pitch: 1.0,                  // header default: 1.0 (overridden below)
+        volume: 1.0,                 // header default: 1.0 (never overridden by this CLI)
+        audio_format: sys::RAC_AUDIO_FORMAT_PCM, // header default: RAC_AUDIO_FORMAT_PCM (never overridden by this CLI)
+        // RAC_TTS_DEFAULT_SAMPLE_RATE (RAC_DEFAULT_TTS_OPTIONS_SAMPLE_RATE) is 0.
+        sample_rate: 0,       // header default: 0 (overridden below)
+        use_ssml: sys::FALSE, // header default: RAC_FALSE (never overridden by this CLI)
+    }
+}
+
 // SDK strings must not embed a NUL; sanitize defensively instead of
 // panicking on file/model-derived input.
 fn to_cstring(value: &str) -> CString {
@@ -105,31 +122,22 @@ fn run_tts(options: &GlobalOptions, p: &Parsed) -> i32 {
     let pitch = p.get_f64("--pitch").unwrap_or(1.0) as f32;
     let sample_rate = p.get_i64("--sample-rate").unwrap_or(0) as i32;
 
-    // RAC_TTS_OPTIONS_DEFAULT is a header-only `static const` (internal C
-    // linkage per translation unit), so there is no symbol to link against
-    // from Rust; every field below is set explicitly instead, using the
-    // header's own default value for any field this CLI does not otherwise
-    // control (language when unset, volume, audio_format, use_ssml).
-    let default_language_c = to_cstring("en-US");
-    // SAFETY: rac_tts_options_t is plain data; zeroed is a valid bit pattern
-    // for every field, all of which are set below.
-    let mut tts_options: sys::rac_tts_options_t = unsafe { std::mem::zeroed() };
+    // volume, audio_format and use_ssml are never touched by this CLI; they
+    // keep default_tts_options()'s header default.
+    let mut tts_options = default_tts_options();
     tts_options.voice = if voice_field.is_empty() {
         std::ptr::null()
     } else {
         voice_field_c.as_ptr()
     };
-    tts_options.language = if language.is_empty() {
-        default_language_c.as_ptr()
-    } else {
-        language_c.as_ptr()
-    };
+    if !language.is_empty() {
+        tts_options.language = language_c.as_ptr();
+    }
     tts_options.rate = speed;
     tts_options.pitch = pitch;
-    tts_options.volume = 1.0;
-    tts_options.audio_format = sys::RAC_AUDIO_FORMAT_PCM;
-    tts_options.sample_rate = if sample_rate > 0 { sample_rate } else { 0 };
-    tts_options.use_ssml = sys::FALSE;
+    if sample_rate > 0 {
+        tts_options.sample_rate = sample_rate;
+    }
 
     let text_c = to_cstring(&text);
     let started = Instant::now();
@@ -229,4 +237,31 @@ pub fn register_tts(app: &mut App) {
     );
 
     cmd.callback(|p, g| run_tts(g, p));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+
+    // Pins default_tts_options() to rac_tts_types.h's RAC_TTS_OPTIONS_DEFAULT
+    // field by field. sample_rate is RAC_TTS_DEFAULT_SAMPLE_RATE
+    // (RAC_DEFAULT_TTS_OPTIONS_SAMPLE_RATE), which src/sys/bindings.rs pins
+    // at 0.
+    #[test]
+    fn default_tts_options_matches_header_default() {
+        let options = default_tts_options();
+        assert!(options.voice.is_null());
+        // SAFETY: default_tts_options() sets language to a static
+        // NUL-terminated string literal.
+        unsafe {
+            assert_eq!(CStr::from_ptr(options.language).to_str().unwrap(), "en-US");
+        }
+        assert_eq!(options.rate, 1.0);
+        assert_eq!(options.pitch, 1.0);
+        assert_eq!(options.volume, 1.0);
+        assert_eq!(options.audio_format, sys::RAC_AUDIO_FORMAT_PCM);
+        assert_eq!(options.sample_rate, 0);
+        assert_eq!(options.use_ssml, sys::FALSE);
+    }
 }

@@ -25,6 +25,19 @@ use crate::sys;
 
 const DIARIZATION_SAMPLE_RATE: i32 = 16000;
 
+/// Literal mirror of `RAC_DIARIZATION_OPTIONS_DEFAULT` from
+/// rac_diarization_types.h: header-only `static const` (internal C linkage
+/// per translation unit), so there is no symbol to link against from Rust.
+fn default_diarization_options() -> sys::rac_diarization_options_t {
+    sys::rac_diarization_options_t {
+        sample_rate_hz: 16000,  // header default: 16000 (never overridden by this CLI)
+        channel_count: 1,       // header default: 1 (never overridden by this CLI)
+        threshold: 0.5,         // header default: 0.5
+        minimum_duration_ms: 0, // header default: 0
+        merge_gap_ms: 0,        // header default: 0
+    }
+}
+
 // SDK strings must not embed a NUL; sanitize defensively instead of
 // panicking on file/model-derived input.
 fn to_cstring(value: &str) -> CString {
@@ -239,20 +252,11 @@ pub fn register_diarize(app: &mut App) {
     );
 
     cmd.callback(|p, g| {
-        // RAC_DIARIZATION_OPTIONS_DEFAULT is a header-only `static const`
-        // (internal C linkage per translation unit), so there is no symbol
-        // to link against from Rust; the header's own default values are
-        // reproduced here instead. sample_rate_hz/channel_count are never
-        // touched by the CLI (the WAV resample step handles the sample rate
-        // separately), so they keep the header default for the life of this
-        // struct.
-        let mut diar_options = sys::rac_diarization_options_t {
-            sample_rate_hz: 16000,
-            channel_count: 1,
-            threshold: 0.5,
-            minimum_duration_ms: 0,
-            merge_gap_ms: 0,
-        };
+        // sample_rate_hz/channel_count are never touched by the CLI (the
+        // WAV resample step handles the sample rate separately), so they
+        // keep default_diarization_options()'s header default for the life
+        // of this struct.
+        let mut diar_options = default_diarization_options();
         if let Some(v) = p.get_f64("--threshold") {
             diar_options.threshold = v as f32;
         }
@@ -264,4 +268,21 @@ pub fn register_diarize(app: &mut App) {
         }
         run_diarize(g, p, diar_options)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pins default_diarization_options() to rac_diarization_types.h's
+    // RAC_DIARIZATION_OPTIONS_DEFAULT field by field.
+    #[test]
+    fn default_diarization_options_matches_header_default() {
+        let options = default_diarization_options();
+        assert_eq!(options.sample_rate_hz, 16000);
+        assert_eq!(options.channel_count, 1);
+        assert_eq!(options.threshold, 0.5);
+        assert_eq!(options.minimum_duration_ms, 0);
+        assert_eq!(options.merge_gap_ms, 0);
+    }
 }
