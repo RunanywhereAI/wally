@@ -30,6 +30,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+/// Body-chunk callback: see `WatchedCall::receiver`.
+type ReceiverFn<'a> = Box<dyn FnMut(&[u8]) -> bool + 'a>;
+/// Response-headers callback: see `WatchedCall::on_headers`.
+type OnHeadersFn<'a> = Box<dyn FnMut(&ResponseHead) + 'a>;
+/// Abandon-notification callback: see `WatchedCall::on_abandoned`.
+type OnAbandonedFn<'a> = Box<dyn FnMut(&str, i32, bool) + Send + 'a>;
+
 /// One upstream POST plus everything `post_watched` needs to watch it. All
 /// callback fields are optional; a caller that does not need one leaves it
 /// `None`.
@@ -43,7 +50,7 @@ pub struct WatchedCall<'a> {
     /// deliver before the poll below gets its turn. Treated as an abandon
     /// (names the cancel, then aborts the request) rather than a plain stop
     /// nobody follows up.
-    pub receiver: Option<Box<dyn FnMut(&[u8]) -> bool + 'a>>,
+    pub receiver: Option<ReceiverFn<'a>>,
     /// True when the reader this stream is for has hung up. Called from the
     /// watch thread only.
     pub reader_gone: Option<Box<dyn Fn() -> bool + Sync + 'a>>,
@@ -51,7 +58,7 @@ pub struct WatchedCall<'a> {
     /// byte: the status and any Retry-After, which a streaming caller needs
     /// to decide whether to commit a 200 stream or answer the pre-stream
     /// failure instead. Must not block.
-    pub on_headers: Option<Box<dyn FnMut(&ResponseHead) + 'a>>,
+    pub on_headers: Option<OnHeadersFn<'a>>,
     /// True when the wrapper is shutting down: stop waiting for an id.
     /// Called from the watch thread only.
     pub stopping: Option<Box<dyn Fn() -> bool + Sync + 'a>>,
@@ -60,7 +67,7 @@ pub struct WatchedCall<'a> {
     /// when the headers never came; `status` is the upstream status, 0 when
     /// unknown; `during_prefill` says the reader left before the headers
     /// arrived. Must not block.
-    pub on_abandoned: Option<Box<dyn FnMut(&str, i32, bool) + Send + 'a>>,
+    pub on_abandoned: Option<OnAbandonedFn<'a>>,
     /// How often the reader is checked. The watch wakes early when the call
     /// ends, so this is never added to a call that completes.
     pub poll: Duration,
@@ -112,7 +119,7 @@ struct Shared<'a> {
     notified: bool,
     request_id: String,
     status: i32,
-    on_abandoned: Option<Box<dyn FnMut(&str, i32, bool) + Send + 'a>>,
+    on_abandoned: Option<OnAbandonedFn<'a>>,
 }
 
 struct WatchState<'a> {
@@ -126,7 +133,7 @@ struct WatchState<'a> {
 }
 
 impl<'a> WatchState<'a> {
-    fn new(on_abandoned: Option<Box<dyn FnMut(&str, i32, bool) + Send + 'a>>) -> Self {
+    fn new(on_abandoned: Option<OnAbandonedFn<'a>>) -> Self {
         WatchState {
             shared: Mutex::new(Shared {
                 headers_seen: false,

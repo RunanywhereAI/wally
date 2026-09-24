@@ -266,6 +266,7 @@ fn on_abandoned(
 /// when set, receives the upstream response headers before any body byte, so
 /// a streaming caller can preserve a pre-stream failure status instead of a
 /// blind 200 (#83).
+#[allow(clippy::type_complexity)]
 fn post_upstream(
     runtime: &Runtime,
     streaming: bool,

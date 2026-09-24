@@ -539,10 +539,11 @@ impl Client {
     /// `receiver` (when given) is called with each body chunk as it arrives
     /// instead of buffering into `Reply.body`; it too may cancel by
     /// returning false, e.g. because the reader this stream was for is gone.
+    #[allow(clippy::type_complexity)]
     pub fn send(
         &mut self,
         request: &Request,
-        mut on_headers: Option<&mut dyn FnMut(&ResponseHead) -> bool>,
+        on_headers: Option<&mut dyn FnMut(&ResponseHead) -> bool>,
         mut receiver: Option<&mut dyn FnMut(&[u8]) -> bool>,
     ) -> Result<Reply, Error> {
         self.ensure_connected()?;
@@ -557,7 +558,7 @@ impl Client {
                 return Err(e);
             }
         };
-        if let Some(cb) = on_headers.as_deref_mut() {
+        if let Some(cb) = on_headers {
             if !cb(&head) {
                 self.conn = None;
                 return Err(Error::Canceled);
@@ -1016,7 +1017,7 @@ mod tests {
         let refused = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
         assert_eq!(classify_connect_error(&refused), Error::Connection);
 
-        let unreachable = io::Error::new(io::ErrorKind::Other, "network unreachable");
+        let unreachable = io::Error::other("network unreachable");
         assert_eq!(classify_connect_error(&unreachable), Error::Connection);
     }
 
