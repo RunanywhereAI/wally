@@ -542,7 +542,14 @@ pub fn stream_chunk_to_anthropic(chunk: &Value, state: &mut StreamState) -> Stri
                 id
             }
         };
-        state.model = field(chunk, "model");
+        // `state.model` is the caller-resolved/client-requested model (set
+        // once, before streaming starts -- see messages.rs's
+        // `state.model = effective.clone()`), never the upstream chunk's own
+        // "model" field: message_start always echoes back the model the
+        // client asked for, matching translate.h's documented contract
+        // ("`model` replaces whatever model the caller named"). An upstream
+        // reporting its own internal model id (or omitting/nulling the
+        // field) must never leak into, or blank out, this response.
         out += &event(
             "message_start",
             &json!({
@@ -981,5 +988,38 @@ mod tests {
         let (kind, message) = upstream_failure(0, "");
         assert_eq!(kind, "api_error");
         assert_eq!(message, "the model endpoint did not answer");
+    }
+
+    // shim-0: message_start must echo the caller's resolved model
+    // (state.model, set by the caller before streaming starts), never the
+    // upstream chunk's own "model" field -- an internal upstream id (or a
+    // missing/null field) must not leak into, or blank out, the response.
+    #[test]
+    fn message_start_keeps_the_callers_model_not_the_upstream_chunks() {
+        let mut state = StreamState::new();
+        state.model = "claude-3-5-sonnet-20241022".to_string();
+        let chunk = json!({
+            "id": "chatcmpl-1",
+            "model": "glm-4-9b-chat",
+            "choices": [{"index": 0, "delta": {"role": "assistant"}}],
+        });
+        let out = stream_chunk_to_anthropic(&chunk, &mut state);
+        assert!(out.contains("\"model\":\"claude-3-5-sonnet-20241022\""));
+        assert!(!out.contains("glm-4-9b-chat"));
+        assert_eq!(state.model, "claude-3-5-sonnet-20241022");
+    }
+
+    #[test]
+    fn message_start_keeps_the_callers_model_when_upstream_omits_it() {
+        let mut state = StreamState::new();
+        state.model = "claude-3-5-sonnet-20241022".to_string();
+        let chunk = json!({
+            "id": "chatcmpl-1",
+            "model": Value::Null,
+            "choices": [{"index": 0, "delta": {"role": "assistant"}}],
+        });
+        let out = stream_chunk_to_anthropic(&chunk, &mut state);
+        assert!(out.contains("\"model\":\"claude-3-5-sonnet-20241022\""));
+        assert_eq!(state.model, "claude-3-5-sonnet-20241022");
     }
 }
