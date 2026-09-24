@@ -1538,10 +1538,16 @@ mod tests {
         client.ensure_connected().unwrap();
         accept_thread.join().unwrap();
 
-        let active = client.active.lock().unwrap();
-        let raw = active
-            .as_ref()
-            .expect("ensure_connected must populate the raw socket clone");
+        assert!(
+            client.active.lock().unwrap().is_some(),
+            "ensure_connected must populate the raw socket clone"
+        );
+        // The socket that reads, not the clone kept for stop(): the read
+        // timeout is applied after the clone is taken, and on Windows a
+        // duplicated socket handle keeps the options it was cloned with.
+        let Some(Stream::Plain(raw)) = client.conn.as_ref() else {
+            panic!("a plain-HTTP connection must be held as Stream::Plain");
+        };
         assert_eq!(
             raw.write_timeout().unwrap(),
             Some(Client::WRITE_TIMEOUT),

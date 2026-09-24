@@ -39,7 +39,8 @@ impl EnvGuard {
     pub fn set(&mut self, key: &str, value: impl AsRef<std::ffi::OsStr>) -> &mut Self {
         self.remember(key);
         // SAFETY: callers hold env_lock(), so no other test thread touches env.
-        unsafe { std::env::set_var(key, value) };
+        unsafe { std::env::set_var(key, &value) };
+        sync_crt_env(key, Some(value.as_ref()));
         self
     }
 
@@ -47,6 +48,7 @@ impl EnvGuard {
         self.remember(key);
         // SAFETY: as above.
         unsafe { std::env::remove_var(key) };
+        sync_crt_env(key, None);
         self
     }
 }
@@ -62,14 +64,37 @@ impl Drop for EnvGuard {
         for (key, value) in self.saved.drain(..).rev() {
             // SAFETY: as above.
             unsafe {
-                match value {
+                match &value {
                     Some(v) => std::env::set_var(&key, v),
                     None => std::env::remove_var(&key),
                 }
             }
+            sync_crt_env(&key, value.as_deref());
         }
     }
 }
+
+/// On Windows the kit reads the C runtime's copy of the environment
+/// (`getenv`), which only `_putenv_s` updates; `std::env::set_var` changes the
+/// Win32 one. The C++ tests' `EnvVar` used `_putenv_s`, so mirror each change
+/// there too. An empty value removes the variable, as `_putenv_s` defines it.
+#[cfg(windows)]
+fn sync_crt_env(key: &str, value: Option<&std::ffi::OsStr>) {
+    extern "C" {
+        fn _putenv_s(name: *const std::ffi::c_char, value: *const std::ffi::c_char) -> i32;
+    }
+    let value = value
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (Ok(name), Ok(value)) = (std::ffi::CString::new(key), std::ffi::CString::new(value)) else {
+        return;
+    };
+    // SAFETY: both are valid NUL-terminated strings; callers hold env_lock().
+    unsafe { _putenv_s(name.as_ptr(), value.as_ptr()) };
+}
+
+#[cfg(not(windows))]
+fn sync_crt_env(_key: &str, _value: Option<&std::ffi::OsStr>) {}
 
 /// An isolated home for one test: every directory wally reads or writes lives
 /// under it. `env()` is what to hand a spawned wally.

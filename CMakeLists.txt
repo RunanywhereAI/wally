@@ -162,7 +162,8 @@ endif()
 # `ctest --test-dir build` stays the CI bar: it runs the whole Rust test suite
 # (every ported C++ case plus the golden CLI corpus) with the kit linked the way
 # the product is, and the kit's runtime directories on PATH so Windows test
-# executables find their DLLs.
+# executables find their DLLs, then the Python end-to-end scripts the C++ ran
+# against the product binary.
 include(CTest)
 if(BUILD_TESTING)
     if(WIN32)
@@ -182,4 +183,52 @@ if(BUILD_TESTING)
     set_tests_properties(wally_rust_tests PROPERTIES
         ENVIRONMENT "PATH=${_wally_test_path}"
         TIMEOUT 3600)
+
+    # Cargo's own executables need the kit DLLs beside them too, as every C++
+    # test exe had: the test binaries under deps/, and the CARGO_BIN_EXE_*
+    # binaries the tests launch with a System32-only PATH. PATH alone is not
+    # enough, because Windows 11 ships an older onnxruntime.dll in System32,
+    # which the loader finds first.
+    wally_stage_windows_runtime_dlls(wally_cargo "${WALLY_CARGO_OUT_DIR}")
+    wally_stage_windows_runtime_dlls(wally_cargo "${WALLY_CARGO_OUT_DIR}/deps")
+    wally_bundle_product_dlls(wally_cargo "${WALLY_CARGO_OUT_DIR}")
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME wally_help_cli_e2e
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_help_cli.py"
+                "${WALLY_PRODUCT_BINARY}")
+    set_tests_properties(wally_help_cli_e2e PROPERTIES TIMEOUT 120)
+    add_test(
+        NAME wally_account_cli_e2e
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_account_cli.py"
+                "${WALLY_PRODUCT_BINARY}")
+    # Launches the binary three times (login, whoami, logout), each one
+    # initialising the whole SDK; each command has its own 15s bound inside
+    # the script, so a real hang is still caught there.
+    set_tests_properties(wally_account_cli_e2e PROPERTIES TIMEOUT 120)
+
+    # Production CLI and the packaged SDK HTTP server, with only inference and
+    # the coding tool replaced by the fixtures in tests/local_harness/.
+    if(RunAnywhere_HAS_SERVER AND RunAnywhere_HAS_LLAMACPP)
+        add_test(NAME wally_local_harness_bins
+            COMMAND "${CMAKE_COMMAND}" -E env
+                "WALLY_BUILD_ENV=${WALLY_BUILD_ENV_FILE}"
+                "CARGO_TARGET_DIR=${WALLY_CARGO_TARGET_DIR}"
+                "${WALLY_CARGO}" build ${_wally_cargo_profile_flag} --locked
+                    --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml"
+                    --bin fake_llm --bin harness_child
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+        set_tests_properties(wally_local_harness_bins PROPERTIES
+            FIXTURES_SETUP wally_local_harness_bins
+            TIMEOUT 1800)
+        add_test(NAME wally_local_harness_cli_e2e
+            COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_SOURCE_DIR}/tests/local_harness/test_local_harness.py"
+                    "${WALLY_CARGO_OUT_DIR}/fake_llm${CMAKE_EXECUTABLE_SUFFIX}"
+                    "${WALLY_CARGO_OUT_DIR}/harness_child${CMAKE_EXECUTABLE_SUFFIX}")
+        set_tests_properties(wally_local_harness_cli_e2e PROPERTIES
+            FIXTURES_REQUIRED wally_local_harness_bins
+            TIMEOUT 120)
+    endif()
 endif()

@@ -3,3 +3,6 @@
 # runners default to core.autocrlf=true, which rewrites LF to CRLF on checkout
 # and breaks that hash. Keep it untouched on every platform.
 contracts/wally-cli-v1.openapi.json -text
+# The golden CLI corpus is compared byte for byte (tests/cli_golden.rs and
+# cli_formatter's own fixture tests); a CRLF checkout would fail every case.
+tests/golden/** -text

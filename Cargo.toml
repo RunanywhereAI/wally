@@ -30,9 +30,9 @@ test = false
 
 # Dev-only fixtures for tests/local_harness/test_local_harness.py (port of
 # fake_llm.cpp / harness_child.cpp). CMake's product build asks cargo for
-# `--bin wally` only (cmake/WallyRust.cmake), so these never ship; `cargo test`
-# builds every target, which is how the CTest-registered `wally_rust_tests`
-# (CMakeLists.txt) picks them up.
+# `--bin wally` only (cmake/WallyRust.cmake), so these never ship; the CTest
+# fixture `wally_local_harness_bins` (CMakeLists.txt) builds them for
+# `wally_local_harness_cli_e2e`.
 [[bin]]
 name = "fake_llm"
 path = "tests/local_harness/fake_llm.rs"
