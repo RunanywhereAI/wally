@@ -37,14 +37,18 @@ fn unset_environment(name: &str) {
 /// there on the way out — its own copy of harness::agents' ScopedEnv, kept
 /// separate so this file diffs against opencode.cpp on its own.
 struct ScopedOpenCodeConfig {
-    previous: Option<String>,
+    previous: Option<std::ffi::OsString>,
     had_previous: bool,
     active: bool,
 }
 
 impl ScopedOpenCodeConfig {
     fn new() -> Self {
-        let previous = std::env::var(CONFIG_VARIABLE).ok();
+        // `var_os`, not `var`: `std::getenv` in C++ returns the raw bytes
+        // regardless of encoding, so a pre-existing non-UTF-8 value must
+        // still be captured (and restored on drop) rather than silently
+        // dropped as `var`'s `Result<String, VarError>` would do.
+        let previous = std::env::var_os(CONFIG_VARIABLE);
         let had_previous = previous.is_some();
         ScopedOpenCodeConfig {
             previous,
@@ -65,7 +69,7 @@ impl Drop for ScopedOpenCodeConfig {
             return;
         }
         if self.had_previous {
-            if let Some(previous) = &self.previous {
+            if let Some(previous) = self.previous.take() {
                 // SAFETY: `previous` came from this same environment
                 // variable before this guard changed it, so it is already a
                 // value the OS accepted.
@@ -151,13 +155,14 @@ fn spawn(executable: &str, arguments: &[String]) -> i32 {
         command.raw_arg(super::harness::quote_windows_arg(arg));
     }
     match command.status() {
-        Ok(status) => {
-            let code = status.code().unwrap_or(1);
-            if code == 127 {
-                missing_opencode();
-            }
-            code
-        }
+        // `_spawnvp(_P_WAIT, ...)` returns the child's real exit status once
+        // CreateProcess succeeded, with no 127-specific handling — 127 here
+        // is a real, legitimate exit code from a process that launched fine,
+        // not a "missing" signal. Unlike the POSIX branch (whose 127 comes
+        // from *this process's own* execvp+_exit fallback when exec fails),
+        // Windows's 127 can only ever be the child's own choice, so it must
+        // not be second-guessed here.
+        Ok(status) => status.code().unwrap_or(1),
         Err(_) => {
             missing_opencode();
             127
@@ -314,4 +319,65 @@ pub fn launch_open_code_cloud(model: &str, arguments: &[String]) -> i32 {
     let console = ConsoleClient::default();
     let spawn: SpawnFunction = std::sync::Arc::new(|tool: &str, args: &[String]| spawn(tool, args));
     launch_open_code_cloud_with(model, arguments, &console, &spawn)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    //! Finding 9: `ScopedOpenCodeConfig` must capture a pre-existing
+    //! `OPENCODE_CONFIG_CONTENT` with `var_os` (raw bytes, matching C++'s
+    //! `std::getenv`), not `var` (which drops a non-UTF-8 value entirely).
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    use super::*;
+
+    /// Environment variables are process-global; hold this for the whole
+    /// body of any test that reads or writes them.
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn scoped_config_restores_non_utf8_previous_value_on_drop() {
+        let _lock = env_lock();
+        let real_previous = std::env::var_os(CONFIG_VARIABLE);
+
+        // Not valid UTF-8 (a lone continuation byte), the same kind of value
+        // a wrapper script could set via raw bytes.
+        let non_utf8 = OsString::from_vec(vec![b'x', 0xFF, 0xFE]);
+        // SAFETY: `env_lock()` is held for this whole test body, and no
+        // other thread in this process touches the environment while it is.
+        unsafe { std::env::set_var(CONFIG_VARIABLE, &non_utf8) };
+
+        {
+            let mut guard = ScopedOpenCodeConfig::new();
+            assert!(
+                guard.had_previous,
+                "a pre-existing non-UTF-8 value must still be observed as \"had a previous value\""
+            );
+            assert!(guard.activate("{}"), "activate should succeed");
+        }
+        // `guard` just dropped; it must have restored the exact original
+        // bytes rather than unsetting the variable.
+
+        let restored = std::env::var_os(CONFIG_VARIABLE);
+        assert_eq!(
+            restored.as_deref(),
+            Some(non_utf8.as_os_str()),
+            "the original non-UTF-8 value must be restored byte-for-byte, not dropped"
+        );
+
+        // SAFETY: still holding env_lock(); restoring whatever was really
+        // there before this test ran.
+        unsafe {
+            match real_previous {
+                Some(value) => std::env::set_var(CONFIG_VARIABLE, value),
+                None => std::env::remove_var(CONFIG_VARIABLE),
+            }
+        }
+    }
 }
