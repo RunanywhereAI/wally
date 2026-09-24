@@ -503,7 +503,20 @@ impl Client {
         Err(last)
     }
 
-    fn write_request(&mut self, request: &Request) -> Result<(), Error> {
+    /// cpp-httplib's default `Accept-Encoding` for this build: Brotli, zlib,
+    /// and Zstd are all linked in (confirmed against the pinned kit's build
+    /// flags), so `prepare_default_headers` concatenates all three in this
+    /// order.
+    const DEFAULT_ACCEPT_ENCODING: &'static str = "br, gzip, deflate, zstd";
+    const DEFAULT_USER_AGENT: &'static str = "cpp-httplib/0.46.1";
+
+    // has_receiver mirrors cpp-httplib's `!r.content_receiver` check in
+    // `prepare_default_headers`: Accept-Encoding and User-Agent are default
+    // headers for a buffered (non-streaming) request only. `Accept: */*` has
+    // no such condition -- it is always added when the caller has not set
+    // one. httplib's Headers is an unordered_multimap, so the wire order of
+    // these is not a real contract; only presence and value are.
+    fn write_request(&mut self, request: &Request, has_receiver: bool) -> Result<(), Error> {
         let mut head = format!("{} {} HTTP/1.1\r\n", request.method, request.path);
         head += &format!("Host: {}\r\n", self.host_header());
         for (k, v) in &request.headers {
@@ -516,6 +529,29 @@ impl Client {
                 .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
             {
                 head += &format!("Authorization: Bearer {token}\r\n");
+            }
+        }
+        if !request
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("accept"))
+        {
+            head += "Accept: */*\r\n";
+        }
+        if !has_receiver {
+            if !request
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("accept-encoding"))
+            {
+                head += &format!("Accept-Encoding: {}\r\n", Self::DEFAULT_ACCEPT_ENCODING);
+            }
+            if !request
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+            {
+                head += &format!("User-Agent: {}\r\n", Self::DEFAULT_USER_AGENT);
             }
         }
         let has_length_header = request
@@ -574,7 +610,7 @@ impl Client {
         mut receiver: Option<&mut dyn FnMut(&[u8]) -> bool>,
     ) -> Result<Reply, Error> {
         self.ensure_connected()?;
-        if let Err(e) = self.write_request(request) {
+        if let Err(e) = self.write_request(request, receiver.is_some()) {
             self.conn = None;
             return Err(e);
         }
@@ -1457,6 +1493,77 @@ mod tests {
         assert_eq!(reply.status, 200);
         assert_eq!(reply.body, b"hi");
         handle.stop();
+    }
+
+    // cpp-httplib's prepare_default_headers adds Accept: */* to every
+    // request; Accept-Encoding and User-Agent only to a buffered
+    // (non-streaming) one, i.e. when the caller gave it no content_receiver.
+    // `receiver.is_some()` is this port's equivalent signal.
+    #[test]
+    fn default_headers_match_httplib_and_skip_encoding_and_agent_when_streaming() {
+        type SeenHeaders = Vec<Vec<(String, String)>>;
+        let seen: Arc<Mutex<SeenHeaders>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_route = seen.clone();
+        let mut server = Server::new();
+        server.route("POST", "/echo", move |req, res, _peer| {
+            seen_route.lock().unwrap().push(req.headers.clone());
+            res.send_full(200, &[], b"ok").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+
+        // Non-streaming: no receiver given.
+        client
+            .send(&Request::post("/echo", b"hi".to_vec()), None, None)
+            .unwrap();
+        // Streaming: a receiver is given, even though this reply has no body
+        // to hand it -- content_receiver's mere presence is what httplib
+        // keys off of, not whether it is ever actually called.
+        let mut sink = |_data: &[u8]| -> bool { true };
+        client
+            .send(
+                &Request::post("/echo", b"hi".to_vec()),
+                None,
+                Some(&mut sink),
+            )
+            .unwrap();
+        handle.stop();
+
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let non_streaming = &calls[0];
+        let streaming = &calls[1];
+
+        assert_eq!(
+            header_lookup(non_streaming, "Accept"),
+            Some("*/*"),
+            "Accept must be sent unconditionally"
+        );
+        assert_eq!(
+            header_lookup(non_streaming, "Accept-Encoding"),
+            Some("br, gzip, deflate, zstd")
+        );
+        assert_eq!(
+            header_lookup(non_streaming, "User-Agent"),
+            Some("cpp-httplib/0.46.1")
+        );
+
+        assert_eq!(
+            header_lookup(streaming, "Accept"),
+            Some("*/*"),
+            "Accept is still unconditional for a streaming request"
+        );
+        assert_eq!(
+            header_lookup(streaming, "Accept-Encoding"),
+            None,
+            "a streaming (content_receiver-bearing) request must not advertise Accept-Encoding"
+        );
+        assert_eq!(
+            header_lookup(streaming, "User-Agent"),
+            None,
+            "a streaming (content_receiver-bearing) request must not send User-Agent"
+        );
     }
 
     #[test]
