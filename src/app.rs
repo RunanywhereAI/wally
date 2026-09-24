@@ -78,7 +78,11 @@ pub fn configure_app(app: &mut App) {
     crate::commands::register_version(app);
     crate::commands::register_update(app);
     crate::commands::register_uninstall(app);
-    crate::commands::register_help(app);
+    // register_help's callback is bound now, before bench/backends/telemetry
+    // (and anything else below) exist; `help_tree` is filled with the
+    // COMPLETE tree at the end of this function so the callback still sees
+    // them at call time (id 44).
+    let help_tree = crate::commands::register_help(app);
 
     crate::commands::register_bench(app); // hidden below
     crate::commands::register_backends(app); // hidden below
@@ -139,6 +143,9 @@ pub fn configure_app(app: &mut App) {
             // configure_app()'s try/catch around CLI::OptionNotFound.
         }
     }
+
+    // Last step: hand `help`'s callback the complete, fully-grouped tree.
+    *help_tree.borrow_mut() = Some(app.clone());
 }
 
 /// The subcommands that hand the terminal to another tool and forward the

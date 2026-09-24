@@ -77,6 +77,24 @@ fn read_file() -> Value {
     }
 }
 
+/// Writes `body` to `temp`, distinguishing open failure from a
+/// write/flush failure the same way C++'s preferences.cpp does: it opens the
+/// temp file first and checks `!out.good()` right after open (`"cannot write
+/// " + temp.string()`), then separately checks the stream again after
+/// `out << ...; out.flush();` (`"failed writing " + temp.string()"` when the
+/// open succeeded but the write/flush did not, e.g. disk full).
+/// `std::fs::write()` folds open+write+flush into one call and would
+/// collapse both onto the same message, so open and write/flush are kept as
+/// distinct fallible steps here to preserve the two distinct texts.
+fn write_temp_file(temp: &Path, body: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let mut file =
+        std::fs::File::create(temp).map_err(|_| format!("cannot write {}", temp.display()))?;
+    file.write_all(body.as_bytes())
+        .and_then(|()| file.flush())
+        .map_err(|_| format!("failed writing {}", temp.display()))
+}
+
 /// Writes `document` to the preferences file atomically: a sibling temp file
 /// then a rename, so a reader never sees a half-written file.
 fn write_file(document: &Value) -> Result<(), String> {
@@ -95,7 +113,7 @@ fn write_file(document: &Value) -> Result<(), String> {
 
     let temp = parent.join(format!("{FILE_NAME}.tmp"));
     let body = format!("{}\n", crate::io::json::dump_pretty(document, 2));
-    std::fs::write(&temp, body).map_err(|_| format!("cannot write {}", temp.display()))?;
+    write_temp_file(&temp, &body)?;
 
     std::fs::rename(&temp, &target).map_err(|e| {
         let _ = std::fs::remove_file(&temp);
@@ -169,4 +187,31 @@ pub fn clear_default_model() -> Result<(), String> {
     }
     map.remove(DEFAULT_MODEL_KEY);
     write_file(&document)
+}
+
+#[cfg(test)]
+mod write_temp_file_tests {
+    use super::write_temp_file;
+
+    // id 30: an open failure (temp file cannot even be created) must produce
+    // "cannot write {temp}", distinct from a write/flush failure.
+    #[test]
+    fn open_failure_uses_cannot_write_text() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Parent directory does not exist, so File::create fails to open.
+        let temp = dir
+            .path()
+            .join("missing-subdir")
+            .join("preferences.json.tmp");
+        let error = write_temp_file(&temp, "{}\n").unwrap_err();
+        assert_eq!(error, format!("cannot write {}", temp.display()));
+    }
+
+    #[test]
+    fn successful_open_and_write_returns_ok() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let temp = dir.path().join("preferences.json.tmp");
+        write_temp_file(&temp, "{}\n").expect("write should succeed");
+        assert_eq!(std::fs::read_to_string(&temp).unwrap(), "{}\n");
+    }
 }

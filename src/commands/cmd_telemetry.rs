@@ -160,6 +160,16 @@ fn uuid4() -> String {
 // Minimal field extraction from the backend's SDKTelemetryBatchResponse JSON
 // ({"success":true,"events_received":N,"events_stored":N,"events_skipped":N,
 // "storage_version":"V2"}). The CLI deliberately carries no JSON parser.
+/// C's `isspace` in the "C" locale: space, \t, \n, \v (0x0B), \f, \r. id 33:
+/// Rust's `u8::is_ascii_whitespace()` deliberately excludes \v (vertical
+/// tab), so it is not a drop-in replacement here — a response body with a
+/// literal vertical tab between the key's `:` and its value would stop
+/// C++'s skip loop one character later than Rust's, shifting where value
+/// parsing starts.
+fn is_c_isspace(byte: u8) -> bool {
+    matches!(byte, b' ' | 0x09 | 0x0A | 0x0B | 0x0C | 0x0D)
+}
+
 fn value_offset_after_key(json: &[u8], key: &str) -> Option<usize> {
     let needle = format!("\"{key}\":");
     let needle = needle.as_bytes();
@@ -168,7 +178,7 @@ fn value_offset_after_key(json: &[u8], key: &str) -> Option<usize> {
     }
     let pos = json.windows(needle.len()).position(|w| w == needle)?;
     let mut i = pos + needle.len();
-    while i < json.len() && json[i].is_ascii_whitespace() {
+    while i < json.len() && is_c_isspace(json[i]) {
         i += 1;
     }
     Some(i)
@@ -230,6 +240,31 @@ struct TelemetryHttpContext {
     endpoints: BTreeMap<String, EndpointStats>,
 }
 
+/// Accumulates one HTTP exchange's outcome into `stats`, matching C++'s
+/// `telemetry_http_callback` accounting. `success`/`events_received`/
+/// `events_stored`/`events_skipped` are read from the backend's RESPONSE body
+/// (`result.body`), never the outgoing request payload — id 32 was Rust
+/// reading the request JSON here instead.
+fn record_http_result(stats: &mut EndpointStats, result: &net::HttpResult) {
+    stats.posts += 1;
+    stats.last_status = result.status;
+    if !result.ok() {
+        stats.failures += 1;
+        stats.last_error = result.describe();
+        return;
+    }
+    if !extract_bool_field(&result.body, "success") {
+        stats.failures += 1;
+        stats.last_error = format!("backend reported success=false: {}", result.body);
+    }
+    let received = extract_int_field(&result.body, "events_received");
+    let stored = extract_int_field(&result.body, "events_stored");
+    let skipped = extract_int_field(&result.body, "events_skipped");
+    stats.received += received.max(0);
+    stats.stored += stored.max(0);
+    stats.skipped += skipped.max(0);
+}
+
 /// Registered with the SDK as the telemetry manager's HTTP transport. Plain
 /// (not `unsafe`) `extern "C" fn`: it self-checks every pointer before
 /// touching it, so it is sound to call with any input the type allows.
@@ -271,23 +306,7 @@ extern "C" fn telemetry_http_callback(
         let result = net::control_plane_post(&endpoint_str, &body, requires_auth == sys::TRUE);
 
         let stats = context.endpoints.entry(endpoint_str).or_default();
-        stats.posts += 1;
-        stats.last_status = result.status;
-        if !result.ok() {
-            stats.failures += 1;
-            stats.last_error = result.describe();
-            return;
-        }
-        if !extract_bool_field(&body, "success") {
-            stats.failures += 1;
-            stats.last_error = format!("backend reported success=false: {body}");
-        }
-        let received = extract_int_field(&body, "events_received");
-        let stored = extract_int_field(&body, "events_stored");
-        let skipped = extract_int_field(&body, "events_skipped");
-        stats.received += received.max(0);
-        stats.stored += stored.max(0);
-        stats.skipped += skipped.max(0);
+        record_http_result(stats, &result);
     });
 }
 
@@ -846,4 +865,60 @@ pub fn register_telemetry(app: &mut App) {
         };
         run_telemetry_blast(options, count, &session_id, metrics)
     });
+}
+
+#[cfg(test)]
+mod fix_models_regression_tests {
+    use super::*;
+
+    // id 32: success/received/stored/skipped must come from the backend's
+    // RESPONSE body, not whatever the request happened to contain. A
+    // request body that (adversarially or coincidentally) looks like a
+    // failing response must not affect accounting; only `result.body` may.
+    #[test]
+    fn accounting_reads_the_response_body_not_the_request_payload() {
+        let mut stats = EndpointStats::default();
+        let result = net::HttpResult {
+            transport: sys::SUCCESS,
+            status: 200,
+            body: r#"{"success":true,"events_received":3,"events_stored":3,"events_skipped":0}"#
+                .to_string(),
+        };
+        record_http_result(&mut stats, &result);
+        assert_eq!(stats.posts, 1);
+        assert_eq!(stats.failures, 0);
+        assert_eq!(stats.received, 3);
+        assert_eq!(stats.stored, 3);
+        assert_eq!(stats.skipped, 0);
+    }
+
+    #[test]
+    fn a_response_reporting_failure_is_counted_as_a_failure() {
+        let mut stats = EndpointStats::default();
+        let result = net::HttpResult {
+            transport: sys::SUCCESS,
+            status: 200,
+            body: r#"{"success":false,"events_received":0}"#.to_string(),
+        };
+        record_http_result(&mut stats, &result);
+        assert_eq!(stats.failures, 1);
+        assert!(stats.last_error.contains("backend reported success=false"));
+    }
+
+    // id 33: C's isspace() (C locale) treats vertical tab (0x0B) as
+    // whitespace; Rust's is_ascii_whitespace() does not. The skip loop must
+    // still step past a literal \v between the key's ':' and its value.
+    #[test]
+    fn value_offset_skips_a_vertical_tab_like_c_isspace() {
+        let json = b"{\"success\":\x0btrue}";
+        let offset = value_offset_after_key(json, "success").expect("key found");
+        assert_eq!(&json[offset..offset + 4], b"true");
+    }
+
+    #[test]
+    fn value_offset_skips_ordinary_ascii_whitespace_too() {
+        let json = b"{\"events_received\": 5}";
+        let offset = value_offset_after_key(json, "events_received").expect("key found");
+        assert_eq!(&json[offset..offset + 1], b"5");
+    }
 }

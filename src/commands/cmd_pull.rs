@@ -88,6 +88,25 @@ extern "C" fn progress_callback(
     });
 }
 
+/// Chooses the download-start failure text the same way C++'s
+/// `cmd_pull.cpp` does: `!parse_proto_buffer(...) || rc != RAC_SUCCESS` is
+/// the failure condition, but the printed text is chosen purely by `rc` —
+/// `rc != RAC_SUCCESS ? describe_result(rc) : error`. A non-SUCCESS rc
+/// always wins with the generic description, even when the buffer's own
+/// envelope also carried a more specific `error_message`; the buffer's parse
+/// error only surfaces when `rc` itself is SUCCESS but the envelope/decode
+/// failed.
+fn download_start_result(
+    rc: sys::rac_result_t,
+    parsed: Result<v1::DownloadStartResult, String>,
+) -> Result<v1::DownloadStartResult, String> {
+    if rc != sys::SUCCESS {
+        Err(out::describe_result(rc))
+    } else {
+        parsed
+    }
+}
+
 /// Shared pull flow (plan → start → progress → terminal state) for an
 /// already-registered model id. Returns 0 / 1 / 130 (cancel).
 pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
@@ -241,22 +260,17 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
             start_out.as_mut_ptr(),
         )
     };
-    let start: v1::DownloadStartResult = match parse_proto_buffer(start_out) {
-        Ok(start) if rc == sys::SUCCESS => start,
-        Ok(_) => {
-            unwire_progress_callback();
-            out::error_line(&format!(
-                "download start failed: {}",
-                out::describe_result(rc)
-            ));
-            return 1;
-        }
-        Err(error) => {
-            unwire_progress_callback();
-            out::error_line(&format!("download start failed: {error}"));
-            return 1;
-        }
-    };
+    // Always call parse_proto_buffer first so the buffer is freed on every
+    // path, exactly as C++'s always-parse-then-check does.
+    let start: v1::DownloadStartResult =
+        match download_start_result(rc, parse_proto_buffer(start_out)) {
+            Ok(start) => start,
+            Err(message) => {
+                unwire_progress_callback();
+                out::error_line(&format!("download start failed: {message}"));
+                return 1;
+            }
+        };
     if !start.accepted {
         unwire_progress_callback();
         let message = start.error.map(|e| e.message).unwrap_or_default();
@@ -423,4 +437,46 @@ pub fn configure_models_download(cmd: &mut App) {
         };
         pull_model_flow(g, &resolved.model_id)
     });
+}
+
+#[cfg(test)]
+mod download_start_result_tests {
+    use super::*;
+
+    // Regression for id 27: when rac_download_start_proto returns a
+    // non-SUCCESS rc while the out-buffer's own envelope also decodes
+    // cleanly with a specific error_message, C++ always shows the generic
+    // describe_result(rc) text, never the buffer's own message.
+    #[test]
+    fn non_success_rc_wins_over_a_cleanly_parsed_buffer_error() {
+        let parsed: Result<v1::DownloadStartResult, String> =
+            Err("no space left on device".to_string());
+        let result = download_start_result(sys::RAC_ERROR_NOT_INITIALIZED, parsed);
+        assert_eq!(
+            result,
+            Err(out::describe_result(sys::RAC_ERROR_NOT_INITIALIZED))
+        );
+        assert_ne!(result, Err("no space left on device".to_string()));
+    }
+
+    #[test]
+    fn success_rc_with_parse_error_surfaces_the_parse_error() {
+        let parsed: Result<v1::DownloadStartResult, String> =
+            Err("failed to parse DownloadStartResult bytes".to_string());
+        let result = download_start_result(sys::SUCCESS, parsed);
+        assert_eq!(
+            result,
+            Err("failed to parse DownloadStartResult bytes".to_string())
+        );
+    }
+
+    #[test]
+    fn success_rc_with_ok_parse_returns_the_start_result() {
+        let start = v1::DownloadStartResult {
+            accepted: true,
+            ..Default::default()
+        };
+        let result = download_start_result(sys::SUCCESS, Ok(start.clone()));
+        assert_eq!(result, Ok(start));
+    }
 }
