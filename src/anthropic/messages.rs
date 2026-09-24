@@ -430,8 +430,13 @@ fn handle_non_streaming(
     };
 
     if result.abandoned {
-        // Nobody is reading; whatever is written here goes nowhere.
-        let _ = writer.send_full(499, &[], b"");
+        // Nobody is reading; whatever is written here goes nowhere. C++
+        // leaves `response.body` empty here too, but cpp-httplib's
+        // error_handler_ fires for ANY response >= 400 with an empty body,
+        // not just a routed 404, so the bytes it actually writes carry the
+        // same generic not_found_error JSON write_translator_error below
+        // produces for a routed 404.
+        write_translator_error(writer, 499, "POST", "/v1/messages");
         return;
     }
     let non_2xx = match &result.reply {
@@ -793,7 +798,9 @@ fn handle_streaming(
             }
             if guard.abandoned {
                 drop(guard);
-                let _ = writer.send_full(499, &[], b"");
+                // Same generic error_handler_ body as the non-streaming
+                // abandoned path above -- see the comment there.
+                write_translator_error(writer, 499, "POST", "/v1/messages");
                 return;
             }
             // Same raw-vs-client status split as the non-streaming path
@@ -1125,8 +1132,11 @@ fn register_routes(server: &mut Server, runtime: Arc<Runtime>) {
 
 /// The JSON body cpp-httplib's `error_handler_` (installed by
 /// `messages.cpp`) fills in for any response `set_error_handler` sees with
-/// an empty body -- a routed 404, or an earlier 400/414 wally never got far
-/// enough to route.
+/// an empty body -- a routed 404, an earlier 400/414 wally never got far
+/// enough to route, or a routed handler (like the abandoned-request 499s in
+/// `handle_non_streaming`/`handle_streaming`) that set a status without ever
+/// writing content. The message text is the same generic "is not something
+/// wally translates" line regardless of which of those triggered it.
 fn write_translator_error(writer: &mut ResponseWriter<'_>, status: i32, method: &str, path: &str) {
     let payload = translate::error_body(
         "not_found_error",
@@ -1366,5 +1376,49 @@ mod tests {
         assert_eq!(panic_message(&*s), "boom");
         let s: Box<dyn std::any::Any + Send> = Box::new(42i32);
         assert_eq!(panic_message(&*s), "unknown panic");
+    }
+
+    #[test]
+    fn nlohmann_type_name_covers_every_serde_json_variant() {
+        assert_eq!(nlohmann_type_name(&Value::Null), "null");
+        assert_eq!(nlohmann_type_name(&Value::Bool(true)), "boolean");
+        assert_eq!(nlohmann_type_name(&json!(1)), "number");
+        assert_eq!(nlohmann_type_name(&json!("s")), "string");
+        assert_eq!(nlohmann_type_name(&json!([1])), "array");
+        assert_eq!(nlohmann_type_name(&json!({"a": 1})), "object");
+    }
+
+    // A route that sets a status >= 400 without ever writing content (an
+    // abandoned-request 499, here and in handle_non_streaming/
+    // handle_streaming) is NOT a routed 404, but cpp-httplib's
+    // error_handler_ fires for any such response regardless -- so it must
+    // still carry the same generic not_found_error body write_translator_error
+    // produces for a routed 404, just naming the status that actually fired.
+    #[test]
+    fn write_translator_error_shapes_a_499_the_same_as_a_404() {
+        use crate::net::http1::{Client, Request, Server};
+        use std::time::Duration;
+
+        let mut server = Server::new();
+        server.route("POST", "/v1/messages", |_req, writer, _stream| {
+            write_translator_error(writer, 499, "POST", "/v1/messages");
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client = Client::new(
+            &format!("http://127.0.0.1:{port}"),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let request = Request::post("/v1/messages", Vec::new());
+        let reply = client.send(&request, None, None).unwrap();
+        assert_eq!(reply.status, 499);
+        let parsed: Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(parsed["error"]["type"], "not_found_error");
+        assert_eq!(
+            parsed["error"]["message"],
+            "POST /v1/messages is not something wally translates"
+        );
+        handle.stop();
     }
 }
