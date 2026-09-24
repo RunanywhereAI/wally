@@ -79,7 +79,7 @@ pub enum ValueType {
     Int,
     /// int64_t / long long
     Int64,
-    /// unsigned / uint32_t (also uint16_t ports)
+    /// unsigned / uint32_t
     UInt,
     /// uint64_t / size_t
     UInt64,
@@ -134,6 +134,13 @@ pub struct Opt {
     pub type_name: Option<String>,
     /// Per-name flag values from `{...}` suffixes (`--hide-thinking{false}`).
     pub flag_values: BTreeMap<String, String>,
+    /// Overrides `integer_bounds(value_type)`'s default `[min, max]` for an
+    /// option whose bound C++ variable is narrower than any `ValueType`
+    /// variant distinguishes (e.g. `serve --port`'s `uint16_t`). Kept as a
+    /// separate field rather than a new `ValueType` variant because
+    /// `ValueType` is matched exhaustively by `cli_formatter.rs`, owned by a
+    /// different worker.
+    pub int_bound_override: Option<(i128, i128)>,
 }
 
 impl Opt {
@@ -155,6 +162,13 @@ impl Opt {
     }
     pub fn type_name(&mut self, name: &str) -> &mut Self {
         self.type_name = Some(name.to_string());
+        self
+    }
+    /// Narrows the integer conversion/range check to `[min, max]`, for an
+    /// option bound to a C++ integer width no `ValueType` variant covers
+    /// (e.g. `serve --port`'s `uint16_t`, `[0, 65535]`).
+    pub fn int_bounds(&mut self, min: i128, max: i128) -> &mut Self {
+        self.int_bound_override = Some((min, max));
         self
     }
     /// Bound to a `std::vector` in C++: may repeat (option) / takes the rest (positional).
@@ -302,6 +316,7 @@ impl App {
             validators: Vec::new(),
             type_name: None,
             flag_values: BTreeMap::new(),
+            int_bound_override: None,
         });
         self.options.last_mut().expect("just pushed")
     }
@@ -339,6 +354,7 @@ impl App {
             validators: Vec::new(),
             type_name: None,
             flag_values,
+            int_bound_override: None,
         });
         self.options.last_mut().expect("just pushed")
     }
@@ -558,8 +574,24 @@ impl<'a> ParseState<'a> {
                         continue;
                     }
                     Token::Short { name, rest } => {
-                        i = self.consume_short(args, i, name, rest);
-                        continue;
+                        // CLI11's own carve-out (`App::_recognize`): a
+                        // short-shaped token whose name character is a digit
+                        // is only "recognized" as a short option if that
+                        // exact `-N` is registered on *this* frame's own app
+                        // (no fallthrough); otherwise it's a negative-number-
+                        // shaped plain value (`-1`, `-1.5`, `-99999999999`),
+                        // taken as-is rather than reported as an unmatched
+                        // option.
+                        let is_digit_name = name.as_bytes().get(1).is_some_and(u8::is_ascii_digit);
+                        let registered = self.frames[depth]
+                            .app
+                            .options
+                            .iter()
+                            .any(|o| o.names.iter().any(|n| n == name));
+                        if !is_digit_name || registered {
+                            i = self.consume_short(args, i, name, rest);
+                            continue;
+                        }
                     }
                 }
             }
@@ -680,16 +712,10 @@ impl<'a> ParseState<'a> {
     ) -> usize {
         let is_flag = self.frames[level].app.options[opt_idx].is_flag;
         if is_flag {
-            let matched_name = args[i]
-                .split('=')
-                .next()
-                .unwrap_or(&args[i])
-                .split(|c: char| c != '-' && !c.is_ascii_alphanumeric())
-                .next()
-                .unwrap_or(&args[i]);
-            let _ = matched_name;
-            // Flags never take a value; look up which registered name was
-            // typed to resolve its `{value}` result (defaults to "true").
+            // A flag always consumes only its own token (never a following
+            // token, cluster remainder, or short-form `=value` — CLI11's
+            // `max_num == 0` branch in `_parse_arg` only ever looks at the
+            // *long*-form inline `value`, never `rest`).
             let opt = &self.frames[level].app.options[opt_idx];
             let typed_name = opt
                 .names
@@ -697,20 +723,57 @@ impl<'a> ParseState<'a> {
                 .find(|n| args[i].starts_with(n.as_str()))
                 .cloned()
                 .unwrap_or_default();
-            let value = opt
-                .flag_values
-                .get(&typed_name)
-                .cloned()
-                .unwrap_or_else(|| "true".to_string());
-            let spec = opt.spec.clone();
-            self.frames[level]
-                .parsed
-                .flag_values
-                .entry(spec)
-                .or_default()
-                .push(value);
-            // A flag consumes only its own token regardless of a short cluster's
-            // remainder or an inline `=value` — both arms were identical.
+            let resolved = match inline {
+                // Plain `--flag` (no `=value`) or a short-form match (whose
+                // `rest`, if any, was never split on `=` to begin with —
+                // see `consume_short`): CLI11's `get_flag_value` returns the
+                // typed name's registered `{value}` result if it has one,
+                // else the literal `"true"`. None of wally's C++ flags
+                // register a `{value}` mapping (`default_flag_values_`
+                // stays empty for every one, confirmed by grep), so this is
+                // always just `split_flag_value`'s own default/`{false}`
+                // text.
+                // `--flag=` (long form, empty inline): `get_flag_value`
+                // treats an empty `value` the same as no `=` at all —
+                // `input_value.empty()` short-circuits to the default/`true`
+                // text before `to_flag_value` is ever called.
+                None | Some("") => Ok(opt
+                    .flag_values
+                    .get(&typed_name)
+                    .cloned()
+                    .unwrap_or_else(|| "true".to_string())),
+                // `--flag=value` (long form only — `args[i]` starts with
+                // `--`): `get_flag_value` returns `value` verbatim (again,
+                // no wally flag has a `{value}` mapping to intercept it),
+                // and the bound `bool`'s own `lexical_cast` — CLI11's
+                // `to_flag_value` — decides the stored result.
+                Some(v) if args[i].starts_with("--") => match flag_value_bool(v) {
+                    Some(true) => Ok("true".to_string()),
+                    Some(false) => Ok("false".to_string()),
+                    None => Err(format!("Could not convert: {typed_name} = {v}")),
+                },
+                // A short-clustered flag's glued-on remainder (`-fx`): not
+                // exercised by any known fuzzed shape; keep the prior,
+                // pre-existing behavior (ignore it, same as a bare flag)
+                // rather than guess at CLI11's short-form `=` handling.
+                Some(_) => Ok(opt
+                    .flag_values
+                    .get(&typed_name)
+                    .cloned()
+                    .unwrap_or_else(|| "true".to_string())),
+            };
+            match resolved {
+                Ok(value) => {
+                    let spec = opt.spec.clone();
+                    self.frames[level]
+                        .parsed
+                        .flag_values
+                        .entry(spec)
+                        .or_default()
+                        .push(value);
+                }
+                Err(msg) => self.push_parse_error(msg),
+            }
             return i + 1;
         }
 
@@ -718,6 +781,7 @@ impl<'a> ParseState<'a> {
         let value_type = self.frames[level].app.options[opt_idx].value_type;
         let validators = self.frames[level].app.options[opt_idx].validators.clone();
         let type_name = self.frames[level].app.options[opt_idx].type_name.clone();
+        let int_bound_override = self.frames[level].app.options[opt_idx].int_bound_override;
         let display = self.frames[level].app.options[opt_idx]
             .names
             .iter()
@@ -740,28 +804,43 @@ impl<'a> ParseState<'a> {
         // passthrough positional — see `fill_positional`, unaffected by this.)
         let mut next = i + 1;
         let mut values: Vec<String> = Vec::new();
-        if let Some(v) = inline {
-            values.push(v.to_string());
-        } else {
-            match args.get(next) {
-                Some(v) if !looks_like_flag(v) => {
+        // An inline `=value` only counts as "the value" when it's non-empty
+        // (CLI11's `_parse_arg`: `} else if(!value.empty()) { // --this=value`
+        // — a bare `--opt=` falls straight through to the same mandatory-
+        // token consumption a plain `--opt` with nothing after it would
+        // use). That consumption is unconditional on the next token's shape:
+        // CLI11's own loop (`while(min_num > collected && !args.empty())`)
+        // has no classification check at all — an option-shaped or
+        // negative-number-shaped next token is still grabbed as the value,
+        // never left for later parsing (only a truly *absent* next token
+        // raises "N required TYPE missing").
+        match inline {
+            Some(v) if !v.is_empty() => {
+                values.push(v.to_string());
+            }
+            _ => match args.get(next) {
+                Some(v) => {
                     values.push(v.clone());
                     next += 1;
                 }
-                _ => {
+                None => {
                     self.push_parse_error(format!(
                         "{display}: 1 required {} missing",
                         full_type_name(value_type, type_name.as_deref(), &validators)
                     ));
                     return next;
                 }
-            }
+            },
         }
 
+        let mut normalized: Vec<String> = Vec::with_capacity(values.len());
         for raw in &values {
-            if let Err(msg) = validate_and_convert(&display, raw, value_type, &validators) {
-                self.push_parse_error(msg);
-                return next;
+            match validate_and_convert(&display, raw, value_type, &validators, int_bound_override) {
+                Ok(canonical) => normalized.push(canonical),
+                Err(msg) => {
+                    self.push_parse_error(msg);
+                    return next;
+                }
             }
         }
         self.frames[level]
@@ -769,7 +848,7 @@ impl<'a> ParseState<'a> {
             .values
             .entry(spec)
             .or_default()
-            .extend(values);
+            .extend(normalized);
         next
     }
 
@@ -789,6 +868,22 @@ impl<'a> ParseState<'a> {
     }
 
     fn fill_positional(&mut self, depth: usize, token: &str) {
+        let positional_only = self.frames[depth].positional_only;
+        // CLI11's `App::_parse_positional` tail fallback: once a bare `--`
+        // has set `positional_only`, a NONE-classified token that names one
+        // of *this* (sub)command's own subcommands is handed to that
+        // subcommand's `_parse` directly (`_find_subcommand` + `com->_parse`)
+        // rather than through the normal `SUBCOMMAND` classification —
+        // bypassing the bookkeeping (`_parse_subcommand`) that would
+        // register it in `parsed_subcommands_`. None of wally's subcommands
+        // set `parse_complete_callback_`, so that back-door `_parse` is
+        // observably a no-op: the token vanishes instead of becoming an
+        // extra, and this (sub)command's own required-subcommand check still
+        // sees nothing entered (reproduced against the real C++ binary:
+        // `wally -- version` / `-- about` / `--json -- version` all print the
+        // bare root help and exit 0, the same as no subcommand at all).
+        let swallow_subcommand =
+            positional_only && self.frames[depth].app.get_subcommand(token).is_some();
         let frame = &mut self.frames[depth];
         let positionals: Vec<usize> = frame
             .app
@@ -812,6 +907,8 @@ impl<'a> ParseState<'a> {
             if !multi {
                 frame.positional_cursor += 1;
             }
+        } else if swallow_subcommand {
+            // Silently discarded, as in C++ — see the comment above.
         } else {
             // Whether this later gets reported (`_process_extras()`, `finish()`)
             // depends on `prefix_command`/`allow_extras` there, not here — every
@@ -857,6 +954,35 @@ impl<'a> ParseState<'a> {
         }
 
         let path = self.path();
+
+        // `Option::run_callback()` (via `App::_process_callbacks()`, called
+        // from `_process()` before `_process_requirements()`/
+        // `_process_extras()`): each option's `_reduce_results` applies its
+        // `multi_option_policy_`, defaulted to `MultiOptionPolicy::Throw`
+        // (CLI11.hpp) — a non-`multi` option given more than once (repeat
+        // occurrences all accumulate into the same `results_`, since
+        // `expected_max_` is 1 for anything not raised to
+        // `detail::expected_max_vector_size`) throws
+        // `ArgumentMismatch::AtMost(get_name(), 1, results_.size())`. This
+        // runs top-down like requirements/extras, but before both — and
+        // after any conversion/missing-value error above, since those throw
+        // immediately during the scan, before `_process()` is ever reached.
+        for frame in &self.frames {
+            for opt in &frame.app.options {
+                if opt.multi || opt.is_flag {
+                    continue;
+                }
+                let count = frame.parsed.values.get(&opt.spec).map_or(0, Vec::len);
+                if count > 1 {
+                    return Outcome::ParseErr {
+                        message: format!(
+                            "{}: At Most 1 required but received {count}",
+                            primary_name(opt)
+                        ),
+                    };
+                }
+            }
+        }
 
         // `_process_requirements()`: top-down, first violation wins.
         for (level, frame) in self.frames.iter().enumerate() {
@@ -941,16 +1067,6 @@ fn primary_name(opt: &Opt) -> &str {
         .unwrap_or("")
 }
 
-/// Whether CLI11 would classify `token` as option-shaped (so a `multi`
-/// option/positional stops greedily consuming at it). A `-`-prefixed
-/// negative number is deliberately still "looks like a flag" here — none of
-/// wally's vector options are ever fed literal negative numbers, and CLI11's
-/// own carve-out for them (checking whether a same-named short option exists)
-/// is not worth the complexity it would add throughout the resolver.
-fn looks_like_flag(token: &str) -> bool {
-    token.starts_with('-') && token != "-"
-}
-
 fn base_type_name(value_type: ValueType, override_name: Option<&str>) -> String {
     if let Some(name) = override_name {
         return name.to_string();
@@ -1006,48 +1122,212 @@ fn full_type_name(
     full
 }
 
-/// CLI11's base-0 integer `lexical_cast`: `0x`/`0X` hex, a lone leading `0`
-/// with more digits octal, otherwise decimal; `_`/`'` are digit separators.
-fn parse_cli_int(raw: &str) -> Option<i64> {
-    let cleaned: String = raw.chars().filter(|c| *c != '_' && *c != '\'').collect();
-    let (neg, digits) = match cleaned.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, cleaned.strip_prefix('+').unwrap_or(&cleaned)),
+/// One pass of C's `strtoull`/`strtoll(str, &end, 0)`, read at i128
+/// precision: skips leading ASCII whitespace, an optional `+`/`-` sign,
+/// then detects the base from a `0x`/`0X` prefix followed by at least one
+/// hex digit (hex), else a leading `0` (octal — a lone `"0"` is base 8 with
+/// zero further digits, value 0), else decimal, and consumes as many valid
+/// digits of that base as it can. Returns the signed value only when the
+/// consumed span reaches the exact end of `raw` (mirroring CLI11's own
+/// `val == input.c_str() + input.size()` full-match check — a partial
+/// parse, including a bare sign or an unconsumed `0x` with no hex digits
+/// after it, is a failure here exactly as it is in the C++, which then
+/// tries its own further fallbacks rather than accepting a partial parse).
+fn strtoll_base0(raw: &str) -> Option<i128> {
+    let bytes = raw.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && (bytes[i] as char).is_ascii_whitespace() {
+        i += 1;
+    }
+    let negative = match bytes.get(i) {
+        Some(b'-') => {
+            i += 1;
+            true
+        }
+        Some(b'+') => {
+            i += 1;
+            false
+        }
+        _ => false,
     };
-    let value = if let Some(hex) = digits
-        .strip_prefix("0x")
-        .or_else(|| digits.strip_prefix("0X"))
+    let hex_prefix = bytes[i..].starts_with(b"0x") || bytes[i..].starts_with(b"0X");
+    let (radix, digits_from): (u32, usize) = if hex_prefix
+        && bytes
+            .get(i + 2)
+            .is_some_and(|b| (*b as char).is_ascii_hexdigit())
     {
-        i64::from_str_radix(hex, 16).ok()?
-    } else if digits.len() > 1 && digits.starts_with('0') && digits.chars().all(|c| c.is_digit(8)) {
-        i64::from_str_radix(digits, 8).ok()?
+        (16, i + 2)
+    } else if bytes.get(i) == Some(&b'0') {
+        (8, i)
     } else {
-        digits.parse::<i64>().ok()?
+        (10, i)
     };
-    Some(if neg { -value } else { value })
+    let mut j = digits_from;
+    let mut magnitude: i128 = 0;
+    while j < bytes.len() {
+        match (bytes[j] as char).to_digit(radix) {
+            Some(d) => {
+                magnitude = magnitude
+                    .checked_mul(i128::from(radix))?
+                    .checked_add(i128::from(d))?;
+                j += 1;
+            }
+            None => break,
+        }
+    }
+    if j == digits_from || j != bytes.len() {
+        // No digit consumed at all (bare sign, "0x" with no hex digit
+        // after it, all-whitespace input) or trailing garbage left over.
+        return None;
+    }
+    Some(if negative { -magnitude } else { magnitude })
 }
 
+/// CLI11's `detail::integral_conversion<T>`: the base-0 numeral grammar
+/// above, plus CLI11's own further fallbacks, tried in the same order the
+/// C++ tries them: strip `_`/`'` digit separators and retry; if the string
+/// ends in whitespace, trim both ends and retry; a `0o`/`0O` prefix
+/// (octal, which a libc `strtoull` does not itself recognize); a `0b`/`0B`
+/// prefix (binary). `unsigned_only` mirrors the *unsigned* overload's
+/// upfront `input.front() == '-'` rejection — it never even calls
+/// `strtoull` on a negative-looking string, unlike the signed overload,
+/// which parses the sign and lets a negative result fail the caller's own
+/// range check. Returns the exact mathematical value at i128 precision (far
+/// wider than any C++ integer width wally binds an option to), so the
+/// caller range-checks it against that option's own width — the same
+/// effect as CLI11's per-`T` `static_cast` round-trip check, without a
+/// generic parse per width.
+fn cli_lexical_int(raw: &str, unsigned_only: bool) -> Option<i128> {
+    if unsigned_only && raw.starts_with('-') {
+        return None;
+    }
+    if let Some(v) = strtoll_base0(raw) {
+        return Some(v);
+    }
+    if raw.contains(['_', '\'']) {
+        let stripped: String = raw.chars().filter(|c| *c != '_' && *c != '\'').collect();
+        if let Some(v) = cli_lexical_int(&stripped, unsigned_only) {
+            return Some(v);
+        }
+    }
+    if raw.ends_with(|c: char| c.is_ascii_whitespace()) {
+        if let Some(v) = cli_lexical_int(raw.trim(), unsigned_only) {
+            return Some(v);
+        }
+    }
+    for (p1, p2, radix) in [("0o", "0O", 8u32), ("0b", "0B", 2u32)] {
+        if let Some(digits) = raw.strip_prefix(p1).or_else(|| raw.strip_prefix(p2)) {
+            if !digits.is_empty() && digits.chars().all(|c| c.is_digit(radix)) {
+                if let Ok(v) = i128::from_str_radix(digits, radix) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// CLI11's `detail::to_flag_value` + boolean `lexical_cast`, for converting a
+/// `--flag=value` inline value on a boolean flag option. Mirrors: exact
+/// case-sensitive `"true"`/`"false"`, then lowercase, then a single-char
+/// special case, then a multi-char keyword set, then a numeric fallback via
+/// `strtoll` where the sign of the result decides the boolean (`out > 0`).
+/// Returns `None` when CLI11 would leave `errno == EINVAL` (conversion
+/// fails, i.e. "Could not convert").
+fn flag_value_bool(input: &str) -> Option<bool> {
+    if input == "true" {
+        return Some(true);
+    }
+    if input == "false" {
+        return Some(false);
+    }
+    let lower = input.to_ascii_lowercase();
+    if lower.chars().count() == 1 {
+        return match lower.chars().next().unwrap() {
+            '1'..='9' => Some(true),
+            '0' | 'f' | 'n' | '-' => Some(false),
+            't' | 'y' | '+' => Some(true),
+            _ => None,
+        };
+    }
+    match lower.as_str() {
+        "true" | "on" | "yes" | "enable" => return Some(true),
+        "false" | "off" | "no" | "disable" => return Some(false),
+        _ => {}
+    }
+    strtoll_base0(&lower).map(|v| v > 0)
+}
+
+/// The inclusive `[min, max]` a specific C++ integer width can hold, at
+/// i128 precision — what `cli_lexical_int`'s result gets range-checked
+/// against, standing in for CLI11's per-`T` round-trip cast check. A handful
+/// of options are bound to a C++ width narrower than any `ValueType` variant
+/// distinguishes (e.g. `serve --port`'s `uint16_t`); those attach an
+/// `Opt::int_bound_override` instead of a dedicated `ValueType` variant, so
+/// this table only needs one arm per *distinct* `ValueType`, matching
+/// `cli_formatter.rs`'s own (separately owned) exhaustive match on the same
+/// enum.
+fn integer_bounds(value_type: ValueType) -> (i128, i128) {
+    match value_type {
+        ValueType::Int => (i128::from(i32::MIN), i128::from(i32::MAX)),
+        ValueType::Int64 => (i128::from(i64::MIN), i128::from(i64::MAX)),
+        ValueType::UInt => (0, i128::from(u32::MAX)),
+        ValueType::UInt64 => (0, i128::from(u64::MAX)),
+        ValueType::Text | ValueType::Float | ValueType::Double => {
+            (i128::from(i64::MIN), i128::from(i64::MAX))
+        }
+    }
+}
+
+/// Validates `raw` against `validators` and its bound type, and returns the
+/// canonical string to store (identical to `raw` for everything except: an
+/// empty value, which CLI11's `detail::lexical_assign` converts to the
+/// type's default-constructed zero/empty value *without* ever running the
+/// type's own `lexical_cast` — skipping hex/octal parsing and range checks
+/// entirely — regardless of what `raw` would otherwise mean; and a numeral
+/// written in a form `lexical_cast` accepts but a plain decimal parse
+/// wouldn't, e.g. `0x10` or `' 5'`, which are canonicalized to plain
+/// decimal here so every later reader (`get_i64`, `get_str`, …) sees the
+/// same value CLI11's callback would have seen). Validators still run
+/// first, on the raw text, even when it's empty — CLI11's own
+/// `Option::_validate` only special-cases an empty result when the option
+/// itself expects zero values, which is never true for a normal wally
+/// option (confirmed against the real C++ binary: `telemetry emit --count
+/// ''` still hits the `PositiveNumber` validator's failure text, not a
+/// silent zero).
 fn validate_and_convert(
     display: &str,
     raw: &str,
     value_type: ValueType,
     validators: &[Validator],
-) -> Result<(), String> {
+    int_bound_override: Option<(i128, i128)>,
+) -> Result<String, String> {
     for validator in validators {
         if let Some(msg) = check_validator(validator, raw) {
             return Err(format!("{display}: {msg}"));
         }
     }
-    let ok = match value_type {
-        ValueType::Text => true,
-        ValueType::Int | ValueType::Int64 => parse_cli_int(raw).is_some(),
-        ValueType::UInt | ValueType::UInt64 => parse_cli_int(raw).is_some_and(|v| v >= 0),
-        ValueType::Float | ValueType::Double => raw.trim().parse::<f64>().is_ok(),
-    };
-    if !ok {
-        return Err(format!("Could not convert: {display} = {raw}"));
+    if raw.is_empty() {
+        return Ok(match value_type {
+            ValueType::Text => String::new(),
+            _ => "0".to_string(),
+        });
     }
-    Ok(())
+    match value_type {
+        ValueType::Text => Ok(raw.to_string()),
+        ValueType::Int | ValueType::Int64 | ValueType::UInt | ValueType::UInt64 => {
+            let unsigned = matches!(value_type, ValueType::UInt | ValueType::UInt64);
+            let (min, max) = int_bound_override.unwrap_or_else(|| integer_bounds(value_type));
+            match cli_lexical_int(raw, unsigned) {
+                Some(v) if v >= min && v <= max => Ok(v.to_string()),
+                _ => Err(format!("Could not convert: {display} = {raw}")),
+            }
+        }
+        ValueType::Float | ValueType::Double => match raw.trim().parse::<f64>() {
+            Ok(_) => Ok(raw.to_string()),
+            Err(_) => Err(format!("Could not convert: {display} = {raw}")),
+        },
+    }
 }
 
 /// One `->check(...)` validator, run against the raw string (CLI11 validates
