@@ -225,8 +225,15 @@ pub unsafe extern "C" fn fake_llm_generate_stream(
         let token_c = std::ffi::CString::new(token).unwrap_or_default();
         // SAFETY: callback is the caller-supplied function pointer; token_c
         // stays alive for the duration of this call.
-        let accepted =
-            unsafe { callback(token_c.as_ptr(), sys::FALSE, std::ptr::null(), 1, callback_user_data) };
+        let accepted = unsafe {
+            callback(
+                token_c.as_ptr(),
+                sys::FALSE,
+                std::ptr::null(),
+                1,
+                callback_user_data,
+            )
+        };
         if accepted != sys::TRUE {
             return sys::RAC_ERROR_STREAM_CANCELLED;
         }
@@ -506,7 +513,9 @@ pub unsafe extern "C" fn fake_tts_synthesize(
         let mut state = lock_state();
         state.tts_synthesize_count += 1;
         // SAFETY: text is a NUL-terminated string valid for this call.
-        state.last_tts_text = unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned();
+        state.last_tts_text = unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned();
         sys::SUCCESS
     });
     result.unwrap_or(sys::RAC_ERROR_INTERNAL)

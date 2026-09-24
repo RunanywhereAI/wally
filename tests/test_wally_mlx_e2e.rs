@@ -171,7 +171,11 @@ fn run_cli_or_fail(args: &[&str], expected_label: &str) -> Result<String, String
 /// `backend_has_primitives`, using `serde_json` instead of the C++ file's
 /// hand-rolled bracket scanner since this is test-side assertion logic, not
 /// CLI output that itself needs byte-identical behavior.
-fn backend_has_primitives(json_text: &str, backend_name: &str, expected: &[&str]) -> Result<(), String> {
+fn backend_has_primitives(
+    json_text: &str,
+    backend_name: &str,
+    expected: &[&str],
+) -> Result<(), String> {
     let parsed: serde_json::Value =
         serde_json::from_str(json_text).map_err(|e| format!("invalid JSON: {e}"))?;
     let backends = parsed
@@ -248,8 +252,11 @@ fn register_local_mlx_model(
     // duration of this call; rac_get_model_registry() returns the process
     // singleton registry handle.
     unsafe {
-        sys::rac_model_registry_register_proto(sys::rac_get_model_registry(), bytes.as_ptr(), bytes.len())
-            == sys::SUCCESS
+        sys::rac_model_registry_register_proto(
+            sys::rac_get_model_registry(),
+            bytes.as_ptr(),
+            bytes.len(),
+        ) == sys::SUCCESS
     }
 }
 
@@ -269,29 +276,71 @@ fn write_file(path: &Path, contents: &str) -> std::io::Result<()> {
 fn mlx_callback_bridge_all_slots() {
     let _lock = fakes::mlx_lock();
     fakes::reset_state();
-    assert!(fakes::install_fake_mlx_callbacks(), "install fake MLX callbacks");
+    assert!(
+        fakes::install_fake_mlx_callbacks(),
+        "install fake MLX callbacks"
+    );
     fakes::register_mlx_backend_or_fail().expect("register MLX backend");
     let _backend_guard = fakes::MlxBackendGuard;
 
     // SAFETY: "mlx" is a 'static NUL-terminated engine name; the FFI call has
     // no other preconditions.
-    let llm_vt = unsafe { sys::rac_plugin_find_for_engine(sys::RAC_PRIMITIVE_GENERATE_TEXT as sys::rac_primitive_t, c"mlx".as_ptr()) };
+    let llm_vt = unsafe {
+        sys::rac_plugin_find_for_engine(
+            sys::RAC_PRIMITIVE_GENERATE_TEXT as sys::rac_primitive_t,
+            c"mlx".as_ptr(),
+        )
+    };
     // SAFETY: as above.
-    let vlm_vt = unsafe { sys::rac_plugin_find_for_engine(sys::RAC_PRIMITIVE_VLM as sys::rac_primitive_t, c"mlx".as_ptr()) };
+    let vlm_vt = unsafe {
+        sys::rac_plugin_find_for_engine(
+            sys::RAC_PRIMITIVE_VLM as sys::rac_primitive_t,
+            c"mlx".as_ptr(),
+        )
+    };
     // SAFETY: as above.
-    let embed_vt = unsafe { sys::rac_plugin_find_for_engine(sys::RAC_PRIMITIVE_EMBED as sys::rac_primitive_t, c"mlx".as_ptr()) };
+    let embed_vt = unsafe {
+        sys::rac_plugin_find_for_engine(
+            sys::RAC_PRIMITIVE_EMBED as sys::rac_primitive_t,
+            c"mlx".as_ptr(),
+        )
+    };
     // SAFETY: as above.
-    let stt_vt = unsafe { sys::rac_plugin_find_for_engine(sys::RAC_PRIMITIVE_TRANSCRIBE as sys::rac_primitive_t, c"mlx".as_ptr()) };
+    let stt_vt = unsafe {
+        sys::rac_plugin_find_for_engine(
+            sys::RAC_PRIMITIVE_TRANSCRIBE as sys::rac_primitive_t,
+            c"mlx".as_ptr(),
+        )
+    };
     // SAFETY: as above.
-    let tts_vt = unsafe { sys::rac_plugin_find_for_engine(sys::RAC_PRIMITIVE_SYNTHESIZE as sys::rac_primitive_t, c"mlx".as_ptr()) };
+    let tts_vt = unsafe {
+        sys::rac_plugin_find_for_engine(
+            sys::RAC_PRIMITIVE_SYNTHESIZE as sys::rac_primitive_t,
+            c"mlx".as_ptr(),
+        )
+    };
 
-    assert!(!llm_vt.is_null() && !vlm_vt.is_null() && !embed_vt.is_null() && !stt_vt.is_null() && !tts_vt.is_null(), "registered MLX vtable for every modality");
+    assert!(
+        !llm_vt.is_null()
+            && !vlm_vt.is_null()
+            && !embed_vt.is_null()
+            && !stt_vt.is_null()
+            && !tts_vt.is_null(),
+        "registered MLX vtable for every modality"
+    );
     // SAFETY: each pointer above was just null-checked and, once
     // registered, is valid for the registry's lifetime per
     // rac_plugin_find_for_engine's documented contract.
     let (llm_vt, vlm_vt, embed_vt, stt_vt, tts_vt) =
         unsafe { (&*llm_vt, &*vlm_vt, &*embed_vt, &*stt_vt, &*tts_vt) };
-    assert!(!llm_vt.llm_ops.is_null() && !vlm_vt.vlm_ops.is_null() && !embed_vt.embedding_ops.is_null() && !stt_vt.stt_ops.is_null() && !tts_vt.tts_ops.is_null(), "registered MLX vtable with all modality op slots");
+    assert!(
+        !llm_vt.llm_ops.is_null()
+            && !vlm_vt.vlm_ops.is_null()
+            && !embed_vt.embedding_ops.is_null()
+            && !stt_vt.stt_ops.is_null()
+            && !tts_vt.tts_ops.is_null(),
+        "registered MLX vtable with all modality op slots"
+    );
     // SAFETY: each *_ops pointer was just null-checked above and is valid
     // for the registry's lifetime.
     let (llm_ops, vlm_ops, embed_ops, stt_ops, tts_ops) = unsafe {
@@ -315,8 +364,14 @@ fn mlx_callback_bridge_all_slots() {
     // populate every required slot); every pointer argument is a live,
     // correctly-typed local for the duration of the call.
     unsafe {
-        assert_eq!((llm_ops.create.unwrap())(model_id.as_ptr(), std::ptr::null(), &mut llm), sys::SUCCESS);
-        assert_eq!((llm_ops.initialize.unwrap())(llm, model_path.as_ptr()), sys::SUCCESS);
+        assert_eq!(
+            (llm_ops.create.unwrap())(model_id.as_ptr(), std::ptr::null(), &mut llm),
+            sys::SUCCESS
+        );
+        assert_eq!(
+            (llm_ops.initialize.unwrap())(llm, model_path.as_ptr()),
+            sys::SUCCESS
+        );
     }
     let mut llm_result: sys::rac_llm_result_t = unsafe { std::mem::zeroed() };
     let mut llm_stream = String::new();
@@ -324,7 +379,15 @@ fn mlx_callback_bridge_all_slots() {
     // SAFETY: as above; llm_stream's address is passed as callback_user_data
     // and only accessed synchronously within this call.
     unsafe {
-        assert_eq!((llm_ops.generate.unwrap())(llm, prompt_direct.as_ptr(), std::ptr::null(), &mut llm_result), sys::SUCCESS);
+        assert_eq!(
+            (llm_ops.generate.unwrap())(
+                llm,
+                prompt_direct.as_ptr(),
+                std::ptr::null(),
+                &mut llm_result
+            ),
+            sys::SUCCESS
+        );
         assert_eq!(
             (llm_ops.generate_stream.unwrap())(
                 llm,
@@ -335,7 +398,10 @@ fn mlx_callback_bridge_all_slots() {
             ),
             sys::SUCCESS
         );
-        assert_eq!((llm_ops.get_info.unwrap())(llm, &mut llm_info), sys::SUCCESS);
+        assert_eq!(
+            (llm_ops.get_info.unwrap())(llm, &mut llm_info),
+            sys::SUCCESS
+        );
         assert_eq!((llm_ops.cancel.unwrap())(llm), sys::SUCCESS);
         assert_eq!((llm_ops.cleanup.unwrap())(llm), sys::SUCCESS);
     }
@@ -347,7 +413,10 @@ fn mlx_callback_bridge_all_slots() {
         let state = fakes::lock_state();
         assert_eq!(state.llm_generate_count, 1);
         assert_eq!(state.stream_count, 1);
-        assert_eq!(state.last_kind, sys::RAC_MLX_SESSION_KIND_LLM as sys::rac_mlx_session_kind_t);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_LLM as sys::rac_mlx_session_kind_t
+        );
     }
     // SAFETY: llm_result was populated by generate() above and is freed
     // exactly once here; llm is destroyed exactly once after.
@@ -377,9 +446,24 @@ fn mlx_callback_bridge_all_slots() {
     let mut vlm_info: sys::rac_vlm_info_t = unsafe { std::mem::zeroed() };
     // SAFETY: as above.
     unsafe {
-        assert_eq!((vlm_ops.create.unwrap())(vlm_model_id.as_ptr(), std::ptr::null(), &mut vlm), sys::SUCCESS);
-        assert_eq!((vlm_ops.initialize.unwrap())(vlm, vlm_model_path.as_ptr(), std::ptr::null()), sys::SUCCESS);
-        assert_eq!((vlm_ops.process.unwrap())(vlm, &image, prompt_look.as_ptr(), std::ptr::null(), &mut vlm_result), sys::SUCCESS);
+        assert_eq!(
+            (vlm_ops.create.unwrap())(vlm_model_id.as_ptr(), std::ptr::null(), &mut vlm),
+            sys::SUCCESS
+        );
+        assert_eq!(
+            (vlm_ops.initialize.unwrap())(vlm, vlm_model_path.as_ptr(), std::ptr::null()),
+            sys::SUCCESS
+        );
+        assert_eq!(
+            (vlm_ops.process.unwrap())(
+                vlm,
+                &image,
+                prompt_look.as_ptr(),
+                std::ptr::null(),
+                &mut vlm_result
+            ),
+            sys::SUCCESS
+        );
         assert_eq!(
             (vlm_ops.process_stream.unwrap())(
                 vlm,
@@ -391,7 +475,10 @@ fn mlx_callback_bridge_all_slots() {
             ),
             sys::SUCCESS
         );
-        assert_eq!((vlm_ops.get_info.unwrap())(vlm, &mut vlm_info), sys::SUCCESS);
+        assert_eq!(
+            (vlm_ops.get_info.unwrap())(vlm, &mut vlm_info),
+            sys::SUCCESS
+        );
         assert_eq!((vlm_ops.cancel.unwrap())(vlm), sys::SUCCESS);
         assert_eq!((vlm_ops.cleanup.unwrap())(vlm), sys::SUCCESS);
     }
@@ -403,7 +490,10 @@ fn mlx_callback_bridge_all_slots() {
         let state = fakes::lock_state();
         assert_eq!(state.vlm_process_count, 1);
         assert_eq!(state.vlm_stream_count, 1);
-        assert_eq!(state.last_kind, sys::RAC_MLX_SESSION_KIND_VLM as sys::rac_mlx_session_kind_t);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_VLM as sys::rac_mlx_session_kind_t
+        );
     }
     // SAFETY: vlm_result was populated by process() above and is freed
     // exactly once here; vlm is destroyed exactly once after.
@@ -421,10 +511,27 @@ fn mlx_callback_bridge_all_slots() {
     let mut embed_info: sys::rac_embeddings_info_t = unsafe { std::mem::zeroed() };
     // SAFETY: as above.
     unsafe {
-        assert_eq!((embed_ops.create.unwrap())(embed_model_id.as_ptr(), std::ptr::null(), &mut embed), sys::SUCCESS);
-        assert_eq!((embed_ops.initialize.unwrap())(embed, embed_model_path.as_ptr()), sys::SUCCESS);
-        assert_eq!((embed_ops.embed.unwrap())(embed, single_text.as_ptr(), std::ptr::null(), &mut embed_result), sys::SUCCESS);
-        assert_eq!((embed_ops.get_info.unwrap())(embed, &mut embed_info), sys::SUCCESS);
+        assert_eq!(
+            (embed_ops.create.unwrap())(embed_model_id.as_ptr(), std::ptr::null(), &mut embed),
+            sys::SUCCESS
+        );
+        assert_eq!(
+            (embed_ops.initialize.unwrap())(embed, embed_model_path.as_ptr()),
+            sys::SUCCESS
+        );
+        assert_eq!(
+            (embed_ops.embed.unwrap())(
+                embed,
+                single_text.as_ptr(),
+                std::ptr::null(),
+                &mut embed_result
+            ),
+            sys::SUCCESS
+        );
+        assert_eq!(
+            (embed_ops.get_info.unwrap())(embed, &mut embed_info),
+            sys::SUCCESS
+        );
         sys::rac_embeddings_result_free(&mut embed_result);
     }
     let text_one = CString::new("one").unwrap();
@@ -434,7 +541,13 @@ fn mlx_callback_bridge_all_slots() {
     // num_texts argument.
     unsafe {
         assert_eq!(
-            (embed_ops.embed_batch.unwrap())(embed, embed_texts.as_ptr(), 2, std::ptr::null(), &mut embed_result),
+            (embed_ops.embed_batch.unwrap())(
+                embed,
+                embed_texts.as_ptr(),
+                2,
+                std::ptr::null(),
+                &mut embed_result
+            ),
             sys::SUCCESS
         );
         assert_eq!((embed_ops.cleanup.unwrap())(embed), sys::SUCCESS);
@@ -445,7 +558,10 @@ fn mlx_callback_bridge_all_slots() {
         let state = fakes::lock_state();
         assert_eq!(state.embed_batch_count, 2);
         assert_eq!(state.embedding_info_count, 1);
-        assert_eq!(state.last_kind, sys::RAC_MLX_SESSION_KIND_EMBEDDINGS as sys::rac_mlx_session_kind_t);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_EMBEDDINGS as sys::rac_mlx_session_kind_t
+        );
     }
     // SAFETY: embed_result was populated by embed_batch() above and is freed
     // exactly once here; embed is destroyed exactly once after.
@@ -466,10 +582,22 @@ fn mlx_callback_bridge_all_slots() {
     // SAFETY: as above; samples is a valid Int16 buffer for audio_size
     // bytes, per the STT ops audio_data/audio_size contract.
     unsafe {
-        assert_eq!((stt_ops.create.unwrap())(stt_model_id.as_ptr(), std::ptr::null(), &mut stt), sys::SUCCESS);
-        assert_eq!((stt_ops.initialize.unwrap())(stt, stt_model_path.as_ptr()), sys::SUCCESS);
         assert_eq!(
-            (stt_ops.transcribe.unwrap())(stt, samples.as_ptr() as *const std::ffi::c_void, audio_size, std::ptr::null(), &mut stt_result),
+            (stt_ops.create.unwrap())(stt_model_id.as_ptr(), std::ptr::null(), &mut stt),
+            sys::SUCCESS
+        );
+        assert_eq!(
+            (stt_ops.initialize.unwrap())(stt, stt_model_path.as_ptr()),
+            sys::SUCCESS
+        );
+        assert_eq!(
+            (stt_ops.transcribe.unwrap())(
+                stt,
+                samples.as_ptr() as *const std::ffi::c_void,
+                audio_size,
+                std::ptr::null(),
+                &mut stt_result
+            ),
             sys::SUCCESS
         );
         assert_eq!(
@@ -483,7 +611,10 @@ fn mlx_callback_bridge_all_slots() {
             ),
             sys::SUCCESS
         );
-        assert_eq!((stt_ops.get_info.unwrap())(stt, &mut stt_info), sys::SUCCESS);
+        assert_eq!(
+            (stt_ops.get_info.unwrap())(stt, &mut stt_info),
+            sys::SUCCESS
+        );
         assert_eq!((stt_ops.cleanup.unwrap())(stt), sys::SUCCESS);
     }
     let stt_text = unsafe { std::ffi::CStr::from_ptr(stt_result.text) }.to_string_lossy();
@@ -495,7 +626,10 @@ fn mlx_callback_bridge_all_slots() {
         assert_eq!(state.stt_transcribe_count, 1);
         assert_eq!(state.stt_stream_count, 1);
         assert_eq!(state.stt_info_count, 1);
-        assert_eq!(state.last_kind, sys::RAC_MLX_SESSION_KIND_STT as sys::rac_mlx_session_kind_t);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_STT as sys::rac_mlx_session_kind_t
+        );
     }
     // SAFETY: stt_result was populated by transcribe() above and is freed
     // exactly once here; stt is destroyed exactly once after.
@@ -515,9 +649,15 @@ fn mlx_callback_bridge_all_slots() {
     // SAFETY: as above; TTS create/initialize take no model_path (voice ID
     // is passed via create's model_id).
     unsafe {
-        assert_eq!((tts_ops.create.unwrap())(tts_model_id.as_ptr(), std::ptr::null(), &mut tts), sys::SUCCESS);
+        assert_eq!(
+            (tts_ops.create.unwrap())(tts_model_id.as_ptr(), std::ptr::null(), &mut tts),
+            sys::SUCCESS
+        );
         assert_eq!((tts_ops.initialize.unwrap())(tts), sys::SUCCESS);
-        assert_eq!((tts_ops.synthesize.unwrap())(tts, say_it.as_ptr(), std::ptr::null(), &mut tts_result), sys::SUCCESS);
+        assert_eq!(
+            (tts_ops.synthesize.unwrap())(tts, say_it.as_ptr(), std::ptr::null(), &mut tts_result),
+            sys::SUCCESS
+        );
         assert_eq!(
             (tts_ops.synthesize_stream.unwrap())(
                 tts,
@@ -529,7 +669,10 @@ fn mlx_callback_bridge_all_slots() {
             sys::SUCCESS
         );
         assert_eq!((tts_ops.stop.unwrap())(tts), sys::SUCCESS);
-        assert_eq!((tts_ops.get_info.unwrap())(tts, &mut tts_info), sys::SUCCESS);
+        assert_eq!(
+            (tts_ops.get_info.unwrap())(tts, &mut tts_info),
+            sys::SUCCESS
+        );
         assert_eq!((tts_ops.cleanup.unwrap())(tts), sys::SUCCESS);
     }
     // tts_stop_count is intentionally NOT asserted here: the kit only
@@ -548,7 +691,10 @@ fn mlx_callback_bridge_all_slots() {
         assert_eq!(state.tts_synthesize_count, 1);
         assert_eq!(state.tts_stream_count, 1);
         assert_eq!(state.tts_info_count, 1);
-        assert_eq!(state.last_kind, sys::RAC_MLX_SESSION_KIND_TTS as sys::rac_mlx_session_kind_t);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_TTS as sys::rac_mlx_session_kind_t
+        );
     }
     // SAFETY: tts_result was populated by synthesize() above and is freed
     // exactly once here; tts is destroyed exactly once after.
@@ -585,7 +731,10 @@ fn mlx_callback_bridge_all_slots() {
 fn wally_mlx_run_end_to_end() {
     let _lock = fakes::mlx_lock();
     fakes::reset_state();
-    assert!(fakes::install_fake_mlx_callbacks(), "install fake MLX callbacks");
+    assert!(
+        fakes::install_fake_mlx_callbacks(),
+        "install fake MLX callbacks"
+    );
 
     let home = tempfile::tempdir().expect("temp home");
     let llm_dir = tempfile::tempdir().expect("temp llm dir");
@@ -609,61 +758,139 @@ fn wally_mlx_run_end_to_end() {
         .expect("write input wav");
 
     let mut options = wally::bootstrap::GlobalOptions::default();
-    options.home_override = Some(home.path().to_string_lossy().into_owned());
+    options.home_override = home.path().to_string_lossy().into_owned();
     options.json = true;
     options.no_progress = true;
     let _bootstrapped = wally::bootstrap::bootstrap(&options).expect("bootstrap");
 
     assert!(
-        register_local_mlx_model(llm_dir.path(), "mlx.fake.llm", "Fake MLX LLM", v1::ModelCategory::Language),
+        register_local_mlx_model(
+            llm_dir.path(),
+            "mlx.fake.llm",
+            "Fake MLX LLM",
+            v1::ModelCategory::Language
+        ),
         "register local MLX LLM model"
     );
     assert!(
-        register_local_mlx_model(vlm_dir.path(), "mlx.fake.vlm", "Fake MLX VLM", v1::ModelCategory::Multimodal),
+        register_local_mlx_model(
+            vlm_dir.path(),
+            "mlx.fake.vlm",
+            "Fake MLX VLM",
+            v1::ModelCategory::Multimodal
+        ),
         "register local MLX VLM model"
     );
     assert!(
-        register_local_mlx_model(embedding_dir.path(), "mlx.fake.embed", "Fake MLX Embeddings", v1::ModelCategory::Embedding),
+        register_local_mlx_model(
+            embedding_dir.path(),
+            "mlx.fake.embed",
+            "Fake MLX Embeddings",
+            v1::ModelCategory::Embedding
+        ),
         "register local MLX embedding model"
     );
     assert!(
-        register_local_mlx_model(stt_dir.path(), "mlx.fake.stt", "Fake MLX STT", v1::ModelCategory::SpeechRecognition),
+        register_local_mlx_model(
+            stt_dir.path(),
+            "mlx.fake.stt",
+            "Fake MLX STT",
+            v1::ModelCategory::SpeechRecognition
+        ),
         "register local MLX STT model"
     );
     assert!(
-        register_local_mlx_model(tts_dir.path(), "mlx.fake.tts", "Fake MLX TTS", v1::ModelCategory::SpeechSynthesis),
+        register_local_mlx_model(
+            tts_dir.path(),
+            "mlx.fake.tts",
+            "Fake MLX TTS",
+            v1::ModelCategory::SpeechSynthesis
+        ),
         "register local MLX TTS model"
     );
 
     let home_str = home.path().to_string_lossy().into_owned();
 
-    let backends_json = run_cli_or_fail(&["wally", "--json", "--no-progress", "--home", &home_str, "backends"], "backends")
-        .expect("backends command");
+    let backends_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "backends",
+        ],
+        "backends",
+    )
+    .expect("backends command");
     backend_has_primitives(&backends_json, "mlx", &["generate_text", "vlm", "embed", "transcribe", "synthesize"])
         .unwrap_or_else(|e| panic!("mlx backend with generate_text/vlm/embed/transcribe/synthesize primitives: {e}: {backends_json}"));
 
-    let list_json = run_cli_or_fail(&["wally", "--json", "--no-progress", "--home", &home_str, "models", "list", "--all"], "models list")
-        .expect("models list command");
+    let list_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "models",
+            "list",
+            "--all",
+        ],
+        "models list",
+    )
+    .expect("models list command");
     // The LLM-only surface lists language models only; the non-LLM fakes are
     // still registered and exercised by the run checks below, just not shown
     // here.
-    assert!(list_json.contains("\"id\":\"mlx.fake.llm\""), "MLX fake LLM row present: {list_json}");
-    assert!(list_json.contains("\"modality\":\"llm\""), "MLX fake LLM row present: {list_json}");
-    assert!(list_json.contains("\"backend\":\"mlx\""), "MLX fake LLM row present: {list_json}");
+    assert!(
+        list_json.contains("\"id\":\"mlx.fake.llm\""),
+        "MLX fake LLM row present: {list_json}"
+    );
+    assert!(
+        list_json.contains("\"modality\":\"llm\""),
+        "MLX fake LLM row present: {list_json}"
+    );
+    assert!(
+        list_json.contains("\"backend\":\"mlx\""),
+        "MLX fake LLM row present: {list_json}"
+    );
 
     let run_json = run_cli_or_fail(
-        &["wally", "--json", "--no-progress", "--home", &home_str, "run", "mlx.fake.llm", "Hello MLX", "--engine", "mlx", "--max-tokens", "4"],
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "run",
+            "mlx.fake.llm",
+            "Hello MLX",
+            "--engine",
+            "mlx",
+            "--max-tokens",
+            "4",
+        ],
         "LLM",
     )
     .expect("run LLM command");
-    assert!(run_json.contains("\"model\":\"mlx.fake.llm\""), "JSON response from MLX stream callback: {run_json}");
-    assert!(run_json.contains("\"response\":\"mlx-stub: Hello MLX\""), "JSON response from MLX stream callback: {run_json}");
+    assert!(
+        run_json.contains("\"model\":\"mlx.fake.llm\""),
+        "JSON response from MLX stream callback: {run_json}"
+    );
+    assert!(
+        run_json.contains("\"response\":\"mlx-stub: Hello MLX\""),
+        "JSON response from MLX stream callback: {run_json}"
+    );
     {
         let state = fakes::lock_state();
         assert_eq!(state.create_count, 1);
         assert_eq!(state.initialize_count, 1);
         assert_eq!(state.stream_count, 1);
-        assert_eq!(state.last_kind, sys::RAC_MLX_SESSION_KIND_LLM as sys::rac_mlx_session_kind_t);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_LLM as sys::rac_mlx_session_kind_t
+        );
         assert_eq!(
             state.last_model_path,
             llm_dir.path().to_string_lossy(),
@@ -673,18 +900,39 @@ fn wally_mlx_run_end_to_end() {
 
     let vlm_json = run_cli_or_fail(
         &[
-            "wally", "--json", "--no-progress", "--home", &home_str, "run", "mlx.fake.vlm", "What is in the image?", "--image",
-            input_image.to_str().expect("utf-8 path"), "--engine", "mlx", "--max-tokens", "4",
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "run",
+            "mlx.fake.vlm",
+            "What is in the image?",
+            "--image",
+            input_image.to_str().expect("utf-8 path"),
+            "--engine",
+            "mlx",
+            "--max-tokens",
+            "4",
         ],
         "VLM",
     )
     .expect("run VLM command");
-    assert!(vlm_json.contains("\"model\":\"mlx.fake.vlm\""), "JSON VLM response from MLX callback: {vlm_json}");
-    assert!(vlm_json.contains("\"response\":\"mlx-vlm-stub: What is in the image?\""), "JSON VLM response from MLX callback: {vlm_json}");
+    assert!(
+        vlm_json.contains("\"model\":\"mlx.fake.vlm\""),
+        "JSON VLM response from MLX callback: {vlm_json}"
+    );
+    assert!(
+        vlm_json.contains("\"response\":\"mlx-vlm-stub: What is in the image?\""),
+        "JSON VLM response from MLX callback: {vlm_json}"
+    );
     {
         let state = fakes::lock_state();
         assert_eq!(state.vlm_process_count, 1);
-        assert_eq!(state.last_kind, sys::RAC_MLX_SESSION_KIND_VLM as sys::rac_mlx_session_kind_t);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_VLM as sys::rac_mlx_session_kind_t
+        );
         assert_eq!(
             state.last_model_path,
             vlm_dir.path().to_string_lossy(),
@@ -703,6 +951,12 @@ fn wally_mlx_run_end_to_end() {
     // section here) when the full command surface returns.
     wally::bootstrap::shutdown();
     let state = fakes::lock_state();
-    assert_eq!(state.create_count, 2, "MLX create/initialize should run once per LLM/VLM model");
-    assert_eq!(state.initialize_count, 2, "MLX create/initialize should run once per LLM/VLM model");
+    assert_eq!(
+        state.create_count, 2,
+        "MLX create/initialize should run once per LLM/VLM model"
+    );
+    assert_eq!(
+        state.initialize_count, 2,
+        "MLX create/initialize should run once per LLM/VLM model"
+    );
 }
