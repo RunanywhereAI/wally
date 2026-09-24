@@ -70,16 +70,25 @@ fn key_or_placeholder(api_key: &str) -> &str {
     }
 }
 
-/// Sets `name`, guarding against a value that cannot be an environment
-/// variable (an embedded NUL, which `std::env::set_var` panics on rather than
-/// truncating the way the C runtime's setenv would); returns whether it
-/// actually applied.
+/// Sets `name`, guarding `name` against byte sequences that make
+/// `std::env::set_var` panic (`name` is always one of our own fixed
+/// identifiers, never server-controlled, so this never actually rejects
+/// anything in practice). `value` is handled the way the C runtime's `setenv`
+/// does: `setenv(name, value.c_str(), 1)` truncates silently at the first
+/// embedded NUL rather than failing, so an embedded NUL here is truncated the
+/// same way instead of refusing to set the variable at all. Returns whether
+/// it actually applied.
 fn set_environment(name: &str, value: &str) -> bool {
-    if name.is_empty() || name.contains('=') || name.contains('\0') || value.contains('\0') {
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
         return false;
     }
-    // SAFETY: name/value were just checked for the byte sequences that make
-    // set_var panic; ScopedEnv holds this for one launch at a time.
+    let value = match value.find('\0') {
+        Some(index) => &value[..index],
+        None => value,
+    };
+    // SAFETY: name was just checked for the byte sequences that make
+    // set_var panic, and `value` was truncated at its first NUL (if any);
+    // ScopedEnv holds this for one launch at a time.
     unsafe { std::env::set_var(name, value) };
     true
 }
@@ -206,12 +215,13 @@ impl TemporaryConfig {
                     ))
                 }
             };
-            if file.write_all(contents.as_bytes()).is_err() {
-                return Err(format!(
-                    "could not write the agent config to {}",
-                    candidate.display()
-                ));
-            }
+            // C++'s Windows branch (`file << contents; file.close();`) never
+            // checks the write's result, so a mid-write I/O failure (disk
+            // full, ...) is silently reported as success there. Match that
+            // instead of surfacing an error C++ never would; `self.path` is
+            // still set below regardless, so the partial file is tracked
+            // and removed by Drop like any other run.
+            let _ = file.write_all(contents.as_bytes());
         }
         self.path = Some(candidate);
         Ok(())
@@ -266,17 +276,21 @@ fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
 /// file's own folder, so pointing `OPENCLAW_CONFIG_PATH` at a temp file
 /// would move their agents and sessions into the temp directory for the run.
 fn open_claw_state_directory() -> PathBuf {
-    if let Ok(state) = std::env::var("OPENCLAW_STATE_DIR") {
+    // `var_os`, not `var`: `std::getenv` in C++ returns the raw bytes
+    // regardless of encoding, and `std::filesystem::path` is encoding-agnostic
+    // on POSIX, so a legacy-encoded HOME/OPENCLAW_* must still resolve here
+    // instead of silently looking unset.
+    if let Some(state) = std::env::var_os("OPENCLAW_STATE_DIR") {
         if !state.is_empty() {
             return PathBuf::from(state);
         }
     }
-    if let Ok(home) = std::env::var("OPENCLAW_HOME") {
+    if let Some(home) = std::env::var_os("OPENCLAW_HOME") {
         if !home.is_empty() {
             return Path::new(&home).join(".openclaw");
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
+    if let Some(home) = std::env::var_os("HOME") {
         if !home.is_empty() {
             return Path::new(&home).join(".openclaw");
         }
@@ -338,8 +352,8 @@ fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
 
 /// Their current config document, or empty when they have none.
 fn read_open_claw_config() -> String {
-    let path = match std::env::var("OPENCLAW_CONFIG_PATH") {
-        Ok(over) if !over.is_empty() => PathBuf::from(over),
+    let path = match std::env::var_os("OPENCLAW_CONFIG_PATH") {
+        Some(over) if !over.is_empty() => PathBuf::from(over),
         _ => {
             let state = open_claw_state_directory();
             if state.as_os_str().is_empty() {
@@ -808,4 +822,100 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
 
     release(&endpoint);
     status
+}
+
+#[cfg(test)]
+mod fix_harness_tests {
+    //! Regression tests for confirmed audit findings 10 and 12
+    //! (/tmp/wally-rust-migration/fixes/harness.json).
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    use super::*;
+
+    /// Environment variables are process-global; hold this for the whole
+    /// body of any test that reads or writes them.
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Finding 12: `setenv(name, value.c_str(), 1)` in C++ truncates silently
+    /// at the first embedded NUL byte rather than failing; `set_environment`
+    /// must do the same instead of refusing to set the variable at all.
+    #[test]
+    fn set_environment_truncates_value_at_first_nul_byte() {
+        let _lock = env_lock();
+        const NAME: &str = "WALLY_FIX_HARNESS_NUL_TEST_VAR";
+        let previous = std::env::var_os(NAME);
+
+        let applied = set_environment(NAME, "abc\0def");
+        assert!(
+            applied,
+            "an embedded NUL in value must truncate, not reject, matching setenv(value.c_str())"
+        );
+        assert_eq!(
+            std::env::var_os(NAME).as_deref(),
+            Some(std::ffi::OsStr::new("abc")),
+            "value must be truncated at the first NUL byte, matching c_str() semantics"
+        );
+
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var(NAME, value),
+                None => std::env::remove_var(NAME),
+            }
+        }
+    }
+
+    /// Finding 10: `OpenClawStateDirectory` reads `std::getenv` (raw bytes,
+    /// encoding-agnostic) in C++; `open_claw_state_directory` must use
+    /// `var_os` so a non-UTF-8 HOME still resolves instead of silently
+    /// looking unset.
+    #[cfg(unix)]
+    #[test]
+    fn open_claw_state_directory_resolves_non_utf8_home() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let _lock = env_lock();
+        let saved_home = std::env::var_os("HOME");
+        let saved_state_dir = std::env::var_os("OPENCLAW_STATE_DIR");
+        let saved_openclaw_home = std::env::var_os("OPENCLAW_HOME");
+
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe {
+            std::env::remove_var("OPENCLAW_STATE_DIR");
+            std::env::remove_var("OPENCLAW_HOME");
+        }
+        let non_utf8_home = OsString::from_vec(vec![b'/', b't', 0xFF, 0xFE, b'p']);
+        // SAFETY: as above.
+        unsafe { std::env::set_var("HOME", &non_utf8_home) };
+
+        let state_dir = open_claw_state_directory();
+
+        assert_eq!(
+            state_dir,
+            Path::new(&non_utf8_home).join(".openclaw"),
+            "a non-UTF-8 HOME must still resolve to HOME/.openclaw, not an empty path"
+        );
+
+        // SAFETY: as above.
+        unsafe {
+            match saved_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match saved_state_dir {
+                Some(value) => std::env::set_var("OPENCLAW_STATE_DIR", value),
+                None => std::env::remove_var("OPENCLAW_STATE_DIR"),
+            }
+            match saved_openclaw_home {
+                Some(value) => std::env::set_var("OPENCLAW_HOME", value),
+                None => std::env::remove_var("OPENCLAW_HOME"),
+            }
+        }
+    }
 }

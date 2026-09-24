@@ -54,7 +54,10 @@ fn read_object(path: &str) -> Result<Value, String> {
     // feed, U+2028, ...), which would silently swallow a file the C++ reader
     // hands to the JSON parser and reports a parse error for. Match the C++
     // character set exactly.
-    if !text.bytes().any(|byte| !matches!(byte, b' ' | b'\t' | b'\r' | b'\n')) {
+    if !text
+        .bytes()
+        .any(|byte| !matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+    {
         return Ok(json!({}));
     }
     match serde_json::from_str::<Value>(&text) {
