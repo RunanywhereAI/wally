@@ -442,23 +442,44 @@ fn windows_static_system_proxy(_scheme: &str) -> Option<String> {
     None
 }
 
-/// The proxy (if any) to use for a console request: `resolve_proxy_url`
-/// against the real process environment, falling back on Windows to the
-/// static system proxy setting when no proxy env var is configured.
+/// The proxy (if any) to use for a console request, matching the C++'s
+/// per-platform behaviour exactly. On Windows the C++ uses WinHTTP with
+/// `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY` (loopback gets
+/// `WINHTTP_ACCESS_TYPE_NO_PROXY` instead) -- it never reads any proxy
+/// environment variable, so Windows here is loopback -> direct, otherwise the
+/// static system (Internet Options) proxy setting, else direct. Everywhere
+/// else the C++ goes through libcurl, so non-Windows keeps
+/// `resolve_proxy_url`'s environment-variable rules unchanged. `is_windows` is
+/// a parameter rather than `cfg!(windows)` so both platforms' rules are
+/// covered by hermetic tests on every host; production always passes
+/// `cfg!(windows)`.
+fn console_proxy_url(
+    url: &str,
+    is_windows: bool,
+    get_env: &dyn Fn(&str) -> Option<String>,
+    static_system_proxy: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if !is_windows {
+        return resolve_proxy_url(url, get_env);
+    }
+    if url_is_loopback(url) {
+        return None;
+    }
+    let scheme = url
+        .parse::<ureq::http::Uri>()
+        .ok()?
+        .scheme_str()?
+        .to_string();
+    static_system_proxy(&scheme)
+}
+
 fn resolve_console_proxy(url: &str) -> Option<ureq::Proxy> {
-    let from_env = resolve_proxy_url(url, &|name| std::env::var(name).ok());
-    let value = from_env.or_else(|| {
-        if url_is_loopback(url) {
-            None
-        } else {
-            let scheme = url
-                .parse::<ureq::http::Uri>()
-                .ok()?
-                .scheme_str()?
-                .to_string();
-            windows_static_system_proxy(&scheme)
-        }
-    })?;
+    let value = console_proxy_url(
+        url,
+        cfg!(windows),
+        &|name| std::env::var(name).ok(),
+        &windows_static_system_proxy,
+    )?;
     ureq::Proxy::new(&value).ok()
 }
 
@@ -1530,5 +1551,86 @@ mod tests {
             super::static_proxy_for_scheme("http=proxy1:8080;https=", "https"),
             None
         );
+    }
+
+    // console_proxy_url: the per-platform dispatch. `is_windows` is a plain
+    // parameter (not cfg!(windows)) precisely so both rule sets are exercised
+    // here regardless of which platform runs the test suite.
+
+    fn no_static_proxy(_scheme: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn non_windows_ignores_the_static_system_proxy_and_follows_the_env_rules() {
+        let env = env_of(&[("https_proxy", "http://proxy.example:8080")]);
+        let resolved = super::console_proxy_url(
+            "https://console.example/v1/me",
+            false,
+            &lookup(&env),
+            &|scheme| Some(format!("static-{scheme}:9")),
+        );
+        assert_eq!(resolved.as_deref(), Some("http://proxy.example:8080"));
+    }
+
+    #[test]
+    fn non_windows_with_no_env_proxy_configured_ignores_the_static_system_proxy_too() {
+        let env = env_of(&[]);
+        let resolved = super::console_proxy_url(
+            "https://console.example/v1/me",
+            false,
+            &lookup(&env),
+            &|scheme| Some(format!("static-{scheme}:9")),
+        );
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn windows_ignores_proxy_env_vars_entirely_and_uses_the_static_system_proxy() {
+        let env = env_of(&[
+            ("https_proxy", "http://from-env:8080"),
+            ("all_proxy", "http://from-env-all:9090"),
+        ]);
+        let resolved = super::console_proxy_url(
+            "https://console.example/v1/me",
+            true,
+            &lookup(&env),
+            &|scheme| Some(format!("static-{scheme}:9")),
+        );
+        assert_eq!(resolved.as_deref(), Some("static-https:9"));
+    }
+
+    #[test]
+    fn windows_with_no_static_system_proxy_configured_goes_direct_even_with_env_vars_set() {
+        let env = env_of(&[("https_proxy", "http://from-env:8080")]);
+        let resolved = super::console_proxy_url(
+            "https://console.example/v1/me",
+            true,
+            &lookup(&env),
+            &no_static_proxy,
+        );
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn windows_loopback_urls_go_direct_even_when_a_static_system_proxy_is_configured() {
+        let env = env_of(&[]);
+        let resolved =
+            super::console_proxy_url("http://127.0.0.1:9999/x", true, &lookup(&env), &|scheme| {
+                Some(format!("static-{scheme}:9"))
+            });
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn windows_uses_the_scheme_specific_static_system_proxy_entry() {
+        let env = env_of(&[]);
+        let resolved = super::console_proxy_url(
+            "http://console.example/v1/me",
+            true,
+            &lookup(&env),
+            &|scheme| super::static_proxy_for_scheme("http=proxy1:8080;https=proxy2:8443", scheme),
+        );
+        assert_eq!(resolved.as_deref(), Some("proxy1:8080"));
     }
 }
