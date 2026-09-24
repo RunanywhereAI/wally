@@ -33,6 +33,41 @@ use std::rc::Rc;
 
 use crate::bootstrap::GlobalOptions;
 
+/// Splits a CLI11 name spec (`"--model,-m"`, `"model"`) into option names and
+/// (at most one) positional name, the way `CLI::detail::split_names` /
+/// `App::_add_option`'s name parsing does.
+fn split_name_spec(spec: &str) -> (Vec<String>, String) {
+    let mut names = Vec::new();
+    let mut positional = String::new();
+    for token in spec.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if token.starts_with('-') {
+            names.push(token.to_string());
+        } else {
+            positional = token.to_string();
+        }
+    }
+    (names, positional)
+}
+
+/// Splits one flag-spec token (`"--hide-thinking{false}"`) into its name and
+/// the result CLI11 records when that name is given: the brace contents, or
+/// `"true"` for a plain flag name.
+fn split_flag_value(token: &str) -> (String, String) {
+    if let Some(brace) = token.find('{') {
+        if token.ends_with('}') {
+            return (
+                token[..brace].to_string(),
+                token[brace + 1..token.len() - 1].to_string(),
+            );
+        }
+    }
+    (token.to_string(), "true".to_string())
+}
+
 /// The value type an option was bound to in C++; decides conversion, the help
 /// type name (`TEXT`, `INT`, `UINT`, `FLOAT`) and CLI11's conversion errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -171,9 +206,23 @@ impl App {
 
     /// `add_subcommand(name, description)`. The new subcommand inherits what
     /// CLI11 copies from its parent at construction (help flag, fallthrough, …).
+    ///
+    /// Mirrors CLI11's `App::App(description, name, parent)` constructor
+    /// (CLI11.hpp): help flag, `allow_extras`, `prefix_command`, `fallthrough`,
+    /// `group` and `require_subcommand_max` are copied from the parent at the
+    /// moment the child is added; `require_subcommand_min` and `version_flag`
+    /// are never inherited.
     pub fn add_subcommand(&mut self, name: &str, description: &str) -> &mut App {
-        let _ = (name, description);
-        todo!("CLI port: construct with CLI11's parent inheritance, push, return it")
+        let mut sub = App::new(description, name);
+        sub.help_flag = self.help_flag.clone();
+        sub.allow_extras = self.allow_extras;
+        sub.prefix_command = self.prefix_command;
+        sub.fallthrough = self.fallthrough;
+        sub.group = self.group.clone();
+        sub.footer = self.footer.clone();
+        sub.require_subcommand_max = self.require_subcommand_max;
+        self.subcommands.push(sub);
+        self.subcommands.last_mut().expect("just pushed")
     }
 
     pub fn get_subcommand(&self, name: &str) -> Option<&App> {
@@ -238,15 +287,60 @@ impl App {
     /// `add_option(spec, variable, description)`. A spec without a leading
     /// dash (`"model"`) is a positional.
     pub fn add_option(&mut self, spec: &str, value_type: ValueType, description: &str) -> &mut Opt {
-        let _ = (spec, value_type, description);
-        todo!("CLI port: split the CLI11 name spec into names/positional, push, return it")
+        let (names, positional) = split_name_spec(spec);
+        self.options.push(Opt {
+            spec: spec.to_string(),
+            names,
+            positional,
+            is_flag: false,
+            value_type,
+            multi: false,
+            description: description.to_string(),
+            group: String::new(),
+            required: false,
+            default_value: None,
+            validators: Vec::new(),
+            type_name: None,
+            flag_values: BTreeMap::new(),
+        });
+        self.options.last_mut().expect("just pushed")
     }
 
     /// `add_flag(spec, variable, description)`, including CLI11's
     /// `--on,--off{false}` value suffixes.
     pub fn add_flag(&mut self, spec: &str, description: &str) -> &mut Opt {
-        let _ = (spec, description);
-        todo!("CLI port: split the CLI11 flag spec (with {{value}} suffixes), push, return it")
+        let mut names = Vec::new();
+        let mut positional = String::new();
+        let mut flag_values = BTreeMap::new();
+        for token in spec.split(',') {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+            let (name, value) = split_flag_value(token);
+            if name.starts_with('-') {
+                flag_values.insert(name.clone(), value);
+                names.push(name);
+            } else {
+                positional = name;
+            }
+        }
+        self.options.push(Opt {
+            spec: spec.to_string(),
+            names,
+            positional,
+            is_flag: true,
+            value_type: ValueType::Text,
+            multi: false,
+            description: description.to_string(),
+            group: String::new(),
+            required: false,
+            default_value: None,
+            validators: Vec::new(),
+            type_name: None,
+            flag_values,
+        });
+        self.options.last_mut().expect("just pushed")
     }
 
     pub fn callback(&mut self, f: impl Fn(&Parsed, &GlobalOptions) -> i32 + 'static) -> &mut Self {
@@ -260,6 +354,707 @@ impl App {
 
     pub fn get_option_mut(&mut self, name: &str) -> Option<&mut Opt> {
         self.options.iter_mut().find(|o| o.matches(name))
+    }
+}
+
+/// What a full parse of an argv slice produced, matching how CLI11's
+/// `App::parse` / `App::exit` classify the outcome (app.cpp's `run()` is the
+/// full switch over these). `path` is always the chain of subcommand names
+/// from (but not including) the root down to the deepest subcommand CLI11
+/// actually entered while consuming the tokens — the same chain
+/// `App::help(prev)`'s self-accumulating recursion and wally's own
+/// `PrintParseErrorHelp` walk to find "the deepest command that actually
+/// parsed" — regardless of which level in that chain raised the error.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    /// The deepest matched command's callback ran (CLI11's bottom-up
+    /// `run_callback()`, after `_process()` and `_process_extras()` both
+    /// succeeded); carries its exit code and the subcommand chain entered
+    /// (empty for a bare `wally` with no subcommand at all — app.rs prints
+    /// the root help to stderr for that case, C++'s `out::status_line(app.help())`).
+    Ran { code: i32, path: Vec<String> },
+    /// `-h`/`--help` matched anywhere in the chain (`_process_help_flags`
+    /// takes precedence over every other outcome, including a later required
+    /// or extra argument).
+    Help { path: Vec<String> },
+    /// `-V`/`--version` matched; `text` is `CLI::CallForVersion::what()`
+    /// (`"wally " + WALLY_VERSION`).
+    Version { text: String },
+    /// `CLI::RequiredError`: a required (sub)command or option was left out.
+    Required { message: String, path: Vec<String> },
+    /// `CLI::ExtrasError`: an unexpected or misspelled (sub)command/argument.
+    Extras { message: String, path: Vec<String> },
+    /// Any other `CLI::ParseError` (bad type, a failed `->check()`, wrong
+    /// argument count): reported via CLI11's `FailureMessage::simple`, with
+    /// no help block.
+    ParseErr { message: String },
+}
+
+impl App {
+    /// `CLI::App::parse(argc, argv)` plus the `run()` switch over what it
+    /// threw — everything cli/mod.rs owns of CLI11's behaviour: token
+    /// classification, subcommand descent, option fallthrough, positional
+    /// filling, conversion/validation, requirements-before-extras, and
+    /// (unlike CLI11 itself) actually invoking the matched callback chain.
+    /// `args` excludes the program name.
+    pub fn parse(&self, args: &[String]) -> Outcome {
+        let mut state = ParseState::new(self);
+        state.run(args);
+        state.finish()
+    }
+
+    /// The deepest command reached along `path` (root if `path` is empty).
+    pub fn resolve_path(&self, path: &[String]) -> &App {
+        let mut app = self;
+        for name in path {
+            app = app.get_subcommand(name).unwrap_or(app);
+        }
+        app
+    }
+
+    /// `CliFormatter::make_help` for the command at `path`, with `path`'s
+    /// ancestors reconstructed as CLI11's own `App::help(prev)` would
+    /// accumulate them (`"wally models"` above `"wally models pull"`).
+    pub fn render_help(&self, path: &[String], color_enabled: bool) -> String {
+        let mut app = self;
+        let mut parents = String::new();
+        for name in path {
+            parents = if parents.is_empty() {
+                app.name.clone()
+            } else {
+                format!("{parents} {}", app.name)
+            };
+            app = app.get_subcommand(name).unwrap_or(app);
+        }
+        crate::cli_formatter::make_help(app, &parents, color_enabled)
+    }
+}
+
+/// One frame of the parse: the app at this depth, what it has collected so
+/// far, and where positional-filling is up to. `positional_only` is CLI11's
+/// per-app flag (set by a bare `--`, or by `prefix_command` sweeping the
+/// rest of the line): once set, every further token is NONE-classified —
+/// never re-tried as a subcommand or option.
+struct Frame<'a> {
+    app: &'a App,
+    parsed: Parsed,
+    positional_cursor: usize,
+    positional_only: bool,
+}
+
+/// The whole in-progress parse: one `Frame` per level of the subcommand chain
+/// actually entered, deepest last.
+struct ParseState<'a> {
+    frames: Vec<Frame<'a>>,
+    help_seen: bool,
+    version_text: Option<String>,
+}
+
+/// A `-x`/`--x`-shaped token, split the way CLI11's `App::_recognize` /
+/// `detail::split_long`/`split_short` do.
+enum Token<'a> {
+    /// `--name` or `--name=value`.
+    Long {
+        name: &'a str,
+        inline: Option<&'a str>,
+    },
+    /// `-x` (one char) possibly followed by an inline value or more clustered
+    /// short flags (`-xvalue`, `-ab`).
+    Short { name: &'a str, rest: &'a str },
+    /// Not option-shaped: a subcommand name, positional value, or (once
+    /// `positional_only`) anything at all.
+    Plain,
+}
+
+fn classify(token: &str) -> Token<'_> {
+    if token == "--" || token == "-" || !token.starts_with('-') {
+        return Token::Plain;
+    }
+    if let Some(rest) = token.strip_prefix("--") {
+        return match rest.split_once('=') {
+            Some((name, value)) => Token::Long {
+                name: &token[..2 + name.len()],
+                inline: Some(value),
+            },
+            None => Token::Long {
+                name: token,
+                inline: None,
+            },
+        };
+    }
+    // Short option: `-x` is the name, whatever follows (`value` or clustered
+    // flags) is `rest`. A `-`-prefixed negative number with no matching short
+    // option falls back to Plain by the caller when nothing resolves it.
+    Token::Short {
+        name: &token[..2],
+        rest: &token[2..],
+    }
+}
+
+impl<'a> ParseState<'a> {
+    fn new(root: &'a App) -> Self {
+        ParseState {
+            frames: vec![Frame {
+                app: root,
+                parsed: Parsed {
+                    name: root.name.clone(),
+                    ..Parsed::default()
+                },
+                positional_cursor: 0,
+                positional_only: false,
+            }],
+            help_seen: false,
+            version_text: None,
+        }
+        .with_name_index(root)
+    }
+
+    fn with_name_index(mut self, root: &'a App) -> Self {
+        index_names(root, &mut self.frames[0].parsed);
+        self
+    }
+
+    fn path(&self) -> Vec<String> {
+        self.frames[1..]
+            .iter()
+            .map(|f| f.app.name.clone())
+            .collect()
+    }
+
+    fn run(&mut self, args: &[String]) {
+        let mut i = 0usize;
+        while i < args.len() {
+            let token = args[i].as_str();
+            let depth = self.frames.len() - 1;
+            let positional_only = self.frames[depth].positional_only;
+
+            if !positional_only && token == "--" {
+                self.frames[depth].positional_only = true;
+                i += 1;
+                continue;
+            }
+
+            if !positional_only {
+                if let Some(sub) = self.frames[depth].app.get_subcommand(token) {
+                    let mut parsed = Parsed {
+                        name: sub.name.clone(),
+                        ..Parsed::default()
+                    };
+                    index_names(sub, &mut parsed);
+                    self.frames.push(Frame {
+                        app: sub,
+                        parsed,
+                        positional_cursor: 0,
+                        positional_only: false,
+                    });
+                    i += 1;
+                    continue;
+                }
+
+                match classify(token) {
+                    Token::Plain => {}
+                    Token::Long { name, inline } => {
+                        i = self.consume_option(args, i, name, inline);
+                        continue;
+                    }
+                    Token::Short { name, rest } => {
+                        i = self.consume_short(args, i, name, rest);
+                        continue;
+                    }
+                }
+            }
+
+            self.fill_positional(depth, token);
+            i += 1;
+        }
+    }
+
+    /// Tries `name` (with an optional inline `=value`) against the help/
+    /// version flags and options reachable by fallthrough from the deepest
+    /// frame up to the root, deepest first — CLI11's own bubbling order.
+    /// Returns the next index to resume scanning from.
+    fn consume_option(
+        &mut self,
+        args: &[String],
+        i: usize,
+        name: &str,
+        inline: Option<&str>,
+    ) -> usize {
+        let depth = self.frames.len() - 1;
+        for level in (0..=depth).rev() {
+            if self.frames[level]
+                .app
+                .help_flag
+                .as_ref()
+                .is_some_and(|(names, _)| names.split(',').any(|n| n.trim() == name))
+            {
+                self.help_seen = true;
+                return i + 1;
+            }
+            if let Some((_, version, _)) = &self.frames[level].app.version_flag {
+                if self.frames[level]
+                    .app
+                    .version_flag
+                    .as_ref()
+                    .unwrap()
+                    .0
+                    .split(',')
+                    .any(|n| n.trim() == name)
+                {
+                    self.version_text = Some(version.clone());
+                    return i + 1;
+                }
+            }
+            if let Some(opt_idx) = self.frames[level]
+                .app
+                .options
+                .iter()
+                .position(|o| o.names.iter().any(|n| n == name))
+            {
+                return self.consume_matched(args, i, level, opt_idx, inline, None);
+            }
+        }
+        self.handle_unmatched(depth, args[i].clone(), i)
+    }
+
+    fn consume_short(&mut self, args: &[String], i: usize, name: &str, rest: &str) -> usize {
+        let depth = self.frames.len() - 1;
+        for level in (0..=depth).rev() {
+            if self.frames[level]
+                .app
+                .help_flag
+                .as_ref()
+                .is_some_and(|(names, _)| names.split(',').any(|n| n.trim() == name))
+            {
+                self.help_seen = true;
+                return if rest.is_empty() {
+                    i + 1
+                } else {
+                    // A clustered short flag after `-h` (e.g. `-hv`): re-scan
+                    // the remainder as its own short token.
+                    self.consume_short(args, i, &format!("-{}", &rest[..1]), &rest[1..])
+                };
+            }
+            if self.frames[level]
+                .app
+                .version_flag
+                .as_ref()
+                .is_some_and(|(names, _, _)| names.split(',').any(|n| n.trim() == name))
+            {
+                self.version_text = Some(
+                    self.frames[level]
+                        .app
+                        .version_flag
+                        .as_ref()
+                        .unwrap()
+                        .1
+                        .clone(),
+                );
+                return i + 1;
+            }
+            if let Some(opt_idx) = self.frames[level]
+                .app
+                .options
+                .iter()
+                .position(|o| o.names.iter().any(|n| n == name))
+            {
+                let inline = if rest.is_empty() { None } else { Some(rest) };
+                return self.consume_matched(args, i, level, opt_idx, inline, Some(rest));
+            }
+        }
+        self.handle_unmatched(depth, args[i].clone(), i)
+    }
+
+    /// Records one match of `app.options[opt_idx]` at frame `level`: a flag
+    /// (records its `{value}` result) or an option (consumes one value, or —
+    /// for a `multi` option — every following plain token, CLI11's
+    /// `TakeAll`/vector-positional-style greedy consumption).
+    fn consume_matched(
+        &mut self,
+        args: &[String],
+        i: usize,
+        level: usize,
+        opt_idx: usize,
+        inline: Option<&str>,
+        short_cluster_rest: Option<&str>,
+    ) -> usize {
+        let is_flag = self.frames[level].app.options[opt_idx].is_flag;
+        if is_flag {
+            let matched_name = args[i]
+                .split('=')
+                .next()
+                .unwrap_or(&args[i])
+                .split(|c: char| c != '-' && !c.is_ascii_alphanumeric())
+                .next()
+                .unwrap_or(&args[i]);
+            let _ = matched_name;
+            // Flags never take a value; look up which registered name was
+            // typed to resolve its `{value}` result (defaults to "true").
+            let opt = &self.frames[level].app.options[opt_idx];
+            let typed_name = opt
+                .names
+                .iter()
+                .find(|n| args[i].starts_with(n.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            let value = opt
+                .flag_values
+                .get(&typed_name)
+                .cloned()
+                .unwrap_or_else(|| "true".to_string());
+            let spec = opt.spec.clone();
+            self.frames[level]
+                .parsed
+                .flag_values
+                .entry(spec)
+                .or_default()
+                .push(value);
+            return if short_cluster_rest.is_some_and(|r| !r.is_empty()) && inline.is_none() {
+                i + 1
+            } else {
+                i + 1
+            };
+        }
+
+        let multi = self.frames[level].app.options[opt_idx].multi;
+        let spec = self.frames[level].app.options[opt_idx].spec.clone();
+        let value_type = self.frames[level].app.options[opt_idx].value_type;
+        let validators = self.frames[level].app.options[opt_idx].validators.clone();
+        let type_name = self.frames[level].app.options[opt_idx].type_name.clone();
+        let display = self.frames[level].app.options[opt_idx]
+            .names
+            .iter()
+            .find(|n| n.starts_with("--"))
+            .or_else(|| self.frames[level].app.options[opt_idx].names.first())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut next = i + 1;
+        let mut values: Vec<String> = Vec::new();
+        if let Some(v) = inline {
+            values.push(v.to_string());
+        } else if !multi {
+            match args.get(next) {
+                Some(v) if !looks_like_flag(v) || multi => {
+                    values.push(v.clone());
+                    next += 1;
+                }
+                _ => {
+                    self.push_parse_error(format!(
+                        "{display}: 1 required {} missing",
+                        base_type_name(value_type, type_name.as_deref())
+                    ));
+                    return next;
+                }
+            }
+        } else {
+            while let Some(v) = args.get(next) {
+                if looks_like_flag(v) {
+                    break;
+                }
+                values.push(v.clone());
+                next += 1;
+            }
+        }
+
+        for raw in &values {
+            if let Err(msg) = validate_and_convert(&display, raw, value_type, &validators) {
+                self.push_parse_error(msg);
+                return next;
+            }
+        }
+        self.frames[level]
+            .parsed
+            .values
+            .entry(spec)
+            .or_default()
+            .extend(values);
+        next
+    }
+
+    /// An unmatched option-shaped token: swept into the current frame's
+    /// greedy positional if it's `prefix_command` (CLI11's own "sweep on
+    /// first unmatched" — reachable in practice only when
+    /// `split_passthrough_argv` couldn't insert a `--`, since it already
+    /// does), otherwise recorded as an extra for `_process_extras()`.
+    fn handle_unmatched(&mut self, depth: usize, token: String, i: usize) -> usize {
+        if self.frames[depth].app.prefix_command {
+            self.frames[depth].positional_only = true;
+            self.fill_positional(depth, &token);
+        } else {
+            self.frames[depth].parsed.remaining.push(token);
+        }
+        i + 1
+    }
+
+    fn fill_positional(&mut self, depth: usize, token: &str) {
+        let frame = &mut self.frames[depth];
+        let positionals: Vec<usize> = frame
+            .app
+            .options
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| !o.positional.is_empty())
+            .map(|(idx, _)| idx)
+            .collect();
+        if frame.positional_cursor < positionals.len() {
+            let opt_idx = positionals[frame.positional_cursor];
+            let opt = &frame.app.options[opt_idx];
+            let spec = opt.spec.clone();
+            let multi = opt.multi;
+            frame
+                .parsed
+                .values
+                .entry(spec)
+                .or_default()
+                .push(token.to_string());
+            if !multi {
+                frame.positional_cursor += 1;
+            }
+        } else if frame.app.prefix_command || frame.app.allow_extras {
+            frame.parsed.remaining.push(token.to_string());
+        } else {
+            frame.parsed.remaining.push(token.to_string());
+        }
+    }
+
+    fn push_parse_error(&mut self, message: String) {
+        self.frames
+            .last_mut()
+            .unwrap()
+            .parsed
+            .remaining
+            .push(format!("\0parse-error\0{message}"));
+    }
+
+    fn finish(self) -> Outcome {
+        // A bad conversion/argument count is recorded as a sentinel in
+        // `remaining` the moment it happens (CLI11 throws immediately, from
+        // wherever the bad token was) — surface the first one, in scan order,
+        // ahead of anything else.
+        for frame in &self.frames {
+            if let Some(msg) = frame
+                .parsed
+                .remaining
+                .iter()
+                .find_map(|r| r.strip_prefix("\0parse-error\0"))
+            {
+                return Outcome::ParseErr {
+                    message: msg.to_string(),
+                };
+            }
+        }
+
+        // `_process_help_flags()` / `_process_callbacks()` for the version
+        // flag both run before requirements or extras are ever checked.
+        if self.help_seen {
+            return Outcome::Help { path: self.path() };
+        }
+        if let Some(text) = self.version_text {
+            return Outcome::Version { text };
+        }
+
+        let path = self.path();
+
+        // `_process_requirements()`: top-down, first violation wins.
+        for (level, frame) in self.frames.iter().enumerate() {
+            for opt in &frame.app.options {
+                if opt.required && frame.parsed.count(primary_name(opt)) == 0 {
+                    return Outcome::Required {
+                        message: format!("{} is required", primary_name(opt)),
+                        path: path.clone(),
+                    };
+                }
+            }
+            if frame.app.require_subcommand_min > 0 {
+                let has_child = self.frames.get(level + 1).is_some();
+                if !has_child {
+                    let message = if frame.app.require_subcommand_min == 1 {
+                        "A subcommand is required".to_string()
+                    } else {
+                        format!(
+                            "Requires at least {} subcommands",
+                            frame.app.require_subcommand_min
+                        )
+                    };
+                    return Outcome::Required {
+                        message,
+                        path: path.clone(),
+                    };
+                }
+            }
+        }
+
+        // `_process_extras()`: top-down, first non-empty `missing_` wins.
+        for frame in &self.frames {
+            let extras: Vec<&String> = frame
+                .parsed
+                .remaining
+                .iter()
+                .filter(|t| !t.starts_with('\0'))
+                .collect();
+            if !extras.is_empty() && !frame.app.allow_extras && !frame.app.prefix_command {
+                let message = if extras.len() > 1 {
+                    format!(
+                        "The following arguments were not expected: {}",
+                        extras
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                } else {
+                    format!("The following argument was not expected: {}", extras[0])
+                };
+                return Outcome::Extras { message, path };
+            }
+        }
+
+        // Everything checked out: run the matched callbacks bottom-up
+        // (deepest first), the way `App::run_callback()` unwinds.
+        let global = crate::app::global_options_from(&self.frames[0].parsed);
+        let mut code = 0;
+        for frame in self.frames.iter().rev() {
+            if let Some(callback) = &frame.app.callback {
+                code = callback(&frame.parsed, &global);
+            }
+        }
+        Outcome::Ran { code, path }
+    }
+}
+
+fn primary_name(opt: &Opt) -> &str {
+    if !opt.positional.is_empty() {
+        return &opt.positional;
+    }
+    opt.names
+        .iter()
+        .find(|n| n.starts_with("--"))
+        .or_else(|| opt.names.first())
+        .map(String::as_str)
+        .unwrap_or("")
+}
+
+/// Whether CLI11 would classify `token` as option-shaped (so a `multi`
+/// option/positional stops greedily consuming at it). A `-`-prefixed
+/// negative number is deliberately still "looks like a flag" here — none of
+/// wally's vector options are ever fed literal negative numbers, and CLI11's
+/// own carve-out for them (checking whether a same-named short option exists)
+/// is not worth the complexity it would add throughout the resolver.
+fn looks_like_flag(token: &str) -> bool {
+    token.starts_with('-') && token != "-"
+}
+
+fn base_type_name(value_type: ValueType, override_name: Option<&str>) -> String {
+    if let Some(name) = override_name {
+        return name.to_string();
+    }
+    match value_type {
+        ValueType::Text => "TEXT",
+        ValueType::Int | ValueType::Int64 => "INT",
+        ValueType::UInt | ValueType::UInt64 => "UINT",
+        ValueType::Float | ValueType::Double => "FLOAT",
+    }
+    .to_string()
+}
+
+/// CLI11's base-0 integer `lexical_cast`: `0x`/`0X` hex, a lone leading `0`
+/// with more digits octal, otherwise decimal; `_`/`'` are digit separators.
+fn parse_cli_int(raw: &str) -> Option<i64> {
+    let cleaned: String = raw.chars().filter(|c| *c != '_' && *c != '\'').collect();
+    let (neg, digits) = match cleaned.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, cleaned.strip_prefix('+').unwrap_or(&cleaned)),
+    };
+    let value = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        i64::from_str_radix(hex, 16).ok()?
+    } else if digits.len() > 1 && digits.starts_with('0') && digits.chars().all(|c| c.is_digit(8)) {
+        i64::from_str_radix(digits, 8).ok()?
+    } else {
+        digits.parse::<i64>().ok()?
+    };
+    Some(if neg { -value } else { value })
+}
+
+fn validate_and_convert(
+    display: &str,
+    raw: &str,
+    value_type: ValueType,
+    validators: &[Validator],
+) -> Result<(), String> {
+    for validator in validators {
+        if let Some(msg) = check_validator(validator, raw) {
+            return Err(format!("{display}: {msg}"));
+        }
+    }
+    let ok = match value_type {
+        ValueType::Text => true,
+        ValueType::Int | ValueType::Int64 => parse_cli_int(raw).is_some(),
+        ValueType::UInt | ValueType::UInt64 => parse_cli_int(raw).is_some_and(|v| v >= 0),
+        ValueType::Float | ValueType::Double => raw.trim().parse::<f64>().is_ok(),
+    };
+    if !ok {
+        return Err(format!("Could not convert: {display} = {raw}"));
+    }
+    Ok(())
+}
+
+/// One `->check(...)` validator, run against the raw string (CLI11 validates
+/// before the option's own type conversion). Returns `None` on success.
+fn check_validator(validator: &Validator, raw: &str) -> Option<String> {
+    match validator {
+        Validator::ExistingFile => {
+            if std::path::Path::new(raw).is_file() {
+                None
+            } else {
+                Some(format!("File does not exist: {raw}"))
+            }
+        }
+        Validator::Range(min, max) => match raw.trim().parse::<i64>() {
+            Ok(v) if v >= *min && v <= *max => None,
+            _ => Some(format!("Value {raw} not in range [{min} - {max}]")),
+        },
+        Validator::RangeF(min, max) => match raw.trim().parse::<f64>() {
+            Ok(v) if v >= *min && v <= *max => None,
+            _ => Some(format!("Value {raw} not in range [{min} - {max}]")),
+        },
+        Validator::PositiveNumber => match raw.trim().parse::<f64>() {
+            Ok(v) if v > 0.0 => None,
+            _ => Some(format!("Value {raw} not in range [POSITIVE]")),
+        },
+        Validator::NonNegativeNumber => match raw.trim().parse::<f64>() {
+            Ok(v) if v >= 0.0 => None,
+            _ => Some(format!("Value {raw} not in range [NONNEGATIVE]")),
+        },
+        Validator::IsMember(choices) => {
+            if choices.iter().any(|c| c == raw) {
+                None
+            } else {
+                Some(format!("{raw} not in {{{}}}", choices.join(",")))
+            }
+        }
+    }
+}
+
+/// Registers every name (and the positional name) of every option on `app`
+/// into `parsed.name_to_spec`/`defaults`, so `Parsed::get_str` etc. resolve
+/// by any of an option's names, the way CLI11's `Option` does internally.
+fn index_names(app: &App, parsed: &mut Parsed) {
+    for opt in &app.options {
+        if !opt.positional.is_empty() {
+            parsed
+                .name_to_spec
+                .insert(opt.positional.clone(), opt.spec.clone());
+        }
+        for name in &opt.names {
+            parsed.name_to_spec.insert(name.clone(), opt.spec.clone());
+        }
+        if let Some(default) = &opt.default_value {
+            parsed.defaults.insert(opt.spec.clone(), default.clone());
+        }
     }
 }
 
@@ -355,5 +1150,196 @@ impl Parsed {
     /// Leftover arguments for prefix commands (the wrapped tool's argv).
     pub fn remaining(&self) -> &[String] {
         &self.remaining
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// A root flag and option are readable in the root's own callback, by
+    /// any of their registered names.
+    #[test]
+    fn root_flag_and_option_are_readable_in_callback() {
+        let captured = Rc::new(RefCell::new(None));
+        let captured2 = captured.clone();
+        let mut app = App::new("desc", "wally");
+        app.add_flag("--json", "json flag");
+        app.add_option("--home", ValueType::Text, "home dir");
+        app.callback(move |p, _g| {
+            *captured2.borrow_mut() = Some((p.flag("--json"), p.get_str("--home")));
+            0
+        });
+
+        let outcome = app.parse(&["--json".into(), "--home".into(), "/tmp/x".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+        assert_eq!(*captured.borrow(), Some((true, Some("/tmp/x".to_string()))));
+    }
+
+    /// A subcommand's required positional is filled and readable, and the
+    /// deepest command's callback result becomes the process exit code.
+    #[test]
+    fn subcommand_positional_and_required_option() {
+        let mut app = App::new("root", "wally");
+        app.add_subcommand("pull", "Download a model")
+            .add_option("model", ValueType::Text, "model id")
+            .required();
+        app.get_subcommand_mut("pull").unwrap().callback(|p, _g| {
+            assert_eq!(p.get_str("model").as_deref(), Some("qwen3-0.6b"));
+            7
+        });
+
+        let outcome = app.parse(&["pull".into(), "qwen3-0.6b".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 7,
+                path: vec!["pull".to_string()]
+            }
+        );
+    }
+
+    /// CLI11's RequiredError: a required option left off the command line,
+    /// with the exact "<name> is required" message.
+    #[test]
+    fn missing_required_option_is_required_error() {
+        let mut app = App::new("root", "wally");
+        app.add_subcommand("pull", "Download a model")
+            .add_option("model", ValueType::Text, "model id")
+            .required();
+
+        let outcome = app.parse(&["pull".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Required {
+                message: "model is required".to_string(),
+                path: vec!["pull".to_string()],
+            }
+        );
+    }
+
+    /// CLI11's ExtrasError (singular form): an argument nothing was
+    /// registered to absorb.
+    #[test]
+    fn unexpected_positional_is_extras_error() {
+        let mut app = App::new("root", "wally");
+        app.add_subcommand("about", "About wally");
+
+        let outcome = app.parse(&["about".into(), "extra".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Extras {
+                message: "The following argument was not expected: extra".to_string(),
+                path: vec!["about".to_string()],
+            }
+        );
+    }
+
+    /// A `->check(CLI::Range(...))` validator failure is a ParseError with no
+    /// help block, using CLI11's own "Value X not in range [min - max]" text.
+    #[test]
+    fn range_validator_produces_parse_error() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--top-k", ValueType::Int, "sampling top-k")
+            .check(Validator::Range(1, 100));
+
+        let outcome = app.parse(&["--top-k".into(), "500".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--top-k: Value 500 not in range [1 - 100]".to_string(),
+            }
+        );
+    }
+
+    /// The passthrough contract: a `prefix_command` subcommand's own `-m`
+    /// option is consumed first, and every remaining plain token greedily
+    /// fills the `multi` "args" positional — exactly the tool argv a wrapped
+    /// coding tool receives (`wally opencode -m x run hello` -> `run hello`).
+    #[test]
+    fn passthrough_style_multi_positional_takes_rest_of_line() {
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let captured2 = captured.clone();
+        let mut app = App::new("root", "wally");
+        {
+            let sub = app.add_subcommand("opencode", "Open Code");
+            sub.prefix_command(true);
+            sub.add_option("-m,--model", ValueType::Text, "model");
+            sub.add_option("args", ValueType::Text, "tool argv").multi();
+            sub.callback(move |p, _g| {
+                *captured2.borrow_mut() = p.get_strs("args");
+                0
+            });
+        }
+
+        let outcome = app.parse(&[
+            "opencode".into(),
+            "-m".into(),
+            "x".into(),
+            "run".into(),
+            "hello".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec!["opencode".to_string()]
+            }
+        );
+        assert_eq!(
+            *captured.borrow(),
+            vec!["run".to_string(), "hello".to_string()]
+        );
+    }
+
+    /// `-h`/`--help` does not short-circuit the scan: the parser keeps
+    /// descending into later subcommands, so `wally --help models pull`
+    /// reports the deepest command reached, not the root.
+    #[test]
+    fn help_flag_anywhere_matches_deepest_reached_command() {
+        let mut app = App::new("root", "wally");
+        app.set_help_flag("-h,--help", "Show help");
+        {
+            let models = app.add_subcommand("models", "Manage models");
+            models.add_subcommand("pull", "Download a model");
+        }
+
+        let outcome = app.parse(&["--help".into(), "models".into(), "pull".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Help {
+                path: vec!["models".to_string(), "pull".to_string()]
+            }
+        );
+    }
+
+    /// `-V`/`--version` reports the exact text `set_version_flag` was given.
+    #[test]
+    fn version_flag_returns_configured_text() {
+        let mut app = App::new("root", "wally");
+        app.set_version_flag("--version,-V", "wally 1.2.3", "Show version");
+
+        let outcome = app.parse(&["--version".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Version {
+                text: "wally 1.2.3".to_string()
+            }
+        );
     }
 }
