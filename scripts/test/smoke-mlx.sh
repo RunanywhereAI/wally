@@ -78,28 +78,38 @@ printf '%s\n' "$llm_out"
 # regression: MLX's actual library loader follows a different resource path.
 RUNANYWHERE_HOME="$HOME_DIR" bash "$ROOT/scripts/test/smoke-mlx-symlink.sh" "$BIN" "$LLM_MODEL"
 
+# TEMP(llm-only cut): TTS, STT, and VLM are commented out of src/app.rs for
+# this release, and their catalog ids (mlx-soprano-*, mlx-qwen3-asr-*,
+# mlx-fastvlm-*) are filtered out of the language-only catalog, so both
+# `wally models pull` and the command itself would fail here -- and abort
+# the whole script under `set -euo pipefail`. Skip and report the skip
+# instead of running them. Restore these three sections unguarded when
+# register_tts/register_stt/register_vlm are uncommented in src/app.rs.
 echo "TTS: $TTS_MODEL"
-pull_if_enabled "$TTS_MODEL"
-tts_wav="$HOME_DIR/mlx-smoke-tts.wav"
-rm -f "$tts_wav"
-wally tts --model "$TTS_MODEL" --text "Hello from MLX text to speech." --output "$tts_wav"
-require_file "$tts_wav"
+echo "TTS: SKIP (tts disabled for llm-only cut)"
+# pull_if_enabled "$TTS_MODEL"
+# tts_wav="$HOME_DIR/mlx-smoke-tts.wav"
+# rm -f "$tts_wav"
+# wally tts --model "$TTS_MODEL" --text "Hello from MLX text to speech." --output "$tts_wav"
+# require_file "$tts_wav"
 
 echo "STT: $STT_MODEL"
-pull_if_enabled "$STT_MODEL"
-stt_out="$(wally stt --model "$STT_MODEL" --input "$tts_wav")"
-require_text "STT" "$stt_out"
-printf '%s\n' "$stt_out"
+echo "STT: SKIP (stt disabled for llm-only cut)"
+# pull_if_enabled "$STT_MODEL"
+# stt_out="$(wally stt --model "$STT_MODEL" --input "$tts_wav")"
+# require_text "STT" "$stt_out"
+# printf '%s\n' "$stt_out"
 
 echo "VLM: $VLM_MODEL"
-pull_if_enabled "$VLM_MODEL"
-image_path="${WALLY_SMOKE_IMAGE:-${RUNANYWHERE_MLX_SMOKE_IMAGE:-$HOME_DIR/mlx-smoke-image.png}}"
-if [[ -z "${WALLY_SMOKE_IMAGE:-${RUNANYWHERE_MLX_SMOKE_IMAGE:-}}" ]]; then
-  make_default_image "$image_path"
-fi
-vlm_out="$(wally run "$VLM_MODEL" --image "$image_path" \
-  "Describe the image in one short sentence." --max-tokens 32 --temp 0.1)"
-require_text "VLM" "$vlm_out"
-printf '%s\n' "$vlm_out"
+echo "VLM: SKIP (vlm disabled for llm-only cut)"
+# pull_if_enabled "$VLM_MODEL"
+# image_path="${WALLY_SMOKE_IMAGE:-${RUNANYWHERE_MLX_SMOKE_IMAGE:-$HOME_DIR/mlx-smoke-image.png}}"
+# if [[ -z "${WALLY_SMOKE_IMAGE:-${RUNANYWHERE_MLX_SMOKE_IMAGE:-}}" ]]; then
+#   make_default_image "$image_path"
+# fi
+# vlm_out="$(wally run "$VLM_MODEL" --image "$image_path" \
+#   "Describe the image in one short sentence." --max-tokens 32 --temp 0.1)"
+# require_text "VLM" "$vlm_out"
+# printf '%s\n' "$vlm_out"
 
-echo "smoke-mlx: ok"
+echo "smoke-mlx: ok (tts/stt/vlm skipped for llm-only cut)"

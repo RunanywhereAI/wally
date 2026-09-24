@@ -46,20 +46,28 @@ pub fn configure_app(app: &mut App) {
     crate::commands::register_llm_aliases(app); // `run`
     crate::commands::register_llm(app); // `llm` (must precede register_tool)
     crate::commands::register_tool(app); // attaches to `llm`
-                                         // TEMP(full-surface test): every modality registered for end-to-end
-                                         // testing; the LLM-only release comments this block out again.
-    crate::commands::register_vlm(app);
-    crate::commands::register_stt(app);
-    crate::commands::register_tts(app);
-    crate::commands::register_vad(app);
-    crate::commands::register_embed(app);
-    crate::commands::register_rerank(app);
-    crate::commands::register_image(app);
-    crate::commands::register_diarize(app);
-    crate::commands::register_segment(app);
-    crate::commands::register_voice(app);
-    crate::commands::register_rag(app);
-    crate::commands::register_lora(app);
+
+    // TEMP(llm-only cut): every non-LLM modality is hidden from --help and from
+    // execution for this release, as in app.cpp. Uncommenting this block is not
+    // enough to bring them back; the same cut also lives in:
+    //   - `is_llm` in src/catalog/catalog.rs (catalog, lookups, SDK registration),
+    //   - the language-only row filter in src/commands/cmd_list.rs,
+    //   - `collect_llm_backend_rows` in cmd_about.rs and cmd_info.rs,
+    //   - the `#[ignore]`s in tests/test_wally_unit/diarize.rs,
+    //     tests/test_wally_unit/catalog.rs and tests/test_wally_mlx_e2e.rs,
+    //   - the TTS/STT/VLM skips in scripts/test/smoke-mlx.sh.
+    // crate::commands::register_vlm(app);
+    // crate::commands::register_stt(app);
+    // crate::commands::register_tts(app);
+    // crate::commands::register_vad(app);
+    // crate::commands::register_embed(app);
+    // crate::commands::register_rerank(app);
+    // crate::commands::register_image(app);
+    // crate::commands::register_diarize(app);
+    // crate::commands::register_segment(app);
+    // crate::commands::register_voice(app);
+    // crate::commands::register_rag(app);
+    // crate::commands::register_lora(app);
     crate::commands::register_models(app);
     crate::commands::register_serve(app);
 
@@ -69,9 +77,10 @@ pub fn configure_app(app: &mut App) {
 
     crate::commands::register_account(app); // account login/logout/whoami/usage
     crate::commands::register_usage(app); // attaches `usage` under `account`
-                                          // `auth` (device sign-in against the control plane) is a developer path
-                                          // that duplicates `account login`; unregister it, matching app.cpp.
-                                          // crate::commands::register_auth(app);
+
+    // `auth` (device sign-in against the control plane) is a developer path
+    // that duplicates `account login`; unregister it, matching app.cpp.
+    // crate::commands::register_auth(app);
 
     crate::commands::register_info(app);
     crate::commands::register_about(app);
