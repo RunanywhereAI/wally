@@ -341,6 +341,20 @@ fn recursive_file_size(dir: &Path) -> u64 {
             total += recursive_file_size(&path);
         } else if metadata.is_file() {
             total += metadata.len();
+        } else if metadata.is_symlink() {
+            // C++'s fs::recursive_directory_iterator + is_regular_file(ec)/
+            // file_size(ec) resolve through status(), which follows symlinks,
+            // so a symlink to a regular file counts the target's real size.
+            // It does not recurse into symlinked directories either (the
+            // iterator's default follow_directory_symlink is off), so only
+            // symlinks that resolve to a regular file are counted here; a
+            // broken symlink or one pointing at a directory contributes 0,
+            // matching is_regular_file(ec) returning false there.
+            if let Ok(target_metadata) = std::fs::metadata(&path) {
+                if target_metadata.is_file() {
+                    total += target_metadata.len();
+                }
+            }
         }
     }
     total
@@ -583,4 +597,40 @@ pub fn register_models_aliases(app: &mut App) {
     let remove = app.add_subcommand("rm", "Delete a model (alias of `models delete`)");
     remove.alias("remove");
     configure_models_delete(remove);
+}
+
+#[cfg(test)]
+mod recursive_file_size_tests {
+    use super::recursive_file_size;
+    use std::path::Path;
+
+    #[test]
+    fn symlinked_regular_file_counts_target_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blob = dir.path().join("blob.gguf");
+        std::fs::write(&blob, b"hello world data").expect("write blob");
+
+        let model_dir = dir.path().join("somemodel");
+        std::fs::create_dir(&model_dir).expect("mkdir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&blob, model_dir.join("model.gguf")).expect("symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&blob, model_dir.join("model.gguf")).expect("symlink");
+
+        // C++'s recursive_directory_iterator + is_regular_file(ec)/file_size(ec)
+        // resolve through status(), which follows the symlink to the real
+        // 16-byte target; the old Rust code used the non-following
+        // DirEntry::metadata() and silently skipped the entry (0 bytes).
+        assert_eq!(recursive_file_size(Path::new(model_dir.to_str().unwrap())), 16);
+    }
+
+    #[test]
+    fn broken_symlink_contributes_zero() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("dangling"))
+            .expect("symlink");
+        #[cfg(unix)]
+        assert_eq!(recursive_file_size(dir.path()), 0);
+    }
 }

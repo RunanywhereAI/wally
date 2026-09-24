@@ -134,6 +134,10 @@ fn trim(value: &str) -> &str {
 /// are found, matching the C locale `isspace` + `strtol` family behaviour
 /// C++ relies on in `meminfo_bytes`. Out-of-range values clamp to
 /// `i64::MAX`/`i64::MIN`, mirroring strtoll's `ERANGE` clamping.
+///
+/// Only meminfo_bytes() (Linux-only) calls this outside of tests, so it is
+/// gated the same way to avoid a dead-code warning on other platforms.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
 fn parse_leading_i64(s: &str) -> i64 {
     let bytes = s.as_bytes();
     let mut i = 0;
