@@ -128,6 +128,57 @@ fn trim(value: &str) -> &str {
     value.trim_matches(|c: char| c == ' ' || c == '\t' || c == '\r' || c == '\n')
 }
 
+/// Port of `std::strtoll(s, nullptr, 10)`: skips leading ASCII whitespace, an
+/// optional sign, then the longest run of decimal digits, ignoring any
+/// trailing text (e.g. a unit suffix like " kB"). Returns 0 when no digits
+/// are found, matching the C locale `isspace` + `strtol` family behaviour
+/// C++ relies on in `meminfo_bytes`. Out-of-range values clamp to
+/// `i64::MAX`/`i64::MIN`, mirroring strtoll's `ERANGE` clamping.
+fn parse_leading_i64(s: &str) -> i64 {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let negative = match bytes.get(i) {
+        Some(b'-') => {
+            i += 1;
+            true
+        }
+        Some(b'+') => {
+            i += 1;
+            false
+        }
+        _ => false,
+    };
+    let digits_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == digits_start {
+        return 0;
+    }
+    // s is valid UTF-8 and [digits_start, i) is an ASCII digit run, so this
+    // slice is always valid UTF-8.
+    let digits = &s[digits_start..i];
+    match digits.parse::<i64>() {
+        Ok(v) => {
+            if negative {
+                -v
+            } else {
+                v
+            }
+        }
+        Err(_) => {
+            if negative {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Linux
 // -----------------------------------------------------------------------------
@@ -190,7 +241,11 @@ mod platform {
         let prefix = format!("{key}:");
         for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
             if let Some(rest) = line.strip_prefix(&prefix) {
-                let kib: i64 = rest.trim().parse().unwrap_or(0);
+                // C++ uses strtoll(line.c_str() + prefix.size(), nullptr, 10),
+                // which parses the leading digit run and ignores the trailing
+                // " kB" unit suffix; a plain parse::<i64>() on the trimmed
+                // remainder would reject "16130004 kB" outright.
+                let kib = super::parse_leading_i64(rest);
                 return if kib > 0 { kib * 1024 } else { 0 };
             }
         }
@@ -1183,3 +1238,36 @@ fn sha256_hex(input: &str) -> String {
 }
 
 use std::ffi::CStr;
+
+#[cfg(test)]
+mod parse_leading_i64_tests {
+    use super::parse_leading_i64;
+
+    #[test]
+    fn meminfo_kb_suffix_is_ignored_like_strtoll() {
+        // C++'s strtoll(line.c_str() + prefix.size(), nullptr, 10) parses the
+        // leading digit run of a real /proc/meminfo remainder and ignores the
+        // trailing " kB" unit; a naive `str::parse::<i64>()` on the whole
+        // trimmed remainder rejects it outright and previously made
+        // meminfo_bytes() always return 0.
+        assert_eq!(parse_leading_i64("16130004 kB"), 16130004);
+        assert_eq!(parse_leading_i64("       16130004 kB"), 16130004);
+    }
+
+    #[test]
+    fn leading_whitespace_is_skipped() {
+        assert_eq!(parse_leading_i64("   42"), 42);
+    }
+
+    #[test]
+    fn no_leading_digits_returns_zero() {
+        assert_eq!(parse_leading_i64("abc"), 0);
+        assert_eq!(parse_leading_i64(""), 0);
+    }
+
+    #[test]
+    fn leading_sign_is_honored() {
+        assert_eq!(parse_leading_i64("-5 kB"), -5);
+        assert_eq!(parse_leading_i64("+7 kB"), 7);
+    }
+}
