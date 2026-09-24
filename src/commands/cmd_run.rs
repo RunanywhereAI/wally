@@ -512,8 +512,12 @@ fn generate_once(options: &GlobalOptions, model_id: &str, prompt: &str, params: 
     };
     let result: v1::LlmGenerationResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if rc == sys::SUCCESS => result,
+        // parse_proto_buffer only fills an error detail on ITS OWN failure
+        // path; when the buffer parsed cleanly but the call's own rc is a
+        // failure, C++ prints the still-empty `error` string here, so match
+        // that with no trailing detail rather than describe_result(rc).
         Ok(_) => {
-            error_line(&format!("generation failed: {}", describe_result(rc)));
+            error_line("generation failed: ");
             return 1;
         }
         Err(message) => {
@@ -605,8 +609,11 @@ fn load_model(
     };
     let result: v1::ModelLoadResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if rc == sys::SUCCESS => result,
+        // See the matching comment in generate_once: parse_proto_buffer only
+        // populates an error detail on its own failure path, so a clean parse
+        // with a failing rc prints no trailing detail in C++.
         Ok(_) => {
-            error_line(&format!("model load failed: {}", describe_result(rc)));
+            error_line("model load failed: ");
             return false;
         }
         Err(message) => {
@@ -665,8 +672,11 @@ fn run_vlm(
     };
     let result: v1::VlmResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if rc == sys::SUCCESS => result,
+        // See the matching comment in generate_once: parse_proto_buffer only
+        // populates an error detail on its own failure path, so a clean parse
+        // with a failing rc prints no trailing detail in C++.
         Ok(_) => {
-            error_line(&format!("vlm generation failed: {}", describe_result(rc)));
+            error_line("vlm generation failed: ");
             return 1;
         }
         Err(message) => {
@@ -761,16 +771,16 @@ fn run_repl(options: &GlobalOptions, model_id: &str, mut params: RunParams) -> i
                 params.system_prompt = value.to_string();
                 status_line("system prompt set");
             } else if let Some(value) = rest.strip_prefix("temperature ") {
-                params.temperature = value.trim().parse().unwrap_or(0.0);
+                params.temperature = strtof_prefix(value);
                 status_line("temperature set");
             } else if let Some(value) = rest.strip_prefix("temp ") {
-                params.temperature = value.trim().parse().unwrap_or(0.0);
+                params.temperature = strtof_prefix(value);
                 status_line("temperature set");
             } else if let Some(value) = rest.strip_prefix("max-output-tokens ") {
-                params.max_output_tokens = value.trim().parse().unwrap_or(0);
+                params.max_output_tokens = strtol_prefix(value);
                 status_line("max-output-tokens set");
             } else if let Some(value) = rest.strip_prefix("max-tokens ") {
-                params.max_output_tokens = value.trim().parse().unwrap_or(0);
+                params.max_output_tokens = strtol_prefix(value);
                 status_line("max-output-tokens set");
             } else {
                 status_line("unknown /set option (system | temperature | max-output-tokens)");
@@ -790,22 +800,124 @@ fn run_repl(options: &GlobalOptions, model_id: &str, mut params: RunParams) -> i
     0
 }
 
-fn read_piped_prompt() -> String {
-    use std::io::Read;
-    let mut piped = String::new();
-    // A non-UTF-8 pipe is not a supported prompt; on a decode error the
-    // partially-read text (often empty) is used, same as the C++ raw byte
-    // buffer would have been if it later required UTF-8 downstream.
-    let _ = std::io::stdin().read_to_string(&mut piped);
+/// Mirrors `std::strtof(s.c_str(), nullptr)`: parses a leading (after
+/// optional whitespace) floating-point prefix and ignores everything after
+/// it, returning 0.0 when no valid prefix is present. Rust's `f32::from_str`
+/// requires the WHOLE trimmed string to be numeric, so `"0.7 please"` fails
+/// there but must still parse to 0.7 here, matching `/set temperature`.
+fn strtof_prefix(s: &str) -> f32 {
+    let trimmed = s.trim_start();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        i += 1;
+    }
+    let mut saw_digit = false;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+        saw_digit = true;
+    }
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+            saw_digit = true;
+        }
+    }
+    if !saw_digit {
+        return 0.0;
+    }
+    let mut end = i;
+    if end < bytes.len() && (bytes[end] == b'e' || bytes[end] == b'E') {
+        let mut j = end + 1;
+        if j < bytes.len() && (bytes[j] == b'+' || bytes[j] == b'-') {
+            j += 1;
+        }
+        let mut saw_exp_digit = false;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+            saw_exp_digit = true;
+        }
+        if saw_exp_digit {
+            end = j;
+        }
+    }
+    trimmed[..end].parse().unwrap_or(0.0)
+}
+
+/// Mirrors `std::strtol(s.c_str(), nullptr, 10)` truncated to `int32_t`:
+/// parses a leading (after optional whitespace) base-10 integer prefix and
+/// ignores everything after it, returning 0 when no valid prefix is present.
+/// Rust's `i32::from_str` requires the WHOLE trimmed string to be numeric, so
+/// `"256 tokens"` fails there but must still parse to 256 here, matching
+/// `/set max-output-tokens`.
+fn strtol_prefix(s: &str) -> i32 {
+    let trimmed = s.trim_start();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        i += 1;
+    }
+    let start_digits = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == start_digits {
+        return 0;
+    }
+    // strtol clamps to LONG_MIN/LONG_MAX on overflow before the C++ side's
+    // static_cast<int32_t> truncates; REPL input overflowing i64 is a
+    // pathological case neither side's user-facing behaviour depends on, so
+    // this falls back to 0 rather than reproducing the clamp-then-truncate.
+    trimmed[..i].parse::<i64>().map(|v| v as i32).unwrap_or(0)
+}
+
+/// Lossily decodes piped stdin bytes to a prompt string and trims trailing
+/// `\n`/`\r`, exactly like the C++ raw-byte `read_piped_prompt` did except
+/// for the UTF-8 conversion prost's `String`-typed proto fields require.
+fn decode_piped_prompt(bytes: &[u8]) -> String {
+    let mut piped = String::from_utf8_lossy(bytes).into_owned();
     while piped.ends_with('\n') || piped.ends_with('\r') {
         piped.pop();
     }
     piped
 }
 
+fn read_piped_prompt() -> String {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    // Read raw bytes, not read_to_string: on ANY invalid UTF-8 byte,
+    // read_to_string leaves its destination String untouched (never
+    // partially filled), which silently drops the whole prompt. C++ forwards
+    // the raw byte content unchanged; prost's proto3 string fields require a
+    // Rust `String`, so from_utf8_lossy (replacing invalid bytes with
+    // U+FFFD) is the closest achievable match -- the prompt survives instead
+    // of vanishing.
+    let _ = std::io::stdin().read_to_end(&mut bytes);
+    decode_piped_prompt(&bytes)
+}
+
 /// Attach a LoRA adapter to the already-loaded LLM in this same process, so
 /// the following generation actually uses it (adapter state is
 /// session-scoped).
+/// Decides lora-apply success/failure from the parsed result + call rc,
+/// mirroring C++'s `!parsed || rc != RAC_SUCCESS || result.has_error()` gate:
+/// an error envelope with an empty message still fails (unlike checking the
+/// message alone, which would treat a present-but-empty-message error as
+/// success).
+fn lora_apply_outcome(result: &v1::LoraApplyResult, rc: sys::rac_result_t) -> Result<(), String> {
+    let has_error = result.error.is_some();
+    if rc == sys::SUCCESS && !has_error {
+        return Ok(());
+    }
+    let message = result
+        .error
+        .as_ref()
+        .and_then(|e| (!e.message.is_empty()).then(|| e.message.clone()))
+        .unwrap_or_else(|| rc.to_string());
+    Err(message)
+}
+
 fn apply_lora_adapter(adapter_path: &str, scale: f32) -> bool {
     // keep_existing left unset (false): SET semantics, which is what the
     // former explicit replace_existing(true) meant. LoraApplyRequest has no
@@ -825,18 +937,13 @@ fn apply_lora_adapter(adapter_path: &str, scale: f32) -> bool {
     let rc =
         unsafe { sys::rac_lora_apply_proto(bytes.as_ptr(), bytes.len(), out_buffer.as_mut_ptr()) };
     match parse_proto_buffer::<v1::LoraApplyResult>(out_buffer) {
-        Ok(result) => {
-            let error_message = result
-                .error
-                .as_ref()
-                .and_then(|e| (!e.message.is_empty()).then(|| e.message.clone()));
-            if rc == sys::SUCCESS && error_message.is_none() {
-                return true;
+        Ok(result) => match lora_apply_outcome(&result, rc) {
+            Ok(()) => true,
+            Err(message) => {
+                error_line(&format!("lora apply failed: {message}"));
+                false
             }
-            let message = error_message.unwrap_or_else(|| rc.to_string());
-            error_line(&format!("lora apply failed: {message}"));
-            false
-        }
+        },
         Err(message) => {
             let message = if message.is_empty() {
                 rc.to_string()
@@ -880,19 +987,15 @@ fn run_llm(options: &GlobalOptions, verb: LlmVerb, prompt: &str, params: &RunPar
         }
     };
 
-    // NOTE (ported as-is, not fixed here): cmd_run.cpp silently discards an
-    // explicit --engine for anything that resolved through the built-in
-    // catalog -- `--engine <x>` on a catalog model does nothing at all, with
-    // no warning. Only a non-catalog ref (hf.co/..., a URL, a bare file path)
-    // gets engine_hint.framework; a catalog hit always loads with UNSPECIFIED
-    // and falls back to its own declared framework. Flagged for a reviewer to
-    // decide whether this is worth fixing; out of scope for this port.
-    let load_framework = if resolved.from_catalog {
-        v1::InferenceFramework::Unspecified
-    } else {
-        engine_hint.framework
-    };
-    if !load_model(options, &resolved.model_id, load_framework, is_vlm) {
+    // An explicit --engine is honoured whatever the ref resolved to. This used to
+    // read `resolved.from_catalog ? UNSPECIFIED : engine_hint.framework`, which
+    // silently DISCARDED the flag for anything that came out of the built-in
+    // catalog -- `--engine <x>` on a catalog model did nothing at all, with no
+    // warning. When the flag is absent engine_hint.framework is UNSPECIFIED, so
+    // catalog entries still fall back to their own declared framework exactly as
+    // before; the only behaviour that changes is that asking now works. Mirrors
+    // cmd_embed.cpp.
+    if !load_model(options, &resolved.model_id, engine_hint.framework, is_vlm) {
         return 1;
     }
     if !params.lora.is_empty() && !apply_lora_adapter(&params.lora, params.lora_scale) {
@@ -1155,4 +1258,78 @@ pub fn register_llm_aliases(app: &mut App) {
         LlmVerb::Chat,
         ModelArg::Positional,
     );
+}
+
+#[cfg(test)]
+mod fix_run_tests {
+    use super::*;
+
+    #[test]
+    fn lora_apply_error_with_empty_message_is_failure_not_success() {
+        // Present error envelope, empty message, rc == SUCCESS: C++'s
+        // `result.has_error()` check fails regardless of message content.
+        let result = v1::LoraApplyResult {
+            error: Some(v1::SdkError {
+                message: String::new(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let outcome = lora_apply_outcome(&result, sys::SUCCESS);
+        assert_eq!(outcome, Err(sys::SUCCESS.to_string()));
+    }
+
+    #[test]
+    fn lora_apply_no_error_and_success_rc_is_success() {
+        let result = v1::LoraApplyResult::default();
+        assert_eq!(lora_apply_outcome(&result, sys::SUCCESS), Ok(()));
+    }
+
+    #[test]
+    fn lora_apply_error_with_message_reports_it() {
+        let result = v1::LoraApplyResult {
+            error: Some(v1::SdkError {
+                message: "adapter not found".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            lora_apply_outcome(&result, sys::SUCCESS),
+            Err("adapter not found".to_string())
+        );
+    }
+
+    #[test]
+    fn set_temperature_trailing_garbage_uses_leading_number() {
+        assert_eq!(strtof_prefix("0.7 please"), 0.7);
+        assert_eq!(strtof_prefix("256 tokens"), 256.0);
+        assert_eq!(strtof_prefix("not a number"), 0.0);
+        assert_eq!(strtof_prefix(""), 0.0);
+    }
+
+    #[test]
+    fn set_max_output_tokens_trailing_garbage_uses_leading_number() {
+        assert_eq!(strtol_prefix("256 tokens"), 256);
+        assert_eq!(strtol_prefix("-12abc"), -12);
+        assert_eq!(strtol_prefix("not a number"), 0);
+        assert_eq!(strtol_prefix(""), 0);
+    }
+
+    #[test]
+    fn piped_prompt_invalid_utf8_is_kept_lossily_not_dropped() {
+        // Previously: any invalid UTF-8 byte anywhere made read_to_string
+        // fail and leave the destination String untouched (empty), silently
+        // dropping the whole prompt instead of forwarding it like C++ does.
+        let bytes = b"describe this\xFFplease\n";
+        let prompt = decode_piped_prompt(bytes);
+        assert_eq!(prompt, "describe this\u{FFFD}please");
+        assert!(!prompt.is_empty());
+    }
+
+    #[test]
+    fn piped_prompt_trims_trailing_newline_and_cr() {
+        assert_eq!(decode_piped_prompt(b"hello\r\n"), "hello");
+        assert_eq!(decode_piped_prompt(b"hello"), "hello");
+    }
 }
