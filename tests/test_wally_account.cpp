@@ -309,6 +309,26 @@ TestResult test_credentials_reject_a_document_they_cannot_unlock() {
     result.passed = true;
     return result;
 }
+
+// A real LOCALAPPDATA is backslash-separated while the suffix appended to it is
+// not. `wally account login` prints this directory, so the join must not mix them.
+TestResult test_profile_directory_uses_one_separator_style() {
+    TestResult result;
+    result.test_name = "profile_directory_uses_one_separator_style";
+    EnvVar profile("WALLY_PROFILE_DIR", nullptr);
+    EnvVar legacy("RCLI_PROFILE_DIR", nullptr);
+    EnvVar local("LOCALAPPDATA", "C:\\wally-local");
+
+    const std::string directory = wally::account::ProfileDirectory();
+    if (directory != "C:/wally-local/RunAnywhere/Wally") {
+        result.expected = "C:/wally-local/RunAnywhere/Wally";
+        result.actual = directory;
+        result.details = "the profile directory must not mix separators";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
 #endif
 
 #if !defined(_WIN32)
@@ -1190,6 +1210,8 @@ int main(int argc, char** argv) {
 #else
     suite.add("credentials_reject_a_document_they_cannot_unlock",
               test_credentials_reject_a_document_they_cannot_unlock);
+    suite.add("profile_directory_uses_one_separator_style",
+              test_profile_directory_uses_one_separator_style);
 #endif
     suite.add("console_client_contract", test_console_client_contract);
     suite.add("console_errors_do_not_echo_secrets", test_console_errors_do_not_echo_secrets);
