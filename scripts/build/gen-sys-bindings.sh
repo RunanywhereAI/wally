@@ -11,6 +11,11 @@
 # 32-bit values, and in `va_list`, which only rac_logger_logv uses; it is
 # blocked here. Struct layouts are asserted at compile time on every target.
 #
+# The kit's RAC_*_DEFAULT option/config structs are header-only `static const`
+# values: bindgen would declare them as extern statics that exist in no kit
+# archive, so a use compiles and then fails to link. They are blocked; build the
+# struct from the header's literal defaults where it is needed.
+#
 # Needs bindgen-cli (`cargo install bindgen-cli`) and libclang. --check exits 1
 # when the committed file differs from what the kit produces. The kit defaults
 # to WALLY_SDK_KIT, then .deps/kit (CMake's auto-fetch location).
@@ -32,6 +37,7 @@ trap 'rm -f "${out}"' EXIT
         --allowlist-function 'rac_.*' --allowlist-type 'rac_.*' --allowlist-var 'RAC_.*' \
         --blocklist-function 'rac_logger_logv' --blocklist-type 'va_list|__builtin_va_list|__va_list_tag' \
         --blocklist-var 'RAC_LOG_(DEBUG|INFO|WARNING|ERROR)' \
+        --blocklist-var 'RAC_.*_DEFAULT' \
         --default-enum-style consts --no-prepend-enum-name \
         --rust-target 1.82 --merge-extern-blocks --sort-semantically --clang-macro-fallback \
         -- -I"${KIT}/include" -x c -std=c11

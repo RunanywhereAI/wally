@@ -7164,10 +7164,6 @@ unsafe extern "C" {
     pub fn rac_llm_unset_stream_proto_callback(handle: rac_handle_t) -> rac_result_t;
     #[doc = " @brief Spin-wait until all in-flight LLM proto-byte stream dispatches have\n        returned. Mirrors the voice_agent in_flight pattern\n        (voice_agent.cpp:594) and rac_vlm_proto_quiesce. Callers freeing\n        user_data passed into rac_llm_set_stream_proto_callback, or tearing\n        down the LLM component, should call this before freeing the\n        user_data. Safe to call from any thread."]
     pub fn rac_llm_proto_quiesce();
-    #[doc = " @brief Default LLM configuration"]
-    pub static RAC_LLM_CONFIG_DEFAULT: rac_llm_config_t;
-    #[doc = " @brief Default LLM generation options\n\n The sampling values come from the `rac_default` annotations on\n runanywhere.v1.LLMGenerationOptions, via the generated\n rac_defaults_generated.h. Editing a number here would desynchronize C++ from\n the five platform SDKs, which generate their own defaults() from the same\n annotations — change idl/llm_options.proto instead.\n\n Fields with no annotation default to the proto's documented \"unset /\n disabled\" sentinels: frequency/presence/min_p=0.0, seed=0, no grammar,\n n_threads=0. Engines apply each only when its non-disabled value is present."]
-    pub static RAC_LLM_OPTIONS_DEFAULT: rac_llm_options_t;
     #[doc = " @brief Free LLM result resources\n\n @param result Result to free (can be NULL)"]
     pub fn rac_llm_result_free(result: *mut rac_llm_result_t);
     #[doc = " @brief Validate borrowed serialized proto bytes.\n\n Returns RAC_SUCCESS when data may be parsed or copied. Empty bytes\n (data == NULL, size == 0) are valid and represent a default proto message.\n Non-empty NULL data and byte counts too large for protobuf ParseFromArray()\n return RAC_ERROR_INVALID_ARGUMENT."]
@@ -7294,8 +7290,6 @@ unsafe extern "C" {
     ) -> rac_result_t;
     #[doc = " @brief Clear all KV cache state\n\n Resets the LLM's context for a fresh adaptive query cycle.\n Optional — returns RAC_ERROR_NOT_SUPPORTED if backend doesn't support it.\n\n @param handle Service handle\n @return RAC_SUCCESS or error code"]
     pub fn rac_llm_clear_context(handle: rac_handle_t) -> rac_result_t;
-    #[doc = " Default LlamaCPP configuration."]
-    pub static RAC_LLM_LLAMACPP_CONFIG_DEFAULT: rac_llm_llamacpp_config_t;
     #[doc = " Creates a LlamaCPP LLM service.\n\n Mirrors Swift's LlamaCPPService.initialize(modelPath:)\n\n @param model_path Path to the GGUF model file\n @param config LlamaCPP-specific configuration (can be NULL for defaults)\n @param out_handle Output: Handle to the created service\n @return RAC_SUCCESS or error code"]
     pub fn rac_llm_llamacpp_create(
         model_path: *const ::std::os::raw::c_char,
@@ -7381,7 +7375,6 @@ unsafe extern "C" {
     pub fn rac_backend_llamacpp_register() -> rac_result_t;
     #[doc = " Unregisters the LlamaCPP backend.\n\n @return RAC_SUCCESS or error code"]
     pub fn rac_backend_llamacpp_unregister() -> rac_result_t;
-    pub static RAC_DIARIZATION_OPTIONS_DEFAULT: rac_diarization_options_t;
     #[doc = " Free all malloc-owned fields in a success or partial-error backend result\n and zero the struct. NULL is accepted; calling again after the first free is\n safe because the first call clears every field."]
     pub fn rac_diarization_result_free(result: *mut rac_diarization_result_t);
     pub fn rac_diarization_create(
@@ -7425,10 +7418,6 @@ unsafe extern "C" {
         request_proto_size: usize,
         out_result: *mut rac_proto_buffer_t,
     ) -> rac_result_t;
-    #[doc = " @brief Default embeddings configuration"]
-    pub static RAC_EMBEDDINGS_CONFIG_DEFAULT: rac_embeddings_config_t;
-    #[doc = " @brief Default embedding options"]
-    pub static RAC_EMBEDDINGS_OPTIONS_DEFAULT: rac_embeddings_options_t;
     #[doc = " @brief Compute the L2 norm of a dense float vector.\n\n An empty vector has norm 0. The input remains caller-owned.\n\n @param vector    Dense float vector. May be NULL only when dimension is 0.\n @param dimension Number of vector elements.\n @param out_norm  Output L2 norm.\n @return RAC_SUCCESS, or RAC_ERROR_NULL_POINTER for an invalid pointer."]
     pub fn rac_embeddings_norm(
         vector: *const f32,
@@ -7493,12 +7482,6 @@ unsafe extern "C" {
     pub fn rac_embeddings_cleanup(handle: rac_handle_t) -> rac_result_t;
     #[doc = " @brief Destroy the embeddings service\n\n @param handle Service handle"]
     pub fn rac_embeddings_destroy(handle: rac_handle_t);
-    #[doc = " @brief Default STT configuration"]
-    pub static RAC_STT_CONFIG_DEFAULT: rac_stt_config_t;
-    #[doc = " @brief Default STT options"]
-    pub static RAC_STT_OPTIONS_DEFAULT: rac_stt_options_t;
-    #[doc = " @brief Default STT input"]
-    pub static RAC_STT_INPUT_DEFAULT: rac_stt_input_t;
     #[doc = " @brief Free STT result resources\n\n @param result Result to free (can be NULL)"]
     pub fn rac_stt_result_free(result: *mut rac_stt_result_t);
     #[doc = " @brief Create an STT service\n\n Routes through service registry to find appropriate backend.\n\n @param model_path Path to the model file (can be NULL for some providers)\n @param out_handle Output: Handle to the created service\n @return RAC_SUCCESS or error code"]
@@ -7566,12 +7549,6 @@ unsafe extern "C" {
     ) -> rac_result_t;
     #[doc = " Report the lifecycle-loaded STT service's state as serialized\n runanywhere.v1.STTServiceState bytes: readiness, current model, streaming\n support, and the supported language codes (BCP-47). Succeeds with\n is_ready=false when no STT model is loaded. Caller MUST release with\n rac_proto_buffer_free()."]
     pub fn rac_stt_state_lifecycle_proto(out_result: *mut rac_proto_buffer_t) -> rac_result_t;
-    #[doc = " @brief Default TTS configuration"]
-    pub static RAC_TTS_CONFIG_DEFAULT: rac_tts_config_t;
-    #[doc = " @brief Default TTS options"]
-    pub static RAC_TTS_OPTIONS_DEFAULT: rac_tts_options_t;
-    #[doc = " @brief Default TTS input"]
-    pub static RAC_TTS_INPUT_DEFAULT: rac_tts_input_t;
     #[doc = " @brief Free TTS result resources\n\n @param result Result to free (can be NULL)"]
     pub fn rac_tts_result_free(result: *mut rac_tts_result_t);
     #[doc = " @brief Create a TTS service\n\n Routes through service registry to find appropriate backend.\n\n @param voice_id Voice/model identifier (registry ID or path)\n @param out_handle Output: Handle to the created service\n @return RAC_SUCCESS or error code"]
@@ -7632,10 +7609,6 @@ unsafe extern "C" {
     pub fn rac_tts_configuration_defaults_proto(
         out_RATTSConfiguration: *mut rac_proto_buffer_t,
     ) -> rac_result_t;
-    #[doc = " @brief Default VLM generation options\n\n runanywhere.v1.VLMGenerationOptions was deleted from idl/vlm_options.proto:\n its sampling fields were name-for-name copies of LLMGenerationOptions, so\n VLMGenerationRequest.options is now LLMGenerationOptions directly (same\n names, same defaults, same validation as the text API). These C defaults\n therefore come from the RAC_DEFAULT_LLM_GENERATION_OPTIONS_* constants\n (rac_default annotations on LLMGenerationOptions), not a VLM-specific set.\n\n Declared as a `static const` (like RAC_LLM_OPTIONS_DEFAULT) rather than a\n compound-literal macro: Swift's Clang importer can import a const global but\n not a struct-literal macro."]
-    pub static RAC_VLM_OPTIONS_DEFAULT: rac_vlm_options_t;
-    #[doc = " @brief Default VLM configuration"]
-    pub static RAC_VLM_CONFIG_DEFAULT: rac_vlm_config_t;
     #[doc = " @brief Free VLM result resources\n\n Frees the text and any other owned resources in the result.\n\n @param result Result to free (can be NULL)"]
     pub fn rac_vlm_result_free(result: *mut rac_vlm_result_t);
     #[doc = " @brief Create a VLM service\n\n Routes through service registry to find appropriate backend.\n\n @param model_id Model identifier (registry ID or path to model file)\n @param out_handle Output: Handle to the created service\n @return RAC_SUCCESS or error code"]
@@ -8472,12 +8445,6 @@ unsafe extern "C" {
     pub fn rac_desktop_device_model() -> *const ::std::os::raw::c_char;
     #[doc = " OS version (kernel release, capped at the backend's 20-char column); \"\" when unknown."]
     pub fn rac_desktop_os_version() -> *const ::std::os::raw::c_char;
-    #[doc = " @brief Default tokenizer configuration"]
-    pub static RAC_DIFFUSION_TOKENIZER_CONFIG_DEFAULT: rac_diffusion_tokenizer_config_t;
-    #[doc = " @brief Default diffusion configuration"]
-    pub static RAC_DIFFUSION_CONFIG_DEFAULT: rac_diffusion_config_t;
-    #[doc = " @brief Default diffusion generation options"]
-    pub static RAC_DIFFUSION_OPTIONS_DEFAULT: rac_diffusion_options_t;
     #[doc = " @brief Free diffusion result resources\n\n @param result Result to free (can be NULL)"]
     pub fn rac_diffusion_result_free(result: *mut rac_diffusion_result_t);
     #[doc = " @brief Create a diffusion service\n\n Routes through service registry to find appropriate backend.\n\n @param model_id Model identifier (registry ID or path to model)\n @param out_handle Output: Handle to the created service\n @return RAC_SUCCESS or error code"]
@@ -8780,7 +8747,6 @@ unsafe extern "C" {
     pub fn rac_lifecycle_state_name(state: rac_lifecycle_state_t) -> *const ::std::os::raw::c_char;
     #[doc = " @brief Get resource type name string\n\n @param type Resource type\n @return Human-readable resource type name"]
     pub fn rac_resource_type_name(type_: rac_resource_type_t) -> *const ::std::os::raw::c_char;
-    pub static RAC_RERANK_OPTIONS_DEFAULT: rac_rerank_options_t;
     #[doc = " Free every malloc-owned result field and zero the struct."]
     pub fn rac_rerank_result_free(result: *mut rac_rerank_result_t);
     pub fn rac_rerank_create(
@@ -8825,7 +8791,6 @@ unsafe extern "C" {
         request_proto_size: usize,
         out_result: *mut rac_proto_buffer_t,
     ) -> rac_result_t;
-    pub static RAC_SEGMENTATION_OPTIONS_DEFAULT: rac_segmentation_options_t;
     #[doc = " Free every malloc-owned result field and zero the struct."]
     pub fn rac_segmentation_result_free(result: *mut rac_segmentation_result_t);
     pub fn rac_segmentation_create(
@@ -9023,10 +8988,6 @@ unsafe extern "C" {
         callback: rac_tts_proto_chunk_callback_fn,
         user_data: *mut ::std::os::raw::c_void,
     ) -> rac_result_t;
-    #[doc = " @brief Default VAD configuration"]
-    pub static RAC_VAD_CONFIG_DEFAULT: rac_vad_config_t;
-    #[doc = " @brief Default VAD input"]
-    pub static RAC_VAD_INPUT_DEFAULT: rac_vad_input_t;
     #[doc = " @brief Create a VAD capability component\n\n @param out_handle Output: Handle to the component\n @return RAC_SUCCESS or error code"]
     pub fn rac_vad_component_create(out_handle: *mut rac_handle_t) -> rac_result_t;
     #[doc = " @brief Configure the VAD component\n\n @param handle Component handle\n @param config Configuration\n @return RAC_SUCCESS or error code"]
@@ -9129,12 +9090,6 @@ unsafe extern "C" {
     pub fn rac_audio_pipeline_state_name(
         state: rac_audio_pipeline_state_t,
     ) -> *const ::std::os::raw::c_char;
-    #[doc = " @brief Default VAD configuration."]
-    pub static RAC_VOICE_AGENT_VAD_CONFIG_DEFAULT: rac_voice_agent_vad_config_t;
-    #[doc = " @brief Default voice agent configuration."]
-    pub static RAC_VOICE_AGENT_CONFIG_DEFAULT: rac_voice_agent_config_t;
-    #[doc = " @brief Default audio pipeline configuration"]
-    pub static RAC_AUDIO_PIPELINE_CONFIG_DEFAULT: rac_audio_pipeline_config_t;
     #[doc = " @brief Check if microphone can be activated in current state\n\n @param current_state Current pipeline state\n @param last_tts_end_time_ms Last TTS end time in milliseconds since epoch (0 if none)\n @param cooldown_duration_ms Cooldown duration in milliseconds\n @return RAC_TRUE if microphone can be activated"]
     pub fn rac_audio_pipeline_can_activate_microphone(
         current_state: rac_audio_pipeline_state_t,
@@ -9722,8 +9677,6 @@ unsafe extern "C" {
     pub fn rac_backend_sherpa_register() -> rac_result_t;
     #[doc = " @brief Reverse of rac_backend_sherpa_register()."]
     pub fn rac_backend_sherpa_unregister() -> rac_result_t;
-    #[doc = " @brief Default server configuration"]
-    pub static RAC_SERVER_CONFIG_DEFAULT: rac_server_config_t;
     #[doc = " @brief Start the HTTP server\n\n Starts the server in a background thread. The function returns immediately\n after the server is ready to accept connections.\n\n @param config Server configuration (model_path is required)\n @return RAC_SUCCESS on success, error code on failure\n\n Error codes:\n   - RAC_ERROR_INVALID_ARGUMENT: config is NULL or model_path is NULL\n   - RAC_ERROR_ALREADY_RUNNING: Server is already running\n   - RAC_ERROR_MODEL_NOT_FOUND: Model file not found\n   - RAC_ERROR_MODEL_LOAD_FAILED: Failed to load model\n   - RAC_ERROR_BIND_FAILED: Failed to bind to port"]
     pub fn rac_server_start(config: *const rac_server_config_t) -> rac_result_t;
     #[doc = " @brief Stop the HTTP server\n\n Gracefully stops the server, waiting for active requests to complete\n (up to a timeout).\n\n @return RAC_SUCCESS on success, RAC_ERROR_NOT_RUNNING if not running"]
