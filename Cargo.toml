@@ -42,7 +42,7 @@ getrandom = "0.3"
 ctrlc = { version = "3", features = ["termination"] }
 
 [target.'cfg(not(windows))'.dependencies]
-rustyline = { version = "18", default-features = false }
+rustyline = { version = "18", default-features = false, features = ["with-file-history"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
