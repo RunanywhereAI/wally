@@ -3,6 +3,7 @@
 //! HTTP/1.1 layer behind the Anthropic shim.
 
 pub mod control_plane;
+pub mod decompress;
 pub mod http1;
 pub mod loopback_auth;
 pub mod upstream_call;

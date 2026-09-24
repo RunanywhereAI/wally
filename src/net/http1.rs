@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::net::decompress;
+
 /// What went wrong sending or receiving one request. `upstream_pool`'s
 /// `retry_on_fresh_connection` reads this to tell a stale keep-alive
 /// connection from a real outage.
@@ -666,8 +668,18 @@ impl Client {
             .map(|v| v.eq_ignore_ascii_case("close"))
             .unwrap_or(false);
 
+        // Decoding happens between the wire (de-chunked/length-delimited by
+        // the readers below) and whatever the caller does with the bytes,
+        // exactly where cpp-httplib's own `read_with_decompression` sits
+        // (see src/net/decompress.rs). `on_headers` above already saw the
+        // still-encoded `Content-Encoding` header, matching httplib, which
+        // never rewrites the header it hands to its own headers callback.
+        let mut decoder =
+            decompress::Decoder::for_content_encoding(head.header("content-encoding"));
+
         let mut body_buf = Vec::new();
         let mut completed = true;
+        let mut decode_failed = false;
         if !no_body {
             let stream = self.conn.as_mut().ok_or(Error::Connection)?;
             let mut reader = Prefixed {
@@ -675,12 +687,27 @@ impl Client {
                 pos: 0,
                 inner: stream,
             };
-            let mut sink = |data: &[u8]| -> bool {
+            let mut deliver = |data: &[u8]| -> bool {
                 match receiver.as_deref_mut() {
                     Some(r) => r(data),
                     None => {
                         body_buf.extend_from_slice(data);
                         true
+                    }
+                }
+            };
+            let mut sink = |data: &[u8]| -> bool {
+                match decoder.push(data, &mut deliver) {
+                    Ok(cont) => cont,
+                    Err(_) => {
+                        // Matches httplib's `decompressor->decompress()`
+                        // returning false: the compressed bytes themselves
+                        // are invalid, not merely a canceled read. Stop the
+                        // raw reader the same way a cancel does (`Ok(false)`
+                        // from `sink`) and report the more specific error
+                        // once the raw reader has unwound below.
+                        decode_failed = true;
+                        false
                     }
                 }
             };
@@ -699,6 +726,11 @@ impl Client {
                     return Err(e);
                 }
             }
+        }
+
+        if decode_failed {
+            self.conn = None;
+            return Err(Error::Read);
         }
 
         if !completed {
@@ -2196,5 +2228,93 @@ mod tests {
             1,
             "the handler ran again on a connection after stop()"
         );
+    }
+
+    // Real gzip bytes (`gzip -c`), matching the fixture in
+    // src/net/decompress.rs -- proves `Client::send` itself decodes a
+    // Content-Encoding reply end to end, not just the decoder in isolation.
+    const GZIP_ENCODED_BODY: &[u8] = &[
+        0x1f, 0x8b, 0x08, 0x08, 0x4b, 0x42, 0xb5, 0x6a, 0x00, 0x03, 0x64, 0x65, 0x63, 0x6f, 0x6d,
+        0x70, 0x2d, 0x66, 0x69, 0x78, 0x74, 0x75, 0x72, 0x65, 0x2e, 0x74, 0x78, 0x74, 0x00, 0xcb,
+        0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x48, 0x2b, 0xca, 0xcf, 0x55, 0x28, 0xc9, 0x48, 0x55, 0x28,
+        0xce, 0xc8, 0xcc, 0x55, 0x48, 0x49, 0x4d, 0xce, 0xcf, 0x2d, 0x28, 0x4a, 0x2d, 0x2e, 0xce,
+        0xcc, 0xcf, 0x53, 0x28, 0x49, 0x2d, 0x2e, 0xe1, 0x02, 0x00, 0xb9, 0x92, 0x41, 0x58, 0x27,
+        0x00, 0x00, 0x00,
+    ];
+    // Real brotli bytes (`brotli -c`) for the same plaintext.
+    const BROTLI_ENCODED_BODY: &[u8] = &[
+        0xa1, 0x30, 0x01, 0xc0, 0xef, 0x48, 0x9d, 0xfa, 0xe4, 0xe1, 0x92, 0xac, 0x6d, 0xae, 0xca,
+        0xd0, 0x12, 0x44, 0x21, 0xad, 0x07, 0x39, 0x44, 0x11, 0x78, 0xf4, 0x28, 0xb7, 0xf0, 0x72,
+        0x0e, 0x76, 0xe4, 0xff, 0x21, 0x89, 0x2b,
+    ];
+    const ENCODED_BODY_PLAINTEXT: &[u8] = b"hello from the shim decompression test\n";
+
+    #[test]
+    fn send_decodes_a_gzip_encoded_buffered_reply() {
+        let mut server = Server::new();
+        server.route("GET", "/gz", |_req, res, _peer| {
+            res.send_full(200, &[("Content-Encoding", "gzip")], GZIP_ENCODED_BODY)
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let reply = client.send(&Request::get("/gz"), None, None).unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            reply.body, ENCODED_BODY_PLAINTEXT,
+            "a gzip Content-Encoding reply must reach the caller decoded, not as raw gzip bytes"
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn send_decodes_a_br_encoded_streamed_reply() {
+        let mut server = Server::new();
+        server.route("GET", "/br", |_req, res, _peer| {
+            res.send_full(200, &[("Content-Encoding", "br")], BROTLI_ENCODED_BODY)
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let mut streamed = Vec::new();
+        let mut receiver = |data: &[u8]| -> bool {
+            streamed.extend_from_slice(data);
+            true
+        };
+        let reply = client
+            .send(&Request::get("/br"), None, Some(&mut receiver))
+            .unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            streamed, ENCODED_BODY_PLAINTEXT,
+            "a br Content-Encoding SSE-style reply must decode through the streaming receiver too"
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn send_fails_like_any_other_read_error_on_a_corrupt_compressed_body() {
+        let mut server = Server::new();
+        server.route("GET", "/corrupt-gz", |_req, res, _peer| {
+            // Valid gzip magic bytes, garbage deflate stream after them --
+            // labeled compressed, but not decodable.
+            let corrupt: &[u8] = &[0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff];
+            res.send_full(200, &[("Content-Encoding", "gzip")], corrupt)
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let result = client.send(&Request::get("/corrupt-gz"), None, None);
+        assert!(
+            matches!(result.as_ref(), Err(Error::Read)),
+            "a corrupt compressed body must fail the same way any other body-read error does, got {result:?}"
+        );
+        handle.stop();
     }
 }
