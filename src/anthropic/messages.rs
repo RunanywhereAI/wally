@@ -1,5 +1,4 @@
-//! The loopback shim server (port of src/anthropic/messages.cpp). Owner: the
-//! upstream / shim port.
+//! The loopback shim server (port of src/anthropic/messages.cpp).
 
 use crate::account::cancel_worker::{Bearer, CancelResult, CancelWorker};
 use crate::account::console::CancelOutcome;
@@ -486,9 +485,9 @@ fn handle_non_streaming(
                 // wrapped directly around it in the `POST /v1/messages`
                 // handler (messages.cpp:664-680), which answers 500 with
                 // `error.what()` as an `api_error`. The `catch_unwind` below
-                // us is that same wrapper; panicking here reaches it exactly
-                // the way an uncaught C++ exception would.
-                panic!("{diagnostic}");
+                // us is that same wrapper; `throw` reaches it exactly the way
+                // the C++ exception did.
+                throw(diagnostic);
             }
         }
         return;
@@ -830,9 +829,9 @@ fn handle_streaming(
                     // before any bytes of the response have gone out (the
                     // C++ side has not yet registered its chunked content
                     // provider, so the equivalent throw is still inside the
-                    // handler's own try/catch), so panicking here reaches
-                    // the same `catch_unwind` the non-streaming path does.
-                    panic!("{diagnostic}");
+                    // handler's own try/catch), so `throw` here reaches the
+                    // same `catch_unwind` the non-streaming path does.
+                    throw(diagnostic);
                 }
             }
             return;
@@ -933,6 +932,14 @@ fn handle_streaming(
     });
 }
 
+/// Stands in for a C++ `throw` that the request handler's own try/catch
+/// answers with a 500: unwinds to that handler's `catch_unwind` carrying
+/// `what()`. `resume_unwind` skips the panic hook, so nothing reaches the
+/// user's stderr — an exception the C++ caught printed nothing either.
+fn throw(what: String) -> ! {
+    std::panic::resume_unwind(Box::new(what))
+}
+
 /// Downcasts a `catch_unwind` panic payload to a message, the same fallback
 /// httplib-adjacent callers use: `&str`, `String`, else "unknown panic".
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
@@ -1021,10 +1028,10 @@ fn handle_messages_route(
         let want_stream = match parsed.get("stream") {
             None => false,
             Some(Value::Bool(b)) => *b,
-            Some(other) => panic!(
+            Some(other) => throw(format!(
                 "[json.exception.type_error.302] type must be boolean, but is {}",
                 nlohmann_type_name(other)
-            ),
+            )),
         };
         if want_stream {
             handle_streaming(runtime, stream, &parsed, writer);
