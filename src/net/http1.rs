@@ -8,7 +8,7 @@ use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// What went wrong sending or receiving one request. `upstream_pool`'s
 /// `retry_on_fresh_connection` reads this to tell a stale keep-alive
@@ -916,8 +916,9 @@ impl Server {
                 }
                 let routes = routes.clone();
                 let not_found = not_found.clone();
+                let conn_stopping = loop_stopping.clone();
                 handlers.push(thread::spawn(move || {
-                    handle_connection(stream, &routes, not_found.as_deref())
+                    handle_connection(stream, &routes, not_found.as_deref(), conn_stopping)
                 }));
                 // Bound the bookkeeping the same way the pool's own worker
                 // list stays small in practice: drop handles for threads that
@@ -975,9 +976,68 @@ impl Drop for ServerHandle {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, routes: &[Route], not_found: Option<&NotFoundFn>) {
-    let _ = stream.set_nodelay(true);
+/// Mirrors cpp-httplib's `keep_alive()`: waits up to `KEEP_ALIVE_TIMEOUT_SEC`
+/// for `stream` to have the start of a request (or EOF) ready to read,
+/// polling in short slices so it notices `stopping` flipping almost
+/// immediately -- matching `keep_alive()`'s own re-check of
+/// `svr_sock == INVALID_SOCKET` on every poll -- rather than blocking a
+/// connection-handler thread (and, via `ServerHandle::stop`, the whole
+/// server shutdown) for the full idle timeout. Returns false if the wait
+/// timed out, the peek failed, or the server is stopping; the caller closes
+/// the connection either way, same as `process_server_socket_core` exiting
+/// its `while (count > 0 && keep_alive(...))` loop.
+fn wait_keep_alive(stream: &TcpStream, stopping: &AtomicBool) -> bool {
+    const POLL_INTERVAL: Duration = Duration::from_millis(10);
+    let deadline = Instant::now() + Duration::from_secs(KEEP_ALIVE_TIMEOUT_SEC as u64);
+    let mut probe = [0u8; 1];
     loop {
+        if stopping.load(Ordering::SeqCst) {
+            return false;
+        }
+        if stream.set_read_timeout(Some(POLL_INTERVAL)).is_err() {
+            return false;
+        }
+        match stream.peek(&mut probe) {
+            // Either real data is waiting, or the peer closed (a 0-byte
+            // peek) -- either way `read_head` below is what should discover
+            // and report it, so just stop waiting.
+            Ok(_) => return true,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return false,
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+    }
+}
+
+fn handle_connection(
+    mut stream: TcpStream,
+    routes: &[Route],
+    not_found: Option<&NotFoundFn>,
+    stopping: Arc<AtomicBool>,
+) {
+    let _ = stream.set_nodelay(true);
+    // Mirrors cpp-httplib's `count = keep_alive_max_count_` in
+    // `process_server_socket_core`: the number of requests this connection
+    // may still serve, counting the one about to be read. `count == 1`
+    // forces `Connection: close` on that request's response (below), same as
+    // httplib's `close_connection = count == 1`.
+    let mut count = KEEP_ALIVE_MAX_COUNT;
+    loop {
+        if !wait_keep_alive(&stream, &stopping) {
+            return;
+        }
+        // The wait above leaves a short read timeout on `stream`; restore
+        // blocking reads for the actual head/body, whose size is bounded by
+        // `MAX_HEAD_BYTES` / the payload cap rather than a wall-clock limit.
+        if stream.set_read_timeout(None).is_err() {
+            return;
+        }
         let (head_bytes, leftover) = match read_head(&mut stream, MAX_HEAD_BYTES, Vec::new()) {
             Ok(v) => v,
             Err(_) => return,
@@ -1041,9 +1101,10 @@ fn handle_connection(mut stream: TcpStream, routes: &[Route], not_found: Option<
             }
         }
 
-        let keep_alive = !header_lookup(&headers, "connection")
-            .map(|v| v.eq_ignore_ascii_case("close"))
-            .unwrap_or(false);
+        let keep_alive = count > 1
+            && !header_lookup(&headers, "connection")
+                .map(|v| v.eq_ignore_ascii_case("close"))
+                .unwrap_or(false);
         let request = ServerRequest {
             method: method.clone(),
             path: path.clone(),
@@ -1073,7 +1134,8 @@ fn handle_connection(mut stream: TcpStream, routes: &[Route], not_found: Option<
             writer.will_close()
         };
 
-        if should_close {
+        count -= 1;
+        if should_close || count <= 0 {
             return;
         }
     }
@@ -1219,6 +1281,62 @@ mod tests {
             Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
         let reply = client.send(&Request::get("/nope"), None, None).unwrap();
         assert_eq!(reply.status, 404);
+        handle.stop();
+    }
+
+    // shim-10: an idle keep-alive connection is dropped after
+    // `KEEP_ALIVE_TIMEOUT_SEC`, mirroring cpp-httplib's `keep_alive()`
+    // timing out in `process_server_socket_core` -- not left to block a
+    // connection-handler thread (and thus `ServerHandle::stop`) forever.
+    #[test]
+    fn idle_keep_alive_connection_is_closed_after_the_timeout() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+        let started = Instant::now();
+        let mut buf = [0u8; 1];
+        // Never send a request; the server should close its end on its own
+        // once the idle wait exceeds the keep-alive timeout, so this read
+        // sees EOF rather than blocking for the full 8s bound above.
+        let n = raw.read(&mut buf).unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(
+            n, 0,
+            "expected EOF from an idle connection the server closed"
+        );
+        assert!(
+            elapsed >= Duration::from_secs(4),
+            "closed too early: {elapsed:?} (expected close near KEEP_ALIVE_TIMEOUT_SEC={KEEP_ALIVE_TIMEOUT_SEC})"
+        );
+        handle.stop();
+    }
+
+    // shim-10: a connection is force-closed (Connection: close) after its
+    // `KEEP_ALIVE_MAX_COUNT`th request, mirroring cpp-httplib's
+    // `close_connection = count == 1`.
+    #[test]
+    fn a_connection_is_closed_after_its_hundredth_request() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        let mut server = Server::new();
+        server.route("GET", "/count", move |_req, res, _peer| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"ok").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let mut last = None;
+        for _ in 0..KEEP_ALIVE_MAX_COUNT {
+            last = Some(client.send(&Request::get("/count"), None, None).unwrap());
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), KEEP_ALIVE_MAX_COUNT as usize);
+        let last = last.unwrap();
+        assert_eq!(last.status, 200);
+        assert_eq!(last.header("connection"), Some("close"));
         handle.stop();
     }
 }
