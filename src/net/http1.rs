@@ -1139,6 +1139,22 @@ fn handle_connection(
             })
             .collect();
 
+        // RFC 9112 6.3 request-smuggling guard, unconditional in
+        // cpp-httplib and run before any body framing is trusted: a
+        // nonzero Content-Length together with any Transfer-Encoding is
+        // rejected outright, since a front end honoring only one of the two
+        // headers could be made to see a different request than wally
+        // does. Content-Length: 0 is tolerated (existing clients send it
+        // alongside chunked out of habit).
+        let content_length_nonzero = header_lookup(&headers, "content-length")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+            > 0;
+        if content_length_nonzero && header_lookup(&headers, "transfer-encoding").is_some() {
+            write_early_failure(&mut stream, 400, &method, &path, on_error);
+            return;
+        }
+
         if header_lookup(&headers, "expect")
             .map(|v| v.eq_ignore_ascii_case("100-continue"))
             .unwrap_or(false)
@@ -1482,6 +1498,73 @@ mod tests {
             head.starts_with("HTTP/1.1 414 "),
             "expected a 414 response, got the first 80 bytes: {:?}",
             &head[..head.len().min(80)]
+        );
+        handle.stop();
+    }
+
+    // shim-14: RFC 9112 6.3 -- a request carrying both a nonzero
+    // Content-Length and a Transfer-Encoding is rejected with 400 before
+    // the body is read, never treated as chunked. Content-Length: 0
+    // alongside Transfer-Encoding is tolerated (below).
+    #[test]
+    fn conflicting_content_length_and_transfer_encoding_is_rejected() {
+        let hit = Arc::new(AtomicUsize::new(0));
+        let counted = hit.clone();
+        let mut server = Server::new();
+        server.route("POST", "/echo", move |_req, res, _peer| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"should not run").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            raw,
+            "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n\r\n"
+        )
+        .unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let head = String::from_utf8_lossy(&buf);
+        assert!(
+            head.starts_with("HTTP/1.1 400 "),
+            "expected a 400 response, got: {head:?}"
+        );
+        assert_eq!(
+            hit.load(Ordering::SeqCst),
+            0,
+            "the route must never see a smuggling-shaped request"
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn zero_content_length_alongside_transfer_encoding_is_tolerated() {
+        let mut server = Server::new();
+        server.route("POST", "/echo", |req, res, _peer| {
+            res.send_full(200, &[], format!("{}", req.body.len()).as_bytes())
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            raw,
+            "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nhi\r\n0\r\n\r\n"
+        )
+        .unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.starts_with("HTTP/1.1 200 "),
+            "expected a 200 response, got: {text:?}"
+        );
+        assert!(
+            text.ends_with('2'),
+            "expected the chunked 2-byte body length echoed back, got: {text:?}"
         );
         handle.stop();
     }
