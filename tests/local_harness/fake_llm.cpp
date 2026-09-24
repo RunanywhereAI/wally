@@ -6,6 +6,7 @@
 #include "rac/plugin/rac_plugin_entry.h"
 #include "rac/server/rac_server.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -22,7 +23,7 @@ Json report = {{"created", 0}, {"initialized", 0}, {"destroyed", 0}, {"generated
 struct Session {
     std::string path;
     bool ready = false;
-    int context = 8192;
+    int context = 16384;
 };
 
 rac_result_t Create(const char* model, const char* config, void** out) {
@@ -30,7 +31,7 @@ rac_result_t Create(const char* model, const char* config, void** out) {
     session->path = model == nullptr ? "" : model;
     if (config != nullptr) {
         report["config"] = Json::parse(config);
-        session->context = report["config"].value("context_length", 8192);
+        session->context = std::max(report["config"].value("context_length", 16384), 16384);
     }
     report["created"] = report["created"].get<int>() + 1;
     report["model_path"] = session->path;
