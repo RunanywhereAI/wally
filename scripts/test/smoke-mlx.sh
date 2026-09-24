@@ -74,13 +74,13 @@ llm_out="$(wally run "$LLM_MODEL" "Say OK in one short sentence." --max-tokens 1
 require_text "LLM" "$llm_out"
 printf '%s\n' "$llm_out"
 
-# TEMP(llm-only cut): TTS, STT, and VLM are commented out of src/app.cpp for
+# TEMP(llm-only cut): TTS, STT, and VLM are commented out of src/app.rs for
 # this release, and their catalog ids (mlx-soprano-*, mlx-qwen3-asr-*,
 # mlx-fastvlm-*) are filtered out of the language-only catalog, so both
 # `wally models pull` and the command itself would fail here -- and abort
 # the whole script under `set -euo pipefail`. Skip and report the skip
 # instead of running them. Restore these three sections unguarded when
-# register_tts/register_stt/register_vlm are uncommented in src/app.cpp.
+# register_tts/register_stt/register_vlm are uncommented in src/app.rs.
 echo "TTS: $TTS_MODEL"
 echo "TTS: SKIP (tts disabled for llm-only cut)"
 # pull_if_enabled "$TTS_MODEL"

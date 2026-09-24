@@ -59,12 +59,12 @@ check() {
 }
 
 # TEMP(llm-only cut): the non-LLM modality commands (tts/stt/vad/voice) are
-# commented out of src/app.cpp and not registered for this release, so their
+# commented out of src/app.rs and not registered for this release, so their
 # checks below cannot pass or meaningfully fail -- they would just error out
 # on "no such command". Report them as skipped instead of running them, so a
 # green summary here is never mistaken for coverage of that surface. Switch
 # the call sites back to `check` when register_vlm/register_stt/register_tts/
-# register_voice are uncommented in src/app.cpp.
+# register_voice are uncommented in src/app.rs.
 skip_case() {
   local name="$1"
   local reason="$2"
@@ -131,7 +131,7 @@ llm_one_shot() {
   test -n "$out"
 }
 
-# TEMP(llm-only cut): tts/stt are commented out of src/app.cpp for this
+# TEMP(llm-only cut): tts/stt are commented out of src/app.rs for this
 # release. Kept here, unreachable via `check`, so this comes back verbatim
 # once register_tts/register_stt are uncommented -- nothing else has to
 # change.
@@ -146,7 +146,7 @@ tts_stt_roundtrip() {
   echo "$transcript" | grep -iE "run|anywhere|models|device"
 }
 
-# TEMP(llm-only cut): vad is commented out of src/app.cpp for this release.
+# TEMP(llm-only cut): vad is commented out of src/app.rs for this release.
 # Kept here, unreachable via `check`, so this comes back verbatim once
 # register_vad is uncommented -- nothing else has to change.
 vad_segments() {
@@ -155,7 +155,7 @@ vad_segments() {
   wally --json vad --input /tmp/wally-e2e-vad.wav | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("segments") or d.get("speech") or isinstance(d, (dict, list))'
 }
 
-# TEMP(llm-only cut): voice is commented out of src/app.cpp for this release.
+# TEMP(llm-only cut): voice is commented out of src/app.rs for this release.
 # Kept here, unreachable via `check`, so this comes back verbatim once
 # register_voice is uncommented -- nothing else has to change.
 voice_turn() {
