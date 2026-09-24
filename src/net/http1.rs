@@ -16,6 +16,11 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     Connection,
+    /// The connect attempt itself ran past `connect_timeout` (httplib's
+    /// `Error::ConnectionTimeout`, distinct from `Connection`). Not
+    /// retry-eligible: a slow network should not be paid for twice, and --
+    /// unlike a stale keep-alive -- there is nothing stale to blame it on.
+    ConnectionTimeout,
     ConnectionClosed,
     Read,
     Write,
@@ -220,6 +225,19 @@ fn read_until_close<R: Read>(
         if !sink(&chunk[..n]) {
             return Ok(false);
         }
+    }
+}
+
+/// Tells a connect attempt that ran out of time (httplib's distinct
+/// `Error::ConnectionTimeout`, never retried) from any other connect failure
+/// (`Error::Connection`, e.g. ECONNREFUSED or no route -- also never retried
+/// today, but for an unrelated reason: a fresh connection failing is a real
+/// outage).
+fn classify_connect_error(e: &io::Error) -> Error {
+    if e.kind() == io::ErrorKind::TimedOut {
+        Error::ConnectionTimeout
+    } else {
+        Error::Connection
     }
 }
 
@@ -430,8 +448,8 @@ impl Client {
         for addr in addrs {
             let tcp = match TcpStream::connect_timeout(&addr, self.connect_timeout) {
                 Ok(t) => t,
-                Err(_) => {
-                    last = Error::Connection;
+                Err(e) => {
+                    last = classify_connect_error(&e);
                     continue;
                 }
             };
@@ -988,6 +1006,18 @@ mod tests {
 
     fn short() -> Duration {
         Duration::from_secs(5)
+    }
+
+    #[test]
+    fn classify_connect_error_distinguishes_timeout_from_other_failures() {
+        let timed_out = io::Error::new(io::ErrorKind::TimedOut, "connection timed out");
+        assert_eq!(classify_connect_error(&timed_out), Error::ConnectionTimeout);
+
+        let refused = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
+        assert_eq!(classify_connect_error(&refused), Error::Connection);
+
+        let unreachable = io::Error::new(io::ErrorKind::Other, "network unreachable");
+        assert_eq!(classify_connect_error(&unreachable), Error::Connection);
     }
 
     #[test]

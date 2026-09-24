@@ -154,19 +154,28 @@ impl Drop for UpstreamLease {
     }
 }
 
-/// Whether a failed call should be retried once, on a brand-new connection,
-/// without paying for it in every other case. Retrying only makes sense when
-/// ALL of these hold:
-/// - the connection was reused (a fresh one failing is a real outage, not
-///   staleness -- nothing to retry against);
-/// - no response was ever seen (a partial reply must not be replayed);
-/// - the error is connection-class (`Connection`/`ConnectionClosed`/
-///   `Read`/`Write`/`SslConnection`).
+/// Whether a failed request should be tried once more on a fresh connection.
 ///
-/// Deliberately NOT retried even when reused: timeouts and cancellation.
-/// A 600s read timeout means a slow or hung upstream, not a stale socket;
-/// a connect timeout means the network is down. Neither should be paid
-/// twice, and a caller-initiated cancel must never be turned into a retry.
+/// Only a request that went out on a REUSED connection, got no HTTP status
+/// back, delivered nothing to the caller, and failed with a connection-class
+/// error (`Connection`/`ConnectionClosed`/`Read`/`Write`/`SslConnection`) is
+/// retried. That is the stale keep-alive case -- the far side closed an idle
+/// connection and the first write or read on it fails -- and it is the same
+/// heuristic curl and browsers apply. A fresh connection that fails is a real
+/// outage and must surface; a request that has produced output must never be
+/// repeated.
+///
+/// Deliberately NOT in the retry-eligible set: `ConnectionTimeout` (the
+/// connect phase itself ran out of time -- that is the network being down,
+/// not a stale socket) and `Canceled` (a caller-initiated stop must never be
+/// turned into a retry). `Read`/`Write` cover a stalled read/write timeout
+/// too, same as httplib, and ARE retried -- the 600s budget expiring on an
+/// idle reused connection looks identical to the far side having silently
+/// closed it.
+///
+/// Accepted risk, capped at one retry: "no bytes back" does not prove the
+/// server never processed the request, so a retry can in rare cases run a
+/// generation twice. Callers log the retry so such a case is traceable.
 pub fn retry_on_fresh_connection(
     error: http1::Error,
     has_response: bool,
@@ -312,6 +321,14 @@ mod tests {
         assert!(
             !retry_on_fresh_connection(http1::Error::InvalidResponse, false, false, true),
             "a malformed response is not a staleness signal"
+        );
+        assert!(
+            !retry_on_fresh_connection(http1::Error::ConnectionTimeout, false, false, true),
+            "a connect-phase timeout is the network being down, not a stale socket"
+        );
+        assert!(
+            retry_on_fresh_connection(http1::Error::Read, false, false, true),
+            "a stalled read on a reused connection is retried, same as httplib"
         );
     }
 }
