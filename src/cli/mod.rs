@@ -1152,3 +1152,194 @@ impl Parsed {
         &self.remaining
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// A root flag and option are readable in the root's own callback, by
+    /// any of their registered names.
+    #[test]
+    fn root_flag_and_option_are_readable_in_callback() {
+        let captured = Rc::new(RefCell::new(None));
+        let captured2 = captured.clone();
+        let mut app = App::new("desc", "wally");
+        app.add_flag("--json", "json flag");
+        app.add_option("--home", ValueType::Text, "home dir");
+        app.callback(move |p, _g| {
+            *captured2.borrow_mut() = Some((p.flag("--json"), p.get_str("--home")));
+            0
+        });
+
+        let outcome = app.parse(&["--json".into(), "--home".into(), "/tmp/x".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+        assert_eq!(*captured.borrow(), Some((true, Some("/tmp/x".to_string()))));
+    }
+
+    /// A subcommand's required positional is filled and readable, and the
+    /// deepest command's callback result becomes the process exit code.
+    #[test]
+    fn subcommand_positional_and_required_option() {
+        let mut app = App::new("root", "wally");
+        app.add_subcommand("pull", "Download a model")
+            .add_option("model", ValueType::Text, "model id")
+            .required();
+        app.get_subcommand_mut("pull").unwrap().callback(|p, _g| {
+            assert_eq!(p.get_str("model").as_deref(), Some("qwen3-0.6b"));
+            7
+        });
+
+        let outcome = app.parse(&["pull".into(), "qwen3-0.6b".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 7,
+                path: vec!["pull".to_string()]
+            }
+        );
+    }
+
+    /// CLI11's RequiredError: a required option left off the command line,
+    /// with the exact "<name> is required" message.
+    #[test]
+    fn missing_required_option_is_required_error() {
+        let mut app = App::new("root", "wally");
+        app.add_subcommand("pull", "Download a model")
+            .add_option("model", ValueType::Text, "model id")
+            .required();
+
+        let outcome = app.parse(&["pull".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Required {
+                message: "model is required".to_string(),
+                path: vec!["pull".to_string()],
+            }
+        );
+    }
+
+    /// CLI11's ExtrasError (singular form): an argument nothing was
+    /// registered to absorb.
+    #[test]
+    fn unexpected_positional_is_extras_error() {
+        let mut app = App::new("root", "wally");
+        app.add_subcommand("about", "About wally");
+
+        let outcome = app.parse(&["about".into(), "extra".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Extras {
+                message: "The following argument was not expected: extra".to_string(),
+                path: vec!["about".to_string()],
+            }
+        );
+    }
+
+    /// A `->check(CLI::Range(...))` validator failure is a ParseError with no
+    /// help block, using CLI11's own "Value X not in range [min - max]" text.
+    #[test]
+    fn range_validator_produces_parse_error() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--top-k", ValueType::Int, "sampling top-k")
+            .check(Validator::Range(1, 100));
+
+        let outcome = app.parse(&["--top-k".into(), "500".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--top-k: Value 500 not in range [1 - 100]".to_string(),
+            }
+        );
+    }
+
+    /// The passthrough contract: a `prefix_command` subcommand's own `-m`
+    /// option is consumed first, and every remaining plain token greedily
+    /// fills the `multi` "args" positional — exactly the tool argv a wrapped
+    /// coding tool receives (`wally opencode -m x run hello` -> `run hello`).
+    #[test]
+    fn passthrough_style_multi_positional_takes_rest_of_line() {
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let captured2 = captured.clone();
+        let mut app = App::new("root", "wally");
+        {
+            let sub = app.add_subcommand("opencode", "Open Code");
+            sub.prefix_command(true);
+            sub.add_option("-m,--model", ValueType::Text, "model");
+            sub.add_option("args", ValueType::Text, "tool argv").multi();
+            sub.callback(move |p, _g| {
+                *captured2.borrow_mut() = p.get_strs("args");
+                0
+            });
+        }
+
+        let outcome = app.parse(&[
+            "opencode".into(),
+            "-m".into(),
+            "x".into(),
+            "run".into(),
+            "hello".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec!["opencode".to_string()]
+            }
+        );
+        assert_eq!(
+            *captured.borrow(),
+            vec!["run".to_string(), "hello".to_string()]
+        );
+    }
+
+    /// `-h`/`--help` does not short-circuit the scan: the parser keeps
+    /// descending into later subcommands, so `wally --help models pull`
+    /// reports the deepest command reached, not the root.
+    #[test]
+    fn help_flag_anywhere_matches_deepest_reached_command() {
+        let mut app = App::new("root", "wally");
+        app.set_help_flag("-h,--help", "Show help");
+        {
+            let models = app.add_subcommand("models", "Manage models");
+            models.add_subcommand("pull", "Download a model");
+        }
+
+        let outcome = app.parse(&["--help".into(), "models".into(), "pull".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Help {
+                path: vec!["models".to_string(), "pull".to_string()]
+            }
+        );
+    }
+
+    /// `-V`/`--version` reports the exact text `set_version_flag` was given.
+    #[test]
+    fn version_flag_returns_configured_text() {
+        let mut app = App::new("root", "wally");
+        app.set_version_flag("--version,-V", "wally 1.2.3", "Show version");
+
+        let outcome = app.parse(&["--version".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Version {
+                text: "wally 1.2.3".to_string()
+            }
+        );
+    }
+}
