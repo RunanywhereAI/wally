@@ -35,9 +35,34 @@ pub enum Error {
 // A plain-or-TLS byte stream
 // ---------------------------------------------------------------------
 
+/// A `TcpStream` shared, not duplicated: every clone of this `Arc` is the
+/// same OS socket handle, unlike `TcpStream::try_clone()` (`WSADuplicateSocket`
+/// on Windows), which mints a second, independent handle. `StopHandle` needs
+/// to reach the socket a request thread is blocked reading, from another
+/// thread, without racing a fresh `connect()`; sharing the one real handle
+/// (via `&TcpStream`'s own `Read`/`Write` impls, which only need `&self`)
+/// gets that for free, where a duplicate does not -- see `StopHandle::stop`.
+#[derive(Clone)]
+struct SharedTcp(Arc<TcpStream>);
+
+impl Read for SharedTcp {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        (&*self.0).read(buf)
+    }
+}
+
+impl Write for SharedTcp {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        (&*self.0).write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        (&*self.0).flush()
+    }
+}
+
 enum Stream {
-    Plain(TcpStream),
-    Tls(Box<native_tls::TlsStream<TcpStream>>),
+    Plain(SharedTcp),
+    Tls(Box<native_tls::TlsStream<SharedTcp>>),
 }
 
 impl Read for Stream {
@@ -343,12 +368,24 @@ fn parse_response_head(bytes: &[u8]) -> Result<ResponseHead, Error> {
 /// writing it; a `stop()` that lands after the call already finished just
 /// closes a connection that would otherwise have gone back to the idle pool
 /// (harmless: `retry_on_fresh_connection` exists for exactly that case).
+///
+/// Holds the same `Arc<TcpStream>` the request thread reads and writes
+/// through (see `SharedTcp`), not a `try_clone()`'d duplicate: on Windows,
+/// `shutdown()` on a `try_clone()`'d handle does not reliably terminate the
+/// connection as observed by a concurrent blocking read on the sibling
+/// handle actually doing I/O -- proven by instrumenting
+/// `an_abandoned_stream_is_cancelled_by_name_and_never_resent` on Windows
+/// ARM64: with the old try_clone()'d `active`, the reader kept receiving
+/// bytes for ~4.7s after `stop()`'s `shutdown(Both)` call, and the peer's
+/// `is_gone()` peek never observed the close either -- the shutdown call
+/// never reached the wire. Sharing the literal same handle removes the
+/// duplicate, and with it the gap.
 #[derive(Clone)]
-pub struct StopHandle(Arc<Mutex<Option<TcpStream>>>);
+pub struct StopHandle(Arc<Mutex<Option<Arc<TcpStream>>>>);
 
 impl StopHandle {
     pub fn stop(&self) {
-        if let Some(s) = self.0.lock().unwrap().as_ref() {
+        if let Some(s) = self.0.lock().unwrap().take() {
             let _ = s.shutdown(Shutdown::Both);
         }
     }
@@ -390,7 +427,7 @@ pub struct Client {
     connect_timeout: Duration,
     read_timeout: Duration,
     conn: Option<Stream>,
-    active: Arc<Mutex<Option<TcpStream>>>,
+    active: Arc<Mutex<Option<Arc<TcpStream>>>>,
     bearer: Option<String>,
 }
 
@@ -505,24 +542,29 @@ impl Client {
             // has no handshake to protect).
             let _ = tcp.set_read_timeout(Some(self.connect_timeout));
             let _ = tcp.set_write_timeout(Some(Self::WRITE_TIMEOUT));
-            let raw_clone = tcp.try_clone().ok();
+            // Shared, not duplicated (see `SharedTcp`): `active` and the
+            // stream the request thread reads/writes are clones of the same
+            // `Arc`, i.e. the same OS handle, so `StopHandle::stop()`'s
+            // `shutdown()` actually reaches the connection a concurrent
+            // blocking read is using.
+            let tcp = Arc::new(tcp);
+            *self.active.lock().unwrap() = Some(tcp.clone());
             let stream = if self.https {
                 let connector = match native_tls::TlsConnector::new() {
                     Ok(c) => c,
                     Err(_) => return Err(Error::SslConnection),
                 };
-                match connector.connect(&self.host, tcp) {
+                match connector.connect(&self.host, SharedTcp(tcp.clone())) {
                     Ok(tls) => {
-                        let _ = tls.get_ref().set_read_timeout(Some(self.read_timeout));
+                        let _ = tls.get_ref().0.set_read_timeout(Some(self.read_timeout));
                         Stream::Tls(Box::new(tls))
                     }
                     Err(_) => return Err(Error::SslConnection),
                 }
             } else {
                 let _ = tcp.set_read_timeout(Some(self.read_timeout));
-                Stream::Plain(tcp)
+                Stream::Plain(SharedTcp(tcp))
             };
-            *self.active.lock().unwrap() = raw_clone;
             self.conn = Some(stream);
             return Ok(());
         }
@@ -1540,14 +1582,15 @@ mod tests {
 
         assert!(
             client.active.lock().unwrap().is_some(),
-            "ensure_connected must populate the raw socket clone"
+            "ensure_connected must populate the handle stop() shuts down"
         );
-        // The socket that reads, not the clone kept for stop(): the read
-        // timeout is applied after the clone is taken, and on Windows a
-        // duplicated socket handle keeps the options it was cloned with.
+        // `active` and the connection's own stream are the same shared
+        // handle (see `SharedTcp`), so reading through either sees the same
+        // options.
         let Some(Stream::Plain(raw)) = client.conn.as_ref() else {
             panic!("a plain-HTTP connection must be held as Stream::Plain");
         };
+        let raw = &raw.0;
         assert_eq!(
             raw.write_timeout().unwrap(),
             Some(Client::WRITE_TIMEOUT),
