@@ -219,24 +219,44 @@ impl Zstd {
             if written > 0 && !sink(&out[..written]) {
                 return Ok(false);
             }
+            if consumed > self.pending.len() {
+                // ruzstd 0.9's trailing-content-checksum shortcut reports a
+                // fixed `consumed = 4` as soon as the frame's last block has
+                // been decoded, even when fewer than 4 bytes of that
+                // checksum have actually been pushed yet (it only *reads*
+                // the 4 bytes, and only updates its own state, when
+                // `pending.len() >= 4`; the reported `consumed` does not
+                // depend on that check passing, and on the next call it
+                // looks for all 4 bytes at the *start* of whatever slice
+                // `pending` is then, not a byte offset it remembers). A
+                // push-based caller can easily be mid-checksum here (a
+                // byte-at-a-time SSE body in particular); leave `pending`
+                // untouched -- draining the bytes that are there now would
+                // permanently lose them, so a checksum split across pushes
+                // would never be complete enough to read, let alone verify --
+                // and wait for the next push to extend it to the full 4
+                // bytes instead.
+                break;
+            }
             if consumed > 0 {
-                let available = consumed.min(self.pending.len());
-                self.pending.drain(..available);
-                if available < consumed {
-                    // ruzstd 0.9's trailing-content-checksum shortcut
-                    // reports a fixed `consumed = 4` as soon as the frame's
-                    // last block has been decoded, even when fewer than 4
-                    // bytes of that checksum have actually been pushed yet
-                    // (it only *reads* the 4 bytes, and only updates its own
-                    // state, when `pending.len() >= 4`; the reported
-                    // `consumed` does not depend on that check passing). A
-                    // push-based caller can easily be mid-checksum here (a
-                    // byte-at-a-time SSE body in particular); wait for the
-                    // next push instead of draining bytes `pending` does not
-                    // have, which would either panic or -- once
-                    // `pending` is empty -- spin forever re-reporting the
-                    // same (4, 0) against nothing left to drain.
-                    break;
+                self.pending.drain(..consumed);
+            }
+            if let (Some(from_trailer), Some(calculated)) = (
+                self.decoder.get_checksum_from_data(),
+                self.decoder.get_calculated_checksum(),
+            ) {
+                // `decode_from_to` only records the trailer's checksum and
+                // the one it calculated while decoding; it never compares
+                // them itself (see ruzstd's own `decode_corpus` test, which
+                // does exactly this comparison). httplib's
+                // `ZSTD_decompressStream` does this check internally and
+                // fails the read on a mismatch -- match that once the
+                // trailer is complete enough for both values to exist.
+                if from_trailer != calculated {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "zstd content checksum mismatch",
+                    ));
                 }
             }
             if consumed == 0 && written == 0 {
@@ -463,6 +483,70 @@ mod tests {
         assert!(
             result.is_err(),
             "expected garbage labeled as zstd to fail decompression, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_zstd_trailer_split_byte_by_byte_still_decodes_and_verifies() {
+        // The frame's last 4 bytes are its content checksum. httplib hands
+        // ZSTD_decompressStream every byte as it arrives and it still
+        // verifies a checksum split across many small pushes; prove the same
+        // here by delivering the body in one push and the trailer one byte
+        // at a time.
+        let mut decoder = Decoder::for_content_encoding(Some("zstd"));
+        let mut out = Vec::new();
+        {
+            let mut sink: Box<Sink<'_>> = Box::new(|data: &[u8]| -> bool {
+                out.extend_from_slice(data);
+                true
+            });
+            let (body, trailer) = ZSTD_FIXTURE.split_at(ZSTD_FIXTURE.len() - 4);
+            decoder.push(body, &mut *sink).unwrap();
+            for byte in trailer {
+                decoder
+                    .push(std::slice::from_ref(byte), &mut *sink)
+                    .unwrap();
+            }
+        }
+        assert_eq!(out, PLAINTEXT);
+    }
+
+    fn zstd_with_corrupted_checksum() -> Vec<u8> {
+        let mut corrupt = ZSTD_FIXTURE.to_vec();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0xff;
+        corrupt
+    }
+
+    #[test]
+    fn a_corrupted_zstd_checksum_fails_the_read_when_delivered_whole() {
+        let mut decoder = Decoder::for_content_encoding(Some("zstd"));
+        let mut sink: Box<Sink<'_>> = Box::new(|_: &[u8]| -> bool { true });
+        let corrupt = zstd_with_corrupted_checksum();
+        let result = decoder.push(&corrupt, &mut *sink);
+        assert!(
+            result.is_err(),
+            "expected a corrupted zstd checksum to fail decompression, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_corrupted_zstd_checksum_fails_the_read_when_split_across_pushes() {
+        let mut decoder = Decoder::for_content_encoding(Some("zstd"));
+        let mut sink: Box<Sink<'_>> = Box::new(|_: &[u8]| -> bool { true });
+        let corrupt = zstd_with_corrupted_checksum();
+        let (body, trailer) = corrupt.split_at(corrupt.len() - 4);
+        decoder.push(body, &mut *sink).unwrap();
+        let mut result = Ok(true);
+        for byte in trailer {
+            result = decoder.push(std::slice::from_ref(byte), &mut *sink);
+            if result.is_err() {
+                break;
+            }
+        }
+        assert!(
+            result.is_err(),
+            "expected a corrupted zstd checksum split across pushes to fail decompression, got {result:?}"
         );
     }
 
