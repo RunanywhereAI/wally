@@ -348,6 +348,11 @@ pub struct StopHandle(Arc<Mutex<Option<TcpStream>>>);
 
 impl StopHandle {
     pub fn stop(&self) {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        eprintln!("XDBG StopHandle::stop t={t}");
         if let Some(s) = self.0.lock().unwrap().as_ref() {
             let _ = s.shutdown(Shutdown::Both);
         }
@@ -778,12 +783,19 @@ impl LivenessProbe {
 
     pub fn is_gone(&self) -> bool {
         let mut buf = [0u8; 1];
-        match self.0.peek(&mut buf) {
+        let result = self.0.peek(&mut buf);
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let gone = match &result {
             Ok(0) => true,
             Ok(_) => false,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
             Err(_) => true,
-        }
+        };
+        eprintln!("XDBG is_gone t={t} result={result:?} gone={gone}");
+        gone
     }
 
     pub fn restore_blocking(&self) -> io::Result<()> {

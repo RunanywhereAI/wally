@@ -30,6 +30,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+fn dbg_now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+}
+
 /// Body-chunk callback: see `WatchedCall::receiver`.
 type ReceiverFn<'a> = Box<dyn FnMut(&[u8]) -> bool + 'a>;
 /// Response-headers callback: see `WatchedCall::on_headers`.
@@ -213,6 +220,13 @@ fn watch_loop(
             .wait_timeout_while(guard, poll, |_| !state.done.load(Ordering::SeqCst))
             .unwrap();
         guard = g;
+        eprintln!(
+            "XDBG watch_loop tick t={} done={} headers_seen={} abandoned={}",
+            dbg_now_ms(),
+            state.done.load(Ordering::SeqCst),
+            guard.headers_seen,
+            state.abandoned.load(Ordering::SeqCst)
+        );
         if state.done.load(Ordering::SeqCst) {
             break;
         }
@@ -222,6 +236,7 @@ fn watch_loop(
             drop(guard);
             let gone = reader_gone.map(|f| f()).unwrap_or(false);
             guard = state.shared.lock().unwrap();
+            eprintln!("XDBG watch_loop reader_gone={gone} t={}", dbg_now_ms());
             if !gone || state.done.load(Ordering::SeqCst) {
                 continue;
             }
@@ -235,6 +250,7 @@ fn watch_loop(
             .unwrap_or(false);
         let is_stopping = stopping.map(|f| f()).unwrap_or(false);
         if guard.headers_seen {
+            eprintln!("XDBG watch_loop naming via headers_seen t={}", dbg_now_ms());
             name_locked(&mut guard);
             stop_now = true;
         } else if waited_out || is_stopping {
@@ -297,6 +313,7 @@ pub fn post_watched(lease: &mut UpstreamLease, call: WatchedCall<'_>) -> Watched
         let _end_watch = EndWatch { state: state_ref };
 
         let mut on_headers_hook = |head: &ResponseHead| -> bool {
+            eprintln!("XDBG on_headers_hook t={} status={}", dbg_now_ms(), head.status);
             let mut shared = state.shared.lock().unwrap();
             shared.headers_seen = true;
             shared.request_id = head.header("x-request-id").unwrap_or("").to_string();

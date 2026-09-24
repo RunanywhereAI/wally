@@ -232,6 +232,16 @@ fn on_abandoned(
     status: i32,
     during_prefill: bool,
 ) {
+    eprintln!(
+        "XDBG on_abandoned t={} id={} status={} prefill={}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+        request_id,
+        status,
+        during_prefill
+    );
     let line = format!(
         "abandoned during={} id={} status={} stream={}",
         if during_prefill { "prefill" } else { "stream" },
@@ -735,6 +745,13 @@ fn handle_streaming(
     // arrives.
     let input_estimate = translate::estimate_request_tokens(request);
     let probe = ReaderGoneProbe::new(stream);
+    eprintln!(
+        "XDBG probe created t={}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
     let pipe = StreamPipe::new();
 
     std::thread::scope(|scope| {

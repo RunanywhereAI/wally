@@ -17,6 +17,13 @@ use wally::harness::Endpoint;
 use wally::net::http1::{Client, Request, Server, StopHandle};
 use wally::net::upstream_pool::{retry_on_fresh_connection, UpstreamOptions, UpstreamPool};
 
+fn dbg_now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+}
+
 /// A translator started against `upstream`, stopped on drop.
 struct RunningShim {
     shim: Shim,
@@ -605,7 +612,9 @@ fn an_abandoned_stream_is_cancelled_by_name_and_never_resent() {
     let mut editor = Editor::new(shim.shim());
     editor.start_streaming();
     std::thread::sleep(Duration::from_millis(300));
+    eprintln!("XDBG editor.leave() t={}", dbg_now_ms());
     editor.leave();
+    eprintln!("XDBG editor.leave() returned t={}", dbg_now_ms());
     editor.join();
 
     assert!(
