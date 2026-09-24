@@ -138,9 +138,9 @@ pub fn local_models(home: &str) -> Vec<LocalModel> {
 /// tokens. Sized from this machine's memory in tiers (8k / 16k / 32k / 64k),
 /// because a coding agent's first request is a 15k-token system prompt and a
 /// fixed 8k window rejected it outright. Capped at the model's own window when
-/// the catalog knows it, never below 8192, which is what every launch used
-/// before. One function, so the server, the picker's declared limits, and the
-/// shim all quote the same number.
+/// the catalog knows it (even when that is below the 8k memory tier). One
+/// function, so the server, the picker's declared limits, and the shim all
+/// quote the same number.
 pub fn local_context_size(model_id: &str) -> i64 {
     const FLOOR: i64 = 8192;
     const GIB: i64 = 1024 * 1024 * 1024;
@@ -186,5 +186,15 @@ pub fn local_context_size(model_id: &str) -> i64 {
             window = tier.min(entry.context_length as i64);
         }
     }
-    FLOOR.max(window)
+    window
+}
+
+/// Leave most of a local context for the coding prompt and conversation.
+/// Zero means no local context was configured (a hosted endpoint).
+pub fn local_output_size(context_window: i64) -> i64 {
+    if context_window > 1 {
+        4096.min(context_window / 4)
+    } else {
+        0
+    }
 }

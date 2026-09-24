@@ -758,30 +758,122 @@ fn hermes_argv_pins_provider_and_model_ahead_of_the_rest() {
     );
 }
 
-// The context a local server is started with never drops below the 8192
-// every launch used before, and never exceeds what the catalog says the
-// model was trained on. The RAM tier in between depends on the machine, so
-// only the two bounds and the unknown-model path are pinned here.
+// A memory budget never overrides a model's own supported window.
 #[test]
 fn local_context_size_respects_floor_and_model_window() {
-    // qwen3-0.6b's catalog window is 4096, below the floor: the floor wins.
+    let tier = harness::local_context_size("unknown-test-model");
+    assert!(
+        tier >= 8192,
+        "unknown models must retain the minimum memory tier"
+    );
+    // A public Windows ARM64 kit ships no llama.cpp. The same catalog filter
+    // used by `models list` then makes these GGUF ids unknown, so their
+    // honest fallback is the memory tier rather than an unsupported
+    // backend's limits.
+    #[cfg(wally_has_llamacpp)]
+    {
+        let qwen_expected = tier.min(32768);
+        let bonsai_expected: i64 = 4096;
+        assert_eq!(
+            harness::local_context_size("qwen3-0.6b"),
+            qwen_expected,
+            "enabled catalog models must cap the memory tier"
+        );
+        assert_eq!(
+            harness::local_context_size("bonsai-27b"),
+            bonsai_expected,
+            "enabled catalog models must cap the memory tier"
+        );
+    }
+    #[cfg(not(wally_has_llamacpp))]
+    {
+        assert_eq!(
+            harness::local_context_size("qwen3-0.6b"),
+            tier,
+            "unavailable models must fall back to the memory tier"
+        );
+        assert_eq!(
+            harness::local_context_size("bonsai-27b"),
+            tier,
+            "unavailable models must fall back to the memory tier"
+        );
+    }
+    #[cfg(wally_has_mlx)]
+    {
+        assert_eq!(
+            harness::local_context_size("mlx-qwen3-0.6b-4bit"),
+            tier.min(32768),
+            "MLX context caps must match the enabled catalog"
+        );
+        assert_eq!(
+            harness::local_context_size("mlx-bonsai-27b-1bit"),
+            4096,
+            "MLX context caps must match the enabled catalog"
+        );
+    }
+}
+
+// The endpoint the local server was actually loaded with is what every
+// harness must quote — OpenCode's picker, OpenClaw's config, and dsh's
+// settings all read the same numbers, even for an alias like "qwen3" that
+// never appears verbatim in the catalog.
+#[test]
+fn local_endpoint_limits_reach_every_harness() {
+    let endpoint = harness::Endpoint {
+        base_url: "http://127.0.0.1:43210/v1".to_string(),
+        api_key: String::new(),
+        console_url: String::new(),
+        serving: true,
+        context_window: 32768,
+        max_output: 4096,
+    };
+    let catalog = harness::catalog_models_for(&endpoint, "qwen3");
+    let open: Value = serde_json::from_str(&harness::build_open_code_config(
+        "qwen3",
+        &endpoint.base_url,
+        "",
+        &catalog,
+    ))
+    .expect("build_open_code_config must emit valid JSON");
+    let provider = &open["provider"]["runanywhere"];
+    let claw: Value = serde_json::from_str(&harness::build_open_claw_config(
+        "",
+        "qwen3",
+        &endpoint.base_url,
+        "",
+        &catalog,
+    ))
+    .expect("build_open_claw_config must emit valid JSON");
+    let deepseek: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+        &endpoint.base_url,
+        "TEST_KEY",
+        &catalog,
+    ))
+    .expect("build_deep_seek_settings must emit valid JSON");
+
+    assert_eq!(catalog.len(), 1, "an alias still resolves to one entry");
+    assert_eq!(catalog[0].context_window, 32768);
+    assert_eq!(provider["options"]["apiKey"], "local");
     assert_eq!(
-        harness::local_context_size("qwen3-0.6b"),
-        8192,
-        "a model window under 8192 must not pull the server below the floor"
+        provider["models"]["qwen3"]["limit"],
+        json!({ "context": 32768, "output": 4096 })
     );
-    // A model the catalog has never heard of gets the machine's tier, which
-    // is at least the floor and a power of two the server accepts.
-    let unknown = harness::local_context_size("hf.co/someone/some-model");
-    assert!(
-        unknown >= 8192 && (unknown & (unknown - 1)) == 0,
-        "an unknown model must get the RAM tier, >= 8192 and a power of two"
+    assert_eq!(
+        claw["models"]["providers"]["runanywhere"]["models"][0]["maxTokens"],
+        4096
     );
-    // A catalog model is never given more than the tier an unknown one gets.
-    assert!(
-        harness::local_context_size("bonsai-27b") <= unknown,
-        "a catalog model must not exceed the machine's tier"
+    assert_eq!(
+        deepseek["llm-pi-ai"]["providers"]["runanywhere"]["models"][0]["maxTokens"],
+        4096
     );
+
+    for context in [4096_i64, 8192, 32768, 65536] {
+        let output = harness::local_output_size(context);
+        assert!(
+            output > 0 && output <= 4096 && output < context,
+            "output must leave room for the coding prompt and history"
+        );
+    }
 }
 
 // A .cmd target with a spaced prompt: the script and the arg each stay one

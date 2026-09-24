@@ -34,6 +34,8 @@ impl RunningShim {
             api_key: "test-upstream-key".to_string(),
             console_url: console_url.to_string(),
             serving: false,
+            context_window: 0,
+            max_output: 0,
         };
         match anthropic::start(&endpoint, "glm-5.3", false, "", &ModelAliases::new()) {
             Some(shim) => RunningShim {
@@ -232,6 +234,8 @@ fn overload_headers_survive_streaming() {
         api_key: "test-upstream-key".to_string(),
         console_url: String::new(),
         serving: false,
+        context_window: 0,
+        max_output: 0,
     };
     let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
     let mut okay = started.is_some();
@@ -840,6 +844,8 @@ fn a_dead_upstream_answers_502_with_the_did_not_answer_message() {
         api_key: "test-upstream-key".to_string(),
         console_url: String::new(),
         serving: false,
+        context_window: 0,
+        max_output: 0,
     };
     let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
     let shim = started.expect("translator did not start");
@@ -906,6 +912,8 @@ fn a_1000_byte_cut_that_splits_a_utf8_character_falls_back_to_the_generic_500() 
         api_key: "test-upstream-key".to_string(),
         console_url: String::new(),
         serving: false,
+        context_window: 0,
+        max_output: 0,
     };
     let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
     let shim = started.expect("translator did not start");
@@ -967,6 +975,8 @@ fn a_non_boolean_stream_field_answers_the_generic_500_not_a_silent_false() {
         api_key: "test-upstream-key".to_string(),
         console_url: String::new(),
         serving: false,
+        context_window: 0,
+        max_output: 0,
     };
     let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
     let shim = started.expect("translator did not start");
@@ -1046,6 +1056,8 @@ fn an_invalid_utf8_sse_data_line_is_a_malformed_frame_not_a_silently_repaired_ch
         api_key: "test-upstream-key".to_string(),
         console_url: String::new(),
         serving: false,
+        context_window: 0,
+        max_output: 0,
     };
     let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
     let shim = started.expect("translator did not start");

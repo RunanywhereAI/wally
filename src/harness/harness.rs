@@ -1,16 +1,21 @@
 //! Endpoint resolution, cloud-session checks, tool install checks and the
 //! launch (port of src/harness/harness.cpp).
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::account::{self, ConsoleClient, Credentials};
 use crate::bootstrap::{self, GlobalOptions};
 use crate::catalog;
 use crate::cli_formatter::{cli_color, color_output_enabled};
+use crate::commands;
 use crate::io::output as out;
+use crate::sys;
+use crate::util::term;
 
 use super::catalog_models::catalog_models_for;
-use super::local_models::local_models;
+use super::local_models::{local_context_size, local_models, local_output_size};
+use super::opencode::build_open_code_config;
 
 /// Where a coding tool is pointed: a hosted API or a local SDK server.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -20,6 +25,12 @@ pub struct Endpoint {
     pub api_key: String,
     pub console_url: String,
     pub serving: bool,
+    /// The context window the endpoint was actually loaded with: the local
+    /// server's real allocation when `serving`, 0 for a hosted endpoint.
+    pub context_window: i64,
+    /// The output budget derived from `context_window`, 0 for a hosted
+    /// endpoint.
+    pub max_output: i64,
 }
 
 impl std::fmt::Debug for Endpoint {
@@ -28,6 +39,8 @@ impl std::fmt::Debug for Endpoint {
             .field("base_url", &self.base_url)
             .field("console_url", &self.console_url)
             .field("serving", &self.serving)
+            .field("context_window", &self.context_window)
+            .field("max_output", &self.max_output)
             .finish_non_exhaustive()
     }
 }
@@ -142,7 +155,46 @@ pub fn verify_cloud_session(
 }
 
 /// Resolve `model` to an endpoint (hosted or local).
-pub fn resolve(model: &str) -> Option<Endpoint> {
+/// A model good enough to point a coding harness at, and nothing above the
+/// window a machine can actually serve it at.
+const MINIMUM_CODING_HARNESS_CONTEXT: i64 = 16384;
+
+/// A port nothing is listening on, found by letting the OS pick one and
+/// giving it straight back. There is a race between this returning and the
+/// server binding, but the alternative is a fixed port that collides with a
+/// second wally. `TcpListener::bind` does the same "AF_INET, bind to
+/// 127.0.0.1:0, read back the assigned port" dance the C++ does by hand with
+/// raw sockets (and, on Windows, WSAStartup) — the standard library already
+/// carries that platform difference, so this needs none of it.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|addr| addr.port())
+        .unwrap_or(0)
+}
+
+/// Prompts on stderr and reads one line from stdin; true only for a
+/// non-empty line starting with 'y' or 'Y'. Mirrors the C++
+/// `std::getline(std::cin, answer) && !answer.empty() && ...` exactly: an
+/// immediate EOF (`read_line` returns 0) and a bare newline (trims to empty)
+/// both answer "no".
+fn confirm_model_pull(model: &str) -> bool {
+    eprint!("{model} is not installed. Download it now? [y/N] ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    let read = std::io::stdin().read_line(&mut answer).unwrap_or(0);
+    if read == 0 {
+        return false;
+    }
+    let trimmed = answer.trim_end_matches(['\n', '\r']);
+    matches!(trimmed.chars().next(), Some('y') | Some('Y'))
+}
+
+/// Resolve `model` to an endpoint (hosted or local), starting a local server
+/// when the resolved model lives on disk. `harness_command` names the
+/// subcommand to suggest in the "not certified" hint (`opencode` when the
+/// caller did not say).
+pub fn resolve(model: &str, options: &GlobalOptions, harness_command: &str) -> Option<Endpoint> {
     if model.is_empty() {
         return None;
     }
@@ -154,7 +206,7 @@ pub fn resolve(model: &str) -> Option<Endpoint> {
     // The kit consumer brings the SDK up through bootstrap rather than the
     // CLI's own lazy Start(), and bootstrap is also what resolves the storage
     // home the model walk below needs.
-    let env = bootstrap::bootstrap(&GlobalOptions::default()).ok()?;
+    let env = bootstrap::bootstrap(options).ok()?;
 
     // The names a person types (`bonsai-27b`, `mlx-qwen3-0.6b`, `qwen3`) are
     // catalog ids, aliases and `models list` merge keys; the directory on disk
@@ -198,10 +250,35 @@ pub fn resolve(model: &str) -> Option<Endpoint> {
         }
     }
 
-    let serving = false;
+    // Both branches below always overwrite `base_url` before it is read in
+    // the `wally_has_server` build this crate ships; a build without the
+    // server support cfg'd out returns before reaching either write.
+    #[allow(unused_assignments)]
+    let mut base_url = String::new();
+    let mut api_key = String::new();
+    let mut console_url = String::new();
+    let mut serving = false;
+    let mut context_window: i64 = 0;
 
     if let Some(index) = local_index {
         let local = &installed[index];
+        let local_entry = catalog::find(&local.id);
+        if !local_entry
+            .map(|entry| entry.harness_compatible)
+            .unwrap_or(false)
+        {
+            out::error_line(
+                "This model is not certified for coding harnesses. Tool calls or long-context \
+                 operation may fail.",
+            );
+            let command = if harness_command.is_empty() {
+                "opencode"
+            } else {
+                harness_command
+            };
+            out::status_line(&format!("Try: wally {command} -m qwen3-4b-instruct-2507"));
+            return None;
+        }
         // A directory with the manifest but no weights is a pull that did not
         // finish. Serving it fails inside llama.cpp with "No .gguf file
         // found", which reads as a bug; say what it is instead.
@@ -212,91 +289,244 @@ pub fn resolve(model: &str) -> Option<Endpoint> {
             out::status_line(&format!("run `wally models pull {model}` to finish it"));
             return None;
         }
-        // Coding tools are cloud-only this release. A local model is refused
-        // outright rather than gated: the kit's local server re-reads the
-        // whole conversation every turn and leaks a reasoning model's
-        // thinking into the reply, so an agent degrades from the second turn
-        // on. `wally run` still takes any local model; the harnesses take a
-        // hosted one. (The C++ has local-server-starting code after this
-        // point that is unreachable — guarded behind a `return false` that
-        // always fires first — and is not ported here for the same reason.)
-        out::error_line(&format!(
-            "{model} is on this machine, but coding tools run on hosted models only"
-        ));
-        out::status_line(
-            "sign in and use one: `wally account login`, then `wally opencode --cloud -m glm-5.3-flash`",
-        );
-        return None;
-    }
+        // Any backend the kit registered. The server's rac_llm_create(path)
+        // looks the path up in the registry and routes on the framework it
+        // finds, so an MLX directory reaches MLX the same way a GGUF reaches
+        // llama.cpp.
+        let port = free_port();
+        if port == 0 {
+            out::error_line("could not find a free port for the local server");
+            return None;
+        }
 
-    let mut credentials = match account::load() {
-        Ok(c) => c,
-        Err(message) => {
-            out::error_line(&message);
+        #[cfg(not(wally_has_server))]
+        {
+            // This kit was built without the OpenAI-compatible server, so
+            // there is nothing here that can serve a file on disk. An
+            // upstream model still works, and saying which is the case beats
+            // starting nothing and reporting success.
+            out::error_line(&format!(
+                "{model} is on this machine, but this build has no local server to serve it"
+            ));
+            out::status_line("point at an upstream model instead, or use a build with the server");
             return None;
         }
-    };
-    if !credentials.signed_in() {
-        report_not_signed_in();
-        return None;
-    }
-    // Keep the catalog fresh for next time without blocking this launch, and
-    // catch a mistyped hosted id from the cache. Local models already took
-    // the branch above; fail open when the cache is empty (offline / never
-    // refreshed) so a launch is never blocked for lack of a network call.
-    account::refresh_model_cache_if_stale(account::MODEL_CACHE_TTL_SECONDS);
-    if account::cache_has_models() && !account::model_is_cached(model) {
-        // Not in the cache: it may just be stale. Refresh live and retry, so
-        // a valid new model launches instead of being wrongly rejected.
-        if !refresh_and_recheck_model(&credentials, model) {
-            return None;
-        }
-    }
-    // signed_in() only proves a token is present, not that it is real: a
-    // hand-written credentials.json satisfies it with any non-empty string.
-    // Everything past this point is destructive to a caller's running app or
-    // session, so confirm the session against the console first — the same
-    // identity check `wally account whoami` makes, with the same
-    // refresh-on-401 dance `wally account usage` uses.
-    let console = ConsoleClient::default();
-    let mut email = String::new();
-    match verify_cloud_session(&console, &mut credentials) {
-        Ok(verified_email) => email = verified_email,
-        Err(err) => {
-            if !err.unverified {
-                report_cloud_session_invalid(model);
+
+        #[cfg(wally_has_server)]
+        {
+            // A single-file model (GGUF) is its file; a directory model (MLX
+            // safetensors shards, Core ML) is its directory, which is also
+            // what `wally serve` hands the server.
+            let path = if local.framework == "LlamaCpp" && !local.path.is_empty() {
+                local.path.as_str()
+            } else {
+                local.dir.as_str()
+            };
+            let path_c = match std::ffi::CString::new(path) {
+                Ok(value) => value,
+                Err(_) => {
+                    out::error_line("resolved model path contains an embedded NUL byte");
+                    return None;
+                }
+            };
+            let model_id_c = match std::ffi::CString::new(model) {
+                Ok(value) => value,
+                Err(_) => {
+                    out::error_line("model id contains an embedded NUL byte");
+                    return None;
+                }
+            };
+            // Sized from this machine, not a constant: a coding agent's
+            // opening request is a 15k-token system prompt, and a fixed 8k
+            // window rejected it. See local_context_size.
+            let requested_context = local_context_size(&local.id);
+            let config = sys::rac_server_config_t {
+                host: c"127.0.0.1".as_ptr(),
+                port,
+                model_path: path_c.as_ptr(),
+                model_id: model_id_c.as_ptr(),
+                context_size: requested_context as i32,
+                threads: 0, // Let the backend choose for this machine.
+                gpu_layers: i32::MIN,
+                enable_cors: sys::RAC_FALSE as sys::rac_bool_t,
+                cors_origins: c"*".as_ptr(),
+                request_timeout_seconds: 300,
+                max_concurrent_requests: 4,
+                verbose: if options.verbose {
+                    sys::RAC_TRUE as sys::rac_bool_t
+                } else {
+                    sys::RAC_FALSE as sys::rac_bool_t
+                },
+            };
+            out::status_line(&format!(
+                "loading {model} on 127.0.0.1:{port} (requesting {} token context)",
+                config.context_size
+            ));
+            // SAFETY: config is fully populated and every pointer field
+            // (path_c, model_id_c, and the 'static host/cors_origins C string
+            // literals) outlives this call.
+            let started = unsafe { sys::rac_server_start(&config) };
+            if started != sys::SUCCESS {
+                out::error_line(&format!(
+                    "the local server would not start for {model}: {}",
+                    out::describe_result(started)
+                ));
+                out::status_line(&format!(
+                    "check `wally models show {model}` and finish its download with `wally \
+                     models pull {model}` (using the same --home)"
+                ));
                 return None;
             }
-            // The console could not be ASKED - it is rate limiting or down.
-            // That is no disproof of the session already on disk, and
-            // refusing here locked every signed-in person out of their own
-            // harness while a load test ran against the same console
-            // (InferenceInfra#444). Go in on the stored session; the
-            // harness's own calls surface the real error if it is still
-            // there.
-            out::status_line(&format!(
-                "could not confirm the cloud session ({}) - continuing on the stored session",
-                err.message
-            ));
+            let mut loaded_context: i32 = 0;
+            // SAFETY: loaded_context is a valid out-param for the duration of
+            // this call, made right after a successful rac_server_start.
+            let context_result = unsafe { sys::rac_server_get_context_length(&mut loaded_context) };
+            if context_result == sys::SUCCESS {
+                let loaded_context = loaded_context as i64;
+                if loaded_context < MINIMUM_CODING_HARNESS_CONTEXT {
+                    // SAFETY: no arguments; stops the server just started
+                    // above.
+                    unsafe {
+                        sys::rac_server_stop();
+                    }
+                    out::error_line(&format!(
+                        "This model can use a {loaded_context}-token context on this machine, \
+                         but coding harnesses require at least \
+                         {MINIMUM_CODING_HARNESS_CONTEXT} tokens."
+                    ));
+                    out::status_line(&format!(
+                        "Use a machine with more available memory, or run it directly with \
+                         `wally run {model}`."
+                    ));
+                    return None;
+                }
+                if loaded_context != config.context_size as i64 {
+                    out::status_line(&format!(
+                        "this machine allocated {loaded_context} tokens from the requested {}",
+                        config.context_size
+                    ));
+                }
+                context_window = loaded_context;
+            } else {
+                out::status_line(
+                    "Wally could not determine the loaded context; using the requested limit",
+                );
+                context_window = config.context_size as i64;
+            }
+            serving = true;
+            base_url = format!("http://127.0.0.1:{port}/v1");
         }
+    } else {
+        let requested = catalog::find(model);
+        if requested
+            .map(|entry| entry.harness_compatible)
+            .unwrap_or(false)
+        {
+            if !term::stdin_is_tty() {
+                out::error_line(&format!("{model} is not downloaded on this machine"));
+                out::status_line(&format!(
+                    "run `wally models pull {model}` first (using the same --home)"
+                ));
+                return None;
+            }
+            if !confirm_model_pull(model) {
+                out::status_line(&format!(
+                    "download cancelled; run `wally models pull {model}` when ready"
+                ));
+                return None;
+            }
+            let requested_id = match requested {
+                Some(entry) => entry.id,
+                None => model,
+            };
+            if commands::pull_model_flow(options, requested_id) != 0 {
+                return None;
+            }
+            return resolve(model, options, harness_command);
+        }
+
+        let mut credentials = match account::load() {
+            Ok(c) => c,
+            Err(message) => {
+                out::error_line(&message);
+                return None;
+            }
+        };
+        if !credentials.signed_in() {
+            // A known local model that has not been pulled should not send a
+            // keyless user into the cloud login flow. Signed-in users still
+            // get the normal catalog refresh for a hosted id of this
+            // spelling.
+            if catalog::find(model).is_some() || wanted.len() > 1 {
+                out::error_line(&format!("{model} is not downloaded on this machine"));
+                out::status_line(&format!(
+                    "run `wally models pull {model}` first (using the same --home)"
+                ));
+            } else {
+                report_not_signed_in();
+            }
+            return None;
+        }
+        // Keep the catalog fresh for next time without blocking this launch, and
+        // catch a mistyped hosted id from the cache. Local models already took
+        // the branch above; fail open when the cache is empty (offline / never
+        // refreshed) so a launch is never blocked for lack of a network call.
+        account::refresh_model_cache_if_stale(account::MODEL_CACHE_TTL_SECONDS);
+        if account::cache_has_models() && !account::model_is_cached(model) {
+            // Not in the cache: it may just be stale. Refresh live and retry, so
+            // a valid new model launches instead of being wrongly rejected.
+            if !refresh_and_recheck_model(&credentials, model) {
+                return None;
+            }
+        }
+        // signed_in() only proves a token is present, not that it is real: a
+        // hand-written credentials.json satisfies it with any non-empty string.
+        // Everything past this point is destructive to a caller's running app or
+        // session, so confirm the session against the console first — the same
+        // identity check `wally account whoami` makes, with the same
+        // refresh-on-401 dance `wally account usage` uses.
+        let console = ConsoleClient::default();
+        let mut email = String::new();
+        match verify_cloud_session(&console, &mut credentials) {
+            Ok(verified_email) => email = verified_email,
+            Err(err) => {
+                if !err.unverified {
+                    report_cloud_session_invalid(model);
+                    return None;
+                }
+                // The console could not be ASKED - it is rate limiting or down.
+                // That is no disproof of the session already on disk, and
+                // refusing here locked every signed-in person out of their own
+                // harness while a load test ran against the same console
+                // (InferenceInfra#444). Go in on the stored session; the
+                // harness's own calls surface the real error if it is still
+                // there.
+                out::status_line(&format!(
+                    "could not confirm the cloud session ({}) - continuing on the stored session",
+                    err.message
+                ));
+            }
+        }
+        base_url = format!("{}/v1", credentials.console_url);
+        api_key = credentials.access_token.clone();
+        console_url = credentials.console_url.clone();
+        out::status_line(&format!(
+            "using {model}{}",
+            if email.is_empty() {
+                String::new()
+            } else {
+                format!(" as {email}")
+            }
+        ));
     }
-    let base_url = format!("{}/v1", credentials.console_url);
-    let api_key = credentials.access_token.clone();
-    let console_url = credentials.console_url.clone();
-    out::status_line(&format!(
-        "using {model}{}",
-        if email.is_empty() {
-            String::new()
-        } else {
-            format!(" as {email}")
-        }
-    ));
 
     Some(Endpoint {
         base_url,
         api_key,
         console_url,
         serving,
+        context_window,
+        max_output: local_output_size(context_window),
     })
 }
 
@@ -641,69 +871,6 @@ pub fn refresh_and_recheck_model(credentials: &Credentials, model: &str) -> bool
     true
 }
 
-/// JSON string escaping, for the handful of characters that can appear in a
-/// model id, a path or a key. Not a general encoder: it exists so a Windows
-/// path with backslashes does not silently produce invalid config.
-fn quote_json(text: &str) -> String {
-    let mut out = String::from("\"");
-    for c in text.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// The provider block opencode reads out of OPENCODE_CONFIG_CONTENT.
-///
-/// Inline rather than a file on purpose: writing to the user's project or to
-/// ~/.config/opencode would outlive the session and change how opencode
-/// behaves when they run it themselves. Hand-built (not `io::json::dump`) so
-/// the key order below matches the C++ byte for byte.
-fn opencode_config(
-    primary: &str,
-    base_url: &str,
-    api_key: &str,
-    models: &[super::catalog_models::CatalogModel],
-) -> String {
-    // A key is always present because opencode's OpenAI client sends an
-    // Authorization header regardless; a local server ignores what is in it.
-    let key = if api_key.is_empty() { "local" } else { api_key };
-    // Every catalog model is a selectable entry so opencode's picker lists
-    // them all; `primary` stays the default selection.
-    let mut entries = String::new();
-    for entry in models {
-        if !entries.is_empty() {
-            entries.push(',');
-        }
-        entries.push_str(&quote_json(&entry.id));
-        entries.push_str(":{\"name\":");
-        entries.push_str(&quote_json(&entry.id));
-        entries.push('}');
-    }
-    let mut out = String::from("{\"provider\":{\"runanywhere\":{");
-    out.push_str("\"npm\":\"@ai-sdk/openai-compatible\",");
-    out.push_str("\"name\":\"RunAnywhere\",");
-    out.push_str("\"options\":{\"baseURL\":");
-    out.push_str(&quote_json(base_url));
-    out.push_str(",\"apiKey\":");
-    out.push_str(&quote_json(key));
-    out.push_str("},");
-    out.push_str("\"models\":{");
-    out.push_str(&entries);
-    out.push_str("}}},");
-    out.push_str("\"model\":");
-    out.push_str(&quote_json(&format!("runanywhere/{primary}")));
-    out.push('}');
-    out
-}
-
 const CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
 
 fn set_config_variable(value: &str) {
@@ -920,18 +1087,18 @@ fn spawn(tool: &str, args: &[String]) -> i32 {
 }
 
 /// Launch `tool` against `model`, forwarding `args`. Returns the exit code.
-pub fn launch(tool: &str, model: &str, args: &[String]) -> i32 {
+pub fn launch(tool: &str, model: &str, args: &[String], options: &GlobalOptions) -> i32 {
     if model.is_empty() {
         // Nothing to wire, so do not pretend to: run the tool as the user
         // has it configured.
         return spawn(tool, args);
     }
 
-    let Some(endpoint) = resolve(model) else {
+    let Some(endpoint) = resolve(model, options, tool) else {
         return 1;
     };
 
-    let config = opencode_config(
+    let config = build_open_code_config(
         model,
         &endpoint.base_url,
         &endpoint.api_key,
