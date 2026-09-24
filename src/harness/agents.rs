@@ -668,7 +668,8 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
             // upstream endpoint gets one under that name; a loopback server
             // is handed none, which is what it expects.
             let key_variable = hermes_key_variable(&endpoint.base_url);
-            let _key: Option<ScopedEnv> = if !endpoint.api_key.is_empty() && !key_variable.is_empty()
+            let _key: Option<ScopedEnv> = if !endpoint.api_key.is_empty()
+                && !key_variable.is_empty()
             {
                 Some(ScopedEnv::new(&key_variable, &endpoint.api_key))
             } else {
@@ -752,14 +753,11 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
             }
             let settings_built =
                 build_deep_seek_settings(&endpoint.base_url, DEEP_SEEK_KEY_VARIABLE, &catalog);
-            let write_failure = settings
-                .write(&settings_built, ".json")
-                .err()
-                .or_else(|| {
-                    config
-                        .write(&build_deep_seek_patch(&settings.path(), model), ".yml")
-                        .err()
-                });
+            let write_failure = settings.write(&settings_built, ".json").err().or_else(|| {
+                config
+                    .write(&build_deep_seek_patch(&settings.path(), model), ".yml")
+                    .err()
+            });
             if let Some(failure) = write_failure {
                 out::error_line(&failure);
                 release(&endpoint);
@@ -798,9 +796,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
                     config.path(),
                 ]
             } else {
-                out::status_line(
-                    "opening the dsh web ui; pass a prompt to run headless instead",
-                );
+                out::status_line("opening the dsh web ui; pass a prompt to run headless instead");
                 vec!["web".to_string(), "--patch".to_string(), config.path()]
             };
             launch_args.extend(child_args.iter().cloned());

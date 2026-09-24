@@ -46,10 +46,7 @@ pub fn model_id_is_safe(id: &str) -> bool {
         // `/` and `\` never appear in a real id — LocalModels() yields a bare
         // directory name — and `< > " ' &` are exactly what an unescaped XML
         // attribute or a shell word cannot survive.
-        if matches!(
-            byte,
-            b'<' | b'>' | b'"' | b'\'' | b'&' | b'/' | b'\\'
-        ) {
+        if matches!(byte, b'<' | b'>' | b'"' | b'\'' | b'&' | b'/' | b'\\') {
             return false;
         }
     }
@@ -76,7 +73,10 @@ fn epoch_seconds() -> i64 {
 /// The refresh half of the same dance `wally account usage` uses: exchange the
 /// refresh token for a new access token and persist it, so later commands in
 /// the same session do not pay for the refresh again.
-fn refresh_session(console: &ConsoleClient, credentials: &mut Credentials) -> Result<(), SessionError> {
+fn refresh_session(
+    console: &ConsoleClient,
+    credentials: &mut Credentials,
+) -> Result<(), SessionError> {
     if credentials.refresh_token.is_empty() {
         return Err(SessionError {
             message: "the cloud session cannot be refreshed; run `wally account login`".to_string(),
@@ -89,8 +89,12 @@ fn refresh_session(console: &ConsoleClient, credentials: &mut Credentials) -> Re
             if !grant.refresh_token.is_empty() {
                 credentials.refresh_token = grant.refresh_token;
             }
-            credentials.expires_at =
-                epoch_seconds() + if grant.expires_in > 0 { grant.expires_in } else { 3600 };
+            credentials.expires_at = epoch_seconds()
+                + if grant.expires_in > 0 {
+                    grant.expires_in
+                } else {
+                    3600
+                };
             account::save(credentials).map_err(|message| SessionError {
                 message,
                 unverified: false,
@@ -442,9 +446,7 @@ fn prepend_to_path(dir: &Path) {
 fn install_hint(tool: &str) -> String {
     match tool {
         "opencode" => "install it with `npm i -g opencode-ai`, then run this again".to_string(),
-        "openclaw" => {
-            "install it with `npm i -g openclaw@latest`, then run this again".to_string()
-        }
+        "openclaw" => "install it with `npm i -g openclaw@latest`, then run this again".to_string(),
         "dsh" => "install it with `npm i -g @deepseek-ai/dsh`, then run this again".to_string(),
         "claude" => {
             if cfg!(windows) {
