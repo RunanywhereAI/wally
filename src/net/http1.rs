@@ -460,6 +460,14 @@ impl Client {
         }
     }
 
+    /// cpp-httplib's `CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_SECOND`, unmodified --
+    /// wally's C++ `upstream_pool.cpp::build()` calls `set_read_timeout(600,
+    /// 0)` and `set_connection_timeout(10, 0)` but never `set_write_timeout`,
+    /// so the write side keeps httplib's own 5s default regardless of how
+    /// long the (600s) read timeout is configured. A stalled write must time
+    /// out in ~5s the way C++'s does, not silently inherit the read budget.
+    const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
     fn ensure_connected(&mut self) -> Result<(), Error> {
         if self.conn.is_some() {
             return Ok(());
@@ -482,7 +490,7 @@ impl Client {
             };
             let _ = tcp.set_nodelay(true);
             let _ = tcp.set_read_timeout(Some(self.read_timeout));
-            let _ = tcp.set_write_timeout(Some(self.read_timeout));
+            let _ = tcp.set_write_timeout(Some(Self::WRITE_TIMEOUT));
             let raw_clone = tcp.try_clone().ok();
             let stream = if self.https {
                 let connector = match native_tls::TlsConnector::new() {
@@ -1455,6 +1463,52 @@ mod tests {
         // in practice: split_base_url only requires the scheme prefix.
         let empty_host = Client::with_literal_host("http://", short(), short());
         assert_eq!(empty_host.host_header(), "http://");
+    }
+
+    // C++'s upstream pool configures a 600s read timeout but never touches
+    // the write side, so cpp-httplib's own unmodified 5s
+    // CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_SECOND default governs writes. The two
+    // must stay independently configured on the connected socket, not
+    // coupled together the way an earlier version of this port had them.
+    #[test]
+    fn write_timeout_is_httplibs_five_second_default_not_the_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept_thread = thread::spawn(move || {
+            // Held for the client's ensure_connected() to complete against;
+            // dropped (closing the accepted socket) once this thread exits.
+            let _ = listener.accept();
+        });
+
+        let production_shaped_read_timeout = Duration::from_secs(600);
+        let mut client = Client::new(
+            &format!("http://127.0.0.1:{port}"),
+            short(),
+            production_shaped_read_timeout,
+        )
+        .unwrap();
+        client.ensure_connected().unwrap();
+        accept_thread.join().unwrap();
+
+        let active = client.active.lock().unwrap();
+        let raw = active
+            .as_ref()
+            .expect("ensure_connected must populate the raw socket clone");
+        assert_eq!(
+            raw.write_timeout().unwrap(),
+            Some(Client::WRITE_TIMEOUT),
+            "the write timeout must stay pinned to httplib's unmodified 5s default"
+        );
+        assert_eq!(
+            raw.read_timeout().unwrap(),
+            Some(production_shaped_read_timeout),
+            "the read timeout must still track the configured value"
+        );
+        assert_ne!(
+            raw.write_timeout().unwrap(),
+            raw.read_timeout().unwrap(),
+            "read and write timeouts must be independently configurable, not coupled together"
+        );
     }
 
     // reason_phrase is httplib's status_message table, ported verbatim --
