@@ -607,6 +607,38 @@ fn aggregate(
     row
 }
 
+/// Left-justifies/truncates `s` to exactly `width` BYTES, matching C's
+/// `%-N.Ns` (snprintf) field semantics: it counts and cuts raw bytes, not
+/// Unicode scalar values, so a multi-byte UTF-8 character straddling the
+/// width boundary is silently cut in half — the resulting bytes can be
+/// invalid UTF-8, same as C++'s `%.30s` on a byte string. Rust's
+/// `std::fmt` width/precision count `char`s, so this must not go through
+/// `format!("{:<N.N}", ...)`.
+fn ljust_bytes(s: &str, width: usize) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = if bytes.len() > width {
+        bytes[..width].to_vec()
+    } else {
+        bytes.to_vec()
+    };
+    if out.len() < width {
+        out.resize(width, b' ');
+    }
+    out
+}
+
+/// Writes one bench table row to stdout. The row may contain invalid UTF-8
+/// (see `ljust_bytes`), so this bypasses `out::result_line` (which requires
+/// a `&str`) and writes the raw bytes directly, exactly as C++'s
+/// `std::printf("%s", line)` on a `char[256]` buffer would.
+fn write_bench_row(line: &[u8]) {
+    use std::io::Write as _;
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(line);
+    let _ = stdout.write_all(b"\n");
+    let _ = stdout.flush();
+}
+
 // Modality-specific "primary" throughput/latency string for the report.
 fn primary_metric(r: &BenchRow) -> String {
     match r.modality {
@@ -829,23 +861,30 @@ pub fn run_bench(
     );
     for r in &rows {
         if r.success {
-            out::result_line(&format!(
-                "{:<30.30} {:<4.4} {:<15.15} {:<22.22} {:6.0}ms  {}",
-                r.model_id,
-                modality_label(r.modality),
-                r.scenario,
-                primary_metric(r),
-                r.med.load_ms,
-                human_bytes(r.med.memory_delta_bytes)
-            ));
+            let mut line = ljust_bytes(&r.model_id, 30);
+            line.push(b' ');
+            line.extend(ljust_bytes(modality_label(r.modality), 4));
+            line.push(b' ');
+            line.extend(ljust_bytes(&r.scenario, 15));
+            line.push(b' ');
+            line.extend(ljust_bytes(&primary_metric(r), 22));
+            line.extend(
+                format!(
+                    " {:6.0}ms  {}",
+                    r.med.load_ms,
+                    human_bytes(r.med.memory_delta_bytes)
+                )
+                .into_bytes(),
+            );
+            write_bench_row(&line);
         } else {
-            out::result_line(&format!(
-                "{:<30.30} {:<4.4} {:<15.15} FAILED: {}",
-                r.model_id,
-                modality_label(r.modality),
-                r.scenario,
-                r.error
-            ));
+            let mut line = ljust_bytes(&r.model_id, 30);
+            line.push(b' ');
+            line.extend(ljust_bytes(modality_label(r.modality), 4));
+            line.push(b' ');
+            line.extend(ljust_bytes(&r.scenario, 15));
+            line.extend(format!(" FAILED: {}", r.error).into_bytes());
+            write_bench_row(&line);
         }
     }
     0
@@ -895,4 +934,45 @@ pub fn register_bench(app: &mut App) {
         let engine = parsed.get_str("--engine").unwrap_or_default();
         run_bench(options, &model, trials, &vlm_image, &engine)
     });
+}
+
+#[cfg(test)]
+mod ljust_bytes_tests {
+    use super::ljust_bytes;
+
+    // id 31: C's "%-N.Ns" (and Rust's old `format!("{:<N.N}", ...)`) differ
+    // on multi-byte UTF-8 — C counts/cuts bytes, Rust's std::fmt counts/cuts
+    // chars. ljust_bytes must match the C (byte) semantics.
+    #[test]
+    fn pads_short_ascii_strings_with_spaces_to_byte_width() {
+        assert_eq!(ljust_bytes("abc", 5), b"abc  ".to_vec());
+    }
+
+    #[test]
+    fn truncates_ascii_strings_longer_than_width() {
+        assert_eq!(ljust_bytes("abcdefgh", 5), b"abcde".to_vec());
+    }
+
+    #[test]
+    fn pads_by_byte_count_not_char_count_for_multibyte_utf8() {
+        // "café" is 4 chars but 5 bytes (é is 2 bytes); snprintf("%-10.10s")
+        // pads to 10 BYTES (5 spaces after the 5-byte string), whereas
+        // Rust's format!("{:<10.10}", "café") would pad to 10 CHARS (6
+        // spaces), one column wider than C++.
+        let padded = ljust_bytes("café", 10);
+        assert_eq!(padded.len(), 10);
+        assert_eq!(&padded[..5], "café".as_bytes());
+        assert_eq!(&padded[5..], b"     ");
+    }
+
+    #[test]
+    fn truncation_can_cut_a_multibyte_character_in_half() {
+        // "é" alone is the 2-byte UTF-8 sequence 0xC3 0xA9. Truncating "café"
+        // (bytes: c a f 0xC3 0xA9) to 4 bytes keeps only the first byte of
+        // "é", producing invalid UTF-8 — exactly what C's %.4s does on the
+        // same byte string.
+        let truncated = ljust_bytes("café", 4);
+        assert_eq!(truncated, vec![b'c', b'a', b'f', 0xC3]);
+        assert!(std::str::from_utf8(&truncated).is_err());
+    }
 }
