@@ -705,6 +705,13 @@ fn opencode_config(
 const CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
 
 fn set_config_variable(value: &str) {
+    if value.contains('\0') {
+        // A NUL cannot appear in a real access token or model id; refuse to
+        // pass it to std::env::set_var, which panics on an embedded NUL,
+        // rather than the C++ setenv this ports, which would just stop at
+        // the first NUL silently.
+        return;
+    }
     // SAFETY: mirrors the C++ setenv/_putenv_s call this ports; `launch` is
     // the only writer active during the spawn it wraps.
     unsafe { std::env::set_var(CONFIG_VARIABLE, value) };
