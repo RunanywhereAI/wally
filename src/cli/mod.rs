@@ -1395,6 +1395,149 @@ fn cli_lexical_int(raw: &str, unsigned_only: bool) -> Option<i128> {
     None
 }
 
+/// The hex-float body C's `strtold` accepts right after a `0x`/`0X` prefix it
+/// already consumed: hex digits, optionally a `.` and more hex digits (at
+/// least one digit somewhere across the two), then optionally `p`/`P` with a
+/// signed decimal exponent (a binary, not decimal, power of two). The strict
+/// C99 grammar requires the `p` exponent; the libc `strtold` every platform
+/// CLI11 links against actually uses does not enforce that (`0x10` parses as
+/// 16.0 with no exponent at all, verified against the host libc), so this
+/// doesn't either. Returns the value and the absolute index into `bytes`
+/// just past what it consumed, or `None` if no hex digit followed the prefix
+/// at all -- `strtold` then falls back to parsing a bare decimal `0` and
+/// leaving the `x...` unconsumed, which the caller handles.
+fn hex_float_body(bytes: &[u8], start: usize) -> Option<(f64, usize)> {
+    let mut i = start;
+    let mut value = 0.0f64;
+    let int_start = i;
+    while i < bytes.len() {
+        match (bytes[i] as char).to_digit(16) {
+            Some(d) => {
+                value = value * 16.0 + f64::from(d);
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    let had_int_digits = i > int_start;
+    let mut had_frac_digits = false;
+    if bytes.get(i) == Some(&b'.') {
+        let mut j = i + 1;
+        let frac_start = j;
+        let mut scale = 1.0 / 16.0;
+        while j < bytes.len() {
+            match (bytes[j] as char).to_digit(16) {
+                Some(d) => {
+                    value += f64::from(d) * scale;
+                    scale /= 16.0;
+                    j += 1;
+                }
+                None => break,
+            }
+        }
+        had_frac_digits = j > frac_start;
+        if had_int_digits || had_frac_digits {
+            i = j;
+        }
+    }
+    if !had_int_digits && !had_frac_digits {
+        return None;
+    }
+    // `p`/`P` [sign] digits+ -- consumed only when at least one exponent
+    // digit actually follows ("0x1p" leaves the trailing "p" unconsumed,
+    // matching strtold).
+    if matches!(bytes.get(i), Some(b'p') | Some(b'P')) {
+        let mut k = i + 1;
+        let exp_negative = match bytes.get(k) {
+            Some(b'-') => {
+                k += 1;
+                true
+            }
+            Some(b'+') => {
+                k += 1;
+                false
+            }
+            _ => false,
+        };
+        let digits_from = k;
+        let mut exponent: i32 = 0;
+        while k < bytes.len() && (bytes[k] as char).is_ascii_digit() {
+            exponent = exponent
+                .saturating_mul(10)
+                .saturating_add(i32::from(bytes[k] - b'0'));
+            k += 1;
+        }
+        if k > digits_from {
+            let signed_exponent = if exp_negative { -exponent } else { exponent };
+            value *= 2f64.powi(signed_exponent);
+            i = k;
+        }
+    }
+    Some((value, i))
+}
+
+/// One pass of C's `strtold(raw, &end)`, read as `f64`: skips leading ASCII
+/// whitespace, an optional `+`/`-` sign, then either a `0x`/`0X`-prefixed
+/// hexadecimal float (`hex_float_body` above) or hands the sign-inclusive
+/// remainder to Rust's own decimal/`inf`/`nan` float grammar (a subset of
+/// `strtold`'s), trying progressively shorter prefixes the same way
+/// `strtold` backs off from trailing garbage it can't extend the token with
+/// -- CLI option values are always short, so this never scans far. Returns
+/// the value and how many bytes of `raw` (from its very start, matching
+/// `end - input.c_str()`) were consumed; `0` means nothing converted at all,
+/// exactly like `end == input.c_str()`.
+fn strtold_prefix(raw: &str) -> (f64, usize) {
+    let bytes = raw.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && (bytes[i] as char).is_ascii_whitespace() {
+        i += 1;
+    }
+    let sign_start = i;
+    let negative = matches!(bytes.get(i), Some(b'-'));
+    if matches!(bytes.get(i), Some(b'-') | Some(b'+')) {
+        i += 1;
+    }
+    if bytes[i..].starts_with(b"0x") || bytes[i..].starts_with(b"0X") {
+        if let Some((magnitude, end)) = hex_float_body(bytes, i + 2) {
+            return (if negative { -magnitude } else { magnitude }, end);
+        }
+    }
+    for end in (sign_start..=bytes.len()).rev() {
+        if let Ok(text) = std::str::from_utf8(&bytes[sign_start..end]) {
+            if let Ok(value) = text.parse::<f64>() {
+                return (value, end);
+            }
+        }
+    }
+    (0.0, 0)
+}
+
+/// CLI11's floating-point `detail::lexical_cast<T>`: convert with `strtold`
+/// semantics (`strtold_prefix` above); if that didn't consume the whole
+/// string, accept it anyway when everything left is ASCII whitespace, else
+/// -- exactly as `cli_lexical_int` does -- strip `_`/`'` digit separators
+/// (CLI11 permits these on floats too) and retry once.
+fn cli_lexical_float(raw: &str) -> Option<f64> {
+    if raw.is_empty() {
+        return None;
+    }
+    let (value, consumed) = strtold_prefix(raw);
+    if consumed == raw.len() {
+        return Some(value);
+    }
+    if raw.as_bytes()[consumed..]
+        .iter()
+        .all(|b| (*b as char).is_ascii_whitespace())
+    {
+        return Some(value);
+    }
+    if raw.contains(['_', '\'']) {
+        let stripped: String = raw.chars().filter(|c| *c != '_' && *c != '\'').collect();
+        return cli_lexical_float(&stripped);
+    }
+    None
+}
+
 /// CLI11's `detail::to_flag_value` + boolean `lexical_cast`, for converting a
 /// `--flag=value` inline value on a boolean flag option. Mirrors: exact
 /// case-sensitive `"true"`/`"false"`, then lowercase, then a single-char
@@ -1491,9 +1634,16 @@ fn validate_and_convert(
                 _ => Err(format!("Could not convert: {display} = {raw}")),
             }
         }
-        ValueType::Float | ValueType::Double => match raw.trim().parse::<f64>() {
-            Ok(_) => Ok(raw.to_string()),
-            Err(_) => Err(format!("Could not convert: {display} = {raw}")),
+        // `cli_lexical_float` mirrors CLI11's floating-point `lexical_cast`
+        // (`strtold` semantics: hex floats, separators, trailing whitespace)
+        // rather than a plain decimal parse, and the canonical decimal
+        // string it returns -- not `raw` -- is what gets stored, exactly as
+        // the doc comment above promises: `get_f64` only ever runs a plain
+        // decimal parse on the stored value, so "0x10" has to become "16"
+        // here or every later reader would fail to reparse it.
+        ValueType::Float | ValueType::Double => match cli_lexical_float(raw) {
+            Some(v) => Ok(v.to_string()),
+            None => Err(format!("Could not convert: {display} = {raw}")),
         },
     }
 }
@@ -2092,6 +2242,80 @@ mod tests {
             vec!["31", "15", "5", "1000", "42"],
             "every form should canonicalize to plain decimal"
         );
+    }
+
+    /// codex-e2e diff 4: CLI11's floating-point `lexical_cast` runs
+    /// `strtold`, which accepts a hexadecimal-floating-constant (with or
+    /// without the `p` exponent C99 technically requires) the same way it
+    /// accepts a decimal one, plus digit separators and surrounding
+    /// whitespace exactly as the integer path does. `--temperature`,
+    /// `--top-p`, and `--lora-scale` are the three options wally's diff
+    /// harness names; this covers all three plus the exponent/sign forms
+    /// the brief calls out.
+    #[test]
+    fn float_lexical_accepts_hex_floats_separators_and_whitespace() {
+        for option in ["--temperature", "--top-p", "--lora-scale"] {
+            for (raw, want) in [
+                ("0x10", "16"),
+                ("0X10", "16"),
+                ("0x1p4", "16"),
+                ("0x1.8p1", "3"),
+                ("-0x10", "-16"),
+                ("+0x10", "16"),
+                ("1_000", "1000"),
+                (" 0.5 ", "0.5"),
+            ] {
+                let seen = Rc::new(RefCell::new(Vec::new()));
+                let seen2 = seen.clone();
+                let mut app = App::new("root", "wally");
+                app.add_option(option, ValueType::Float, "float option");
+                app.callback(move |p, _g| {
+                    seen2.borrow_mut().push((
+                        p.get_str(option).unwrap(),
+                        p.get_f64(option)
+                            .expect("get_f64 must reparse the stored value"),
+                    ));
+                    0
+                });
+                let outcome = app.parse(&[option.to_string(), raw.to_string()]);
+                assert_eq!(
+                    outcome,
+                    Outcome::Ran {
+                        code: 0,
+                        path: vec![]
+                    },
+                    "{option} {raw:?} should parse"
+                );
+                let (stored, reparsed) = seen.borrow()[0].clone();
+                assert_eq!(stored, want, "{option} {raw:?} canonical form");
+                assert_eq!(
+                    reparsed,
+                    want.parse::<f64>().unwrap(),
+                    "{option} {raw:?} get_f64 must see the value CLI11 would have bound"
+                );
+            }
+        }
+    }
+
+    /// codex-e2e diff 4: a `0x` prefix with no hex digit after it, or a `p`
+    /// exponent with no digit after it, is the same conversion failure a
+    /// plain garbage string is -- `strtold` only ever partially consumes
+    /// those, and nothing left over is whitespace or a digit separator.
+    #[test]
+    fn float_lexical_rejects_an_incomplete_hex_float() {
+        for raw in ["0x", "0xg", "0x1p", "0x."] {
+            let mut app = App::new("root", "wally");
+            app.add_option("--temperature", ValueType::Float, "float option");
+            app.callback(|_p, _g| 0);
+            let outcome = app.parse(&["--temperature".into(), raw.to_string()]);
+            assert_eq!(
+                outcome,
+                Outcome::ParseErr {
+                    message: format!("Could not convert: --temperature = {raw}"),
+                },
+                "{raw:?} should be rejected"
+            );
+        }
     }
 
     /// fuzz-values item 3: out-of-range for the SPECIFIC C++ bound width is
