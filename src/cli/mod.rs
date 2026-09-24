@@ -611,7 +611,7 @@ impl<'a> ParseState<'a> {
                 .iter()
                 .position(|o| o.names.iter().any(|n| n == name))
             {
-                return self.consume_matched(args, i, level, opt_idx, inline, None);
+                return self.consume_matched(args, i, level, opt_idx, inline);
             }
         }
         self.handle_unmatched(depth, args[i].clone(), i)
@@ -659,16 +659,17 @@ impl<'a> ParseState<'a> {
                 .position(|o| o.names.iter().any(|n| n == name))
             {
                 let inline = if rest.is_empty() { None } else { Some(rest) };
-                return self.consume_matched(args, i, level, opt_idx, inline, Some(rest));
+                return self.consume_matched(args, i, level, opt_idx, inline);
             }
         }
         self.handle_unmatched(depth, args[i].clone(), i)
     }
 
     /// Records one match of `app.options[opt_idx]` at frame `level`: a flag
-    /// (records its `{value}` result) or an option (consumes one value, or —
-    /// for a `multi` option — every following plain token, CLI11's
-    /// `TakeAll`/vector-positional-style greedy consumption).
+    /// (records its `{value}` result) or an option (consumes exactly one
+    /// value — CLI11's `type_size(1, 1)` for a `std::vector<std::string>`-bound
+    /// option; a `multi` option accumulates across *repeated* occurrences of
+    /// the flag, not by greedily eating multiple tokens in one occurrence).
     fn consume_matched(
         &mut self,
         args: &[String],
@@ -676,7 +677,6 @@ impl<'a> ParseState<'a> {
         level: usize,
         opt_idx: usize,
         inline: Option<&str>,
-        short_cluster_rest: Option<&str>,
     ) -> usize {
         let is_flag = self.frames[level].app.options[opt_idx].is_flag;
         if is_flag {
@@ -709,14 +709,11 @@ impl<'a> ParseState<'a> {
                 .entry(spec)
                 .or_default()
                 .push(value);
-            return if short_cluster_rest.is_some_and(|r| !r.is_empty()) && inline.is_none() {
-                i + 1
-            } else {
-                i + 1
-            };
+            // A flag consumes only its own token regardless of a short cluster's
+            // remainder or an inline `=value` — both arms were identical.
+            return i + 1;
         }
 
-        let multi = self.frames[level].app.options[opt_idx].multi;
         let spec = self.frames[level].app.options[opt_idx].spec.clone();
         let value_type = self.frames[level].app.options[opt_idx].value_type;
         let validators = self.frames[level].app.options[opt_idx].validators.clone();
@@ -729,31 +726,35 @@ impl<'a> ParseState<'a> {
             .cloned()
             .unwrap_or_default();
 
+        // Every wally vector-bound option (`--stop`, `--doc,-d`, `--file,-f`,
+        // `--text,-t`, ...) is `std::vector<std::string>`, and CLI11 explicitly
+        // excludes `std::string` from `is_mutable_container` (it's constructible
+        // from a single string), so `type_size(1, 1)` applies: each *occurrence*
+        // of the flag consumes exactly one following token, never a greedy run —
+        // repetition is how the vector accumulates (`expected_count` is
+        // unbounded), not multi-token consumption per occurrence. `multi` here
+        // only distinguishes "may repeat" for downstream accumulation semantics;
+        // it must not change how many tokens a single occurrence consumes. (The
+        // one CLI11 mechanism that *does* make a single occurrence greedy,
+        // `->allow_extra_args()`, is applied in wally only to the "args"
+        // passthrough positional — see `fill_positional`, unaffected by this.)
         let mut next = i + 1;
         let mut values: Vec<String> = Vec::new();
         if let Some(v) = inline {
             values.push(v.to_string());
-        } else if !multi {
+        } else {
             match args.get(next) {
-                Some(v) if !looks_like_flag(v) || multi => {
+                Some(v) if !looks_like_flag(v) => {
                     values.push(v.clone());
                     next += 1;
                 }
                 _ => {
                     self.push_parse_error(format!(
                         "{display}: 1 required {} missing",
-                        base_type_name(value_type, type_name.as_deref())
+                        full_type_name(value_type, type_name.as_deref(), &validators)
                     ));
                     return next;
                 }
-            }
-        } else {
-            while let Some(v) = args.get(next) {
-                if looks_like_flag(v) {
-                    break;
-                }
-                values.push(v.clone());
-                next += 1;
             }
         }
 
@@ -811,9 +812,10 @@ impl<'a> ParseState<'a> {
             if !multi {
                 frame.positional_cursor += 1;
             }
-        } else if frame.app.prefix_command || frame.app.allow_extras {
-            frame.parsed.remaining.push(token.to_string());
         } else {
+            // Whether this later gets reported (`_process_extras()`, `finish()`)
+            // depends on `prefix_command`/`allow_extras` there, not here — every
+            // positional-exhausted token is recorded the same way.
             frame.parsed.remaining.push(token.to_string());
         }
     }
@@ -894,11 +896,15 @@ impl<'a> ParseState<'a> {
                 .filter(|t| !t.starts_with('\0'))
                 .collect();
             if !extras.is_empty() && !frame.app.allow_extras && !frame.app.prefix_command {
+                // CLI11's `ExtrasError` (CLI11.hpp) builds its message with
+                // `detail::rjoin`, which joins in REVERSE order — not the order
+                // the extras were encountered on the command line.
                 let message = if extras.len() > 1 {
                     format!(
                         "The following arguments were not expected: {}",
                         extras
                             .iter()
+                            .rev()
                             .map(|s| s.as_str())
                             .collect::<Vec<_>>()
                             .join(" ")
@@ -956,6 +962,48 @@ fn base_type_name(value_type: ValueType, override_name: Option<&str>) -> String 
         ValueType::Float | ValueType::Double => "FLOAT",
     }
     .to_string()
+}
+
+/// The `description()` CLI11 attaches to one `->check(...)` validator — what
+/// `Option::get_type_name()` (CLI11.hpp) appends after `:` for each validator
+/// on the option. `Range`/`RangeF` auto-generate `"<TYPE> in [min - max]"`
+/// when constructed without an explicit name (CLI11.hpp's `Range` ctor);
+/// `ExistingFile`/`PositiveNumber`/`NonNegativeNumber` are always given an
+/// explicit literal name at construction, so their description is just that
+/// name — note this is independent of the runtime failure text in
+/// `check_validator`, which for `Range`-family validators always prints the
+/// numeric bounds regardless of the name.
+fn validator_description(validator: &Validator, value_type: ValueType) -> String {
+    match validator {
+        Validator::ExistingFile => "FILE".to_string(),
+        Validator::Range(min, max) => {
+            format!("{} in [{min} - {max}]", base_type_name(value_type, None))
+        }
+        Validator::RangeF(min, max) => {
+            format!("{} in [{min} - {max}]", base_type_name(value_type, None))
+        }
+        Validator::PositiveNumber => "POSITIVE".to_string(),
+        Validator::NonNegativeNumber => "NONNEGATIVE".to_string(),
+        Validator::IsMember(choices) => format!("{{{}}}", choices.join(",")),
+    }
+}
+
+/// `Option::get_type_name()` (CLI11.hpp): the base type name plus `:<description>`
+/// for every attached validator, concatenated in order — this is what CLI11
+/// embeds in `ArgumentMismatch::TypedAtLeast`'s "N required TYPE missing" message
+/// (the help formatter keeps the simplified base name; only this error path uses
+/// the full concatenation).
+fn full_type_name(
+    value_type: ValueType,
+    override_name: Option<&str>,
+    validators: &[Validator],
+) -> String {
+    let mut full = base_type_name(value_type, override_name);
+    for validator in validators {
+        full.push(':');
+        full.push_str(&validator_description(validator, value_type));
+    }
+    full
 }
 
 /// CLI11's base-0 integer `lexical_cast`: `0x`/`0X` hex, a lone leading `0`
@@ -1021,13 +1069,21 @@ fn check_validator(validator: &Validator, raw: &str) -> Option<String> {
             Ok(v) if v >= *min && v <= *max => None,
             _ => Some(format!("Value {raw} not in range [{min} - {max}]")),
         },
+        // `PositiveNumber`/`NonNegativeNumber` are CLI11's `Range(DBL_MIN, DBL_MAX,
+        // "POSITIVE")` / `Range(0, DBL_MAX, "NONNEGATIVE")`: the validator's *name*
+        // ("POSITIVE"/"NONNEGATIVE") only ever surfaces in `description()` (used for
+        // the type name, see `validator_description` below) — the runtime failure
+        // string always prints the literal numeric bounds captured at construction
+        // (CLI11.hpp's `Range::func_`), never the name.
         Validator::PositiveNumber => match raw.trim().parse::<f64>() {
             Ok(v) if v > 0.0 => None,
-            _ => Some(format!("Value {raw} not in range [POSITIVE]")),
+            _ => Some(format!(
+                "Value {raw} not in range [2.22507e-308 - 1.79769e+308]"
+            )),
         },
         Validator::NonNegativeNumber => match raw.trim().parse::<f64>() {
             Ok(v) if v >= 0.0 => None,
-            _ => Some(format!("Value {raw} not in range [NONNEGATIVE]")),
+            _ => Some(format!("Value {raw} not in range [0 - 1.79769e+308]")),
         },
         Validator::IsMember(choices) => {
             if choices.iter().any(|c| c == raw) {
@@ -1260,6 +1316,91 @@ mod tests {
             outcome,
             Outcome::ParseErr {
                 message: "--top-k: Value 500 not in range [1 - 100]".to_string(),
+            }
+        );
+    }
+
+    /// CLI11's `ExtrasError` (`detail::rjoin`) lists multiple unexpected
+    /// arguments in REVERSE order, not the order they were typed.
+    #[test]
+    fn extras_error_lists_multiple_unexpected_arguments_in_reverse_order() {
+        let mut app = App::new("root", "wally");
+        app.add_subcommand("about", "About wally");
+
+        let outcome = app.parse(&[
+            "about".into(),
+            "one".into(),
+            "two".into(),
+            "three".into(),
+            "four".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Extras {
+                message: "The following arguments were not expected: four three two one"
+                    .to_string(),
+                path: vec!["about".to_string()],
+            }
+        );
+    }
+
+    /// A `std::vector<std::string>`-bound (`multi`) option still has
+    /// `type_size(1, 1)`: one occurrence consumes exactly one token, so a
+    /// trailing bare `--stop` is a missing-value ParseError, not a silently
+    /// empty vector — repetition, not greedy per-occurrence consumption, is
+    /// how CLI11 fills a vector option.
+    #[test]
+    fn multi_option_with_no_trailing_value_is_missing_value_error() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--stop", ValueType::Text, "stop sequence")
+            .multi();
+
+        let outcome = app.parse(&["--stop".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--stop: 1 required TEXT missing".to_string(),
+            }
+        );
+    }
+
+    /// The "N required TYPE missing" message uses CLI11's full
+    /// `Option::get_type_name()` (base type plus `:<validator description>`),
+    /// not just the base type name the help formatter simplifies to.
+    #[test]
+    fn missing_value_error_includes_validator_text_in_type_name() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--max-output-tokens", ValueType::Int, "cap")
+            .check(Validator::Range(1, 2147483647));
+
+        let outcome = app.parse(&["--max-output-tokens".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--max-output-tokens: 1 required INT:INT in [1 - 2147483647] missing"
+                    .to_string(),
+            }
+        );
+    }
+
+    /// `PositiveNumber`'s failure text is CLI11's `Range(double)` text using
+    /// the literal DBL_MIN/DBL_MAX bounds captured at construction — not the
+    /// validator's "POSITIVE" name (which only appears in the type name).
+    #[test]
+    fn positive_number_validator_uses_literal_double_bounds_in_failure_text() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--count", ValueType::Int, "count")
+            .check(Validator::PositiveNumber);
+
+        let outcome = app.parse(&["--count".into(), "0".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--count: Value 0 not in range [2.22507e-308 - 1.79769e+308]".to_string(),
             }
         );
     }
