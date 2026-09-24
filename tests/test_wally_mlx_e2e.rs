@@ -32,9 +32,10 @@ use mlx_fakes as fakes;
 /// Unlike the C++ version (whose `finish()` is the only cleanup path, safe
 /// because `app.parse()` cannot escape past the try/catch above it), this
 /// guard restores fd 1 in `Drop` too: `common::run_in_process` calls into
-/// still-unported `wally::app::run()`, which currently panics via
-/// `todo!()`. If that panic unwinds through a capture, `Drop` still runs and
-/// restores stdout, so one blocked test cannot corrupt output capture for
+/// still-unported `wally::app::run()`, which currently panics because its
+/// body is an unimplemented placeholder. If that panic unwinds through a
+/// capture, `Drop` still runs and restores stdout, so one blocked test
+/// cannot corrupt output capture for
 /// every other test in this binary (cargo test runs `#[test]` fns on
 /// parallel threads within one process).
 struct StdoutCapture {
