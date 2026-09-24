@@ -44,7 +44,12 @@ struct RagParams {
 
 #[cfg(wally_has_rag)]
 fn read_text_file(path: &str) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|_| format!("cannot open file: {path}"))
+    // Matches cmd_rag.cpp read_text_file: opens in binary mode and accepts
+    // any byte sequence verbatim, including non-UTF-8. Only failing to open
+    // the file is an error; the bytes are lossily converted to UTF-8 (proto
+    // string fields require valid UTF-8) rather than rejected.
+    let bytes = std::fs::read(path).map_err(|_| format!("cannot open file: {path}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 // One session covers the whole invocation: open -> ingest every document -> ask
@@ -176,7 +181,7 @@ fn run_rag_query(
     params: &RagParams,
     question: &str,
 ) -> i32 {
-    use crate::io::output::{describe_result, error_line, result_line, status_line, JsonWriter};
+    use crate::io::output::{error_line, result_line, status_line, JsonWriter};
     use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
     use crate::sys;
 
@@ -244,7 +249,14 @@ fn run_rag_query(
     let result = match parse_proto_buffer::<v1::RagResult>(result_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!("RAG query failed: {}", describe_result(proto_rc)));
+            // Matches cmd_rag.cpp: parse_proto_buffer only ever writes
+            // `error` on its own failure path (buffer status or decode).
+            // When parsing succeeds but proto_rc still disagrees, C++'s
+            // `error` stays empty, so the printed line is the bare prefix
+            // with nothing after the colon — not `describe_result(proto_rc)`.
+            // (Contrast open_and_ingest above, which explicitly falls back to
+            // describe_result when `error` is empty; run_rag_query does not.)
+            error_line("RAG query failed: ");
             // SAFETY: session is the live handle from open_and_ingest; not used
             // again after this.
             unsafe { sys::rac_rag_session_destroy_proto(session) };
@@ -321,7 +333,7 @@ fn run_rag_search(
     params: &RagParams,
     question: &str,
 ) -> i32 {
-    use crate::io::output::{describe_result, error_line, result_line, status_line, JsonWriter};
+    use crate::io::output::{error_line, result_line, status_line, JsonWriter};
     use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
     use crate::sys;
 
@@ -375,7 +387,12 @@ fn run_rag_search(
     let response = match parse_proto_buffer::<v1::RagSearchResponse>(response_buffer) {
         Ok(response) if proto_rc == sys::SUCCESS => response,
         Ok(_) => {
-            error_line(&format!("RAG search failed: {}", describe_result(proto_rc)));
+            // Matches cmd_rag.cpp run_rag_search: parse_proto_buffer only
+            // ever writes `error` on its own failure path. When parsing
+            // succeeds but proto_rc still disagrees, C++'s `error` stays
+            // empty, so the printed line is the bare prefix with nothing
+            // after the colon.
+            error_line("RAG search failed: ");
             // SAFETY: session is the live handle from open_and_ingest; not used
             // again after this.
             unsafe { sys::rac_rag_session_destroy_proto(session) };

@@ -4,16 +4,56 @@
 //! anyway per the migration brief.
 
 use std::ffi::CString;
+use std::io::Write as _;
 
 use crate::bootstrap::{self, GlobalOptions};
 use crate::cli::{App, Validator, ValueType};
 use crate::commands::model_setup::ensure_model_ready;
-use crate::io::output::{describe_result, error_line, result_line, table, JsonWriter};
+use crate::io::output::{describe_result, error_line, result_line, JsonWriter};
 use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
 use crate::sys;
 
+/// Byte-exact reimplementation of `io::output::table` for the DOCUMENT
+/// column, which (matching cmd_rerank.cpp) may legitimately contain a
+/// truncated, non-UTF-8 byte sequence. `output::table` operates on `String`
+/// and cannot hold that, so this renders raw bytes directly the same way the
+/// C++ build's `fprintf("%s", ...)` does. Column widths are byte lengths, as
+/// in the C++ (`std::string::size`).
+fn print_table_bytes(header: &[&str], rows: &[Vec<Vec<u8>>]) {
+    let mut widths: Vec<usize> = header.iter().map(|cell| cell.len()).collect();
+    for row in rows {
+        for (c, cell) in row.iter().enumerate().take(widths.len()) {
+            widths[c] = widths[c].max(cell.len());
+        }
+    }
+    let mut stdout = std::io::stdout().lock();
+    let mut print_row = |row: &[Vec<u8>]| {
+        let mut line: Vec<u8> = Vec::new();
+        for (c, width) in widths.iter().enumerate() {
+            let cell: &[u8] = row.get(c).map(Vec::as_slice).unwrap_or(&[]);
+            line.extend_from_slice(cell);
+            if c + 1 < widths.len() {
+                line.resize(line.len() + (width - cell.len() + 4), b' ');
+            }
+        }
+        line.push(b'\n');
+        let _ = stdout.write_all(&line);
+        let _ = stdout.flush();
+    };
+    let header_row: Vec<Vec<u8>> = header.iter().map(|s| s.as_bytes().to_vec()).collect();
+    print_row(&header_row);
+    for row in rows {
+        print_row(row);
+    }
+}
+
 fn read_text_file(path: &str) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|_| format!("cannot open file: {path}"))
+    // Matches cmd_rerank.cpp read_text_file: opens in binary mode and accepts
+    // any byte sequence verbatim, including non-UTF-8. Only failing to open
+    // the file is an error; the bytes are lossily converted to UTF-8 (proto
+    // string fields require valid UTF-8) rather than rejected.
+    let bytes = std::fs::read(path).map_err(|_| format!("cannot open file: {path}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -118,7 +158,12 @@ fn run_rerank(
     let result = match parse_proto_buffer::<v1::RerankResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!("rerank failed: {}", describe_result(proto_rc)));
+            // Matches cmd_rerank.cpp: parse_proto_buffer only ever writes
+            // `error` on its own failure path (buffer status or decode). When
+            // parsing succeeds but proto_rc still disagrees, C++'s `error`
+            // stays empty, so the printed line is the bare prefix with
+            // nothing after the colon — not `describe_result(proto_rc)`.
+            error_line("rerank failed: ");
             // SAFETY: handle is the live component created above.
             unsafe { sys::rac_rerank_component_destroy(handle) };
             return 1;
@@ -157,31 +202,35 @@ fn run_rerank(
         json.end_object();
         result_line(json.str());
     } else {
-        let header = ["RANK", "INDEX", "SCORE", "DOCUMENT"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>();
-        let mut rows = Vec::with_capacity(result.items.len());
+        let header = ["RANK", "INDEX", "SCORE", "DOCUMENT"];
+        let mut rows: Vec<Vec<Vec<u8>>> = Vec::with_capacity(result.items.len());
         for (i, item) in result.items.iter().enumerate() {
             let doc = documents
                 .get(item.index as usize)
                 .map(String::as_str)
                 .unwrap_or("");
             let doc_bytes = doc.as_bytes();
-            let preview = if doc_bytes.len() > 60 {
-                let cut = &doc_bytes[..57.min(doc_bytes.len())];
-                format!("{}...", String::from_utf8_lossy(cut))
+            // Raw byte-index cut, matching cmd_rerank.cpp's
+            // `documents[index].substr(0, 57) + "..."` exactly, including
+            // splitting a multi-byte UTF-8 character mid-sequence. Do not
+            // route this through `String`/`str::from_utf8_lossy`: that would
+            // substitute U+FFFD for a dangling byte sequence and change the
+            // bytes actually written to stdout.
+            let preview: Vec<u8> = if doc_bytes.len() > 60 {
+                let mut cut = doc_bytes[..57.min(doc_bytes.len())].to_vec();
+                cut.extend_from_slice(b"...");
+                cut
             } else {
-                doc.to_string()
+                doc_bytes.to_vec()
             };
             rows.push(vec![
-                (i + 1).to_string(),
-                item.index.to_string(),
-                format!("{:.4}", item.relevance_score),
+                (i + 1).to_string().into_bytes(),
+                item.index.to_string().into_bytes(),
+                format!("{:.4}", item.relevance_score).into_bytes(),
                 preview,
             ]);
         }
-        table(&header, &rows);
+        print_table_bytes(&header, &rows);
     }
     0
 }

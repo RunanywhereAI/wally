@@ -80,7 +80,6 @@ fn load_diffusion_model(
     model_id: &str,
     validate_availability: bool,
 ) -> bool {
-    use crate::io::output::describe_result;
     use crate::io::proto::{parse_proto_buffer, ProtoBuffer};
     use crate::progress::progress_bar::DownloadProgressScope;
     use crate::sys;
@@ -110,10 +109,11 @@ fn load_diffusion_model(
     let result = match parse_proto_buffer::<v1::ModelLoadResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!(
-                "diffusion model load failed: {}",
-                describe_result(proto_rc)
-            ));
+            // Matches cmd_image.cpp: parse_proto_buffer only ever writes
+            // `error` on its own failure path. When parsing succeeds but
+            // proto_rc still disagrees, C++'s `error` stays empty, so the
+            // printed line is the bare prefix with nothing after the colon.
+            error_line("diffusion model load failed: ");
             return false;
         }
         Err(error) => {
@@ -221,7 +221,6 @@ fn run_image_generate_body(
     seed: i64,
 ) -> i32 {
     use crate::catalog::model_ref;
-    use crate::io::output::describe_result;
     use crate::io::proto::{parse_proto_buffer, ProtoBuffer};
     use crate::sys;
 
@@ -304,10 +303,11 @@ fn run_image_generate_body(
     let result = match parse_proto_buffer::<v1::DiffusionResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!(
-                "image generation failed: {}",
-                describe_result(proto_rc)
-            ));
+            // Matches cmd_image.cpp: parse_proto_buffer only ever writes
+            // `error` on its own failure path. When parsing succeeds but
+            // proto_rc still disagrees, C++'s `error` stays empty, so the
+            // printed line is the bare prefix with nothing after the colon.
+            error_line("image generation failed: ");
             return 1;
         }
         Err(error) => {
