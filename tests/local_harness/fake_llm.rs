@@ -59,6 +59,18 @@ unsafe extern "C" fn create(
             config_value = Some(parsed);
         }
     }
+    // Test-only override: every path above clamps the reported context to
+    // at least 16384, which means nothing here ever exercises the harness's
+    // MINIMUM_CODING_HARNESS_CONTEXT rejection (src/harness/harness.rs). A
+    // scenario that needs a smaller loaded context -- to prove the harness
+    // actually rejects it -- sets this instead of trying to talk the real
+    // SDK into allocating less memory than it has available.
+    if let Some(forced) = env::var("WALLY_TEST_LOADED_CONTEXT")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+    {
+        context = forced;
+    }
     {
         let mut guard = report_lock();
         if let Some(value) = config_value {
