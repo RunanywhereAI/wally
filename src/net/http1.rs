@@ -2102,8 +2102,18 @@ mod tests {
         raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         raw.write_all(b"GET /count HTTP/1.1\r\nHost: x\r\n\r\n")
             .unwrap();
-        let (head, _) = read_head(&mut raw, MAX_HEAD_BYTES, Vec::new()).unwrap();
+        let (head, mut rest) = read_head(&mut raw, MAX_HEAD_BYTES, Vec::new()).unwrap();
         assert!(String::from_utf8_lossy(&head).starts_with("HTTP/1.1 200 "));
+        // Consume the 2-byte "ok" body too; otherwise the read after stop()
+        // below returns those unread bytes, not the close it is checking for.
+        while rest.len() < 2 {
+            let mut byte = [0u8; 1];
+            if raw.read(&mut byte).unwrap_or(0) == 0 {
+                break;
+            }
+            rest.push(byte[0]);
+        }
+        assert_eq!(rest, b"ok");
         assert_eq!(hits.load(Ordering::SeqCst), 1);
 
         // The connection is now idle-but-kept-alive; the handler thread is
