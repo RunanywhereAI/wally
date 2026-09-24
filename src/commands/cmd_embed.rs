@@ -74,7 +74,8 @@ fn load_embeddings_model(
     model_id: &str,
     framework: v1::InferenceFramework,
 ) -> bool {
-    let _progress_scope = DownloadProgressScope::new(model_id, !options.no_progress && !options.json);
+    let _progress_scope =
+        DownloadProgressScope::new(model_id, !options.no_progress && !options.json);
     let mut request = v1::ModelLoadRequest {
         model_id: model_id.to_string(),
         validate_availability: true,
@@ -331,7 +332,10 @@ pub fn register_embed(app: &mut App) {
         ValueType::Text,
         "Scale vectors to unit length or leave them raw",
     )
-    .check(Validator::IsMember(vec!["l2".to_string(), "none".to_string()]));
+    .check(Validator::IsMember(vec![
+        "l2".to_string(),
+        "none".to_string(),
+    ]));
     cmd.add_option(
         "--pooling",
         ValueType::Text,

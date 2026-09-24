@@ -20,7 +20,11 @@ fn crc32_table() -> &'static [u32; 256] {
         for (n, entry) in table.iter_mut().enumerate() {
             let mut c = n as u32;
             for _ in 0..8 {
-                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
             }
             *entry = c;
         }
@@ -185,12 +189,12 @@ pub fn read_ppm(path: &str) -> Result<RgbImage, String> {
         ));
     }
     let mut pos = 2usize;
-    let width = next_ppm_uint(&bytes, &mut pos)
-        .ok_or_else(|| format!("malformed PPM header in {path}"))?;
-    let height = next_ppm_uint(&bytes, &mut pos)
-        .ok_or_else(|| format!("malformed PPM header in {path}"))?;
-    let maxval = next_ppm_uint(&bytes, &mut pos)
-        .ok_or_else(|| format!("malformed PPM header in {path}"))?;
+    let width =
+        next_ppm_uint(&bytes, &mut pos).ok_or_else(|| format!("malformed PPM header in {path}"))?;
+    let height =
+        next_ppm_uint(&bytes, &mut pos).ok_or_else(|| format!("malformed PPM header in {path}"))?;
+    let maxval =
+        next_ppm_uint(&bytes, &mut pos).ok_or_else(|| format!("malformed PPM header in {path}"))?;
     if width == 0 || height == 0 || maxval != 255 {
         return Err("unsupported PPM (need non-empty dimensions and maxval 255)".to_string());
     }

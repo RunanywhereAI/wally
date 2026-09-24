@@ -194,8 +194,12 @@ pub fn register_rerank(app: &mut App) {
         "Query the documents are scored against",
     )
     .required();
-    cmd.add_option("--model,-m", ValueType::Text, "Reranker model id or on-disk path")
-        .required();
+    cmd.add_option(
+        "--model,-m",
+        ValueType::Text,
+        "Reranker model id or on-disk path",
+    )
+    .required();
     cmd.add_option(
         "--doc,-d",
         ValueType::Text,

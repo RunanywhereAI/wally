@@ -59,22 +59,34 @@ fn register_local_bundle(path: &str) -> Result<String, String> {
     // (valid once bootstrap() has run); bytes is a valid slice for its own
     // length for the duration of the call.
     let rc = unsafe {
-        sys::rac_model_registry_register_proto(sys::rac_get_model_registry(), bytes.as_ptr(), bytes.len())
+        sys::rac_model_registry_register_proto(
+            sys::rac_get_model_registry(),
+            bytes.as_ptr(),
+            bytes.len(),
+        )
     };
     if rc != sys::SUCCESS {
-        return Err(format!("failed to register local model: {}", describe_result(rc)));
+        return Err(format!(
+            "failed to register local model: {}",
+            describe_result(rc)
+        ));
     }
     Ok(model_id)
 }
 
 #[cfg(wally_has_neurt)]
-fn load_diffusion_model(options: &GlobalOptions, model_id: &str, validate_availability: bool) -> bool {
+fn load_diffusion_model(
+    options: &GlobalOptions,
+    model_id: &str,
+    validate_availability: bool,
+) -> bool {
     use crate::io::output::describe_result;
     use crate::io::proto::{parse_proto_buffer, ProtoBuffer};
     use crate::progress::progress_bar::DownloadProgressScope;
     use crate::sys;
 
-    let _progress_scope = DownloadProgressScope::new(model_id, !options.no_progress && !options.json);
+    let _progress_scope =
+        DownloadProgressScope::new(model_id, !options.no_progress && !options.json);
     let request = v1::ModelLoadRequest {
         model_id: model_id.to_string(),
         category: Some(v1::ModelCategory::ImageGeneration as i32),
@@ -98,7 +110,10 @@ fn load_diffusion_model(options: &GlobalOptions, model_id: &str, validate_availa
     let result = match parse_proto_buffer::<v1::ModelLoadResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!("diffusion model load failed: {}", describe_result(proto_rc)));
+            error_line(&format!(
+                "diffusion model load failed: {}",
+                describe_result(proto_rc)
+            ));
             return false;
         }
         Err(error) => {
@@ -165,7 +180,16 @@ fn run_image_generate(
     if bootstrap::bootstrap(options).is_err() {
         return 1;
     }
-    run_image_generate_body(options, model, prompt, negative_prompt, out_path, steps, guidance, seed)
+    run_image_generate_body(
+        options,
+        model,
+        prompt,
+        negative_prompt,
+        out_path,
+        steps,
+        guidance,
+        seed,
+    )
 }
 
 #[cfg(not(wally_has_neurt))]
@@ -268,7 +292,11 @@ fn run_image_generate_body(
     // SAFETY: bytes is a valid slice for its own length; out_buffer.as_mut_ptr()
     // points at a live, initialized rac_proto_buffer_t.
     let proto_rc = unsafe {
-        sys::rac_diffusion_generate_lifecycle_proto(bytes.as_ptr(), bytes.len(), out_buffer.as_mut_ptr())
+        sys::rac_diffusion_generate_lifecycle_proto(
+            bytes.as_ptr(),
+            bytes.len(),
+            out_buffer.as_mut_ptr(),
+        )
     };
     // DiffusionResult carries no error field of its own any more -- failures
     // travel out-of-band on the rac_proto_buffer_t status envelope, already
@@ -276,7 +304,10 @@ fn run_image_generate_body(
     let result = match parse_proto_buffer::<v1::DiffusionResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!("image generation failed: {}", describe_result(proto_rc)));
+            error_line(&format!(
+                "image generation failed: {}",
+                describe_result(proto_rc)
+            ));
             return 1;
         }
         Err(error) => {
@@ -311,7 +342,10 @@ fn run_image_generate_body(
         if options.verbose {
             status_line(&format!(
                 "({}x{}, seed {}, {} ms)",
-                image_result.width, image_result.height, image_result.seed_used, result.total_time_ms
+                image_result.width,
+                image_result.height,
+                image_result.seed_used,
+                result.total_time_ms
             ));
         }
     }
@@ -319,7 +353,10 @@ fn run_image_generate_body(
 }
 
 pub fn register_image(app: &mut App) {
-    let cmd = app.add_subcommand("image", "Make images from text (CoreML diffusion, Apple only)");
+    let cmd = app.add_subcommand(
+        "image",
+        "Make images from text (CoreML diffusion, Apple only)",
+    );
     cmd.require_subcommand(1, 1);
 
     let generate = cmd.add_subcommand("generate", "Render an image from a prompt");

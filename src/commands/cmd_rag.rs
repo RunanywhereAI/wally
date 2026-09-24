@@ -148,7 +148,10 @@ fn open_and_ingest(
         match parse_proto_buffer::<v1::RagStatistics>(stats_buffer) {
             Ok(_) if ingest_rc == sys::SUCCESS => {}
             Ok(_) => {
-                error_line(&format!("RAG ingest failed: {}", describe_result(ingest_rc)));
+                error_line(&format!(
+                    "RAG ingest failed: {}",
+                    describe_result(ingest_rc)
+                ));
                 // SAFETY: session is the live handle created above; not used again.
                 unsafe { sys::rac_rag_session_destroy_proto(session) };
                 return None;
@@ -168,7 +171,11 @@ fn open_and_ingest(
 }
 
 #[cfg(wally_has_rag)]
-fn run_rag_query(options: &crate::bootstrap::GlobalOptions, params: &RagParams, question: &str) -> i32 {
+fn run_rag_query(
+    options: &crate::bootstrap::GlobalOptions,
+    params: &RagParams,
+    question: &str,
+) -> i32 {
     use crate::io::output::{describe_result, error_line, result_line, status_line, JsonWriter};
     use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
     use crate::sys;
@@ -196,7 +203,8 @@ fn run_rag_query(options: &crate::bootstrap::GlobalOptions, params: &RagParams, 
         query: question.to_string(),
         ..Default::default()
     };
-    if params.max_output_tokens > 0 || params.temperature >= 0.0 || !params.system_prompt.is_empty() {
+    if params.max_output_tokens > 0 || params.temperature >= 0.0 || !params.system_prompt.is_empty()
+    {
         let mut generation = v1::LlmGenerationOptions::default();
         if params.max_output_tokens > 0 {
             generation.max_output_tokens = Some(params.max_output_tokens);
@@ -308,7 +316,11 @@ fn run_rag_query(options: &crate::bootstrap::GlobalOptions, params: &RagParams, 
 }
 
 #[cfg(wally_has_rag)]
-fn run_rag_search(options: &crate::bootstrap::GlobalOptions, params: &RagParams, question: &str) -> i32 {
+fn run_rag_search(
+    options: &crate::bootstrap::GlobalOptions,
+    params: &RagParams,
+    question: &str,
+) -> i32 {
     use crate::io::output::{describe_result, error_line, result_line, status_line, JsonWriter};
     use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
     use crate::sys;
@@ -430,16 +442,28 @@ fn run_rag_search(options: &crate::bootstrap::GlobalOptions, params: &RagParams,
 fn add_corpus_options(cmd: &mut App) {
     use crate::cli::ValueType;
 
-    cmd.add_option("--doc,-d", ValueType::Text, "Document text to index; repeat for several")
-        .multi();
-    cmd.add_option("--file,-f", ValueType::Text, "Text file to index; repeat for several")
-        .multi();
+    cmd.add_option(
+        "--doc,-d",
+        ValueType::Text,
+        "Document text to index; repeat for several",
+    )
+    .multi();
+    cmd.add_option(
+        "--file,-f",
+        ValueType::Text,
+        "Text file to index; repeat for several",
+    )
+    .multi();
     cmd.add_option(
         "--embedding-model,--embed",
         ValueType::Text,
         &format!("Embedding model to index with (default: {DEFAULT_RAG_EMBED})"),
     );
-    cmd.add_option("--top-k", ValueType::Int, "Retrieve this many chunks per question");
+    cmd.add_option(
+        "--top-k",
+        ValueType::Int,
+        "Retrieve this many chunks per question",
+    );
     cmd.add_option(
         "--chunk-size",
         ValueType::Int,
@@ -466,7 +490,11 @@ pub fn register_rag(app: &mut App) {
 
     let query_cmd = cmd.add_subcommand("query", "Answer a question from the documents");
     query_cmd
-        .add_option("question", ValueType::Text, "Question to answer over the documents")
+        .add_option(
+            "question",
+            ValueType::Text,
+            "Question to answer over the documents",
+        )
         .required();
     add_corpus_options(query_cmd);
     query_cmd.add_option(
@@ -484,7 +512,11 @@ pub fn register_rag(app: &mut App) {
         ValueType::Int,
         "Cap the answer length in tokens",
     );
-    query_cmd.add_option("--temperature", ValueType::Float, "Raise for more random sampling");
+    query_cmd.add_option(
+        "--temperature",
+        ValueType::Float,
+        "Raise for more random sampling",
+    );
 
     query_cmd.callback(|p, g| {
         let params = RagParams {

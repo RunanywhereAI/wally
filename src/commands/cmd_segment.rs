@@ -41,7 +41,11 @@ fn opt_cstr(ptr: *const std::os::raw::c_char) -> Option<String> {
         return None;
     }
     // SAFETY: caller guarantees a NUL-terminated string alive for this call.
-    Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+    Some(
+        unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 fn print_result(options: &GlobalOptions, model_ref: &str, result: &sys::rac_segmentation_result_t) {
@@ -51,9 +55,7 @@ fn print_result(options: &GlobalOptions, model_ref: &str, result: &sys::rac_segm
     let classes: &[sys::rac_segmentation_class_summary_t] = if result.class_summaries.is_null() {
         &[]
     } else {
-        unsafe {
-            std::slice::from_raw_parts(result.class_summaries, result.class_summary_count)
-        }
+        unsafe { std::slice::from_raw_parts(result.class_summaries, result.class_summary_count) }
     };
 
     if options.json {
@@ -176,13 +178,18 @@ fn run_segment(
         pixel_format: sys::RAC_SEGMENTATION_PIXEL_FORMAT_RGB8,
     };
 
-    // SAFETY: RAC_SEGMENTATION_OPTIONS_DEFAULT is a plain-data extern static
-    // provided by the kit, valid to copy.
-    let mut seg_options = unsafe { sys::RAC_SEGMENTATION_OPTIONS_DEFAULT };
-    seg_options.include_diagnostic_rgba = if diagnostic_path.is_empty() {
-        sys::FALSE
-    } else {
-        sys::TRUE
+    // rac_segmentation_options_t default (rac_segmentation_types.h
+    // RAC_SEGMENTATION_OPTIONS_DEFAULT: { include_diagnostic_rgba: RAC_FALSE }),
+    // built from the header literal rather than the kit's extern static: that
+    // static is header-only (declared `static const` in the header, not
+    // present in any kit archive), so `cargo check` accepts a reference to it
+    // but linking fails. Only include_diagnostic_rgba varies here anyway.
+    let seg_options = sys::rac_segmentation_options_t {
+        include_diagnostic_rgba: if diagnostic_path.is_empty() {
+            sys::FALSE
+        } else {
+            sys::TRUE
+        },
     };
 
     // SAFETY: result is zero-initialized plain data; the kit fills it in.
@@ -246,8 +253,12 @@ pub fn register_segment(app: &mut App) {
     cmd.add_option("image", ValueType::Text, "Input image (binary PPM / P6)")
         .required()
         .check(Validator::ExistingFile);
-    cmd.add_option("--model,-m", ValueType::Text, "Segmentation model id or on-disk path")
-        .required();
+    cmd.add_option(
+        "--model,-m",
+        ValueType::Text,
+        "Segmentation model id or on-disk path",
+    )
+    .required();
     cmd.add_option(
         "--diagnostic-image",
         ValueType::Text,
