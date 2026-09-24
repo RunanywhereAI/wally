@@ -44,7 +44,11 @@ static PULL_STATE: Mutex<Option<Arc<PullShared>>> = Mutex::new(None);
 // extern "C" fn handed to the SDK as the process-wide download progress
 // callback. Must never let a panic cross the FFI boundary (rule: every
 // extern "C" fn wraps its body in catch_unwind).
-extern "C" fn progress_callback(proto_bytes: *const u8, proto_size: usize, _user_data: *mut c_void) {
+extern "C" fn progress_callback(
+    proto_bytes: *const u8,
+    proto_size: usize,
+    _user_data: *mut c_void,
+) {
     let _ = std::panic::catch_unwind(|| {
         if proto_bytes.is_null() || proto_size == 0 {
             return;
@@ -72,7 +76,9 @@ extern "C" fn progress_callback(proto_bytes: *const u8, proto_size: usize, _user
         inner.last = progress.clone();
         inner.got_progress = true;
         match v1::DownloadState::try_from(progress.state) {
-            Ok(v1::DownloadState::Completed) | Ok(v1::DownloadState::Failed) | Ok(v1::DownloadState::Cancelled) => {
+            Ok(v1::DownloadState::Completed)
+            | Ok(v1::DownloadState::Failed)
+            | Ok(v1::DownloadState::Cancelled) => {
                 inner.terminal = true;
             }
             _ => {}
@@ -121,7 +127,9 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
                 return 1;
             }
             Err(error) => {
-                out::error_line(&format!("model not found in registry: {resolved_model_id} ({error})"));
+                out::error_line(&format!(
+                    "model not found in registry: {resolved_model_id} ({error})"
+                ));
                 return 1;
             }
         }
@@ -163,9 +171,14 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
 
     let mut plan_out = ProtoBuffer::new();
     // SAFETY: plan_bytes/plan_out are valid for the duration of this call.
-    let rc = unsafe { sys::rac_download_plan_proto(plan_bytes.as_ptr(), plan_bytes.len(), plan_out.as_mut_ptr()) };
+    let rc = unsafe {
+        sys::rac_download_plan_proto(plan_bytes.as_ptr(), plan_bytes.len(), plan_out.as_mut_ptr())
+    };
     if rc != sys::SUCCESS {
-        out::error_line(&format!("download plan failed: {}", out::describe_result(rc)));
+        out::error_line(&format!(
+            "download plan failed: {}",
+            out::describe_result(rc)
+        ));
         return 1;
     }
     let plan: v1::DownloadPlanResult = match parse_proto_buffer(plan_out) {
@@ -203,7 +216,9 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
     // SAFETY: progress_callback is `extern "C" fn` with the exact signature the
     // SDK expects, catch_unwind-wrapped, and stays valid for the process
     // lifetime; user_data is unused (null is documented as acceptable).
-    unsafe { sys::rac_download_set_progress_proto_callback(Some(progress_callback), std::ptr::null_mut()) };
+    unsafe {
+        sys::rac_download_set_progress_proto_callback(Some(progress_callback), std::ptr::null_mut())
+    };
 
     let mut renderer = ProgressRenderer::new(!options.no_progress && !options.json);
 
@@ -219,12 +234,21 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
 
     let mut start_out = ProtoBuffer::new();
     // SAFETY: start_bytes/start_out are valid for the duration of this call.
-    let rc = unsafe { sys::rac_download_start_proto(start_bytes.as_ptr(), start_bytes.len(), start_out.as_mut_ptr()) };
+    let rc = unsafe {
+        sys::rac_download_start_proto(
+            start_bytes.as_ptr(),
+            start_bytes.len(),
+            start_out.as_mut_ptr(),
+        )
+    };
     let start: v1::DownloadStartResult = match parse_proto_buffer(start_out) {
         Ok(start) if rc == sys::SUCCESS => start,
         Ok(_) => {
             unwire_progress_callback();
-            out::error_line(&format!("download start failed: {}", out::describe_result(rc)));
+            out::error_line(&format!(
+                "download start failed: {}",
+                out::describe_result(rc)
+            ));
             return 1;
         }
         Err(error) => {
@@ -282,7 +306,11 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
                 let mut cancel_out = ProtoBuffer::new();
                 // SAFETY: cancel_bytes/cancel_out are valid for the duration of this call.
                 unsafe {
-                    sys::rac_download_cancel_proto(cancel_bytes.as_ptr(), cancel_bytes.len(), cancel_out.as_mut_ptr())
+                    sys::rac_download_cancel_proto(
+                        cancel_bytes.as_ptr(),
+                        cancel_bytes.len(),
+                        cancel_out.as_mut_ptr(),
+                    )
                 };
                 inner = shared.inner.lock().unwrap_or_else(|e| e.into_inner());
             }
@@ -362,8 +390,12 @@ fn model_ref_c_string(model_id: &str) -> std::ffi::CString {
 }
 
 pub fn configure_models_download(cmd: &mut App) {
-    cmd.add_option("model", ValueType::Text, "Model id, alias, hf.co/org/repo/file or URL")
-        .required();
+    cmd.add_option(
+        "model",
+        ValueType::Text,
+        "Model id, alias, hf.co/org/repo/file or URL",
+    )
+    .required();
     cmd.add_option(
         "--engine",
         ValueType::Text,

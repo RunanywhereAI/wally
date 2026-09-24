@@ -105,7 +105,13 @@ fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
     // SAFETY: rac_get_model_registry() returns the process-wide registry
     // handle; model_out is a valid out-param for this call only.
     let model_id_c = std::ffi::CString::new(resolved.model_id.as_str()).unwrap_or_default();
-    let get_rc = unsafe { sys::rac_model_registry_get_proto_buffer(sys::rac_get_model_registry(), model_id_c.as_ptr(), model_out.as_mut_ptr()) };
+    let get_rc = unsafe {
+        sys::rac_model_registry_get_proto_buffer(
+            sys::rac_get_model_registry(),
+            model_id_c.as_ptr(),
+            model_out.as_mut_ptr(),
+        )
+    };
     // parse unconditionally: it interprets the {status,error_message} envelope
     // and frees the buffer on every path (no leak on get failure).
     let model: v1::ModelInfo = match parse_proto_buffer(model_out) {
@@ -128,7 +134,10 @@ fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
             return 1;
         }
         if target.exists() {
-            if !force && term::stdin_is_tty() && !confirm_on_tty(&format!("delete {}?", target.display())) {
+            if !force
+                && term::stdin_is_tty()
+                && !confirm_on_tty(&format!("delete {}?", target.display()))
+            {
                 out::status_line("aborted");
                 return 1;
             }
@@ -152,7 +161,11 @@ fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
     let mut remove_out = ProtoBuffer::new();
     // SAFETY: as above.
     let proto_rc = unsafe {
-        sys::rac_model_registry_remove_proto_buffer(sys::rac_get_model_registry(), model_id_c.as_ptr(), remove_out.as_mut_ptr())
+        sys::rac_model_registry_remove_proto_buffer(
+            sys::rac_get_model_registry(),
+            model_id_c.as_ptr(),
+            remove_out.as_mut_ptr(),
+        )
     };
     if let Err(error) = parse_proto_buffer::<v1::ModelDeleteResult>(remove_out).and_then(|_| {
         if proto_rc == sys::SUCCESS {
@@ -209,7 +222,8 @@ fn remove_all(target: &Path) -> std::io::Result<()> {
 }
 
 pub fn configure_models_delete(cmd: &mut App) {
-    cmd.add_option("model", ValueType::Text, "Model id or alias").required();
+    cmd.add_option("model", ValueType::Text, "Model id or alias")
+        .required();
     cmd.add_flag("-f,--force", "Skip the confirmation prompt");
     cmd.callback(|p, g| {
         let reference = p.get_str("model").unwrap_or_default();

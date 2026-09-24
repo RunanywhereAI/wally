@@ -40,7 +40,9 @@ const STATE_CATEGORIES: [v1::ModelCategory; 7] = [
 ];
 
 fn parse_category(name: &str) -> Option<v1::ModelCategory> {
-    STATE_CATEGORIES.into_iter().find(|&category| name == model_labels::category(category))
+    STATE_CATEGORIES
+        .into_iter()
+        .find(|&category| name == model_labels::category(category))
 }
 
 fn category_choices() -> String {
@@ -102,8 +104,10 @@ fn run_register(options: &GlobalOptions, reference: &str, engine: &str) -> i32 {
     };
 
     if options.json {
-        let category = v1::ModelCategory::try_from(model.category).unwrap_or(v1::ModelCategory::Unspecified);
-        let framework = v1::InferenceFramework::try_from(model.framework).unwrap_or(v1::InferenceFramework::Unspecified);
+        let category =
+            v1::ModelCategory::try_from(model.category).unwrap_or(v1::ModelCategory::Unspecified);
+        let framework = v1::InferenceFramework::try_from(model.framework)
+            .unwrap_or(v1::InferenceFramework::Unspecified);
         let mut json = out::JsonWriter::new();
         json.begin_object()
             .field_str("id", &model.id)
@@ -111,7 +115,10 @@ fn run_register(options: &GlobalOptions, reference: &str, engine: &str) -> i32 {
             .field_str("modality", model_labels::category(category))
             .field_str("backend", model_labels::backend(framework))
             .field_str("download_url", &model.download_url)
-            .field_bool("downloaded", model.registry_status == Some(v1::ModelRegistryStatus::Downloaded as i32))
+            .field_bool(
+                "downloaded",
+                model.registry_status == Some(v1::ModelRegistryStatus::Downloaded as i32),
+            )
             .end_object();
         out::result_line(json.str());
     } else {
@@ -138,7 +145,10 @@ fn run_load(options: &GlobalOptions, reference: &str, engine: &str, category_nam
         match parse_category(category_name) {
             Some(parsed) => category = parsed,
             None => {
-                out::error_line(&format!("unknown category '{category_name}' ({})", category_choices()));
+                out::error_line(&format!(
+                    "unknown category '{category_name}' ({})",
+                    category_choices()
+                ));
                 return 2;
             }
         }
@@ -154,7 +164,8 @@ fn run_load(options: &GlobalOptions, reference: &str, engine: &str, category_nam
         }
     };
 
-    let _progress_scope = DownloadProgressScope::new(&resolved.model_id, !options.no_progress && !options.json);
+    let _progress_scope =
+        DownloadProgressScope::new(&resolved.model_id, !options.no_progress && !options.json);
     let mut request = v1::ModelLoadRequest {
         model_id: resolved.model_id.clone(),
         validate_availability: true,
@@ -171,7 +182,12 @@ fn run_load(options: &GlobalOptions, reference: &str, engine: &str, category_nam
     let mut out_buffer = ProtoBuffer::new();
     // SAFETY: bytes/out_buffer are valid for the duration of this call.
     let proto_rc = unsafe {
-        sys::rac_model_lifecycle_load_proto(sys::rac_get_model_registry(), bytes.as_ptr(), bytes.len(), out_buffer.as_mut_ptr())
+        sys::rac_model_lifecycle_load_proto(
+            sys::rac_get_model_registry(),
+            bytes.as_ptr(),
+            bytes.len(),
+            out_buffer.as_mut_ptr(),
+        )
     };
     let result: v1::ModelLoadResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
@@ -185,7 +201,11 @@ fn run_load(options: &GlobalOptions, reference: &str, engine: &str, category_nam
         }
     };
     if let Some(err) = &result.error {
-        let message = if err.message.is_empty() { "unknown error" } else { &err.message };
+        let message = if err.message.is_empty() {
+            "unknown error"
+        } else {
+            &err.message
+        };
         out::error_line(&format!("model load failed: {message}"));
         return 1;
     }
@@ -201,7 +221,10 @@ fn run_load(options: &GlobalOptions, reference: &str, engine: &str, category_nam
             .end_object();
         out::result_line(json.str());
     } else {
-        out::result_line(&format!("loaded {} → {}", result.model_id, result.resolved_path));
+        out::result_line(&format!(
+            "loaded {} → {}",
+            result.model_id, result.resolved_path
+        ));
     }
     0
 }
@@ -218,7 +241,10 @@ fn run_unload(options: &GlobalOptions, category_name: &str) -> i32 {
         match parse_category(category_name) {
             Some(category) => request.category = Some(category as i32),
             None => {
-                out::error_line(&format!("unknown category '{category_name}' ({})", category_choices()));
+                out::error_line(&format!(
+                    "unknown category '{category_name}' ({})",
+                    category_choices()
+                ));
                 return 2;
             }
         }
@@ -227,7 +253,9 @@ fn run_unload(options: &GlobalOptions, category_name: &str) -> i32 {
     let bytes = crate::io::proto::serialize(&request);
     let mut out_buffer = ProtoBuffer::new();
     // SAFETY: bytes/out_buffer are valid for the duration of this call.
-    let proto_rc = unsafe { sys::rac_model_lifecycle_unload_proto(bytes.as_ptr(), bytes.len(), out_buffer.as_mut_ptr()) };
+    let proto_rc = unsafe {
+        sys::rac_model_lifecycle_unload_proto(bytes.as_ptr(), bytes.len(), out_buffer.as_mut_ptr())
+    };
     let result: v1::ModelUnloadResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
@@ -279,7 +307,13 @@ fn loaded_model_id(category: v1::ModelCategory) -> String {
     let bytes = crate::io::proto::serialize(&request);
     let mut out_buffer = ProtoBuffer::new();
     // SAFETY: bytes/out_buffer are valid for the duration of this call.
-    let proto_rc = unsafe { sys::rac_model_lifecycle_current_model_proto(bytes.as_ptr(), bytes.len(), out_buffer.as_mut_ptr()) };
+    let proto_rc = unsafe {
+        sys::rac_model_lifecycle_current_model_proto(
+            bytes.as_ptr(),
+            bytes.len(),
+            out_buffer.as_mut_ptr(),
+        )
+    };
     match parse_proto_buffer::<v1::CurrentModelResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS && result.found => result.model_id,
         _ => String::new(),
@@ -300,7 +334,9 @@ fn recursive_file_size(dir: &Path) -> u64 {
         let path = entry.path();
         // skip_permission_denied: an unreadable child is silently excluded,
         // not a hard failure of the whole scan.
-        let Ok(metadata) = entry.metadata() else { continue };
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
         if metadata.is_dir() {
             total += recursive_file_size(&path);
         } else if metadata.is_file() {
@@ -328,11 +364,22 @@ fn disk_space_available(path: &Path) -> Option<u64> {
 fn disk_space_available(path: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let mut free_bytes: u64 = 0;
     // SAFETY: wide is a valid NUL-terminated UTF-16 buffer; free_bytes is a
     // valid out-param for the duration of this call.
-    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free_bytes, std::ptr::null_mut(), std::ptr::null_mut()) };
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_bytes,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
     if ok == 0 {
         return None;
     }
@@ -378,7 +425,10 @@ fn run_state(options: &GlobalOptions) -> i32 {
         let mut json = out::JsonWriter::new();
         json.begin_object().begin_array("loaded");
         for (modality, id) in &loaded {
-            json.begin_array_object().field_str("modality", modality).field_str("id", id).end_object();
+            json.begin_array_object()
+                .field_str("modality", modality)
+                .field_str("id", id)
+                .end_object();
         }
         json.end_array()
             .field_i64("storage_used_bytes", storage.used_bytes as i64)
@@ -391,7 +441,10 @@ fn run_state(options: &GlobalOptions) -> i32 {
     if loaded.is_empty() {
         out::result_line("no models loaded");
     } else {
-        let rows: Vec<Vec<String>> = loaded.iter().map(|(modality, id)| vec![modality.to_string(), id.clone()]).collect();
+        let rows: Vec<Vec<String>> = loaded
+            .iter()
+            .map(|(modality, id)| vec![modality.to_string(), id.clone()])
+            .collect();
         out::table(&["MODALITY".to_string(), "LOADED".to_string()], &rows);
     }
     out::result_line(&format!(
@@ -408,34 +461,59 @@ pub fn register_models(app: &mut App) {
 
     let list_cmd = ns.add_subcommand("list", "List downloaded models (--all for the catalog)");
     list_cmd.alias("ls");
-    list_cmd.footer(&examples_footer(&[Example::new("wally models list --all", "Browse the whole catalog")]));
+    list_cmd.footer(&examples_footer(&[Example::new(
+        "wally models list --all",
+        "Browse the whole catalog",
+    )]));
     configure_models_list(list_cmd);
 
     let show_cmd = ns.add_subcommand("show", "Show a model's details");
     show_cmd.alias("get");
-    show_cmd.footer(&examples_footer(&[Example::new("wally models show granite-4.2-8b", "")]));
+    show_cmd.footer(&examples_footer(&[Example::new(
+        "wally models show granite-4.2-8b",
+        "",
+    )]));
     configure_models_get(show_cmd);
 
     let pull_cmd = ns.add_subcommand("pull", "Download a model");
     pull_cmd.alias("download");
     pull_cmd.footer(&examples_footer(&[
         Example::new("wally models pull qwen3-0.6b", "From the catalog"),
-        Example::new("wally models pull hf.co/<org>/<repo>/<file>", "From Hugging Face"),
+        Example::new(
+            "wally models pull hf.co/<org>/<repo>/<file>",
+            "From Hugging Face",
+        ),
     ]));
     configure_models_download(pull_cmd);
 
     let delete_cmd = ns.add_subcommand("rm", "Delete a downloaded model");
-    delete_cmd.footer(&examples_footer(&[Example::new("wally models rm qwen3-0.6b", "")]));
+    delete_cmd.footer(&examples_footer(&[Example::new(
+        "wally models rm qwen3-0.6b",
+        "",
+    )]));
     delete_cmd.alias("remove");
     delete_cmd.alias("delete");
     configure_models_delete(delete_cmd);
 
     // Advanced lifecycle verbs stay callable but out of the --help tree (empty
     // group), so `models` shows just the four CRUD branches.
-    let register_cmd = ns.add_subcommand("register", "Add a model from a URL or hf.co ref to the registry");
+    let register_cmd = ns.add_subcommand(
+        "register",
+        "Add a model from a URL or hf.co ref to the registry",
+    );
     register_cmd.group("");
-    register_cmd.add_option("model", ValueType::Text, "hf.co/org/repo/file, hf:// or http(s) URL").required();
-    register_cmd.add_option("--engine", ValueType::Text, "Pin the inference engine (mlx, llamacpp, onnx, sherpa)");
+    register_cmd
+        .add_option(
+            "model",
+            ValueType::Text,
+            "hf.co/org/repo/file, hf:// or http(s) URL",
+        )
+        .required();
+    register_cmd.add_option(
+        "--engine",
+        ValueType::Text,
+        "Pin the inference engine (mlx, llamacpp, onnx, sherpa)",
+    );
     register_cmd.callback(|p, g| {
         let reference = p.get_str("model").unwrap_or_default();
         let engine = p.get_str("--engine").unwrap_or_default();
@@ -444,9 +522,23 @@ pub fn register_models(app: &mut App) {
 
     let load_cmd = ns.add_subcommand("load", "Load a model now instead of on first use");
     load_cmd.group("");
-    load_cmd.add_option("model", ValueType::Text, "Model id, alias, hf.co/... ref or URL").required();
-    load_cmd.add_option("--engine,--framework", ValueType::Text, "Pin the inference engine (mlx, llamacpp, onnx, sherpa)");
-    load_cmd.add_option("--category", ValueType::Text, &format!("Load it as this modality ({})", category_choices()));
+    load_cmd
+        .add_option(
+            "model",
+            ValueType::Text,
+            "Model id, alias, hf.co/... ref or URL",
+        )
+        .required();
+    load_cmd.add_option(
+        "--engine,--framework",
+        ValueType::Text,
+        "Pin the inference engine (mlx, llamacpp, onnx, sherpa)",
+    );
+    load_cmd.add_option(
+        "--category",
+        ValueType::Text,
+        &format!("Load it as this modality ({})", category_choices()),
+    );
     load_cmd.callback(|p, g| {
         let reference = p.get_str("model").unwrap_or_default();
         let engine = p.get_str("--engine").unwrap_or_default();
@@ -456,7 +548,11 @@ pub fn register_models(app: &mut App) {
 
     let unload_cmd = ns.add_subcommand("unload", "Free loaded models, all of them by default");
     unload_cmd.group("");
-    unload_cmd.add_option("category", ValueType::Text, &format!("Only free this modality ({})", category_choices()));
+    unload_cmd.add_option(
+        "category",
+        ValueType::Text,
+        &format!("Only free this modality ({})", category_choices()),
+    );
     unload_cmd.callback(|p, g| {
         let category = p.get_str("category").unwrap_or_default();
         run_unload(g, &category)
@@ -478,7 +574,9 @@ pub fn register_models_aliases(app: &mut App) {
     configure_models_list(list);
 
     configure_models_get(app.add_subcommand("show", "Show model details (alias of `models get`)"));
-    configure_models_download(app.add_subcommand("pull", "Download a model (alias of `models download`)"));
+    configure_models_download(
+        app.add_subcommand("pull", "Download a model (alias of `models download`)"),
+    );
 
     let remove = app.add_subcommand("rm", "Delete a model (alias of `models delete`)");
     remove.alias("remove");

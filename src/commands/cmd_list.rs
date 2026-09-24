@@ -30,8 +30,9 @@ fn backend_rank(framework: v1::InferenceFramework) -> i32 {
 }
 
 struct GroupedRow {
-    id: String,         // merge key by default; see the override below
-    #[allow(dead_code)] // id of the variant that set size_bytes; kept for parity with the C++ struct
+    id: String, // merge key by default; see the override below
+    #[allow(dead_code)]
+    // id of the variant that set size_bytes; kept for parity with the C++ struct
     size_id: String,
     local_path: String, // local_path of the variant backing `id`, if downloaded
     name: String,
@@ -107,8 +108,12 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
     let mut all_out = ProtoBuffer::new();
     // SAFETY: rac_get_model_registry() returns the process-wide registry
     // handle (valid for the process lifetime); all_out is a valid out-param.
-    let proto_rc =
-        unsafe { sys::rac_model_registry_list_proto_buffer(sys::rac_get_model_registry(), all_out.as_mut_ptr()) };
+    let proto_rc = unsafe {
+        sys::rac_model_registry_list_proto_buffer(
+            sys::rac_get_model_registry(),
+            all_out.as_mut_ptr(),
+        )
+    };
     let all_models: v1::ModelInfoList = match parse_proto_buffer(all_out) {
         Ok(models) if proto_rc == sys::SUCCESS => models,
         Ok(_) => {
@@ -126,7 +131,10 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         let mut downloaded_out = ProtoBuffer::new();
         // SAFETY: as above.
         let rc = unsafe {
-            sys::rac_model_registry_list_downloaded_proto_buffer(sys::rac_get_model_registry(), downloaded_out.as_mut_ptr())
+            sys::rac_model_registry_list_downloaded_proto_buffer(
+                sys::rac_get_model_registry(),
+                downloaded_out.as_mut_ptr(),
+            )
         };
         if rc == sys::SUCCESS {
             if let Ok(downloaded) = parse_proto_buffer::<v1::ModelInfoList>(downloaded_out) {
@@ -162,9 +170,11 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
                 ..GroupedRow::default()
             }
         });
-        let framework = v1::InferenceFramework::try_from(model.framework).unwrap_or(v1::InferenceFramework::Unspecified);
+        let framework = v1::InferenceFramework::try_from(model.framework)
+            .unwrap_or(v1::InferenceFramework::Unspecified);
         let rank = backend_rank(framework);
-        row.backends.insert((rank, model_labels::short_backend(framework)));
+        row.backends
+            .insert((rank, model_labels::short_backend(framework)));
         row.downloaded = row.downloaded || is_downloaded;
         // A downloaded variant's own id/local_path always displaces the merge
         // key default, best rank first among downloaded variants.
@@ -176,7 +186,8 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         if rank < row.name_rank {
             row.name_rank = rank;
             row.name = model.name.clone();
-            row.category = v1::ModelCategory::try_from(model.category).unwrap_or(v1::ModelCategory::Unspecified);
+            row.category = v1::ModelCategory::try_from(model.category)
+                .unwrap_or(v1::ModelCategory::Unspecified);
         }
         let size = model.download_size_bytes;
         if size > 0 && rank < row.size_rank {
