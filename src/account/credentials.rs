@@ -616,15 +616,19 @@ fn read_document(path: &str) -> Result<Option<String>, String> {
     Ok(Some(body))
 }
 
+/// Same basename C++'s `mkstemp` template builds (`path + ".tmp.XXXXXX"`): a
+/// visible sibling of the real file (e.g. "credentials.json.tmp.<rand>"), not
+/// a hidden, unrelated basename.
+#[cfg(not(windows))]
+fn temp_file_pattern(path: &str) -> String {
+    format!("{path}.tmp.XXXXXX")
+}
+
 #[cfg(not(windows))]
 fn write_document(path: &str, document: &str) -> Result<(), String> {
     use std::io::Write;
 
-    let directory = std::path::Path::new(path)
-        .parent()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let pattern = format!("{directory}/.credentials.tmp.XXXXXX");
+    let pattern = temp_file_pattern(path);
     let mut template = std::ffi::CString::new(pattern)
         .map_err(|_| "could not create a temporary cloud session".to_string())?
         .into_bytes_with_nul();
@@ -666,7 +670,21 @@ fn write_document(path: &str, document: &str) -> Result<(), String> {
             "could not atomically store the cloud session",
         );
     }
-    drop(file);
+    // C++ folds a close() failure into `ok` and skips the rename (`ok =
+    // ::close(fd) == 0 && ok;`). `File`'s `Drop` impl discards that error, so
+    // take the fd back and close it explicitly to observe the result, matching
+    // a real POSIX close() failure mode (e.g. a delayed NFS write-back error)
+    // distinct from fsync already having succeeded.
+    let raw_fd = std::os::fd::IntoRawFd::into_raw_fd(file);
+    // SAFETY: `raw_fd` was owned by `file`, which we just consumed via
+    // `into_raw_fd` without dropping it, so this is the one and only close.
+    let closed = unsafe { libc::close(raw_fd) } == 0;
+    if !closed {
+        return cleanup_and_fail(
+            &temporary_path,
+            "could not atomically store the cloud session",
+        );
+    }
     if std::fs::rename(&temporary_path, path).is_err() {
         return cleanup_and_fail(
             &temporary_path,
@@ -811,6 +829,40 @@ pub fn credentials_path() -> String {
     }
 }
 
+/// C++'s `object.value(key, default)` (nlohmann::json) returns the default
+/// only when `key` is absent; a present key of the wrong JSON type makes
+/// `get<std::string>()` throw a `type_error` that the caller turns into
+/// "cloud session file is not valid JSON". A missing field must default, but
+/// a present-and-wrong-typed field must fail the whole load, not silently
+/// default like a missing one.
+fn json_string_field(
+    map: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<String, String> {
+    match map.get(key) {
+        None => Ok(String::new()),
+        Some(serde_json::Value::String(value)) => Ok(value.clone()),
+        Some(_) => Err("cloud session file is not valid JSON".to_string()),
+    }
+}
+
+/// Same rule as `json_string_field` for `object.value("expires_at", 0LL)`:
+/// nlohmann accepts any JSON number subtype (integer, unsigned, float) for an
+/// integer `get<T>()`, but a non-number value throws.
+fn json_i64_field(
+    map: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<i64, String> {
+    match map.get(key) {
+        None => Ok(0),
+        Some(serde_json::Value::Number(number)) => Ok(number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|value| value as i64))
+            .unwrap_or(0)),
+        Some(_) => Err("cloud session file is not valid JSON".to_string()),
+    }
+}
+
 /// Missing credentials are not an error; the result then carries the default
 /// console URL. (C++ `bool Load(Credentials*, std::string*)`.)
 pub fn load() -> Result<Credentials, String> {
@@ -839,28 +891,13 @@ pub fn load() -> Result<Credentials, String> {
     // value the document actually specifies gets validated. Without this, a
     // hand-edited or partially-written file that simply omits the field fails
     // with "console URL must be HTTPS" instead of falling back.
-    let stored_url = map
-        .get("console_url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let stored_url = json_string_field(map, "console_url")?;
     if !stored_url.is_empty() {
-        credentials.console_url = normalize_console_url(stored_url)?;
+        credentials.console_url = normalize_console_url(&stored_url)?;
     }
-    credentials.email = map
-        .get("email")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let access_token = map
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let refresh_token = map
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    credentials.email = json_string_field(map, "email")?;
+    let access_token = json_string_field(map, "access_token")?;
+    let refresh_token = json_string_field(map, "refresh_token")?;
     if (!access_token.is_empty() && !session_token_is_safe(&access_token))
         || (!refresh_token.is_empty() && !session_token_is_safe(&refresh_token))
     {
@@ -868,7 +905,7 @@ pub fn load() -> Result<Credentials, String> {
     }
     credentials.access_token = access_token;
     credentials.refresh_token = refresh_token;
-    credentials.expires_at = map.get("expires_at").and_then(|v| v.as_i64()).unwrap_or(0);
+    credentials.expires_at = json_i64_field(map, "expires_at")?;
     Ok(credentials)
 }
 
@@ -913,5 +950,21 @@ pub fn clear() -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err("could not remove the local cloud session".to_string()),
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+
+    // Before the fix this built ".credentials.tmp.XXXXXX" in the parent
+    // directory: a hidden, unrelated basename instead of mkstemp's own
+    // convention of a visible sibling of the real file.
+    #[test]
+    fn temp_file_pattern_matches_mkstemp_sibling_naming() {
+        assert_eq!(
+            temp_file_pattern("/home/user/.config/wally/credentials.json"),
+            "/home/user/.config/wally/credentials.json.tmp.XXXXXX"
+        );
     }
 }
