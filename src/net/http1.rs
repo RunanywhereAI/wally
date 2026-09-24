@@ -282,6 +282,15 @@ impl Request {
         }
     }
 
+    pub fn head(path: impl Into<String>) -> Self {
+        Request {
+            method: "HEAD".to_string(),
+            path: path.into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
         self
@@ -839,6 +848,19 @@ pub struct ResponseWriter<'a> {
     /// with `status >= 400` raises it, mirroring httplib's "don't leave
     /// connections open after errors".
     closing: bool,
+    /// The incoming request's method was HEAD. Mirrors cpp-httplib's
+    /// `Server::routing`, which dispatches HEAD through the very same
+    /// `get_handlers_` table GET uses, and `write_response_core`, which
+    /// then (a) still writes every header a GET response would have --
+    /// including a real `Content-Length` computed from the body the
+    /// handler built -- but never the body bytes themselves, and (b) adds
+    /// `Accept-Ranges: bytes` to any response to a HEAD request that does
+    /// not already have one. Both hold no matter which handler produced
+    /// the response (a route registered under HEAD explicitly, a route
+    /// found by falling back from HEAD to its GET counterpart, or an
+    /// error/not-found handler), so this lives on the writer rather than
+    /// being threaded through each call site.
+    is_head: bool,
 }
 
 /// cpp-httplib's `status_message` table (httplib.h, pinned v0.46.1), ported
@@ -917,11 +939,12 @@ fn reason_phrase(status: i32) -> &'static str {
 }
 
 impl<'a> ResponseWriter<'a> {
-    fn new(stream: &'a mut TcpStream, request_wants_close: bool) -> Self {
+    fn new(stream: &'a mut TcpStream, request_wants_close: bool, is_head: bool) -> Self {
         ResponseWriter {
             stream,
             request_wants_close,
             closing: request_wants_close,
+            is_head,
         }
     }
 
@@ -954,6 +977,23 @@ impl<'a> ResponseWriter<'a> {
         })
     }
 
+    /// The `Accept-Ranges: bytes` line cpp-httplib's `write_response_core`
+    /// adds to every response to a HEAD request that does not already carry
+    /// one (`if (req.method == "HEAD" && !res.has_header("Accept-Ranges"))`)
+    /// -- unconditional on status, so it applies to a routed 200 exactly as
+    /// much as a 404 or 500.
+    fn accept_ranges_header(&self, headers: &[(&str, &str)]) -> Option<&'static str> {
+        if self.is_head
+            && !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("accept-ranges"))
+        {
+            Some("Accept-Ranges: bytes\r\n")
+        } else {
+            None
+        }
+    }
+
     pub fn send_full(
         &mut self,
         status: i32,
@@ -971,11 +1011,24 @@ impl<'a> ResponseWriter<'a> {
             .iter()
             .any(|(k, _)| k.eq_ignore_ascii_case("content-length"))
         {
+            // A real Content-Length even when the body itself is about to
+            // be withheld below -- httplib computes this from the same
+            // `res.body` a GET would have sent before ever checking the
+            // request method.
             head += &format!("Content-Length: {}\r\n", body.len());
+        }
+        if let Some(line) = self.accept_ranges_header(headers) {
+            head += line;
         }
         head += "\r\n";
         self.stream.write_all(head.as_bytes())?;
-        self.stream.write_all(body)?;
+        // httplib's write_response_core: `if (req.method != "HEAD" && ...)
+        // bstrm.write(res.body...)` -- the handler still built the body (and
+        // its Content-Length above reflects that), but a HEAD response never
+        // puts it on the wire.
+        if !self.is_head {
+            self.stream.write_all(body)?;
+        }
         self.stream.flush()
     }
 
@@ -993,15 +1046,21 @@ impl<'a> ResponseWriter<'a> {
         {
             head += "Transfer-Encoding: chunked\r\n";
         }
+        if let Some(line) = self.accept_ranges_header(headers) {
+            head += line;
+        }
         head += "\r\n";
         self.stream.write_all(head.as_bytes())?;
         self.stream.flush()
     }
 
     /// Writes one chunk. `Err` means the reader is gone -- the caller should
-    /// stop producing more data.
+    /// stop producing more data. A no-op for HEAD: httplib never calls its
+    /// content provider (`req.method != "HEAD" && res.content_provider_`) for
+    /// one, so no chunk -- and, in `end_chunked`, no trailer -- ever reaches
+    /// the wire.
     pub fn write_chunk(&mut self, data: &[u8]) -> io::Result<()> {
-        if data.is_empty() {
+        if data.is_empty() || self.is_head {
             return Ok(());
         }
         write!(self.stream, "{:x}\r\n", data.len())?;
@@ -1011,6 +1070,9 @@ impl<'a> ResponseWriter<'a> {
     }
 
     pub fn end_chunked(&mut self) -> io::Result<()> {
+        if self.is_head {
+            return Ok(());
+        }
         self.stream.write_all(b"0\r\n\r\n")?;
         self.stream.flush()
     }
@@ -1253,7 +1315,7 @@ fn write_early_failure(
     // enough to know whether the client wanted to keep it alive, and
     // `connection_header` would force `Connection: close` for status >= 400
     // anyway.
-    let mut writer = ResponseWriter::new(stream, true);
+    let mut writer = ResponseWriter::new(stream, true, method.eq_ignore_ascii_case("HEAD"));
     match on_error {
         Some(f) => f(status, method, path, &mut writer),
         None => {
@@ -1445,11 +1507,28 @@ fn handle_connection(
             Ok(s) => s,
             Err(_) => return,
         };
+        let is_head = method.eq_ignore_ascii_case("HEAD");
         let route = routes
             .iter()
-            .find(|r| r.method.eq_ignore_ascii_case(&method) && r.path == path);
+            .find(|r| r.method.eq_ignore_ascii_case(&method) && r.path == path)
+            .or_else(|| {
+                // cpp-httplib has no separate HEAD table: `Server::routing`
+                // dispatches "GET" and "HEAD" through the very same
+                // `get_handlers_`, so any GET route it serves also answers
+                // HEAD (same status/headers, no body) without a second
+                // registration. Only reached when no route registered HEAD
+                // itself (e.g. `/api/hello` below keeps its own, since the
+                // C++ short-circuits that one path ahead of routing).
+                if is_head {
+                    routes
+                        .iter()
+                        .find(|r| r.method.eq_ignore_ascii_case("GET") && r.path == path)
+                } else {
+                    None
+                }
+            });
         let should_close = {
-            let mut writer = ResponseWriter::new(&mut stream, !keep_alive);
+            let mut writer = ResponseWriter::new(&mut stream, !keep_alive, is_head);
             match route {
                 Some(r) => (r.handler)(&request, &mut writer, &probe_stream),
                 None => match not_found {
@@ -1893,6 +1972,95 @@ mod tests {
             Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
         let reply = client.send(&Request::get("/nope"), None, None).unwrap();
         assert_eq!(reply.status, 404);
+        handle.stop();
+    }
+
+    // cpp-httplib has no separate HEAD table (`Server::routing` dispatches
+    // "GET" and "HEAD" through the same `get_handlers_`): a route registered
+    // only under GET answers HEAD too, with the exact status and headers the
+    // GET response would have carried -- including a real Content-Length
+    // computed from the body the handler built -- but never the body bytes.
+    #[test]
+    fn head_on_a_get_only_route_answers_like_the_get_but_without_a_body() {
+        let mut server = Server::new();
+        server.route("GET", "/v1/models", |_req, res, _peer| {
+            let _ = res.send_full(
+                200,
+                &[("Content-Type", "application/json")],
+                b"{\"object\":\"list\",\"data\":[]}",
+            );
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+
+        let get_reply = client
+            .send(&Request::get("/v1/models"), None, None)
+            .unwrap();
+        let head_reply = client
+            .send(&Request::head("/v1/models"), None, None)
+            .unwrap();
+
+        assert_eq!(head_reply.status, get_reply.status);
+        assert!(head_reply.body.is_empty(), "HEAD must not carry a body");
+        assert_eq!(
+            head_reply.header("content-length"),
+            get_reply.header("content-length"),
+            "HEAD's Content-Length must match what the GET body would have been"
+        );
+        assert_eq!(
+            head_reply.header("content-type"),
+            get_reply.header("content-type")
+        );
+        assert_eq!(head_reply.header("accept-ranges"), Some("bytes"));
+        handle.stop();
+    }
+
+    // cpp-httplib's `write_response_core` adds `Accept-Ranges: bytes` to
+    // every response to a HEAD request that doesn't already carry one --
+    // unconditional on status, so a HEAD that misses every route still gets
+    // it on its 404 the same as a HEAD that hits a real route gets it on its
+    // 200.
+    #[test]
+    fn head_accept_ranges_is_added_even_on_a_404() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+
+        let reply = client.send(&Request::head("/nope"), None, None).unwrap();
+        assert_eq!(reply.status, 404);
+        assert!(reply.body.is_empty());
+        assert_eq!(reply.header("accept-ranges"), Some("bytes"));
+
+        // A plain GET to the same path must not pick up the HEAD-only
+        // header.
+        let get_reply = client.send(&Request::get("/nope"), None, None).unwrap();
+        assert_eq!(get_reply.header("accept-ranges"), None);
+        handle.stop();
+    }
+
+    // A route registered explicitly under HEAD (cpp-httplib short-circuits
+    // `/api/hello` this way, ahead of routing, rather than falling back to
+    // its GET) still gets `Accept-Ranges` from the writer, not from the
+    // handler.
+    #[test]
+    fn head_accept_ranges_is_added_to_an_explicit_head_route() {
+        let mut server = Server::new();
+        server.route("HEAD", "/api/hello", |_req, res, _peer| {
+            let _ = res.send_full(200, &[], b"");
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+
+        let reply = client
+            .send(&Request::head("/api/hello"), None, None)
+            .unwrap();
+        assert_eq!(reply.status, 200);
+        assert!(reply.body.is_empty());
+        assert_eq!(reply.header("content-length"), Some("0"));
+        assert_eq!(reply.header("accept-ranges"), Some("bytes"));
         handle.stop();
     }
 
