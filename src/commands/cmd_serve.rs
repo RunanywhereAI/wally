@@ -214,6 +214,9 @@ pub fn register_serve(app: &mut App) {
             ValueType::UInt,
             "Port to listen on (default 8080)",
         )
+        // cmd_serve.cpp binds this to a uint16_t: 70000/4294967296 are
+        // conversion errors even though they'd fit a plain uint32_t.
+        .int_bounds(0, i128::from(u16::MAX))
         .default_val("8080");
         cmd.add_option(
             "--context-length,--context,-c",

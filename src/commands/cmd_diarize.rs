@@ -227,12 +227,14 @@ pub fn register_diarize(app: &mut App) {
     );
     cmd.add_option(
         "--minimum-duration-ms,--min-duration",
-        ValueType::Int,
+        // rac_diarization_options_t::minimum_duration_ms is int64_t.
+        ValueType::Int64,
         "Drop segments shorter than this many ms (default 0)",
     );
     cmd.add_option(
         "--merge-gap-ms,--merge-gap",
-        ValueType::Int,
+        // rac_diarization_options_t::merge_gap_ms is int64_t.
+        ValueType::Int64,
         "Merge same-speaker segments closer than this many ms (default 0)",
     );
 
