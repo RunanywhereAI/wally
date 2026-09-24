@@ -49,9 +49,9 @@ pub fn register_harness(app: &mut App) {
                 );
                 return 2;
             }
-            return harness::launch_open_code_cloud(&effective, p.remaining());
+            return harness::launch_open_code_cloud(&effective, &p.get_strs("args"));
         }
-        harness::launch("opencode", &effective, p.remaining())
+        harness::launch("opencode", &effective, &p.get_strs("args"))
     });
 
     // The OpenAI-shaped agents, one subcommand per row of the table. They need
@@ -89,7 +89,7 @@ pub fn register_harness(app: &mut App) {
             harness::launch_agent(
                 &agent,
                 &resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color),
-                p.remaining(),
+                &p.get_strs("args"),
             )
         });
     }

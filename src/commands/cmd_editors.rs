@@ -598,7 +598,7 @@ pub fn register_editors(app: &mut App) {
             if p.flag("--serve") {
                 serve(&effective, g.verbose)
             } else {
-                run(&editor, &effective, p.remaining(), g.verbose)
+                run(&editor, &effective, &p.get_strs("args"), g.verbose)
             }
         });
     }
