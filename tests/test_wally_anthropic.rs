@@ -168,10 +168,21 @@ impl Editor {
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json");
             let mut receiver = |data: &[u8]| -> bool {
+                eprintln!(
+                    "XDBG editor receiver got {} bytes t={}",
+                    data.len(),
+                    dbg_now_ms()
+                );
                 received.lock().unwrap().extend_from_slice(data);
                 true
             };
+            eprintln!("XDBG editor client.send() start t={}", dbg_now_ms());
             let reply = client.send(&request, None, Some(&mut receiver));
+            eprintln!(
+                "XDBG editor client.send() returned t={} reply={:?}",
+                dbg_now_ms(),
+                reply.as_ref().map(|r| r.status)
+            );
             status.store(reply.map(|r| r.status).unwrap_or(0), Ordering::SeqCst);
         }));
     }

@@ -16,6 +16,13 @@ use std::time::Duration;
 
 use wally::net::http1::{ResponseWriter, Server, ServerHandle, ServerRequest};
 
+fn dbg_now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+}
+
 const ROLE_FRAME: &str = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\n";
 const CONTENT_FRAME: &str = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n";
 const FINISH_FRAME: &str = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
@@ -68,11 +75,18 @@ impl Shared {
 
     fn wait_for_hold(&self) {
         let state = self.state.lock().unwrap();
-        let _ = self
+        eprintln!("XDBG wait_for_hold enter t={}", dbg_now_ms());
+        let (_g, timed_out) = self
             .arrived
             .wait_timeout_while(state, Duration::from_secs(5), |s| {
                 s.arrivals < self.hold_until.load(Ordering::SeqCst)
-            });
+            })
+            .unwrap();
+        eprintln!(
+            "XDBG wait_for_hold exit t={} timed_out={}",
+            dbg_now_ms(),
+            timed_out.timed_out()
+        );
     }
 
     fn wait_for_header_hold(&self) {
