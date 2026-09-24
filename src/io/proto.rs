@@ -58,6 +58,21 @@ impl ProtoBuffer {
         let text = unsafe { std::ffi::CStr::from_ptr(self.0.error_message) }.to_string_lossy();
         (!text.is_empty()).then(|| text.into_owned())
     }
+
+    /// Like `error_message()`, but only null-checks the pointer, returning
+    /// `Some("")` for a non-null empty C string instead of falling through to
+    /// `None`. Some C++ call sites (e.g. `register_url`'s early-return path,
+    /// which never reaches `parse_proto_buffer`) reimplement the null check
+    /// inline without the empty-string guard `parse_proto_buffer` applies;
+    /// this mirrors that narrower check for callers that need to match it.
+    pub fn error_message_nullable(&self) -> Option<String> {
+        if self.0.error_message.is_null() {
+            return None;
+        }
+        // SAFETY: NUL-terminated string owned by the buffer.
+        let text = unsafe { std::ffi::CStr::from_ptr(self.0.error_message) }.to_string_lossy();
+        Some(text.into_owned())
+    }
 }
 
 impl Default for ProtoBuffer {

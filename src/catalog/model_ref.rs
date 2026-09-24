@@ -88,6 +88,20 @@ fn without_trailing_slashes(path: &str) -> String {
     out
 }
 
+/// Mirrors `std::filesystem::path::filename()` on the raw, unstripped input:
+/// unlike `Path::file_name()`, which strips a trailing separator before
+/// taking the last component, this returns empty when `path` ends with a
+/// separator (matching the C++ standard's documented behaviour).
+fn cpp_style_filename(path: &str) -> String {
+    if path.ends_with('/') || path.ends_with('\\') {
+        return String::new();
+    }
+    Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// Best-effort `std::filesystem::weakly_canonical`: resolve symlinks/`..`
 /// through the real path when it exists (the common case here — callers only
 /// reach this after `is_local_path` confirmed the path exists), falling back
@@ -188,10 +202,14 @@ fn infer_local_kind(path: &str) -> (v1::InferenceFramework, v1::ModelFormat) {
     // QHexRT HNPU bundles: Hexagon arch folder (v75/v79/v81), a context.bin, or
     // a top-level non-aux .json next to QNN binaries. `_HNPU` is the published
     // repo suffix; honor it so `wally run --engine qhexrt <dir>` is not required.
-    let leaf = p
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    //
+    // Use the C++-style leaf, not `Path::file_name()`: the latter strips a
+    // trailing separator before taking the last component (so
+    // `Path::new("a/HNPU/").file_name()` is `Some("HNPU")`), while
+    // `std::filesystem::path::filename()` on the same unstripped input
+    // returns empty. A `wally run ./models/Foo_HNPU/` (trailing slash) must
+    // miss the name-suffix shortcut exactly like C++ does.
+    let leaf = cpp_style_filename(path);
     let looks_qnn = || -> bool {
         if leaf.contains("_HNPU") || leaf.contains("-npu") {
             return true;
@@ -307,7 +325,13 @@ fn register_url(
         sys::rac_register_model_from_url_proto(bytes.as_ptr(), bytes.len(), out.as_mut_ptr())
     };
     if rc != sys::SUCCESS {
-        let detail = out.error_message().unwrap_or_else(|| describe_result(rc));
+        // C++ here checks only for a null error_message pointer (not
+        // null-or-empty, unlike the shared parse_proto_buffer convention
+        // below), so a non-null empty error_message yields an empty trailing
+        // detail rather than falling back to describe_result(rc).
+        let detail = out
+            .error_message_nullable()
+            .unwrap_or_else(|| describe_result(rc));
         return Err((rc, format!("failed to register {url}: {detail}")));
     }
 

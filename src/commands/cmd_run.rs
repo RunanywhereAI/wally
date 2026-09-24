@@ -512,8 +512,12 @@ fn generate_once(options: &GlobalOptions, model_id: &str, prompt: &str, params: 
     };
     let result: v1::LlmGenerationResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if rc == sys::SUCCESS => result,
+        // parse_proto_buffer only fills an error detail on ITS OWN failure
+        // path; when the buffer parsed cleanly but the call's own rc is a
+        // failure, C++ prints the still-empty `error` string here, so match
+        // that with no trailing detail rather than describe_result(rc).
         Ok(_) => {
-            error_line(&format!("generation failed: {}", describe_result(rc)));
+            error_line("generation failed: ");
             return 1;
         }
         Err(message) => {
@@ -605,8 +609,11 @@ fn load_model(
     };
     let result: v1::ModelLoadResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if rc == sys::SUCCESS => result,
+        // See the matching comment in generate_once: parse_proto_buffer only
+        // populates an error detail on its own failure path, so a clean parse
+        // with a failing rc prints no trailing detail in C++.
         Ok(_) => {
-            error_line(&format!("model load failed: {}", describe_result(rc)));
+            error_line("model load failed: ");
             return false;
         }
         Err(message) => {
@@ -665,8 +672,11 @@ fn run_vlm(
     };
     let result: v1::VlmResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if rc == sys::SUCCESS => result,
+        // See the matching comment in generate_once: parse_proto_buffer only
+        // populates an error detail on its own failure path, so a clean parse
+        // with a failing rc prints no trailing detail in C++.
         Ok(_) => {
-            error_line(&format!("vlm generation failed: {}", describe_result(rc)));
+            error_line("vlm generation failed: ");
             return 1;
         }
         Err(message) => {
@@ -880,19 +890,15 @@ fn run_llm(options: &GlobalOptions, verb: LlmVerb, prompt: &str, params: &RunPar
         }
     };
 
-    // NOTE (ported as-is, not fixed here): cmd_run.cpp silently discards an
-    // explicit --engine for anything that resolved through the built-in
-    // catalog -- `--engine <x>` on a catalog model does nothing at all, with
-    // no warning. Only a non-catalog ref (hf.co/..., a URL, a bare file path)
-    // gets engine_hint.framework; a catalog hit always loads with UNSPECIFIED
-    // and falls back to its own declared framework. Flagged for a reviewer to
-    // decide whether this is worth fixing; out of scope for this port.
-    let load_framework = if resolved.from_catalog {
-        v1::InferenceFramework::Unspecified
-    } else {
-        engine_hint.framework
-    };
-    if !load_model(options, &resolved.model_id, load_framework, is_vlm) {
+    // An explicit --engine is honoured whatever the ref resolved to. This used to
+    // read `resolved.from_catalog ? UNSPECIFIED : engine_hint.framework`, which
+    // silently DISCARDED the flag for anything that came out of the built-in
+    // catalog -- `--engine <x>` on a catalog model did nothing at all, with no
+    // warning. When the flag is absent engine_hint.framework is UNSPECIFIED, so
+    // catalog entries still fall back to their own declared framework exactly as
+    // before; the only behaviour that changes is that asking now works. Mirrors
+    // cmd_embed.cpp.
+    if !load_model(options, &resolved.model_id, engine_hint.framework, is_vlm) {
         return 1;
     }
     if !params.lora.is_empty() && !apply_lora_adapter(&params.lora, params.lora_scale) {

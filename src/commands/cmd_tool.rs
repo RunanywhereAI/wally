@@ -24,7 +24,7 @@ use crate::bootstrap::{self, GlobalOptions};
 use crate::catalog::model_ref;
 use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};
-use crate::io::output::{describe_result, error_line, result_line, status_line, JsonWriter};
+use crate::io::output::{error_line, result_line, status_line, JsonWriter};
 use crate::io::proto::{self, parse_proto_buffer, v1, ProtoBuffer};
 use crate::progress::progress_bar::DownloadProgressScope;
 use crate::sys;
@@ -159,8 +159,12 @@ fn load_model(options: &GlobalOptions, model_id: &str, framework: v1::InferenceF
     };
     let result: v1::ModelLoadResult = match parse_proto_buffer(out_buffer) {
         Ok(result) if rc == sys::SUCCESS => result,
+        // parse_proto_buffer only populates an error detail on its own
+        // failure path; when the buffer parsed cleanly but the call's own rc
+        // is a failure, C++ prints the still-empty `error` string here, so
+        // match that with no trailing detail rather than describe_result(rc).
         Ok(_) => {
-            error_line(&format!("model load failed: {}", describe_result(rc)));
+            error_line("model load failed: ");
             return false;
         }
         Err(message) => {
