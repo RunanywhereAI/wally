@@ -44,6 +44,9 @@ pub struct CatalogEntry {
     /// Shared base for the same model across backends (llama.cpp / MLX / ANE /
     /// NPU). None → the row stands alone. `models list` groups by this.
     pub merge_key: Option<&'static str>,
+    /// Proven by the local coding-harness compatibility matrix for this exact
+    /// artifact.
+    pub harness_compatible: bool,
 }
 
 // AUTO-TRANSLITERATED DATA START (parse_catalog.py) — do not hand-edit the
@@ -347,6 +350,86 @@ const MLX_QWEN3_06_BFILES_FILES: &[CatalogFile] = &[
     },
     CatalogFile {
         url: "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/main/vocab.json",
+        filename: "vocab.json",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+];
+
+const MLX_QWEN3_4_B_INSTRUCT2507_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/added_tokens.json",
+        filename: "added_tokens.json",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/chat_template.jinja",
+        filename: "chat_template.jinja",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/generation_config.json",
+        filename: "generation_config.json",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/merges.txt",
+        filename: "merges.txt",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/model.safetensors",
+        filename: "model.safetensors",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/model.safetensors.index.json",
+        filename: "model.safetensors.index.json",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/special_tokens_map.json",
+        filename: "special_tokens_map.json",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 0,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/Qwen3-4B-Instruct-2507-4bit/resolve/50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b/vocab.json",
         filename: "vocab.json",
         required: true,
         size_bytes: 0,
@@ -2436,11 +2519,29 @@ const CATALOG: &[CatalogEntry] = &[
         url: Some("https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf"),
         files: &[],
         download_size_bytes: 639 * MB,
-        context_length: 4096,
+        context_length: 32768,
         supports_thinking: true,
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("qwen3-0.6b"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "qwen3-4b-instruct-2507",
+        alias: Some("qwen3-4b-instruct"),
+        name: "Qwen3 4B Instruct 2507 Q8_0",
+        category: v1::ModelCategory::Language,
+        framework: v1::InferenceFramework::LlamaCpp,
+        format: v1::ModelFormat::Gguf,
+        url: Some("https://huggingface.co/ggml-org/Qwen3-4B-Instruct-2507-Q8_0-GGUF/resolve/e6f794d44f9395d0184a966c27b5ae99ea356fcb/qwen3-4b-instruct-2507-q8_0.gguf"),
+        files: &[],
+        download_size_bytes: 4300000000,
+        context_length: 262144,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("qwen3-4b-instruct-2507"),
+        harness_compatible: true,
     },
     // RunAnywhere's canonical-based llama.cpp fork supports PrismML's Q1_0
     // Bonsai artifacts. Ternary-Bonsai uses the explicitly canonical
@@ -2461,6 +2562,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("bonsai-1.7b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "bonsai-4b",
@@ -2477,6 +2579,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("bonsai-4b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "bonsai-8b",
@@ -2493,6 +2596,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("bonsai-8b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "bonsai-27b",
@@ -2509,6 +2613,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("bonsai-27b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "ternary-bonsai-1.7b",
@@ -2525,6 +2630,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("ternary-bonsai-1.7b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "ternary-bonsai-4b",
@@ -2541,6 +2647,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("ternary-bonsai-4b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "ternary-bonsai-8b",
@@ -2557,6 +2664,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("ternary-bonsai-8b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "maple-preview",
@@ -2573,6 +2681,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("maple-preview"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "llama-3.2-3b",
@@ -2589,6 +2698,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // LiquidAI LFM2.5 family (official GGUF, Apache 2.0). Replaces the older
     // LFM2 Q8 entry: newer version, ≤4-bit, pinned revisions. 230M/350M also ship
@@ -2608,6 +2718,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("lfm2.5-230m"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "lfm2.5-350m",
@@ -2624,6 +2735,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("lfm2.5-350m"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "lfm2.5-1.2b",
@@ -2640,6 +2752,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("lfm2.5-1.2b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "lfm2.5-2.6b",
@@ -2656,6 +2769,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // SmolLM2 135M from the llama.cpp org's own GGUF (official), ≤4-bit.
     CatalogEntry {
@@ -2673,6 +2787,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // Google Gemma 4 family (GGUF). Licensed under Apache 2.0; preserve the
     // upstream license and attribution notices when redistributing.
@@ -2691,6 +2806,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-e2b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "gemma-4-e4b",
@@ -2707,6 +2823,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-e4b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "gemma-4-12b",
@@ -2723,6 +2840,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-12b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "gemma-4-26b-a4b",
@@ -2739,6 +2857,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-26b-a4b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "gemma-4-31b",
@@ -2755,6 +2874,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-31b"),
+        harness_compatible: false,
     },
     // Qwen3.8-27B (dense, newest Qwen, Apache 2.0).
     CatalogEntry {
@@ -2772,6 +2892,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("qwen3.8-27b"),
+        harness_compatible: false,
     },
     // IBM Granite 4.1 family (Apache 2.0).
     CatalogEntry {
@@ -2784,11 +2905,12 @@ const CATALOG: &[CatalogEntry] = &[
         url: Some("https://huggingface.co/unsloth/granite-4.1-3b-GGUF/resolve/5b88826e4b80789548180f8faab39c5cf68772c9/granite-4.1-3b-Q4_K_M.gguf"),
         files: &[],
         download_size_bytes: 2099502400,
-        context_length: 4096,
+        context_length: 131072,
         supports_thinking: false,
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("granite-4.1-3b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "granite-4.1-8b",
@@ -2805,6 +2927,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("granite-4.1-8b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "granite-4.1-30b",
@@ -2821,6 +2944,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("granite-4.1-30b"),
+        harness_compatible: false,
     },
     // IBM Granite 4.2 family (bartowski GGUF, Apache 2.0) — newest Granite.
     CatalogEntry {
@@ -2838,6 +2962,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "granite-4.2-30b",
@@ -2854,6 +2979,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- VLM (gguf + mmproj pairs) ---
     CatalogEntry {
@@ -2871,6 +2997,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "lfm2-vl-450m-q8_0",
@@ -2887,6 +3014,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // Native window is 128k (lfm2.context_length in the GGUF); 4096 is the
     // on-device working context, matching the other multi-GB VLM row.
@@ -2905,6 +3033,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "qwen2-vl-2b-instruct-q4_k_m",
@@ -2921,6 +3050,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "fara1.5-4b-q4_k_m",
@@ -2937,6 +3067,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "fara",
         merge_key: None,
+        harness_compatible: false,
     },
     // Meta Muse Glimmer 30B (Apache 2.0). llama.cpp's mmproj is image-only —
     // vision-capable, not the checkpoint's marketed audio/video "omni" surface.
@@ -2955,6 +3086,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // NVIDIA Nemotron-3-Nano-Omni-30B-A3B-Reasoning (MoE, NVIDIA Open Model
     // License). Same image-only mmproj caveat as Muse Glimmer above.
@@ -2973,6 +3105,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- Speech (Sherpa-ONNX archives; orchestrator extracts in-core) ---
     CatalogEntry {
@@ -2990,6 +3123,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "sherpa-nemo-parakeet-tdt-0.6b-v2-int8",
@@ -3006,6 +3140,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "sherpa-nemo-parakeet-tdt-0.6b-v3-int8",
@@ -3022,6 +3157,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "sherpa-nemo-parakeet-ctc-1.1b-int8",
@@ -3038,6 +3174,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 2147483648,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "sherpa-nemo-canary-180m-flash-int8",
@@ -3054,6 +3191,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "sherpa-nemotron-3.5-asr-streaming-0.6b-320ms-int8",
@@ -3070,6 +3208,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "vits-piper-en_US-lessac-medium",
@@ -3086,6 +3225,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // Supertone Supertonic v3 (MIT). Not the raw Supertone/supertonic-3 repo —
     // see kSherpaSupertonicV3Files for why. Needs sherpa-onnx >= 1.13.2.
@@ -3104,6 +3244,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- VAD ---
     // Exact artifact size (matches iOS ModelCatalogBootstrap.swift): the
@@ -3124,6 +3265,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- Speaker diarization (ONNX Runtime) ---
     CatalogEntry {
@@ -3141,6 +3283,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- Semantic segmentation (ONNX Runtime) ---
     CatalogEntry {
@@ -3158,6 +3301,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- Embeddings ---
     CatalogEntry {
@@ -3175,6 +3319,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "llama-nemotron-embed-1b-v2-q4_k_m",
@@ -3191,6 +3336,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // NVIDIA Llama Embed Nemotron 8B — portable GGUF previously HNPU-only.
     CatalogEntry {
@@ -3208,6 +3354,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "all-minilm-l6-v2",
@@ -3224,6 +3371,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- Reranking (llama.cpp cross-encoder; `wally rerank -m <id>`) ---
     CatalogEntry {
@@ -3241,6 +3389,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- Image generation (CoreML diffusion; Apple only) ---
     // Apple-optimized Stable Diffusion 1.5. Id matches the built-in diffusion
@@ -3272,6 +3421,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // NeuRT advertises LLM + STT + EMBED + RERANK + VLM + EMBED_IMAGE + DIFFUSION; folder refs (same ModelInfo
     // path as sd15). Pass a local compiled tree to `--model` — `wally models pull` of a
@@ -3317,6 +3467,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // The first ANE RERANK row. Its `score` graph role was outside NeuRT's manifest vocabulary, so
     // the published bundle was rejected before a graph was touched. Gate on an M4 Max: positive
@@ -3340,6 +3491,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // The first ANE VLM row. Image + prompt -> text: the runtime runs the vision tower, splices its
     // 256 visual tokens over the prompt's <IMG_CONTEXT> positions, then drives the ordinary chunked
@@ -3360,6 +3512,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // The first ANE IMAGE-EMBEDDING row (pixels -> vector, for retrieval/similarity). Serves the
     // RAC_PRIMITIVE_EMBED_IMAGE slot promoted from reserved_slot_3 in ABI v10. Gate on an M4 Max:
@@ -3380,6 +3533,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // The first ANE TEXT-TO-SPEECH row, and NeuRT's last null primitive filled (SDK 0.20.33).
     // Kokoro-82M across three Core ML graphs (duration -> decode -> gen) plus two host seams that
@@ -3409,6 +3563,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "parakeet_tdt_0_6b_v2_ane",
@@ -3425,6 +3580,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // --- MLX (Apple Silicon / Apple GPU via mlx-swift-lm) ---
     CatalogEntry {
@@ -3437,11 +3593,29 @@ const CATALOG: &[CatalogEntry] = &[
         url: None,
         files: MLX_QWEN3_06_BFILES_FILES,
         download_size_bytes: 351383618,
-        context_length: 4096,
+        context_length: 32768,
         supports_thinking: true,
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("qwen3-0.6b"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "mlx-qwen3-4b-instruct-2507-4bit",
+        alias: Some("mlx-qwen3-4b-instruct"),
+        name: "Qwen3 4B Instruct 2507",
+        category: v1::ModelCategory::Language,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: MLX_QWEN3_4_B_INSTRUCT2507_FILES,
+        download_size_bytes: 2315000000,
+        context_length: 262144,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("qwen3-4b-instruct-2507"),
+        harness_compatible: true,
     },
     CatalogEntry {
         id: "mlx-maple-preview-2bit",
@@ -3458,6 +3632,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("maple-preview"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-llama-3.1-nemotron-nano-8b-v1-4bit",
@@ -3474,6 +3649,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("mlx-nemotron-nano"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-nemotron-mini-4b-instruct-4bit",
@@ -3490,6 +3666,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("mlx-nemotron-mini"),
+        harness_compatible: false,
     },
     // PrismML Bonsai family 1-bit MLX. Needs the narrow Prism kernels carried
     // by the canonical-first RunAnywhere MLX/mlx-swift forks pinned in the
@@ -3509,6 +3686,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("bonsai-1.7b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-bonsai-4b-1bit",
@@ -3525,6 +3703,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("bonsai-4b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-bonsai-8b-1bit",
@@ -3541,6 +3720,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("bonsai-8b"),
+        harness_compatible: false,
     },
     // PrismML Bonsai-27B 1-bit MLX (~5.1 GB safetensors). Experimental —
     // requires mlx-swift-lm support for qwen3_5 / 1-bit Bonsai.
@@ -3559,6 +3739,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("bonsai-27b"),
+        harness_compatible: false,
     },
     // PrismML Ternary-Bonsai family at ternary/2-bit MLX. bits=2 was already
     // supported by upstream MLX 0.31.6 before the Prism 1-bit patch, so this
@@ -3580,6 +3761,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("ternary-bonsai-1.7b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-ternary-bonsai-4b-2bit",
@@ -3596,6 +3778,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("ternary-bonsai-4b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-ternary-bonsai-8b-2bit",
@@ -3612,6 +3795,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("ternary-bonsai-8b"),
+        harness_compatible: false,
     },
     // merge_key matches the bare id, same as every other Ternary-Bonsai size
     // above (1.7b/4b/8b) -- not the "mlx-" prefixed alias -- so a future GGUF
@@ -3631,6 +3815,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("ternary-bonsai-27b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-llama-3.2-1b-instruct-4bit",
@@ -3647,6 +3832,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("mlx-llama3.2"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-qwen2-vl-2b-instruct-4bit",
@@ -3663,6 +3849,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-fastvlm-0.5b-bf16",
@@ -3679,6 +3866,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-lfm2.5-vl-3b-4bit",
@@ -3695,6 +3883,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-qwen3-embedding-0.6b-4bit-dwq",
@@ -3711,6 +3900,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-qwen3-asr-0.6b-8bit",
@@ -3727,6 +3917,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-glm-asr-nano-2512-4bit",
@@ -3743,6 +3934,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-parakeet-ctc-1.1b",
@@ -3759,6 +3951,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-parakeet-tdt-0.6b-v2",
@@ -3775,6 +3968,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-parakeet-tdt-0.6b-v3",
@@ -3791,6 +3985,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-parakeet-rnnt-1.1b",
@@ -3807,6 +4002,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-nemotron-3.5-asr-streaming-0.6b-8bit",
@@ -3823,6 +4019,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-qwen3-tts-12hz-0.6b-base-8bit",
@@ -3839,6 +4036,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-soprano-1.1-80m-5bit",
@@ -3855,6 +4053,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     // Google Gemma 4 family (MLX). config.json model_type "gemma4" /
     // "gemma4_unified" (12B), both registered in the pinned mlx-swift-lm
@@ -3876,6 +4075,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-e2b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-gemma-4-e4b-it-qat-4bit",
@@ -3892,6 +4092,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-e4b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-gemma-4-12b-it-qat-4bit",
@@ -3908,6 +4109,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-12b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-gemma-4-26b-a4b-it-4bit",
@@ -3924,6 +4126,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-26b-a4b"),
+        harness_compatible: false,
     },
     // The plain 4bit variant, NOT "-qat-4bit" — that name does not resolve to
     // a clean repo (verified this session); this is the largest dense Gemma 4.
@@ -3942,6 +4145,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gemma-4-31b"),
+        harness_compatible: false,
     },
     // Qwen3.8-27B (dense) — config.json model_type "qwen3_5", registered.
     CatalogEntry {
@@ -3959,6 +4163,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("qwen3.8-27b"),
+        harness_compatible: false,
     },
     // IBM Granite 4.1 family (MLX). config.json model_type "granite",
     // registered in mlx-swift-lm 3.31.5's LLMTypeRegistry.
@@ -3972,11 +4177,12 @@ const CATALOG: &[CatalogEntry] = &[
         url: None,
         files: MLX_GRANITE4_1_3_BFILES_FILES,
         download_size_bytes: 2127162429,
-        context_length: 4096,
+        context_length: 131072,
         supports_thinking: false,
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("granite-4.1-3b"),
+        harness_compatible: false,
     },
     // A real, official mlx-community 8B 4-bit quant does exist (Apache-2.0,
     // model_type "granite") — verified via HF API this session, despite the
@@ -3996,6 +4202,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("granite-4.1-8b"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "mlx-granite-4.1-30b-4bit",
@@ -4012,6 +4219,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("granite-4.1-30b"),
+        harness_compatible: false,
     },
     // --- QHexRT (Snapdragon Hexagon NPU; Windows ARM64 overlay) ---
     // Ids match engines/qhexrt/qhexrt_model_catalog.cpp so pull/lifecycle
@@ -4034,6 +4242,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("lfm2.5-230m"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "lfm2_5_350m",
@@ -4050,6 +4259,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("lfm2.5-350m"),
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "lfm2_5_1_2b_thinking",
@@ -4066,6 +4276,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("lfm2.5-1.2b"),
+        harness_compatible: false,
     },
     // Non-LLM Hexagon primitives. Ids match engines/qhexrt/qhexrt_model_catalog.cpp.
     // Same folder-URL registration as the LLM rows — pass a local `*_HNPU`
@@ -4085,6 +4296,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "moonshine_tiny",
@@ -4101,6 +4313,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "kitten_micro_0_8",
@@ -4117,6 +4330,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "embeddinggemma_300m",
@@ -4133,6 +4347,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "internvl3_5_1b",
@@ -4149,6 +4364,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "cosmos3_edge_diffusion",
@@ -4165,6 +4381,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
     CatalogEntry {
         id: "nv_rerankqa_1b",
@@ -4181,6 +4398,7 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
     },
 ];
 
