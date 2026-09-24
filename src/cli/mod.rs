@@ -904,7 +904,17 @@ impl<'a> ParseState<'a> {
                     next += 1;
                 }
                 None => {
-                    self.push_parse_error(format!(
+                    // `ArgumentMismatch::TypedAtLeast` (CLI11.hpp, `_parse_arg`):
+                    // thrown synchronously out of the scan itself, the moment an
+                    // option can't collect its required minimum — this aborts
+                    // the whole parse immediately, before `_process_callbacks()`
+                    // (where a positional's `->check()` validator or another
+                    // option's value conversion would run) is ever reached. It
+                    // therefore always outranks those, regardless of where in
+                    // argv this option appears relative to them — a distinct,
+                    // higher-priority sentinel bucket from `push_parse_error`'s
+                    // (deferred, addition-order) conversion/validator errors.
+                    self.push_scan_error(format!(
                         "{display}: 1 required {} missing",
                         full_type_name(value_type, type_name.as_deref(), &validators)
                     ));
@@ -1055,7 +1065,36 @@ impl<'a> ParseState<'a> {
             .push(format!("\0parse-error\0{message}"));
     }
 
+    /// `ArgumentMismatch::TypedAtLeast` (a missing required option value) is
+    /// thrown straight out of CLI11's scan — before `_process_callbacks()`
+    /// ever starts — so it unconditionally outranks a conversion/validator
+    /// error from `push_parse_error`, regardless of scan order between them.
+    fn push_scan_error(&mut self, message: String) {
+        self.frames
+            .last_mut()
+            .unwrap()
+            .parsed
+            .remaining
+            .push(format!("\0scan-error\0{message}"));
+    }
+
     fn finish(self) -> Outcome {
+        // See `push_scan_error`: a missing-required-value error aborts the
+        // scan itself, so it wins over every conversion/validator error below
+        // no matter which was encountered first while walking argv.
+        for frame in &self.frames {
+            if let Some(msg) = frame
+                .parsed
+                .remaining
+                .iter()
+                .find_map(|r| r.strip_prefix("\0scan-error\0"))
+            {
+                return Outcome::ParseErr {
+                    message: msg.to_string(),
+                };
+            }
+        }
+
         // A bad conversion/argument count is recorded as a sentinel in
         // `remaining` the moment it happens (CLI11 throws immediately, from
         // wherever the bad token was) — surface the first one, in scan order,
@@ -2361,6 +2400,35 @@ mod tests {
             outcome,
             Outcome::ParseErr {
                 message: "audio: File does not exist: definitely-missing.wav".to_string(),
+            }
+        );
+    }
+
+    /// full-surface sweep, item 2 (follow-up): a missing required option
+    /// *value* (`ArgumentMismatch::TypedAtLeast`) is thrown straight out of
+    /// CLI11's scan, before `_process_callbacks()` — where a positional's
+    /// `->check()` validator runs — is ever reached, so it wins even though
+    /// the positional appears earlier in argv and would otherwise be checked
+    /// first (`positional_check_runs_before_a_later_required_option_error`,
+    /// above, is the case where the option *does* get its value).
+    #[test]
+    fn missing_option_value_outranks_an_earlier_positional_validator_error() {
+        let mut app = App::new("root", "wally");
+        let cmd = app.add_subcommand("diarize", "Diarize audio");
+        cmd.add_option("audio", ValueType::Text, "16-bit PCM WAV file")
+            .check(Validator::ExistingFile);
+        cmd.add_option("--model,-m", ValueType::Text, "model");
+
+        let outcome = app.parse(&[
+            "diarize".into(),
+            "definitely-missing.wav".into(),
+            "--model".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--model: 1 required TEXT missing".to_string(),
             }
         );
     }
