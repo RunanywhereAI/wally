@@ -86,9 +86,9 @@ with its first token, so a request abandoned while the model is still reading
 the prompt is stopped the moment that first token arrives, and nothing after it
 is passed on. When the tool quits, `wally` sends any cancel still queued before
 it returns. Each cancel is a line in `shim.log` under the state directory
-(`~/.local/state/runanywhere/`, or `$XDG_STATE_HOME/runanywhere/`) — never the
-tool's terminal. A local model needs none of this: the dropped connection is
-enough.
+(`~/.local/state/runanywhere/`, or `$XDG_STATE_HOME/runanywhere/`; on Windows
+`%LOCALAPPDATA%\RunAnywhere\state\`) — never the tool's terminal. A local
+model needs none of this: the dropped connection is enough.
 
 ## Local models
 

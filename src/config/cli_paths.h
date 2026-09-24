@@ -25,7 +25,11 @@ namespace wally::paths {
  */
 std::string resolve_home(const std::string& override_dir);
 
-/** ${XDG_STATE_HOME:-~/.local/state}/runanywhere (not created). */
+/**
+ * ${XDG_STATE_HOME:-~/.local/state}/runanywhere (not created). On Windows,
+ * with XDG_STATE_HOME unset, %LOCALAPPDATA%/RunAnywhere/state even when HOME
+ * is set (MSYS2 / Git Bash).
+ */
 std::string state_dir();
 
 /** Strip one trailing '/' (keeps root "/"). */

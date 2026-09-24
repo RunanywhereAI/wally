@@ -306,6 +306,18 @@ TestResult test_state_dir() {
       return result;
     }
   }
+  {
+    // MSYS2 / Git Bash set HOME on Windows. It must not win over LOCALAPPDATA,
+    // or state lands in a POSIX-shaped directory under the user profile.
+    EnvVar xdg("XDG_STATE_HOME", nullptr);
+    EnvVar home("HOME", "C:/msys-home");
+    EnvVar local("LOCALAPPDATA", "C:/wally-local");
+    const std::string state = wally::paths::state_dir();
+    if (state != "C:/wally-local/RunAnywhere/state") {
+      result.details = "HOME should not win over LOCALAPPDATA, got " + state;
+      return result;
+    }
+  }
 #endif
   result.passed = true;
   return result;
