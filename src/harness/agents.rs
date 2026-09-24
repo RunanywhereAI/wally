@@ -155,13 +155,34 @@ struct TemporaryConfig {
     path: Option<PathBuf>,
 }
 
+/// `std::filesystem::temp_directory_path()`: TMPDIR, TMP, TEMP, TEMPDIR (the
+/// first that is set), else /tmp — and nothing unless that names an existing
+/// directory. `std::env::temp_dir()` is not the same: it reads only TMPDIR and,
+/// on macOS, falls back to the per-user /var/folders/…/T instead of /tmp.
+fn temp_directory_path() -> Option<PathBuf> {
+    #[cfg(not(windows))]
+    let directory = ["TMPDIR", "TMP", "TEMP", "TEMPDIR"]
+        .iter()
+        .find_map(std::env::var_os)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    // MSVC's temp_directory_path is GetTempPathW, which temp_dir() also wraps.
+    #[cfg(windows)]
+    let directory = std::env::temp_dir();
+    std::fs::metadata(&directory)
+        .is_ok_and(|metadata| metadata.is_dir())
+        .then_some(directory)
+}
+
 impl TemporaryConfig {
     fn new() -> Self {
         TemporaryConfig { path: None }
     }
 
     fn write(&mut self, contents: &str, extension: &str) -> Result<(), String> {
-        let directory = std::env::temp_dir();
+        let Some(directory) = temp_directory_path() else {
+            return Err("no temp directory to write the agent config into".to_string());
+        };
         // Matches std::random_device entropy(); entropy() — any process-wide
         // source of unpredictability is enough, this only has to dodge a name
         // collision, not resist an attacker who can already write here.
@@ -825,9 +846,9 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
 }
 
 #[cfg(test)]
-mod fix_harness_tests {
-    //! Regression tests for confirmed audit findings 10 and 12
-    //! (/tmp/wally-rust-migration/fixes/harness.json).
+mod tests {
+    //! OpenClaw's non-UTF-8 environment, setenv's NUL truncation, and the
+    //! temp-directory lookup, each as the C++ behaved.
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use super::*;
@@ -915,6 +936,37 @@ mod fix_harness_tests {
             match saved_openclaw_home {
                 Some(value) => std::env::set_var("OPENCLAW_HOME", value),
                 None => std::env::remove_var("OPENCLAW_HOME"),
+            }
+        }
+    }
+    #[test]
+    #[cfg(not(windows))]
+    fn temp_directory_follows_the_cpp_lookup_order() {
+        let _lock = env_lock();
+        let names = ["TMPDIR", "TMP", "TEMP", "TEMPDIR"];
+        let saved: Vec<_> = names.iter().map(|n| (n, std::env::var_os(n))).collect();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        // SAFETY: env_lock serializes every test here that touches the env.
+        unsafe {
+            for name in names {
+                std::env::remove_var(name);
+            }
+        }
+        assert_eq!(temp_directory_path(), Some(PathBuf::from("/tmp")));
+        unsafe { std::env::set_var("TEMP", tmp.path()) };
+        assert_eq!(temp_directory_path(), Some(tmp.path().to_path_buf()));
+        unsafe { std::env::set_var("TMPDIR", "") };
+        assert_eq!(
+            temp_directory_path(),
+            None,
+            "a set-but-empty TMPDIR wins and is not a directory"
+        );
+        unsafe {
+            for (name, value) in saved {
+                match value {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
             }
         }
     }
