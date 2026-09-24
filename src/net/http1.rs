@@ -353,7 +353,13 @@ impl StopHandle {
             .unwrap()
             .as_millis();
         eprintln!("XDBG StopHandle::stop t={t}");
-        if let Some(s) = self.0.lock().unwrap().as_ref() {
+        if let Some(s) = self.0.lock().unwrap().take() {
+            // Taking (not just borrowing) the stream so it drops --
+            // closesocket() on Windows, close() elsewhere -- right after
+            // shutdown(): a bare shutdown() on this try_clone()'d duplicate,
+            // left open, is not enough to promptly terminate the connection
+            // as observed by the peer or by a concurrent blocking read on
+            // the sibling handle actually doing I/O.
             let _ = s.shutdown(Shutdown::Both);
         }
     }
