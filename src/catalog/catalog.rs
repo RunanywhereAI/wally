@@ -2,7 +2,7 @@
 //! equivalent of the example apps' ModelCatalog. Entries use the proto-generated
 //! enums and register through the same single-call commons entry points the SDKs
 //! use (rac_register_model_from_url_proto / rac_register_multi_file_model_proto).
-//! Registration is idempotent per process. Owner: the catalog port.
+//! Registration is idempotent per process.
 
 use std::sync::OnceLock;
 

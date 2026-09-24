@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_info.cpp. Owner: the maintenance/diagnostics port.
+//! Port of src/commands/cmd_info.cpp.
 //!
 //! `wally info` — environment summary (versions, paths, memory, plugins).
 

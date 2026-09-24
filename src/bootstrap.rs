@@ -7,10 +7,8 @@
 //!   desktop HTTP transport → backend registration → catalog + discovery
 //!
 //! Commands call bootstrap() exactly once; it is idempotent within a process.
-//! Owner: the SDK bootstrap / device info / progress port. Every callback handed
-//! to the SDK must be `'static`, thread-safe and panic-free across the ABI; see
-//! /tmp/wally-rust-migration/explore-bootstrap.md for the retained-callback and
-//! init/shutdown-order contract.
+//! Every callback handed
+//! to the SDK must be `'static`, thread-safe and panic-free across the ABI.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;

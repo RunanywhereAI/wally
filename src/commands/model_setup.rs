@@ -1,5 +1,5 @@
 //! Shared ensure-downloaded + resolve-paths step for speech commands. Port of
-//! src/commands/model_setup.cpp. Owner: the run/llm/tool/serve port.
+//! src/commands/model_setup.cpp.
 //!
 //! Resolves a model ref, pulls it when missing (same flow as `wally models
 //! pull`), and resolves the on-disk artifact paths through commons'

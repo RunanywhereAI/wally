@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_usage.cpp. Owner: the account port.
+//! Port of src/commands/cmd_usage.cpp.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

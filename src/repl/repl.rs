@@ -1,6 +1,5 @@
 //! Line editor with history (port of src/repl/repl.cpp: linenoise on
-//! macOS/Linux, plain stdin on Windows as WALLY_NO_LINENOISE did). Owner: the
-//! run/llm/tool/serve port.
+//! macOS/Linux, plain stdin on Windows as WALLY_NO_LINENOISE did).
 
 #[cfg(not(windows))]
 use rustyline::config::Configurer;

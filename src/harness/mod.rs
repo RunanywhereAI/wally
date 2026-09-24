@@ -1,6 +1,6 @@
 //! Launching coding tools (Claude Code, opencode, Hermes, OpenClaw, DeepSeek)
 //! against a hosted or local model. One namespace, as C++ `wally::harness` was.
-//! Owner: the coding-tool harness port.
+//!
 
 pub mod agents;
 pub mod catalog_models;

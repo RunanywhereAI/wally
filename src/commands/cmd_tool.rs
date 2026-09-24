@@ -1,5 +1,5 @@
 //! `wally llm tool-call` — exercise the tool-calling loop end to end. Port of
-//! src/commands/cmd_tool.cpp. Owner: the run/llm/tool/serve port.
+//! src/commands/cmd_tool.cpp.
 //!
 //! Thin wrapper over rac_tool_calling_run_loop_proto: load an LLM, hand
 //! commons a prompt plus two built-in demo tools (get_weather, calculate),

@@ -1,8 +1,7 @@
 //! `wally segment <image.ppm> --model <path>` — segmentation via the commons
 //! segmentation service (image-in → per-class mask summary). Port of
-//! src/commands/cmd_segment.cpp. Owner: the dormant vision/text modalities
-//! port. Not registered in the app (LLM-only release); ported completely
-//! anyway per the migration brief.
+//! src/commands/cmd_segment.cpp. Not registered in the app (LLM-only
+//! release), as in the C++.
 //!
 //! Mirrors cmd_image's structure (bootstrap → resolve model → one commons path
 //! → render) but consumes an image instead of producing one. The model

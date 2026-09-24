@@ -1,7 +1,7 @@
 //! The console's CLI endpoints: device-flow sign-in, identity, usage, hosted
 //! models and request cancellation (port of src/account/console.cpp). Requests
 //! and responses go through the generated binding in console_contract.rs (P0
-//! contract-first rule in AGENTS.md). Owner: the account port.
+//! contract-first rule in AGENTS.md).
 //!
 //! The real transport is ureq with native-tls (the OS trust store, as curl and
 //! WinHTTP used), env proxies with loopback bypass. Tests inject a `Transport`.

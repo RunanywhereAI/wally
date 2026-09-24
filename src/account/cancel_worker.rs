@@ -1,7 +1,7 @@
 //! Sends cancels to the control plane off the request path (port of
 //! src/account/cancel_worker.cpp, wally #81): one worker thread, in order, each
 //! bounded by `timeout_ms`; `stop()` drains the queue and joins. The bearer is
-//! read at SEND time and is never logged. Owner: the account port.
+//! read at SEND time and is never logged.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};

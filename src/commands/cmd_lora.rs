@@ -1,7 +1,6 @@
 //! `wally lora apply|remove|list|catalog` — LoRA adapters on the loaded LLM.
-//! Port of src/commands/cmd_lora.cpp. Owner: the dormant vision/text
-//! modalities port. Not registered in the app (LLM-only release); ported
-//! completely anyway per the migration brief.
+//! Port of src/commands/cmd_lora.cpp. Not registered in the app (LLM-only
+//! release), as in the C++.
 //!
 //! `list` reports the adapters currently attached (rac_lora_state_proto) — the
 //! spec's LoraState — while `catalog` lists registered adapter metadata. This

@@ -1,4 +1,4 @@
-//! Port of tests/test_wally_account.cpp. Owner: the account port.
+//! Port of tests/test_wally_account.cpp.
 
 #[path = "common/mod.rs"]
 mod common;

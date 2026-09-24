@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_update.cpp. Owner: the maintenance/diagnostics port.
+//! Port of src/commands/cmd_update.cpp.
 //!
 //! `wally update` — re-run the installer, telling it our version.
 //!

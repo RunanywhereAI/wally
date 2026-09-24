@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_editors.cpp. Owner: the coding-tool harness port.
+//! Port of src/commands/cmd_editors.cpp.
 
 use std::fs;
 use std::path::Path;

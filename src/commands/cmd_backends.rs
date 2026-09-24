@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_backends.cpp. Owner: the maintenance/diagnostics port.
+//! Port of src/commands/cmd_backends.cpp.
 //!
 //! `wally backends` — registered engine plugins per primitive.
 

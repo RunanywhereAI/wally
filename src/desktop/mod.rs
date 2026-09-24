@@ -1,4 +1,4 @@
-//! Claude Desktop's gateway profile. Owner: the coding-tool harness port.
+//! Claude Desktop's gateway profile.
 
 pub mod claude_profile;
 

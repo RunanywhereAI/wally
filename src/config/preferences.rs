@@ -1,5 +1,4 @@
 //! Non-secret per-profile CLI preferences (port of src/config/preferences.cpp).
-//! Owner: the models port.
 //!
 //! Distinct from the credential store (`account`), which is the secret file at
 //! mode 0600. The only key today is the default model. Resolution precedence,
@@ -193,7 +192,7 @@ pub fn clear_default_model() -> Result<(), String> {
 mod write_temp_file_tests {
     use super::write_temp_file;
 
-    // id 30: an open failure (temp file cannot even be created) must produce
+    // An open failure (temp file cannot even be created) must produce
     // "cannot write {temp}", distinct from a write/flush failure.
     #[test]
     fn open_failure_uses_cannot_write_text() {

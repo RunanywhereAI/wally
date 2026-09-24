@@ -1,7 +1,7 @@
 //! Control-plane network wiring for wally: auth, device, telemetry HTTP (port
 //! of src/net/control_plane.cpp). Drives the canonical commons entry points
 //! (rac_auth_* + rac_sdk_init_phase2_proto). Requires bootstrap() to have run.
-//! Owner: the SDK bootstrap / device info / progress port.
+//!
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;

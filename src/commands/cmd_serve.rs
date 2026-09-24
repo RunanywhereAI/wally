@@ -1,5 +1,5 @@
 //! `wally serve [model]` -- OpenAI-compatible local HTTP server. Port of
-//! src/commands/cmd_serve.cpp. Owner: the run/llm/tool/serve port.
+//! src/commands/cmd_serve.cpp.
 //!
 //! Wraps the existing commons rac_server (include/rac/server/rac_server.h --
 //! same engine behind tools/runanywhere-server.cpp). Scope inherited from

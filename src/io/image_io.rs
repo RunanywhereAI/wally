@@ -1,5 +1,5 @@
 //! PNG writing and PPM reading for the image/segment commands (port of
-//! src/io/image_io.cpp). Owner: the dormant vision/text modalities port.
+//! src/io/image_io.cpp).
 //!
 //! Self-contained (no libpng / zlib dependency): emits a PNG whose IDAT is a
 //! zlib stream of *stored* (uncompressed) DEFLATE blocks, which every decoder

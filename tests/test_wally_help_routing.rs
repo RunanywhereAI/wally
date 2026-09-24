@@ -1,5 +1,4 @@
-//! Regression coverage for the "models" fix group's cross-cutting finding:
-//! `wally help <topic>` reached through a leading global flag (id 44).
+//! `wally help <topic>` reached through a leading global flag.
 //!
 //! `app::run`'s pre-parse `args[1] == "help"` shortcut only fires when "help"
 //! is literally the first token; any leading global flag (`--json`, `-q`,

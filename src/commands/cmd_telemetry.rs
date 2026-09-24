@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_telemetry.cpp. Owner: the maintenance/diagnostics port.
+//! Port of src/commands/cmd_telemetry.cpp.
 //!
 //! `wally telemetry emit|blast` — model-free control-plane telemetry.
 //!
@@ -160,7 +160,7 @@ fn uuid4() -> String {
 // Minimal field extraction from the backend's SDKTelemetryBatchResponse JSON
 // ({"success":true,"events_received":N,"events_stored":N,"events_skipped":N,
 // "storage_version":"V2"}). The CLI deliberately carries no JSON parser.
-/// C's `isspace` in the "C" locale: space, \t, \n, \v (0x0B), \f, \r. id 33:
+/// C's `isspace` in the "C" locale: space, \t, \n, \v (0x0B), \f, \r.
 /// Rust's `u8::is_ascii_whitespace()` deliberately excludes \v (vertical
 /// tab), so it is not a drop-in replacement here — a response body with a
 /// literal vertical tab between the key's `:` and its value would stop
@@ -243,8 +243,7 @@ struct TelemetryHttpContext {
 /// Accumulates one HTTP exchange's outcome into `stats`, matching C++'s
 /// `telemetry_http_callback` accounting. `success`/`events_received`/
 /// `events_stored`/`events_skipped` are read from the backend's RESPONSE body
-/// (`result.body`), never the outgoing request payload — id 32 was Rust
-/// reading the request JSON here instead.
+/// (`result.body`), never the outgoing request payload.
 fn record_http_result(stats: &mut EndpointStats, result: &net::HttpResult) {
     stats.posts += 1;
     stats.last_status = result.status;
@@ -868,10 +867,10 @@ pub fn register_telemetry(app: &mut App) {
 }
 
 #[cfg(test)]
-mod fix_models_regression_tests {
+mod tests {
     use super::*;
 
-    // id 32: success/received/stored/skipped must come from the backend's
+    // Success/received/stored/skipped must come from the backend's
     // RESPONSE body, not whatever the request happened to contain. A
     // request body that (adversarially or coincidentally) looks like a
     // failing response must not affect accounting; only `result.body` may.
@@ -905,7 +904,7 @@ mod fix_models_regression_tests {
         assert!(stats.last_error.contains("backend reported success=false"));
     }
 
-    // id 33: C's isspace() (C locale) treats vertical tab (0x0B) as
+    // C's isspace() (C locale) treats vertical tab (0x0B) as
     // whitespace; Rust's is_ascii_whitespace() does not. The skip loop must
     // still step past a literal \v between the key's ':' and its value.
     #[test]

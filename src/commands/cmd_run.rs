@@ -1,6 +1,5 @@
 //! `wally llm generate|stream`, `wally vlm generate`, and the terminal alias
-//! `wally run`. Port of src/commands/cmd_run.cpp. Owner: the run/llm/tool/serve
-//! port.
+//! `wally run`. Port of src/commands/cmd_run.cpp.
 //!
 //! Canonical SDK flow, all heavy lifting in commons:
 //!   rac_model_lifecycle_load_proto(validate_availability=true) -> auto-pulls
@@ -1261,7 +1260,7 @@ pub fn register_llm_aliases(app: &mut App) {
 }
 
 #[cfg(test)]
-mod fix_run_tests {
+mod tests {
     use super::*;
 
     #[test]

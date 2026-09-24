@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_harness.cpp. Owner: the coding-tool harness port.
+//! Port of src/commands/cmd_harness.cpp.
 
 use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};

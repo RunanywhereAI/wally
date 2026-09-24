@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_account.cpp. Owner: the account port.
+//! Port of src/commands/cmd_account.cpp.
 
 #[cfg(windows)]
 use std::process::Command;

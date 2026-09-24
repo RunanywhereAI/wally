@@ -273,10 +273,10 @@ pub fn configure_models_delete(cmd: &mut App) {
 }
 
 #[cfg(test)]
-mod fix_models_regression_tests {
+mod tests {
     use super::*;
 
-    // id 28: a clean parse (buffer status SUCCESS, decode OK) paired with a
+    // A clean parse (buffer status SUCCESS, decode OK) paired with a
     // failing proto_rc must print the stale/empty `error` C++ carries over,
     // not a freshly computed describe_result(proto_rc).
     #[test]
@@ -315,7 +315,7 @@ mod fix_models_regression_tests {
         assert_eq!(warning, None);
     }
 
-    // id 29: directory_size must follow symlinks to a regular file, matching
+    // `directory_size` must follow symlinks to a regular file, matching
     // C++'s recursive_directory_iterator + is_regular_file(ec)/file_size(ec).
     #[test]
     fn directory_size_follows_symlinked_regular_files() {

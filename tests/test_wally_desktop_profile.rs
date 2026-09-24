@@ -1,14 +1,12 @@
-//! Regression tests for the confirmed harness audit findings
-//! (/tmp/wally-rust-migration/fixes/harness.json, ids 8-12, 14). Each test
-//! fails on the pre-fix Rust behaviour and passes once Rust matches the C++
-//! reference exactly.
+//! Claude Desktop profile files: which contents count as blank, exactly as
+//! claude_profile.cpp decided it (only " \t\r\n").
 
 mod common;
 
 use common::{env_lock, EnvGuard, TempHome};
 
 // ---------------------------------------------------------------------------
-// finding 14 — blank-file detection in the profile JSON reader must only
+// Blank-file detection in the profile JSON reader must only
 // treat space/tab/CR/LF as blank, matching C++'s
 // `find_first_not_of(" \t\r\n")`.
 // ---------------------------------------------------------------------------

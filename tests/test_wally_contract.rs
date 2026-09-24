@@ -1,6 +1,6 @@
 //! Port of tests/test_wally_contract.cpp. The generated console binding is in
 //! lockstep with its pinned contract, and it round-trips the shapes the CLI
-//! actually sends and receives. Owner: the account port.
+//! actually sends and receives.
 
 use wally::account::console_contract as contract;
 

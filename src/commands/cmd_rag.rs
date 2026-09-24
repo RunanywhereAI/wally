@@ -1,7 +1,6 @@
 //! `wally rag query` / `wally rag search` — retrieval-augmented generation via
-//! the commons RAG session ABI. Port of src/commands/cmd_rag.cpp. Owner: the
-//! dormant vision/text modalities port. Not registered in the app (LLM-only
-//! release); ported completely anyway per the migration brief.
+//! the commons RAG session ABI. Port of src/commands/cmd_rag.cpp. Not
+//! registered in the app (LLM-only release), as in the C++.
 //!
 //! Single-shot flow in one process (the CLI is stateless across invocations and
 //! RAG indexes are in-memory only):
@@ -594,12 +593,12 @@ pub fn register_rag(app: &mut App) {
 }
 
 #[cfg(all(test, wally_has_rag))]
-mod fix_vision_tests {
+mod tests {
     use super::read_text_file;
 
     #[test]
     fn read_text_file_accepts_non_utf8_bytes() {
-        // finding 41: a lone 0xFF is not valid UTF-8; cmd_rag.cpp's binary
+        // A lone 0xFF is not valid UTF-8; cmd_rag.cpp's binary
         // read accepts it verbatim, so read_text_file must not reject an
         // openable-but-non-UTF-8 file as "cannot open".
         let dir = std::env::temp_dir().join(format!(

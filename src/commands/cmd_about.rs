@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_about.cpp. Owner: the maintenance/diagnostics port.
+//! Port of src/commands/cmd_about.cpp.
 //!
 //! `wally about` — a styled, richer environment panel: product, system,
 //! runtime backends, paths, and the signed-in account. See `wally info` for

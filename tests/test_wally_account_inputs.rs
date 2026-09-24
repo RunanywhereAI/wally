@@ -1,8 +1,7 @@
-//! Regression tests for the account-port fixes in
-//! /tmp/wally-rust-migration/fixes/account.json (findings 2 and 3). Findings
-//! 4-7 are covered either by inline `#[cfg(test)]` unit tests next to the
-//! fixed code (credentials.rs, cmd_account.rs) or are not hermetically
-//! testable (see the task report).
+//! Account inputs the C++ handled in a particular way: an out-of-range
+//! Retry-After header, and a credentials file whose fields have the wrong JSON
+//! type. The temp-file naming and the browser opener are covered by unit tests
+//! next to that code (credentials.rs, cmd_account.rs).
 
 #[path = "common/mod.rs"]
 mod common;

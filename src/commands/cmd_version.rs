@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_version.cpp. Owner: the maintenance/diagnostics port.
+//! Port of src/commands/cmd_version.cpp.
 //!
 //! `wally version` — CLI + commons versions. No bootstrap needed.
 

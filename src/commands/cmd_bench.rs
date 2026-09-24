@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_bench.cpp. Owner: the maintenance/diagnostics port.
+//! Port of src/commands/cmd_bench.cpp.
 //!
 //! `wally bench [model]` — auto-benchmark installed models, like the Android
 //! app's benchmark screen.
@@ -940,7 +940,7 @@ pub fn register_bench(app: &mut App) {
 mod ljust_bytes_tests {
     use super::ljust_bytes;
 
-    // id 31: C's "%-N.Ns" (and Rust's old `format!("{:<N.N}", ...)`) differ
+    // C's "%-N.Ns" (and Rust's old `format!("{:<N.N}", ...)`) differ
     // on multi-byte UTF-8 — C counts/cuts bytes, Rust's std::fmt counts/cuts
     // chars. ljust_bytes must match the C (byte) semantics.
     #[test]

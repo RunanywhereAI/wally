@@ -1,5 +1,5 @@
 //! The stored console credential, console/browser origin rules and profile
-//! paths (port of src/account/credentials.cpp). Owner: the account port.
+//! paths (port of src/account/credentials.cpp).
 
 use crate::util::getenv;
 

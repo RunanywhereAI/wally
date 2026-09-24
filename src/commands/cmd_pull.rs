@@ -443,7 +443,7 @@ pub fn configure_models_download(cmd: &mut App) {
 mod download_start_result_tests {
     use super::*;
 
-    // Regression for id 27: when rac_download_start_proto returns a
+    // When rac_download_start_proto returns a
     // non-SUCCESS rc while the out-buffer's own envelope also decodes
     // cleanly with a specific error_message, C++ always shows the generic
     // describe_result(rc) text, never the buffer's own message.

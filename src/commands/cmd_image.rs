@@ -1,7 +1,6 @@
 //! `wally image generate` — text-to-image via NeuRT (Core ML diffusion). Port
-//! of src/commands/cmd_image.cpp. Owner: the dormant vision/text modalities
-//! port. Not registered in the app (LLM-only release); ported completely
-//! anyway per the migration brief.
+//! of src/commands/cmd_image.cpp. Not registered in the app (LLM-only
+//! release), as in the C++.
 //!
 //! Canonical SDK flow, all heavy lifting in commons (mirrors cmd_run/cmd_embed):
 //!   rac_model_lifecycle_load_proto(category=IMAGE_GENERATION, validate=true)

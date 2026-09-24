@@ -7,7 +7,7 @@
 //! is loaded, energy-based otherwise) and derives segments from
 //! is_speech_active transitions.
 //!
-//! Port of src/commands/cmd_vad.cpp. Owner: the dormant audio modalities port.
+//! Port of src/commands/cmd_vad.cpp.
 
 use std::ffi::CString;
 

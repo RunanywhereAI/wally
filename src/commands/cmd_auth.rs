@@ -1,5 +1,5 @@
 //! `wally auth login` -- real control-plane handshake (port of
-//! src/commands/cmd_auth.cpp). Owner: the account port.
+//! src/commands/cmd_auth.cpp).
 //!
 //! Runs the canonical staging/production auth sequence against the configured
 //! backend (--base-url/--api-key/--environment or their RUNANYWHERE_* env

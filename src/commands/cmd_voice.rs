@@ -1,7 +1,7 @@
 //! `wally voice --input a.wav` — one-shot voice turn (STT → LLM → TTS) via
 //! the commons voice agent, mirroring tests/test_voice_agent.cpp.
 //!
-//! Port of src/commands/cmd_voice.cpp. Owner: the dormant audio modalities port.
+//! Port of src/commands/cmd_voice.cpp.
 
 use std::ffi::{c_void, CString};
 

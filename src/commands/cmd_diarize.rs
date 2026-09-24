@@ -12,7 +12,7 @@
 //! the .onnx inside a directory); otherwise it is treated as a catalog id and
 //! pulled with the shared ensure-downloaded flow.
 //!
-//! Port of src/commands/cmd_diarize.cpp. Owner: the dormant audio modalities port.
+//! Port of src/commands/cmd_diarize.cpp.
 
 use std::ffi::{c_char, CStr, CString};
 

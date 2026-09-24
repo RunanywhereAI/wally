@@ -1,5 +1,5 @@
 //! Model reference resolution for pull/run/show/rm arguments (port of
-//! src/catalog/model_ref.cpp). Owner: the catalog port.
+//! src/catalog/model_ref.cpp).
 //!
 //! Accepted forms, resolved in order:
 //!   1. catalog id            qwen3-0.6b
@@ -432,7 +432,7 @@ pub fn resolve(
 }
 
 #[cfg(test)]
-mod fix_run_tests {
+mod tests {
     use super::*;
 
     /// A directory whose ONLY QHexRT signal is the `_HNPU` name suffix (no

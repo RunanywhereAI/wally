@@ -5,7 +5,7 @@
 //! `stt` namespace and `transcribe` is a fallthrough alias, so both spellings
 //! reach one callback.
 //!
-//! Port of src/commands/cmd_stt.cpp. Owner: the dormant audio modalities port.
+//! Port of src/commands/cmd_stt.cpp.
 
 use std::ffi::{c_char, c_void, CStr, CString};
 

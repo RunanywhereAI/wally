@@ -1,5 +1,4 @@
 //! WAV read/write for the audio modality commands (port of src/io/wav_io.cpp).
-//! Owner: the dormant audio modalities port.
 //!
 //! PCM conversion, linear resampling and RIFF/WAV container synthesis live in
 //! commons (`rac_audio_*`); this module only does path-based read/write plus

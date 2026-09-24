@@ -3,7 +3,7 @@
 //! commands grouped by intent with namespaces shown as full paths
 //! (`models pull`), and a verbatim `Examples:` footer. On a terminal, headings
 //! are bold and anything typeable is cyan; anywhere else the text is plain and
-//! byte-identical. Owner: the CLI port.
+//! byte-identical.
 //!
 //! This is a from-scratch port, not just of `cli_formatter.cpp` but of every
 //! piece of CLI11's own `Formatter`/`FormatterBase` it calls into (wally never

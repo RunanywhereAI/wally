@@ -1,7 +1,6 @@
 //! `wally embed [input]` — text embeddings via the commons lifecycle path.
-//! Port of src/commands/cmd_embed.cpp. Owner: the dormant vision/text
-//! modalities port. Not registered in the app (LLM-only release); ported
-//! completely anyway per the migration brief.
+//! Port of src/commands/cmd_embed.cpp. Not registered in the app (LLM-only
+//! release), as in the C++.
 
 use crate::bootstrap::{self, GlobalOptions};
 use crate::catalog::model_ref;

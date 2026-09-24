@@ -1,4 +1,4 @@
-//! Port of src/commands/cmd_maintenance.cpp. Owner: the maintenance/diagnostics port.
+//! Port of src/commands/cmd_maintenance.cpp.
 //!
 //! `wally help` (a plain-word mirror of `--help`) and `wally uninstall` (remove
 //! wally, its on-device models, and its config -- never the coding tools a
@@ -123,10 +123,10 @@ fn models_directory() -> String {
 
 // Best-effort recursive size, directory symlinks not followed while walking
 // (avoids a symlink cycle; the C++ recursive_directory_iterator default has
-// the same effect for directory symlinks). id 34: C++'s
-// is_regular_file(ec)/file_size(ec) call status(), which DOES follow a
-// symlink to a regular file, so a symlinked file's target size counts here
-// too — matches the same fix already applied for ids 26/29.
+// the same effect for directory symlinks). C++'s is_regular_file(ec) /
+// file_size(ec) call status(), which DOES follow a symlink to a regular file,
+// so a symlinked file's target size counts here too — as in `models state`
+// and `rm`.
 fn dir_size(dir: &Path) -> u64 {
     let mut total = 0u64;
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -174,7 +174,7 @@ fn human_size(target: &Path) -> String {
     format!("{value:.1} {}", units[unit])
 }
 
-/// id 35: strips the "(os error N)" suffix Rust's `io::Error` Display always
+/// Strips the "(os error N)" suffix Rust's `io::Error` Display always
 /// appends after the OS message for an OS-sourced error, so the printed text
 /// matches C++'s `std::error_code::message()`, which is the OS message alone
 /// (e.g. "Permission denied"), with no error-number suffix. Only a trailing
@@ -345,7 +345,7 @@ pub fn run_uninstall(yes: bool) -> i32 {
 /// The Callback type has no access to the App tree at call time, and this
 /// callback is bound at *registration* time -- before bench/backends/
 /// telemetry (and everything registered after `register_help`) exist. A
-/// plain clone of `app` here would miss them (id 44). Instead this returns a
+/// plain clone of `app` here would miss them. Instead this returns a
 /// handle `configure_app` fills with a clone of the COMPLETE tree after the
 /// last `register_*` call, so topic lookups made through the handle at call
 /// time see every subcommand.
@@ -394,10 +394,10 @@ pub fn register_uninstall(app: &mut App) {
 }
 
 #[cfg(test)]
-mod fix_models_regression_tests {
+mod tests {
     use super::*;
 
-    // id 34: dir_size (uninstall's pre-delete size preview) must follow a
+    // Dir_size (uninstall's pre-delete size preview) must follow a
     // symlink to a regular file, matching C++'s is_regular_file(ec)/
     // file_size(ec) (which call status(), following symlinks).
     #[test]
@@ -414,7 +414,7 @@ mod fix_models_regression_tests {
         assert_eq!(dir_size(&scan_dir), 23);
     }
 
-    // id 35: the printed message must be the bare OS message, with no
+    // The printed message must be the bare OS message, with no
     // "(os error N)" suffix (that suffix is Rust io::Error::Display-only and
     // has no C++ equivalent — std::error_code::message() never appends it).
     #[test]
@@ -431,7 +431,7 @@ mod fix_models_regression_tests {
         assert_eq!(os_error_message(&error), "custom failure text");
     }
 
-    // id 44: `wally help <topic>` reached through a leading global flag runs
+    // `wally help <topic>` reached through a leading global flag runs
     // the `help` subcommand's own registered callback, not app::run's
     // pre-parse shortcut. help_render_path is what that callback uses to
     // pick which subcommand's help to render.
@@ -462,8 +462,8 @@ mod fix_models_regression_tests {
         assert_eq!(help_render_path(&app, "pull"), vec!["help".to_string()]);
     }
 
-    // End-to-end coverage of the staleness half of id 44 (a snapshot cloned
-    // at register_help's registration time, before bench/backends/telemetry
-    // exist) lives in tests/test_wally_fix_models.rs, which drives the real
+    // End-to-end coverage of the stale-snapshot case (a tree cloned at
+    // register_help's registration time, before bench/backends/telemetry
+    // exist) lives in tests/test_wally_help_routing.rs, which drives the real
     // built binary through app::run's non-shortcut parse path.
 }

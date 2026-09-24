@@ -1,5 +1,5 @@
 //! Port of the `diarize_*` cases in explore-main/tests/test_wally_unit.cpp
-//! (diarize command coverage). Owner: the dormant audio modalities port.
+//! (diarize command coverage).
 //!
 //! Every case below is compiled in but `#[ignore]`d, mirroring the C++
 //! `#if !WALLY_LLM_ONLY_CUT` guard around the whole block there: `wally diarize`

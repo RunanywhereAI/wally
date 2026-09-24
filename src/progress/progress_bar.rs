@@ -1,6 +1,5 @@
 //! Renders runanywhere.v1.DownloadProgress updates on stderr (port of
-//! src/progress/progress_bar.cpp). Owner: the SDK bootstrap / device info /
-//! progress port.
+//! src/progress/progress_bar.cpp).
 //!
 //! TTY: single re-drawn line — stage, bar, bytes, speed, ETA.
 //! Non-TTY / --no-progress: one plain line per 10% step (and per stage change)

@@ -1,6 +1,5 @@
 //! The `open` argv that starts a macOS app bundle (Claude Desktop) with the shim
-//! variables set (C++ editor_env.h; defined in cmd_editors.cpp). Owner: the
-//! coding-tool harness port.
+//! variables set (C++ editor_env.h; defined in cmd_editors.cpp).
 //!
 //! `open --env` is the only way in: launchd starts a bundle from the reader's
 //! login session, so nothing the parent process exports reaches it. Anything the

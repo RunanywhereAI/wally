@@ -1,5 +1,5 @@
 //! Shared wally app wiring for the binary and in-process tests (port of
-//! src/app.cpp). Owner: the CLI port.
+//! src/app.cpp).
 
 use crate::bootstrap::{self, GlobalOptions};
 use crate::cli::{App, Outcome};
@@ -81,7 +81,7 @@ pub fn configure_app(app: &mut App) {
     // register_help's callback is bound now, before bench/backends/telemetry
     // (and anything else below) exist; `help_tree` is filled with the
     // COMPLETE tree at the end of this function so the callback still sees
-    // them at call time (id 44).
+    // them at call time.
     let help_tree = crate::commands::register_help(app);
 
     crate::commands::register_bench(app); // hidden below

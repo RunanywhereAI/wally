@@ -109,7 +109,7 @@ pub fn serialize<M: Message>(message: &M) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod fix_run_tests {
+mod tests {
     use super::*;
     use std::ffi::CString;
 

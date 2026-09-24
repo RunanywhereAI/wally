@@ -6,7 +6,7 @@
 //! The sherpa TTS engine returns float PCM at the voice's native sample rate;
 //! converted to int16 WAV.
 //!
-//! Port of src/commands/cmd_tts.cpp. Owner: the dormant audio modalities port.
+//! Port of src/commands/cmd_tts.cpp.
 
 use std::ffi::CString;
 use std::time::Instant;

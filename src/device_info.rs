@@ -1,5 +1,5 @@
 //! Desktop device facts and device-registration callbacks (port of
-//! src/device_info.cpp). Owner: the SDK bootstrap / device info / progress port.
+//! src/device_info.cpp).
 
 use std::ffi::CString;
 use std::sync::{Mutex, OnceLock};
