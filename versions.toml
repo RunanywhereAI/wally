@@ -19,7 +19,7 @@ idl_protoc_version = "35.1"
 kit_sha256_macos_arm64 = "8e45a36b7d5dc12d76c29659b158d95d72cf171649d0ad961637cdfee09219a5"
 kit_sha256_windows_x64 = "250d974c08f791ce6dd066e4115124b4b88955a959d68b80b89ff6d531998acb"
 kit_sha256_windows_arm64 = "d0a6a2a241052278b2689a960ec7fcb9c066e29b9d9e5a8206d87e7946dce956"
-kit_sha256_linux_x64 = "476c6bc4297ef3011fe7a676ebeaed9f0ed63f4f00457cc64d2fa30b67c860ec"
+kit_sha256_linux_x64 = "bfa4a2bfde01c6ea352ec6b04d1b18832eb9ff03015c34b040216651e7fabf32"
 
 [swift]
 # The Apple MLX host's Swift SDK: sdk_package_version pins swift/Package.swift,
