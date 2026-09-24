@@ -42,6 +42,23 @@ elseif(UNIX)
     set_target_properties(wally_link_probe PROPERTIES BUILD_RPATH "${RunAnywhere_THIRD_PARTY_DIR}")
 endif()
 
+# The kit's librac_server.a embeds cpp-httplib, compiled with whatever
+# compression and platform networking its build machine offered (brotli, zstd,
+# and on Apple CFNetwork/Security), but its imported target does not declare
+# them. The C++ build linked them transitively through its own FetchContent'd
+# httplib target, which looked for each "if available". Linking that same
+# target (same tag, same options) into the probe reproduces that closure on
+# every platform instead of guessing it per OS. httplib is header-only; nothing
+# of it is compiled here.
+include(FetchContent)
+set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(cpp_httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG v0.46.1
+    GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(cpp_httplib)
+target_link_libraries(wally_link_probe PRIVATE httplib::httplib)
+
 # Ask for the codemodel reply; CMake writes it at the end of generation.
 # cmake_file_api() (3.27+) asks from inside this run. On older CMake the query
 # file only takes effect from the next configure, and build.rs says so.
