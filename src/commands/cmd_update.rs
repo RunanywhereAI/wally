@@ -12,6 +12,7 @@ use crate::io::output as out;
 
 // The same script the install line in the README pipes to a shell. Kept as one
 // constant so the update path and the documented install path cannot drift.
+#[cfg(not(windows))]
 const INSTALL_URL: &str = "https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.sh";
 
 pub fn register_update(app: &mut App) {

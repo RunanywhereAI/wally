@@ -628,12 +628,11 @@ mod recursive_file_size_tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn broken_symlink_contributes_zero() {
         let dir = tempfile::tempdir().expect("tempdir");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("dangling"))
             .expect("symlink");
-        #[cfg(unix)]
         assert_eq!(recursive_file_size(dir.path()), 0);
     }
 }

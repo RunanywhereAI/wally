@@ -328,7 +328,7 @@ pub fn launch_open_code_cloud(model: &str, arguments: &[String]) -> i32 {
 
 #[cfg(all(test, unix))]
 mod tests {
-    //! Finding 9: `ScopedOpenCodeConfig` must capture a pre-existing
+    //! `ScopedOpenCodeConfig` must capture a pre-existing
     //! `OPENCODE_CONFIG_CONTENT` with `var_os` (raw bytes, matching C++'s
     //! `std::getenv`), not `var` (which drops a non-UTF-8 value entirely).
     use std::ffi::OsString;

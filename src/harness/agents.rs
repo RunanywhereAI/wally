@@ -862,7 +862,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Finding 12: `setenv(name, value.c_str(), 1)` in C++ truncates silently
+    /// `setenv(name, value.c_str(), 1)` in C++ truncates silently
     /// at the first embedded NUL byte rather than failing; `set_environment`
     /// must do the same instead of refusing to set the variable at all.
     #[test]
@@ -891,7 +891,7 @@ mod tests {
         }
     }
 
-    /// Finding 10: `OpenClawStateDirectory` reads `std::getenv` (raw bytes,
+    /// `OpenClawStateDirectory` reads `std::getenv` (raw bytes,
     /// encoding-agnostic) in C++; `open_claw_state_directory` must use
     /// `var_os` so a non-UTF-8 HOME still resolves instead of silently
     /// looking unset.

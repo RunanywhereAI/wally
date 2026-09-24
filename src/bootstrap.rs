@@ -267,6 +267,7 @@ fn detect_locale() -> String {
     normalize_locale(&first_env_value(&["LC_ALL", "LC_MESSAGES", "LANG"]))
 }
 
+#[cfg(not(windows))]
 fn strip_timezone_prefix(path: &str) -> String {
     const PREFIXES: [&str; 3] = [
         "/usr/share/zoneinfo/",

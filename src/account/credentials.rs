@@ -357,7 +357,7 @@ fn ensure_secure_directory(directory: &str) -> Result<(), String> {
 mod dpapi {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPTOAPI_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
     /// Zero `bytes` in place without the compiler eliding the writes -- the
@@ -375,11 +375,11 @@ mod dpapi {
             return Err("credential document is too large".to_string());
         }
         let description: Vec<u16> = "RunAnywhere Wally cloud session\0".encode_utf16().collect();
-        let mut input = CRYPTOAPI_BLOB {
+        let input = CRYPT_INTEGER_BLOB {
             cbData: plaintext.len() as u32,
             pbData: plaintext.as_ptr() as *mut u8,
         };
-        let mut output = CRYPTOAPI_BLOB {
+        let mut output = CRYPT_INTEGER_BLOB {
             cbData: 0,
             pbData: std::ptr::null_mut(),
         };
@@ -388,7 +388,7 @@ mod dpapi {
         // we free with LocalFree on success.
         let ok = unsafe {
             CryptProtectData(
-                &mut input,
+                &input,
                 description.as_ptr(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -406,7 +406,7 @@ mod dpapi {
             unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
         // SAFETY: `output.pbData` was allocated by CryptProtectData with
         // LocalAlloc and is freed exactly once, here.
-        unsafe { LocalFree(output.pbData as isize) };
+        unsafe { LocalFree(output.pbData as *mut core::ffi::c_void) };
         Ok(bytes)
     }
 
@@ -414,11 +414,11 @@ mod dpapi {
         if protected_bytes.len() > u32::MAX as usize {
             return Err("credential document is too large".to_string());
         }
-        let mut input = CRYPTOAPI_BLOB {
+        let input = CRYPT_INTEGER_BLOB {
             cbData: protected_bytes.len() as u32,
             pbData: protected_bytes.as_ptr() as *mut u8,
         };
-        let mut output = CRYPTOAPI_BLOB {
+        let mut output = CRYPT_INTEGER_BLOB {
             cbData: 0,
             pbData: std::ptr::null_mut(),
         };
@@ -426,7 +426,7 @@ mod dpapi {
         // call; `output` is a valid out-parameter.
         let ok = unsafe {
             CryptUnprotectData(
-                &mut input,
+                &input,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
@@ -448,7 +448,7 @@ mod dpapi {
         // SAFETY: `output.pbData` was allocated by CryptUnprotectData with
         // LocalAlloc and is freed exactly once, here, after it was copied out
         // and zeroed above.
-        unsafe { LocalFree(output.pbData as isize) };
+        unsafe { LocalFree(output.pbData as *mut core::ffi::c_void) };
         if bytes.is_empty() {
             bytes.clear();
         }
@@ -477,8 +477,8 @@ fn write_document(path: &str, document: &str) -> Result<(), String> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileA, DeleteFileA, FlushFileBuffers, MoveFileExA, WriteFile, FILE_ATTRIBUTE_HIDDEN,
-        FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_GENERIC_WRITE, MOVE_FILE_REPLACE_EXISTING,
-        MOVE_FILE_WRITE_THROUGH,
+        FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_GENERIC_WRITE, MOVEFILE_REPLACE_EXISTING,
+        MOVEFILE_WRITE_THROUGH,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 
@@ -499,12 +499,12 @@ fn write_document(path: &str, document: &str) -> Result<(), String> {
     let handle = unsafe {
         CreateFileA(
             temporary_c.as_ptr() as *const u8,
-            FILE_GENERIC_WRITE.0,
+            FILE_GENERIC_WRITE,
             0,
             std::ptr::null_mut(),
             windows_sys::Win32::Storage::FileSystem::CREATE_NEW,
             FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
-            0,
+            std::ptr::null_mut(),
         )
     };
     if handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
@@ -534,12 +534,12 @@ fn write_document(path: &str, document: &str) -> Result<(), String> {
         return Err("could not store the protected cloud session".to_string());
     };
     // SAFETY: both C strings are valid and outlive the call.
-    let moved = wrote != false
+    let moved = wrote
         && unsafe {
             MoveFileExA(
                 temporary_c.as_ptr() as *const u8,
                 path_c.as_ptr() as *const u8,
-                MOVE_FILE_REPLACE_EXISTING | MOVE_FILE_WRITE_THROUGH,
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
             ) != 0
         };
     if !moved {

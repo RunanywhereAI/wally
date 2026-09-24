@@ -513,14 +513,14 @@ pub fn quote_windows_arg(arg: &str) -> String {
             backslashes += 1;
         }
         if i == chars.len() {
-            quoted.extend(std::iter::repeat('\\').take(backslashes * 2));
+            quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
             break;
         }
         if chars[i] == '"' {
-            quoted.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+            quoted.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
             quoted.push('"');
         } else {
-            quoted.extend(std::iter::repeat('\\').take(backslashes));
+            quoted.extend(std::iter::repeat_n('\\', backslashes));
             quoted.push(chars[i]);
         }
         i += 1;
@@ -763,7 +763,7 @@ fn spawn_command_line(tool: &str, command_line: &str) -> i32 {
     let mut wide: Vec<u16> = command_line.encode_utf16().collect();
     wide.push(0);
 
-    let mut startup = STARTUPINFOW {
+    let startup = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
         ..Default::default()
     };

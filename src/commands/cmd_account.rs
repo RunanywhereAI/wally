@@ -82,7 +82,7 @@ fn hostname() -> String {
             return "unknown".to_string();
         }
         let mut buffer = [0u8; 256];
-        let rc = gethostname(buffer.as_mut_ptr() as *mut i8, buffer.len() as i32 - 1);
+        let rc = gethostname(buffer.as_mut_ptr(), buffer.len() as i32 - 1);
         if rc == 0 {
             let end = buffer.iter().position(|&b| b == 0).unwrap_or(0);
             if end > 0 {

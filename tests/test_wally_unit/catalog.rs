@@ -69,6 +69,7 @@ fn init_sdk_once() {
     });
 }
 
+#[cfg(target_os = "macos")]
 fn remove_registered_model(id: &str) {
     let Ok(id_c) = CString::new(id) else {
         return;
@@ -82,10 +83,12 @@ fn remove_registered_model(id: &str) {
 
 /// RAII cleanup for models registered by a test, mirroring the C++
 /// test-local `RegisteredModelCleanup`.
+#[cfg(target_os = "macos")]
 struct RegisteredModelCleanup {
     ids: Vec<&'static str>,
 }
 
+#[cfg(target_os = "macos")]
 impl Drop for RegisteredModelCleanup {
     fn drop(&mut self) {
         for id in &self.ids {
@@ -112,6 +115,7 @@ fn get_registered_model(id: &str) -> Result<v1::ModelInfo, String> {
     parse_proto_buffer(found)
 }
 
+#[cfg(target_os = "macos")]
 fn multi_file_count(model: &v1::ModelInfo) -> Option<usize> {
     match &model.artifact {
         Some(v1::model_info::Artifact::MultiFile(multi)) => Some(multi.files.len()),

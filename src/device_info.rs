@@ -812,14 +812,15 @@ mod platform {
     use super::DeviceInfoState;
     use std::ffi::CStr;
 
-    use windows_sys::Win32::Foundation::MAX_COMPUTERNAME_LENGTH;
+    // winbase.h; windows-sys does not export it.
+    const MAX_COMPUTERNAME_LENGTH: u32 = 15;
     use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
     use windows_sys::Win32::System::Registry::{RegGetValueA, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
     use windows_sys::Win32::System::SystemInformation::{
-        GetComputerNameA, GetNativeSystemInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX,
-        PROCESSOR_ARCHITECTURE_AMD64, PROCESSOR_ARCHITECTURE_ARM64, PROCESSOR_ARCHITECTURE_INTEL,
-        SYSTEM_INFO,
+        GetNativeSystemInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX, PROCESSOR_ARCHITECTURE_AMD64,
+        PROCESSOR_ARCHITECTURE_ARM64, PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_INFO,
     };
+    use windows_sys::Win32::System::WindowsProgramming::GetComputerNameA;
 
     pub(super) fn collect_device_info(info: &mut DeviceInfoState) {
         info.platform = super::cstring_from("windows");

@@ -331,6 +331,8 @@ fn restore(editor: &Editor) -> i32 {
 
 fn run(editor: &Editor, model: &str, args: &[String], verbose: bool) -> i32 {
     let is_bundle = !editor.bundle.is_empty();
+    // Only macOS fills this in; elsewhere a bundle editor is an error.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut bundle = String::new();
     if is_bundle {
         #[cfg(target_os = "macos")]

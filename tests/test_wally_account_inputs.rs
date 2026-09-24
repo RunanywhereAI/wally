@@ -8,10 +8,13 @@ mod common;
 
 use std::collections::BTreeMap;
 
+#[cfg(not(windows))]
 use common::{env_lock, EnvGuard, TempHome};
-use wally::account::{self as account, HttpResponse};
+use wally::account::HttpResponse;
+#[cfg(not(windows))]
+use wally::account::{self as account};
 
-// Finding 2: a Retry-After header whose digits overflow a 32-bit int (e.g. an
+// A Retry-After header whose digits overflow a 32-bit int (e.g. an
 // accidental millisecond-epoch value) must read as "no valid Retry-After"
 // (-1), the same as C++'s `std::from_chars` into a 32-bit `int` reports
 // `result_out_of_range`. Silently clamping it to a day, as a 64-bit parse
@@ -56,7 +59,7 @@ fn retry_after_ordinary_value_passes_through() {
     assert_eq!(response.retry_after_seconds(), 5);
 }
 
-// Finding 3: nlohmann::json's `object.value(key, default)` calls
+// Nlohmann::json's `object.value(key, default)` calls
 // `get<ValueType>()` when `key` is present, and that throws on a type
 // mismatch (e.g. `access_token` holding a JSON number instead of a string) --
 // caught by C++'s `catch (const Json::exception&)`, failing the whole load
