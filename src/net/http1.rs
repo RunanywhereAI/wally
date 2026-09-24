@@ -412,6 +412,33 @@ impl Client {
         })
     }
 
+    /// cpp-httplib's `Client(scheme_host_port)` constructor, when
+    /// `detail::parse_url` cannot make sense of the string (or it names no
+    /// host), does not fail: it falls back to `ClientImpl(scheme_host_port,
+    /// 80, ...)`, i.e. the entire raw, still-malformed string becomes the
+    /// literal (non-TLS, port 80) hostname every request is attempted
+    /// against. `Client::new` above returns `Err` in that situation instead
+    /// -- this is the same fallback `parse_origin` failing takes, so a
+    /// misconfigured origin fails (or misbehaves) using that same
+    /// configured value, the way C++'s does, rather than a hardcoded
+    /// stand-in the operator never set.
+    pub(crate) fn with_literal_host(
+        raw_origin: &str,
+        connect_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Self {
+        Client {
+            https: false,
+            host: raw_origin.to_string(),
+            port: 80,
+            connect_timeout,
+            read_timeout,
+            conn: None,
+            active: Arc::new(Mutex::new(None)),
+            bearer: None,
+        }
+    }
+
     pub fn stop_handle(&self) -> StopHandle {
         StopHandle(self.active.clone())
     }
@@ -1315,6 +1342,28 @@ mod tests {
 
         let unreachable = io::Error::other("network unreachable");
         assert_eq!(classify_connect_error(&unreachable), Error::Connection);
+    }
+
+    // cpp-httplib's Client falls back to using the whole raw, unparseable
+    // origin string as a literal (non-TLS, port 80) hostname rather than
+    // failing or substituting a value the operator never configured -- so
+    // the Host header (and every connect attempt) must still name that
+    // same misconfigured value, byte for byte.
+    #[test]
+    fn with_literal_host_keeps_the_raw_unparseable_origin_as_the_host() {
+        assert!(
+            Client::new("not a url at all", short(), short()).is_err(),
+            "this string should not have parsed as an origin in the first place"
+        );
+        let client = Client::with_literal_host("not a url at all", short(), short());
+        assert_eq!(client.host_header(), "not a url at all");
+        assert!(!client.https);
+        assert_eq!(client.port, 80);
+
+        // Also covers the empty-host case ("http://") that reaches build()
+        // in practice: split_base_url only requires the scheme prefix.
+        let empty_host = Client::with_literal_host("http://", short(), short());
+        assert_eq!(empty_host.host_header(), "http://");
     }
 
     #[test]
