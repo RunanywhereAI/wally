@@ -1,5 +1,5 @@
 //! Exclusive client leases to the hosted upstream (port of
-//! src/net/upstream_pool.cpp). Owner: the upstream / shim port.
+//! src/net/upstream_pool.cpp).
 //!
 //! A fresh TCP + TLS handshake to a hosted endpoint measures around 541ms;
 //! paying that on every request would dominate latency. `httplib::Client`

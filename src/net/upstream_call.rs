@@ -1,5 +1,5 @@
 //! A watched upstream POST that notices the editor leaving and cancels by name
-//! (port of src/net/upstream_call.cpp). Owner: the upstream / shim port.
+//! (port of src/net/upstream_call.cpp).
 //!
 //! The translators sit between an editor and the model endpoint. When the
 //! editor abandons a stream -- Esc in Claude Code, the app quitting -- the

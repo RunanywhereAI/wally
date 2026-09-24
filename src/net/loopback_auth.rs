@@ -1,5 +1,5 @@
 //! The per-session secret a loopback proxy hands the tool it launched (port of
-//! src/net/loopback_auth.cpp). Owner: the upstream / shim port.
+//! src/net/loopback_auth.cpp).
 //!
 //! The coding-harness proxies bind 127.0.0.1 and forward to the hosted API on
 //! the signed-in user's credit. The port is reachable by any other process

@@ -1,7 +1,6 @@
 //! A minimal blocking HTTP/1.1 client and server, replacing cpp-httplib.
 //! Thread-per-connection, one TCP stream per client lease, no async runtime
 //! -- mirrors the C++ (httplib-backed) concurrency model one to one.
-//! Owner: the upstream / shim port.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};

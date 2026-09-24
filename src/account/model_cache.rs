@@ -1,7 +1,6 @@
 //! On-disk cache of the hosted model ids the console advertises (port of
 //! src/account/model_cache.cpp). Read paths never touch the network; the
 //! refresh is best-effort. Validation fails open. Lives in the profile dir.
-//!
 
 use std::io::Write;
 
