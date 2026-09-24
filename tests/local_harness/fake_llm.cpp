@@ -32,6 +32,7 @@ rac_result_t Create(const char* model, const char* config, void** out) {
     if (config != nullptr) {
         report["config"] = Json::parse(config);
         session->context = std::max(report["config"].value("context_length", 16384), 16384);
+        report["config"]["context_length"] = session->context;
     }
     report["created"] = report["created"].get<int>() + 1;
     report["model_path"] = session->path;
