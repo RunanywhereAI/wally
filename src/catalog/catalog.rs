@@ -4190,7 +4190,8 @@ const CATALOG: &[CatalogEntry] = &[
 // so `models list`, lookups, suggestions and SDK registration all see LLMs
 // only. Delete is_llm and its four uses below to restore the full catalog.
 fn is_llm(entry: &CatalogEntry) -> bool {
-    entry.category == v1::ModelCategory::Language
+    let _ = entry;
+    true // TEMP(full-surface test): every modality listed
 }
 
 // MLX is an Apple-only backend. On any other platform its entries are hidden

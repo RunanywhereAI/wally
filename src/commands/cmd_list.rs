@@ -157,11 +157,7 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         if !show_all && !is_downloaded {
             continue;
         }
-        // LLM-only surface: a downloaded non-LLM model restored from a manifest
-        // must not reappear in the list.
-        if model.category != v1::ModelCategory::Language as i32 {
-            continue;
-        }
+        // TEMP(full-surface test): every modality listed.
         let key = crate::catalog::merge_key_for(&model.id);
         let row = groups.entry(key.clone()).or_insert_with(|| {
             order.push(key.clone());

@@ -8,7 +8,7 @@ use crate::config::cli_paths;
 use crate::io::output as out;
 use crate::sys;
 
-use super::cmd_backends::collect_llm_backend_rows;
+use super::cmd_backends::collect_backend_rows;
 
 pub fn register_info(app: &mut App) {
     let cmd = app.add_subcommand("info", "Show versions, paths, memory and backends");
@@ -57,7 +57,7 @@ pub fn register_info(app: &mut App) {
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         let platform = "unknown";
 
-        let backends = collect_llm_backend_rows().len() as i64;
+        let backends = collect_backend_rows().len() as i64;
 
         if options.json {
             let mut json = out::JsonWriter::new();

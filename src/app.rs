@@ -45,21 +45,20 @@ pub fn configure_app(app: &mut App) {
     crate::commands::register_llm_aliases(app); // `run`
     crate::commands::register_llm(app); // `llm` (must precede register_tool)
     crate::commands::register_tool(app); // attaches to `llm`
-                                         // TEMP(llm-only cut): every non-LLM modality is hidden from --help and
-                                         // from execution for this release; matches app.cpp's own commented-out
-                                         // block. Re-enable the full surface by uncommenting as a whole.
-                                         // crate::commands::register_vlm(app);
-                                         // crate::commands::register_stt(app);
-                                         // crate::commands::register_tts(app);
-                                         // crate::commands::register_vad(app);
-                                         // crate::commands::register_embed(app);
-                                         // crate::commands::register_rerank(app);
-                                         // crate::commands::register_image(app);
-                                         // crate::commands::register_diarize(app);
-                                         // crate::commands::register_segment(app);
-                                         // crate::commands::register_voice(app);
-                                         // crate::commands::register_rag(app);
-                                         // crate::commands::register_lora(app);
+                                         // TEMP(full-surface test): every modality registered for end-to-end
+                                         // testing; the LLM-only release comments this block out again.
+    crate::commands::register_vlm(app);
+    crate::commands::register_stt(app);
+    crate::commands::register_tts(app);
+    crate::commands::register_vad(app);
+    crate::commands::register_embed(app);
+    crate::commands::register_rerank(app);
+    crate::commands::register_image(app);
+    crate::commands::register_diarize(app);
+    crate::commands::register_segment(app);
+    crate::commands::register_voice(app);
+    crate::commands::register_rag(app);
+    crate::commands::register_lora(app);
     crate::commands::register_models(app);
     crate::commands::register_serve(app);
 
