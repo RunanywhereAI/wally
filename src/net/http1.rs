@@ -834,6 +834,14 @@ impl<'a> ResponseWriter<'a> {
 
 type RouteFn = dyn Fn(&ServerRequest, &mut ResponseWriter<'_>, &TcpStream) + Send + Sync;
 type NotFoundFn = dyn Fn(&ServerRequest, &mut ResponseWriter<'_>) + Send + Sync;
+/// Mirrors cpp-httplib's `set_error_handler`: called for a request wally
+/// never got far enough to route at all -- a malformed request line/headers
+/// (400) or an over-long URI (414) -- with whatever `(method, path)` parsing
+/// reached before it gave up. `not_found` (a real 404, after routing) stays
+/// separate since it has a full `ServerRequest`; C++'s single
+/// `error_handler_` covers both cases (any `res.status >= 400`) but nothing
+/// here needs them unified to match its output.
+type OnErrorFn = dyn Fn(i32, &str, &str, &mut ResponseWriter<'_>) + Send + Sync;
 
 struct Route {
     method: String,
@@ -849,6 +857,7 @@ struct Route {
 pub struct Server {
     routes: Vec<Route>,
     not_found: Option<Box<NotFoundFn>>,
+    on_error: Option<Box<OnErrorFn>>,
 }
 
 impl Default for Server {
@@ -862,6 +871,7 @@ impl Server {
         Server {
             routes: Vec::new(),
             not_found: None,
+            on_error: None,
         }
     }
 
@@ -885,6 +895,13 @@ impl Server {
         self.not_found = Some(Box::new(handler));
     }
 
+    pub fn on_error(
+        &mut self,
+        handler: impl Fn(i32, &str, &str, &mut ResponseWriter<'_>) + Send + Sync + 'static,
+    ) {
+        self.on_error = Some(Box::new(handler));
+    }
+
     /// Binds `host:0` (any free port), starts the accept loop on its own
     /// thread and returns the handle plus the bound port.
     pub fn bind_and_run(self, host: &str) -> io::Result<(ServerHandle, u16)> {
@@ -893,6 +910,7 @@ impl Server {
         let stopping = Arc::new(AtomicBool::new(false));
         let routes = Arc::new(self.routes);
         let not_found = Arc::new(self.not_found);
+        let on_error = Arc::new(self.on_error);
 
         let loop_stopping = stopping.clone();
         let join = thread::spawn(move || {
@@ -916,9 +934,16 @@ impl Server {
                 }
                 let routes = routes.clone();
                 let not_found = not_found.clone();
+                let on_error = on_error.clone();
                 let conn_stopping = loop_stopping.clone();
                 handlers.push(thread::spawn(move || {
-                    handle_connection(stream, &routes, not_found.as_deref(), conn_stopping)
+                    handle_connection(
+                        stream,
+                        &routes,
+                        not_found.as_deref(),
+                        on_error.as_deref(),
+                        conn_stopping,
+                    )
                 }));
                 // Bound the bookkeeping the same way the pool's own worker
                 // list stays small in practice: drop handles for threads that
@@ -1015,10 +1040,40 @@ fn wait_keep_alive(stream: &TcpStream, stopping: &AtomicBool) -> bool {
     }
 }
 
+/// The over-long-URI threshold httplib checks `req.target.size()` against
+/// (`CPPHTTPLIB_REQUEST_URI_MAX_LENGTH`, unmodified by `messages.cpp`).
+const REQUEST_URI_MAX_LENGTH: usize = 8192;
+
+/// Writes httplib's `error_handler_`-shaped response for a request wally
+/// never got far enough to route: a malformed request line/headers, or an
+/// over-long URI. Falls back to a bare status line with no body if the
+/// caller registered no `on_error` handler, matching `handle_connection`'s
+/// existing bare-404 fallback for `not_found`.
+fn write_early_failure(
+    stream: &mut TcpStream,
+    status: i32,
+    method: &str,
+    path: &str,
+    on_error: Option<&OnErrorFn>,
+) {
+    // Always the last response on this connection: parsing never got far
+    // enough to know whether the client wanted to keep it alive, and
+    // `connection_header` would force `Connection: close` for status >= 400
+    // anyway.
+    let mut writer = ResponseWriter::new(stream, true);
+    match on_error {
+        Some(f) => f(status, method, path, &mut writer),
+        None => {
+            let _ = writer.send_full(status, &[], b"");
+        }
+    }
+}
+
 fn handle_connection(
     mut stream: TcpStream,
     routes: &[Route],
     not_found: Option<&NotFoundFn>,
+    on_error: Option<&OnErrorFn>,
     stopping: Arc<AtomicBool>,
 ) {
     let _ = stream.set_nodelay(true);
@@ -1040,15 +1095,35 @@ fn handle_connection(
         }
         let (head_bytes, leftover) = match read_head(&mut stream, MAX_HEAD_BYTES, Vec::new()) {
             Ok(v) => v,
+            // A head this connection never finished sending within
+            // MAX_HEAD_BYTES -- closest to httplib's `read_headers` failing
+            // a too-long header line (400); other read failures (EOF/error
+            // partway through the very first line) mirror httplib's own
+            // `!line_reader.getline()` path, which writes nothing.
+            Err(Error::InvalidResponse) => {
+                write_early_failure(&mut stream, 400, "", "", on_error);
+                return;
+            }
             Err(_) => return,
         };
         let mut headers_buf = [httparse::EMPTY_HEADER; 64];
         let mut parsed = httparse::Request::new(&mut headers_buf);
         if !matches!(parsed.parse(&head_bytes), Ok(httparse::Status::Complete(_))) {
+            // Mirrors httplib's `parse_request_line` failing (bad method,
+            // bad HTTP version, wrong token count, ...): a real 400 response
+            // with whatever (method, path) parsing reached, not a silently
+            // dropped connection.
+            let method = parsed.method.unwrap_or("");
+            let path = parsed.path.unwrap_or("");
+            write_early_failure(&mut stream, 400, method, path, on_error);
             return;
         }
         let method = parsed.method.unwrap_or("").to_string();
         let raw_path = parsed.path.unwrap_or("").to_string();
+        if raw_path.len() > REQUEST_URI_MAX_LENGTH {
+            write_early_failure(&mut stream, 414, &method, &raw_path, on_error);
+            return;
+        }
         let (path, query) = match raw_path.split_once('?') {
             Some((p, q)) => (p.to_string(), q.to_string()),
             None => (raw_path, String::new()),
@@ -1337,6 +1412,77 @@ mod tests {
         let last = last.unwrap();
         assert_eq!(last.status, 200);
         assert_eq!(last.header("connection"), Some("close"));
+        handle.stop();
+    }
+
+    // shim-8: a request line httplib's grammar rejects (unknown method, bad
+    // HTTP version, ...) gets a real 400 response, not a silently dropped
+    // connection -- with no `on_error` handler registered, the bare-status
+    // fallback still writes a status line.
+    #[test]
+    fn a_malformed_request_line_gets_a_400_not_a_silent_close() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.write_all(b"NOT A REQUEST\r\n\r\n").unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let head = String::from_utf8_lossy(&buf);
+        assert!(
+            head.starts_with("HTTP/1.1 400 "),
+            "expected a 400 response, got: {head:?}"
+        );
+        handle.stop();
+    }
+
+    // shim-8: the registered `on_error` handler (messages.rs's translator
+    // error body, in production) fires for a pre-routing failure the same
+    // way it fires for a routed 404, with the status/method/path parsing
+    // reached.
+    #[test]
+    fn on_error_handler_fires_for_a_malformed_request_line() {
+        let seen = Arc::new(Mutex::new(None));
+        let recorded = seen.clone();
+        let mut server = Server::new();
+        server.on_error(move |status, method, path, writer| {
+            *recorded.lock().unwrap() = Some((status, method.to_string(), path.to_string()));
+            let _ = writer.send_full(status, &[], b"boom");
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.write_all(b"NOT A REQUEST\r\n\r\n").unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        assert!(String::from_utf8_lossy(&buf).ends_with("boom"));
+        let (status, method, _path) = seen.lock().unwrap().clone().expect("on_error not called");
+        assert_eq!(status, 400);
+        assert_eq!(method, "NOT");
+        handle.stop();
+    }
+
+    // shim-8: a URI past httplib's CPPHTTPLIB_REQUEST_URI_MAX_LENGTH is 414,
+    // not silently dropped.
+    #[test]
+    fn an_over_long_uri_gets_a_414() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let long_path = "/".to_string() + &"x".repeat(REQUEST_URI_MAX_LENGTH + 1);
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(raw, "GET {long_path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let head = String::from_utf8_lossy(&buf);
+        assert!(
+            head.starts_with("HTTP/1.1 414 "),
+            "expected a 414 response, got the first 80 bytes: {:?}",
+            &head[..head.len().min(80)]
+        );
         handle.stop();
     }
 }

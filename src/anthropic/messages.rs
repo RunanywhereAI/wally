@@ -1010,24 +1010,43 @@ fn register_routes(server: &mut Server, runtime: Arc<Runtime>) {
 
     // A route we do not translate should say so, not 404 into a silence the
     // reader has to guess at.
-    let not_found_runtime = runtime;
+    let not_found_runtime = runtime.clone();
     server.not_found(move |req, writer| {
         if not_found_runtime.verbose {
             status_line(&format!("anthropic: {} {} -> 404", req.method, req.path));
         }
-        let payload = translate::error_body(
-            "not_found_error",
-            &format!(
-                "{} {} is not something wally translates",
-                req.method, req.path
-            ),
-        );
-        let _ = writer.send_full(
-            404,
-            &[("Content-Type", "application/json")],
-            payload.as_bytes(),
-        );
+        write_translator_error(writer, 404, &req.method, &req.path);
     });
+
+    // cpp-httplib's `set_error_handler` fires for ANY response with status
+    // >= 400, not just a routed 404 -- including a malformed request line,
+    // bad headers, or an over-long URI that never made it to routing at
+    // all. `not_found` above covers the routed case (it has a full
+    // `ServerRequest`); this covers the earlier ones with whatever parsing
+    // reached.
+    let on_error_runtime = runtime;
+    server.on_error(move |status, method, path, writer| {
+        if on_error_runtime.verbose {
+            status_line(&format!("anthropic: {method} {path} -> {status}"));
+        }
+        write_translator_error(writer, status, method, path);
+    });
+}
+
+/// The JSON body cpp-httplib's `error_handler_` (installed by
+/// `messages.cpp`) fills in for any response `set_error_handler` sees with
+/// an empty body -- a routed 404, or an earlier 400/414 wally never got far
+/// enough to route.
+fn write_translator_error(writer: &mut ResponseWriter<'_>, status: i32, method: &str, path: &str) {
+    let payload = translate::error_body(
+        "not_found_error",
+        &format!("{method} {path} is not something wally translates"),
+    );
+    let _ = writer.send_full(
+        status,
+        &[("Content-Type", "application/json")],
+        payload.as_bytes(),
+    );
 }
 
 // ---------------------------------------------------------------------
