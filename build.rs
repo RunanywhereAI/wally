@@ -52,6 +52,19 @@ fn main() {
             .get("kit_version")
             .expect("versions.toml is missing kit_version")
     );
+    // `wally about`/`wally version` show the pinned IDL schema (RUNANYWHERE_IDL_VERSION /
+    // RUNANYWHERE_IDL_SCHEMA_SHA256 / RUNANYWHERE_IDL_PROTOC_VERSION in the C++ build, baked
+    // from schema_lock.h). versions.toml is the same pin these macros are generated from, so
+    // export it the same way as the other pins above instead of bridging the C header.
+    for key in ["idl_version", "idl_schema_sha256", "idl_protoc_version"] {
+        println!(
+            "cargo:rustc-env=WALLY_{}={}",
+            key.to_ascii_uppercase(),
+            versions
+                .get(key)
+                .unwrap_or_else(|| panic!("versions.toml is missing {key}"))
+        );
+    }
 
     let env_file = env::var_os("WALLY_BUILD_ENV")
         .map(PathBuf::from)
