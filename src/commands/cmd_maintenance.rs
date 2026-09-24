@@ -24,8 +24,9 @@ fn self_executable() -> String {
     let mut raw = vec![0u8; libc::PATH_MAX as usize];
     let mut size = raw.len() as u32;
     // SAFETY: `raw` is a valid, writable buffer of `size` bytes for the call.
-    let ok =
-        unsafe { _NSGetExecutablePath(raw.as_mut_ptr() as *mut std::os::raw::c_char, &mut size) == 0 };
+    let ok = unsafe {
+        _NSGetExecutablePath(raw.as_mut_ptr() as *mut std::os::raw::c_char, &mut size) == 0
+    };
     if !ok {
         return String::new();
     }
@@ -40,7 +41,10 @@ fn self_executable() -> String {
     // SAFETY: `resolved` has room for PATH_MAX bytes (realpath's documented
     // maximum output here); `c_raw` is a NUL-terminated input path.
     let resolved_ptr = unsafe {
-        libc::realpath(c_raw.as_ptr(), resolved.as_mut_ptr() as *mut std::os::raw::c_char)
+        libc::realpath(
+            c_raw.as_ptr(),
+            resolved.as_mut_ptr() as *mut std::os::raw::c_char,
+        )
     };
     if resolved_ptr.is_null() {
         return raw_path;
@@ -130,7 +134,9 @@ fn dir_size(dir: &Path) -> u64 {
         if file_type.is_dir() {
             total += dir_size(&entry.path());
         } else if file_type.is_file() {
-            total += std::fs::metadata(entry.path()).map(|m| m.len()).unwrap_or(0);
+            total += std::fs::metadata(entry.path())
+                .map(|m| m.len())
+                .unwrap_or(0);
         }
     }
     total

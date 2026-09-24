@@ -19,7 +19,9 @@ fn cstr_or_empty(ptr: *const std::os::raw::c_char) -> String {
     } else {
         // SAFETY: caller only passes pointers documented by the SDK as either
         // NULL or a NUL-terminated string valid for the call's duration.
-        unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -103,7 +105,9 @@ pub fn register_backends(app: &mut App) {
                     .field_i64("priority", row.priority as i64);
                 json.begin_array("primitives");
                 for primitive in &row.primitives {
-                    json.begin_array_object().field_str("name", primitive).end_object();
+                    json.begin_array_object()
+                        .field_str("name", primitive)
+                        .end_object();
                 }
                 json.end_array().end_object();
             }

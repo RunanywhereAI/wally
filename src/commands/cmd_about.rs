@@ -96,7 +96,11 @@ pub fn register_about(app: &mut App) {
         // default_console_url() itself keys on. console_url is the *effective*
         // target though, since an env override still wins over the bake.
         let dev_channel = !env!("WALLY_BAKED_CONSOLE_API_URL").is_empty();
-        let channel = if dev_channel { "development" } else { "production" };
+        let channel = if dev_channel {
+            "development"
+        } else {
+            "production"
+        };
         let console_url = credentials::default_console_url();
 
         let loaded = credentials::load().ok();

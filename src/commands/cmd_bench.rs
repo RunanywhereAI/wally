@@ -67,28 +67,75 @@ fn modality_of(category: v1::ModelCategory) -> Option<Modality> {
 #[derive(Debug, Clone, Copy)]
 struct Scenario {
     label: &'static str,
-    max_tokens: i32, // LLM/VLM
-    seconds: f64,    // STT audio length
-    sine: bool,      // STT: 440 Hz tone vs silence
+    max_tokens: i32,            // LLM/VLM
+    seconds: f64,               // STT audio length
+    sine: bool,                 // STT: 440 Hz tone vs silence
     text: Option<&'static str>, // TTS input
 }
 
 fn scenarios_for(m: Modality) -> &'static [Scenario] {
     const LLM: &[Scenario] = &[
-        Scenario { label: "Short (50)", max_tokens: 50, seconds: 0.0, sine: false, text: None },
-        Scenario { label: "Medium (256)", max_tokens: 256, seconds: 0.0, sine: false, text: None },
-        Scenario { label: "Long (512)", max_tokens: 512, seconds: 0.0, sine: false, text: None },
+        Scenario {
+            label: "Short (50)",
+            max_tokens: 50,
+            seconds: 0.0,
+            sine: false,
+            text: None,
+        },
+        Scenario {
+            label: "Medium (256)",
+            max_tokens: 256,
+            seconds: 0.0,
+            sine: false,
+            text: None,
+        },
+        Scenario {
+            label: "Long (512)",
+            max_tokens: 512,
+            seconds: 0.0,
+            sine: false,
+            text: None,
+        },
     ];
     const STT: &[Scenario] = &[
-        Scenario { label: "Silent 2s", max_tokens: 0, seconds: 2.0, sine: false, text: None },
-        Scenario { label: "Sine Tone 3s", max_tokens: 0, seconds: 3.0, sine: true, text: None },
+        Scenario {
+            label: "Silent 2s",
+            max_tokens: 0,
+            seconds: 2.0,
+            sine: false,
+            text: None,
+        },
+        Scenario {
+            label: "Sine Tone 3s",
+            max_tokens: 0,
+            seconds: 3.0,
+            sine: true,
+            text: None,
+        },
     ];
     const TTS: &[Scenario] = &[
-        Scenario { label: "Short Text", max_tokens: 0, seconds: 0.0, sine: false, text: Some(TTS_SHORT) },
-        Scenario { label: "Medium Text", max_tokens: 0, seconds: 0.0, sine: false, text: Some(TTS_MEDIUM) },
+        Scenario {
+            label: "Short Text",
+            max_tokens: 0,
+            seconds: 0.0,
+            sine: false,
+            text: Some(TTS_SHORT),
+        },
+        Scenario {
+            label: "Medium Text",
+            max_tokens: 0,
+            seconds: 0.0,
+            sine: false,
+            text: Some(TTS_MEDIUM),
+        },
     ];
-    const VLM: &[Scenario] =
-        &[Scenario { label: "Image Description", max_tokens: 128, seconds: 0.0, sine: false, text: None }];
+    const VLM: &[Scenario] = &[Scenario {
+        label: "Image Description",
+        max_tokens: 128,
+        seconds: 0.0,
+        sine: false,
+        text: None,
+    }];
     match m {
         Modality::Llm => LLM,
         Modality::Stt => STT,
@@ -169,7 +216,9 @@ fn make_pcm16(seconds: f64, sine: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity((n.max(0) as usize) * 2);
     for i in 0..n.max(0) {
         let v = if sine {
-            (2.0 * std::f64::consts::PI * 440.0 * i as f64 / SAMPLE_RATE as f64).sin() * 32767.0 * 0.6
+            (2.0 * std::f64::consts::PI * 440.0 * i as f64 / SAMPLE_RATE as f64).sin()
+                * 32767.0
+                * 0.6
         } else {
             0.0
         };
@@ -275,7 +324,11 @@ fn load_model_timed(
         Ok(result) if rc == sys::SUCCESS => result,
         Ok(_) => return Err("load failed".to_string()),
         Err(message) => {
-            return Err(if message.is_empty() { "load failed".to_string() } else { message });
+            return Err(if message.is_empty() {
+                "load failed".to_string()
+            } else {
+                message
+            });
         }
     };
     if let Some(error) = result.error.as_ref() {
@@ -552,7 +605,11 @@ fn aggregate(
     // NOTE: unlike every other field, output_tokens is NOT a median — it's a
     // raw middle-index pick on the UNSORTED per-trial vector, matching the
     // C++ exactly.
-    row.med.output_tokens = if out_tok.is_empty() { 0 } else { out_tok[out_tok.len() / 2] };
+    row.med.output_tokens = if out_tok.is_empty() {
+        0
+    } else {
+        out_tok[out_tok.len() / 2]
+    };
     row
 }
 
@@ -560,12 +617,19 @@ fn aggregate(
 fn primary_metric(r: &BenchRow) -> String {
     match r.modality {
         Modality::Llm | Modality::Vlm => {
-            format!("{:.1} tok/s  {:.0}ms pf", r.med.tokens_per_second, r.med.prompt_eval_ms)
+            format!(
+                "{:.1} tok/s  {:.0}ms pf",
+                r.med.tokens_per_second, r.med.prompt_eval_ms
+            )
         }
         Modality::Stt => format!(
             "RTF {:.3} ({:.0}x rt)",
             r.med.real_time_factor,
-            if r.med.real_time_factor > 0.0 { 1.0 / r.med.real_time_factor } else { 0.0 }
+            if r.med.real_time_factor > 0.0 {
+                1.0 / r.med.real_time_factor
+            } else {
+                0.0
+            }
         ),
         Modality::Tts => format!("{:.0} chars/s", r.med.chars_per_second),
     }
@@ -612,7 +676,11 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
         let Some(modality) = modality_of(category) else {
             continue;
         };
-        models.push(BenchModel { id: m.id, category, modality });
+        models.push(BenchModel {
+            id: m.id,
+            category,
+            modality,
+        });
     }
     Ok(models)
 }
@@ -790,7 +858,10 @@ pub fn run_bench(
 }
 
 pub fn register_bench(app: &mut App) {
-    let cmd = app.add_subcommand("bench", "Measure throughput and load time of downloaded models");
+    let cmd = app.add_subcommand(
+        "bench",
+        "Measure throughput and load time of downloaded models",
+    );
     cmd.add_option(
         "model",
         ValueType::Text,
@@ -804,19 +875,29 @@ pub fn register_bench(app: &mut App) {
         ValueType::Text,
         &format!("Engine hint ({})", engine_options::engine_choices()),
     );
-    cmd.add_option("--trials,-n", ValueType::Int, "Measured trials per scenario (median reported)")
-        .default_val("3")
-        // Range, not PositiveNumber, for the message alone. PositiveNumber
-        // renders its bounds as doubles, so `-n -5` was rejected with "not in
-        // range [2.22507e-308 - 1.79769e+308]". The accepted set is unchanged:
-        // trials is an int, so anything above INT_MAX already failed to parse.
-        .check(Validator::Range(1, i32::MAX as i64));
-    cmd.add_option("--vlm-image", ValueType::Text, "Image file for VLM benchmarking")
-        .default_val(DEFAULT_VLM_IMAGE);
+    cmd.add_option(
+        "--trials,-n",
+        ValueType::Int,
+        "Measured trials per scenario (median reported)",
+    )
+    .default_val("3")
+    // Range, not PositiveNumber, for the message alone. PositiveNumber
+    // renders its bounds as doubles, so `-n -5` was rejected with "not in
+    // range [2.22507e-308 - 1.79769e+308]". The accepted set is unchanged:
+    // trials is an int, so anything above INT_MAX already failed to parse.
+    .check(Validator::Range(1, i32::MAX as i64));
+    cmd.add_option(
+        "--vlm-image",
+        ValueType::Text,
+        "Image file for VLM benchmarking",
+    )
+    .default_val(DEFAULT_VLM_IMAGE);
     cmd.callback(|parsed, options| {
         let model = parsed.get_str("model").unwrap_or_default();
         let trials = parsed.get_i64("--trials").unwrap_or(3) as i32;
-        let vlm_image = parsed.get_str("--vlm-image").unwrap_or_else(|| DEFAULT_VLM_IMAGE.to_string());
+        let vlm_image = parsed
+            .get_str("--vlm-image")
+            .unwrap_or_else(|| DEFAULT_VLM_IMAGE.to_string());
         let engine = parsed.get_str("--engine").unwrap_or_default();
         run_bench(options, &model, trials, &vlm_image, &engine)
     });
