@@ -200,8 +200,16 @@ std::string PrepareClaudeConfigDir() {
     std::error_code ec;
 
     const char* home = std::getenv("HOME");
-    const fs::path og_dir = home != nullptr ? fs::path(home) / ".claude" : fs::path();
-    const fs::path og_json = home != nullptr ? fs::path(home) / ".claude.json" : fs::path();
+#if defined(_WIN32)
+    // PowerShell and cmd.exe leave HOME unset; Claude Code's home there is the profile.
+    if (home == nullptr || *home == 0) {
+        home = std::getenv("USERPROFILE");
+    }
+#endif
+    // An empty value would resolve against the working directory, so treat it as unset.
+    const bool has_home = home != nullptr && *home != 0;
+    const fs::path og_dir = has_home ? fs::path(home) / ".claude" : fs::path();
+    const fs::path og_json = has_home ? fs::path(home) / ".claude.json" : fs::path();
 
     const bool first_run = !fs::exists(ours, ec);
     fs::create_directories(ours, ec);

@@ -223,6 +223,12 @@ std::filesystem::path OpenClawStateDirectory() {
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != 0) {
         return std::filesystem::path(home) / ".openclaw";
     }
+#if defined(_WIN32)
+    // PowerShell and cmd.exe leave HOME unset; openclaw falls back to the profile.
+    if (const char* profile = std::getenv("USERPROFILE"); profile != nullptr && *profile != 0) {
+        return std::filesystem::path(profile) / ".openclaw";
+    }
+#endif
     return {};
 }
 
