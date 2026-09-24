@@ -150,7 +150,9 @@ fn run_cli_capture(args: &[&str]) -> (i32, String) {
     let Some(capture) = StdoutCapture::start() else {
         return (1, String::new());
     };
-    let code = common::run_in_process(args);
+    // Callers pass argv with its program name, as the C++ did; run_in_process
+    // supplies its own.
+    let code = common::run_in_process(args.strip_prefix(&["wally"]).unwrap_or(args));
     (code, capture.finish())
 }
 

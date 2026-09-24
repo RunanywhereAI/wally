@@ -3,12 +3,10 @@
 //!
 //! Every case below is compiled in but `#[ignore]`d, mirroring the C++
 //! `#if !WALLY_LLM_ONLY_CUT` guard around the whole block there: `wally diarize`
-//! is not wired into `src/app.rs` for the LLM-only release, and the CLI port's
-//! `App::add_subcommand`/`add_option` are still unimplemented, so a call into
-//! `register_diarize` or a `wally diarize …` invocation cannot run today. Once
-//! diarize is re-enabled in `src/app.rs` and the CLI port lands, dropping the
-//! `#[ignore]` attributes is the whole re-enable step, exactly as uncommenting
-//! `register_diarize(app, options);` was on the C++ side.
+//! is not wired into `src/app.rs` for the LLM-only release. Once diarize is
+//! re-enabled there, dropping the `#[ignore]` attributes is the whole re-enable
+//! step, exactly as uncommenting `register_diarize(app, options);` was on the
+//! C++ side.
 
 #[allow(unused_imports)]
 use super::common;
@@ -44,11 +42,10 @@ impl Drop for TempWavFile {
 }
 
 /// register_diarize() is not called from src/app.rs for the LLM-only cut, so
-/// the subcommand this introspection asserts on does not exist yet (and the
-/// CLI port's App::add_subcommand/add_option are still unimplemented). Mirrors the
+/// the subcommand this introspection asserts on does not exist yet. Mirrors the
 /// C++ WALLY_LLM_ONLY_CUT exclusion rather than a body-less always-pass stub.
 #[test]
-#[ignore = "diarize is not registered in src/app.rs for the LLM-only release, and the CLI port's App::add_subcommand/add_option are still unimplemented (mirrors C++ WALLY_LLM_ONLY_CUT)"]
+#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT)"]
 fn diarize_arg_surface() {
     let mut app = wally::cli::App::new("wally test app", "wally");
     wally::commands::cmd_diarize::register_diarize(&mut app);
@@ -87,7 +84,7 @@ fn diarize_arg_surface() {
 // diarize's argument parsing regressed or the command were deleted outright.
 
 #[test]
-#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT); the CLI port's parser is also still unimplemented"]
+#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT)"]
 fn diarize_missing_model_exit2() {
     // audio positional satisfied by an existing temp file -> the only failure
     // is the missing required --model (RequiredError -> ParseError -> exit 2).
@@ -97,7 +94,7 @@ fn diarize_missing_model_exit2() {
 }
 
 #[test]
-#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT); the CLI port's parser is also still unimplemented"]
+#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT)"]
 fn diarize_missing_audio_exit2() {
     // --model consumes "x"; the required audio positional is left unsatisfied
     // (RequiredError -> ParseError -> exit 2).
@@ -109,7 +106,7 @@ fn diarize_missing_audio_exit2() {
 }
 
 #[test]
-#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT); the CLI port's parser is also still unimplemented"]
+#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT)"]
 fn diarize_audio_not_found_exit2() {
     // --model is supplied so the sole failure is the audio ExistingFile
     // validator (ValidationError -> ParseError -> exit 2), a distinct path
@@ -127,7 +124,7 @@ fn diarize_audio_not_found_exit2() {
 }
 
 #[test]
-#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT); the CLI port's parser is also still unimplemented"]
+#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT)"]
 fn diarize_numeric_option_typing_exit2() {
     // A non-numeric value for a typed numeric option raises a conversion
     // error (a ParseError) during parse, before the callback -> exit 2. This
@@ -144,7 +141,7 @@ fn diarize_numeric_option_typing_exit2() {
 }
 
 #[test]
-#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT); the CLI port's parser is also still unimplemented"]
+#[ignore = "diarize is not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT)"]
 fn diarize_unknown_flag_exit2() {
     // An unrecognized option is not consumed by the subcommand or (via
     // fallthrough) the parent, so parse ends with an extras error
