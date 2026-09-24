@@ -40,6 +40,17 @@ sha2 = "0.10"
 hex = "0.4"
 getrandom = "0.3"
 ctrlc = { version = "3", features = ["termination"] }
+# Upstream response decompression (src/net/decompress.rs), matching the four
+# encodings cpp-httplib's Accept-Encoding advertises and decodes: gzip and
+# zlib-wrapped deflate share flate2's rust_backend (miniz_oxide) -- pure Rust,
+# no vendored/system zlib, same backend httplib's own zlib codepath is
+# functionally equivalent to. brotli-decompressor and ruzstd are decode-only,
+# pure-Rust, and (unlike the `brotli`/`zstd` crates) do not pull in an
+# encoder or a C library binding neither this client nor cpp-httplib's
+# client-side ever needs.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+brotli-decompressor = "6"
+ruzstd = "0.9"
 
 [target.'cfg(not(windows))'.dependencies]
 rustyline = { version = "18", default-features = false, features = ["with-file-history"] }
