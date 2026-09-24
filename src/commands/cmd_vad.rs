@@ -102,7 +102,8 @@ fn run_vad(options: &GlobalOptions, p: &Parsed) -> i32 {
     let activation_threshold = p.get_f64("--activation-threshold").unwrap_or(0.0) as f32;
     if activation_threshold > 0.0 {
         // SAFETY: handle is a valid, live component handle.
-        let rc = unsafe { sys::rac_vad_component_set_energy_threshold(handle, activation_threshold) };
+        let rc =
+            unsafe { sys::rac_vad_component_set_energy_threshold(handle, activation_threshold) };
         if rc != sys::SUCCESS {
             out::error_line("invalid --activation-threshold (expected 0.0-1.0)");
             // SAFETY: handle is a valid, live component handle.
@@ -196,7 +197,11 @@ fn run_vad(options: &GlobalOptions, p: &Parsed) -> i32 {
         out::result_line("no speech detected");
         return 0;
     }
-    let header = vec!["START".to_string(), "END".to_string(), "DURATION".to_string()];
+    let header = vec![
+        "START".to_string(),
+        "END".to_string(),
+        "DURATION".to_string(),
+    ];
     let rows: Vec<Vec<String>> = segments
         .iter()
         .map(|segment| {

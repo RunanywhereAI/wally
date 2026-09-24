@@ -52,7 +52,11 @@ fn run_tts(options: &GlobalOptions, p: &Parsed) -> i32 {
 
     let model = p.get_str("--model").unwrap_or_default();
     let voice_field = p.get_str("--voice").unwrap_or_default();
-    let model_ref = if !model.is_empty() { &model } else { &voice_field };
+    let model_ref = if !model.is_empty() {
+        &model
+    } else {
+        &voice_field
+    };
     let model_ref: &str = if model_ref.is_empty() {
         DEFAULT_VOICE
     } else {
@@ -85,7 +89,10 @@ fn run_tts(options: &GlobalOptions, p: &Parsed) -> i32 {
         )
     };
     if rc != sys::SUCCESS {
-        out::error_line(&format!("failed to load voice: {}", out::describe_result(rc)));
+        out::error_line(&format!(
+            "failed to load voice: {}",
+            out::describe_result(rc)
+        ));
         // SAFETY: handle is a valid, live component handle.
         unsafe { sys::rac_tts_component_destroy(handle) };
         return 1;
@@ -98,21 +105,31 @@ fn run_tts(options: &GlobalOptions, p: &Parsed) -> i32 {
     let pitch = p.get_f64("--pitch").unwrap_or(1.0) as f32;
     let sample_rate = p.get_i64("--sample-rate").unwrap_or(0) as i32;
 
-    // SAFETY: reading a kit-provided default struct (plain data, no pointers).
-    let mut tts_options = unsafe { sys::RAC_TTS_OPTIONS_DEFAULT };
+    // RAC_TTS_OPTIONS_DEFAULT is a header-only `static const` (internal C
+    // linkage per translation unit), so there is no symbol to link against
+    // from Rust; every field below is set explicitly instead, using the
+    // header's own default value for any field this CLI does not otherwise
+    // control (language when unset, volume, audio_format, use_ssml).
+    let default_language_c = to_cstring("en-US");
+    // SAFETY: rac_tts_options_t is plain data; zeroed is a valid bit pattern
+    // for every field, all of which are set below.
+    let mut tts_options: sys::rac_tts_options_t = unsafe { std::mem::zeroed() };
     tts_options.voice = if voice_field.is_empty() {
         std::ptr::null()
     } else {
         voice_field_c.as_ptr()
     };
-    if !language.is_empty() {
-        tts_options.language = language_c.as_ptr();
-    }
+    tts_options.language = if language.is_empty() {
+        default_language_c.as_ptr()
+    } else {
+        language_c.as_ptr()
+    };
     tts_options.rate = speed;
     tts_options.pitch = pitch;
-    if sample_rate > 0 {
-        tts_options.sample_rate = sample_rate;
-    }
+    tts_options.volume = 1.0;
+    tts_options.audio_format = sys::RAC_AUDIO_FORMAT_PCM;
+    tts_options.sample_rate = if sample_rate > 0 { sample_rate } else { 0 };
+    tts_options.use_ssml = sys::FALSE;
 
     let text_c = to_cstring(&text);
     let started = Instant::now();
@@ -193,10 +210,18 @@ pub fn register_tts(app: &mut App) {
         ValueType::Text,
         "BCP-47 language to speak (default en-US)",
     );
-    cmd.add_option("--speed", ValueType::Float, "Speak faster or slower than 1.0")
-        .default_val("1.0");
-    cmd.add_option("--pitch", ValueType::Float, "Raise or lower the pitch from 1.0")
-        .default_val("1.0");
+    cmd.add_option(
+        "--speed",
+        ValueType::Float,
+        "Speak faster or slower than 1.0",
+    )
+    .default_val("1.0");
+    cmd.add_option(
+        "--pitch",
+        ValueType::Float,
+        "Raise or lower the pitch from 1.0",
+    )
+    .default_val("1.0");
     cmd.add_option(
         "--sample-rate",
         ValueType::Int,

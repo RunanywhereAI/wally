@@ -38,21 +38,33 @@ fn run_voice(options: &GlobalOptions, p: &Parsed) -> i32 {
     }
 
     let stt_ref = p.get_str("--stt").unwrap_or_default();
-    let stt_ref: &str = if stt_ref.is_empty() { DEFAULT_STT } else { &stt_ref };
+    let stt_ref: &str = if stt_ref.is_empty() {
+        DEFAULT_STT
+    } else {
+        &stt_ref
+    };
     let stt = match ensure_model_ready(options, stt_ref) {
         Ok(m) => m,
         Err(code) => return code,
     };
 
     let llm_ref = p.get_str("--llm").unwrap_or_default();
-    let llm_ref: &str = if llm_ref.is_empty() { DEFAULT_LLM } else { &llm_ref };
+    let llm_ref: &str = if llm_ref.is_empty() {
+        DEFAULT_LLM
+    } else {
+        &llm_ref
+    };
     let llm = match ensure_model_ready(options, llm_ref) {
         Ok(m) => m,
         Err(code) => return code,
     };
 
     let tts_ref = p.get_str("--tts").unwrap_or_default();
-    let tts_ref: &str = if tts_ref.is_empty() { DEFAULT_TTS } else { &tts_ref };
+    let tts_ref: &str = if tts_ref.is_empty() {
+        DEFAULT_TTS
+    } else {
+        &tts_ref
+    };
     let tts = match ensure_model_ready(options, tts_ref) {
         Ok(m) => m,
         Err(code) => return code,
@@ -67,7 +79,11 @@ fn run_voice(options: &GlobalOptions, p: &Parsed) -> i32 {
             return 1;
         }
     };
-    let pcm16 = wav::resample(&audio_data.samples, audio_data.sample_rate, TURN_SAMPLE_RATE);
+    let pcm16 = wav::resample(
+        &audio_data.samples,
+        audio_data.sample_rate,
+        TURN_SAMPLE_RATE,
+    );
     if pcm16.is_empty() {
         out::error_line("resampled audio is empty");
         return 1;
@@ -94,8 +110,34 @@ fn run_voice(options: &GlobalOptions, p: &Parsed) -> i32 {
     let tts_id_c = to_cstring(&tts.model_id);
     let tts_name_c = to_cstring(&tts.display_name);
 
-    // SAFETY: reading a kit-provided default struct (plain data, no pointers).
-    let mut config = unsafe { sys::RAC_VOICE_AGENT_CONFIG_DEFAULT };
+    // RAC_VOICE_AGENT_CONFIG_DEFAULT is a header-only `static const`
+    // (internal C linkage per translation unit), so there is no symbol to
+    // link against from Rust; the header's own default values are
+    // reproduced here instead. This CLI never sets vad_config, so it keeps
+    // the header default for the life of this struct; every stt/llm/tts
+    // field is overridden below.
+    let mut config = sys::rac_voice_agent_config_t {
+        vad_config: sys::rac_voice_agent_vad_config_t {
+            sample_rate: 16000,
+            frame_length: 0.1,
+            energy_threshold: 0.005,
+        },
+        stt_config: sys::rac_voice_agent_stt_config_t {
+            model_path: std::ptr::null(),
+            model_id: std::ptr::null(),
+            model_name: std::ptr::null(),
+        },
+        llm_config: sys::rac_voice_agent_llm_config_t {
+            model_path: std::ptr::null(),
+            model_id: std::ptr::null(),
+            model_name: std::ptr::null(),
+        },
+        tts_config: sys::rac_voice_agent_tts_config_t {
+            voice_path: std::ptr::null(),
+            voice_id: std::ptr::null(),
+            voice_name: std::ptr::null(),
+        },
+    };
     config.stt_config.model_path = stt_path_c.as_ptr();
     config.stt_config.model_id = stt_id_c.as_ptr();
     config.stt_config.model_name = stt_name_c.as_ptr();
@@ -177,7 +219,11 @@ fn run_voice(options: &GlobalOptions, p: &Parsed) -> i32 {
             exit_code = 1;
         }
         Err(e) => {
-            let msg = if rc != sys::SUCCESS { out::describe_result(rc) } else { e };
+            let msg = if rc != sys::SUCCESS {
+                out::describe_result(rc)
+            } else {
+                e
+            };
             out::error_line(&format!("voice turn failed: {msg}"));
             exit_code = 1;
         }
@@ -191,10 +237,18 @@ fn run_voice(options: &GlobalOptions, p: &Parsed) -> i32 {
 pub fn register_voice(app: &mut App) {
     let cmd = app.add_subcommand("voice", "Hold one spoken turn: listen, answer, speak");
 
-    cmd.add_option("audio", ValueType::Text, "16-bit PCM WAV file with the user's speech")
-        .check(Validator::ExistingFile);
-    cmd.add_option("--input,-i", ValueType::Text, "16-bit PCM WAV file with the user's speech")
-        .check(Validator::ExistingFile);
+    cmd.add_option(
+        "audio",
+        ValueType::Text,
+        "16-bit PCM WAV file with the user's speech",
+    )
+    .check(Validator::ExistingFile);
+    cmd.add_option(
+        "--input,-i",
+        ValueType::Text,
+        "16-bit PCM WAV file with the user's speech",
+    )
+    .check(Validator::ExistingFile);
     cmd.add_option(
         "--stt",
         ValueType::Text,
@@ -210,7 +264,11 @@ pub fn register_voice(app: &mut App) {
         ValueType::Text,
         &format!("Voice that speaks the reply (default: {DEFAULT_TTS})"),
     );
-    cmd.add_option("--output,-o", ValueType::Text, "WAV file for the spoken reply");
+    cmd.add_option(
+        "--output,-o",
+        ValueType::Text,
+        "WAV file for the spoken reply",
+    );
 
     cmd.callback(|p, g| run_voice(g, p));
 }

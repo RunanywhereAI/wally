@@ -32,7 +32,9 @@ fn ptr_to_string(ptr: *const c_char) -> String {
     }
     // SAFETY: non-null pointers from the SDK's result structs are
     // NUL-terminated strings owned by the result until it is freed.
-    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn run_stt(options: &GlobalOptions, p: &Parsed) -> i32 {
@@ -106,18 +108,33 @@ fn run_stt(options: &GlobalOptions, p: &Parsed) -> i32 {
     let diarization = p.flag("--diarization");
     let max_speakers = p.get_i64("--max-speakers").unwrap_or(0) as i32;
 
-    // SAFETY: reading a kit-provided default struct (plain data, no pointers).
-    let mut stt_options = unsafe { sys::RAC_STT_OPTIONS_DEFAULT };
+    // RAC_STT_OPTIONS_DEFAULT is a header-only `static const` (internal C
+    // linkage per translation unit), so there is no symbol to link against
+    // from Rust; every field below is set explicitly instead. Every field
+    // this CLI does not otherwise control keeps the header's own default
+    // (only audio_format, since every other field is overridden below).
+    // SAFETY: rac_stt_options_t is plain data; zeroed is a valid bit pattern
+    // for every field, all of which are set below.
+    let mut stt_options: sys::rac_stt_options_t = unsafe { std::mem::zeroed() };
     stt_options.language = if language.is_empty() {
         std::ptr::null()
     } else {
         language_c.as_ptr()
     };
-    stt_options.detect_language = if language.is_empty() { sys::TRUE } else { sys::FALSE };
+    stt_options.detect_language = if language.is_empty() {
+        sys::TRUE
+    } else {
+        sys::FALSE
+    };
     stt_options.enable_punctuation = if punctuation { sys::TRUE } else { sys::FALSE };
-    stt_options.enable_timestamps = if word_timestamps { sys::TRUE } else { sys::FALSE };
+    stt_options.enable_timestamps = if word_timestamps {
+        sys::TRUE
+    } else {
+        sys::FALSE
+    };
     stt_options.enable_diarization = if diarization { sys::TRUE } else { sys::FALSE };
     stt_options.max_speakers = max_speakers;
+    stt_options.audio_format = sys::RAC_AUDIO_FORMAT_PCM;
     stt_options.sample_rate = STT_SAMPLE_RATE;
 
     let mut result: sys::rac_stt_result_t = unsafe { std::mem::zeroed() };

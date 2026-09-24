@@ -37,7 +37,9 @@ fn ptr_to_string(ptr: *const c_char) -> String {
     }
     // SAFETY: non-null pointers from the SDK's result structs are
     // NUL-terminated strings owned by the result until it is freed.
-    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn print_result(options: &GlobalOptions, model_ref: &str, result: &sys::rac_diarization_result_t) {
@@ -212,8 +214,12 @@ pub fn register_diarize(app: &mut App) {
     cmd.add_option("audio", ValueType::Text, "16-bit PCM WAV file")
         .required()
         .check(Validator::ExistingFile);
-    cmd.add_option("--model,-m", ValueType::Text, "Diarization model id or on-disk path")
-        .required();
+    cmd.add_option(
+        "--model,-m",
+        ValueType::Text,
+        "Diarization model id or on-disk path",
+    )
+    .required();
     cmd.add_option(
         "--threshold",
         ValueType::Float,
@@ -231,8 +237,20 @@ pub fn register_diarize(app: &mut App) {
     );
 
     cmd.callback(|p, g| {
-        // SAFETY: reading a kit-provided default struct (plain data, no pointers).
-        let mut diar_options = unsafe { sys::RAC_DIARIZATION_OPTIONS_DEFAULT };
+        // RAC_DIARIZATION_OPTIONS_DEFAULT is a header-only `static const`
+        // (internal C linkage per translation unit), so there is no symbol
+        // to link against from Rust; the header's own default values are
+        // reproduced here instead. sample_rate_hz/channel_count are never
+        // touched by the CLI (the WAV resample step handles the sample rate
+        // separately), so they keep the header default for the life of this
+        // struct.
+        let mut diar_options = sys::rac_diarization_options_t {
+            sample_rate_hz: 16000,
+            channel_count: 1,
+            threshold: 0.5,
+            minimum_duration_ms: 0,
+            merge_gap_ms: 0,
+        };
         if let Some(v) = p.get_f64("--threshold") {
             diar_options.threshold = v as f32;
         }
