@@ -749,23 +749,78 @@ pub struct ResponseWriter<'a> {
     closing: bool,
 }
 
+/// cpp-httplib's `status_message` table (httplib.h, pinned v0.46.1), ported
+/// verbatim: every status code it names, the same wording (RFC 9110's
+/// "Unprocessable Content" for 422, not the older "Unprocessable Entity"),
+/// and the same fallback. httplib has no case for 499 either, so an
+/// abandoned-request response falls through to the same default as any
+/// other code it does not name -- there is no dedicated "Client Closed
+/// Request" phrase to port, because C++ never sends one.
 fn reason_phrase(status: i32) -> &'static str {
     match status {
+        100 => "Continue",
+        101 => "Switching Protocol",
+        102 => "Processing",
+        103 => "Early Hints",
         200 => "OK",
         201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
         204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        207 => "Multi-Status",
+        208 => "Already Reported",
+        226 => "IM Used",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        305 => "Use Proxy",
+        306 => "unused",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
         400 => "Bad Request",
         401 => "Unauthorized",
+        402 => "Payment Required",
         403 => "Forbidden",
         404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
         413 => "Payload Too Large",
-        422 => "Unprocessable Entity",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        418 => "I'm a teapot",
+        421 => "Misdirected Request",
+        422 => "Unprocessable Content",
+        423 => "Locked",
+        424 => "Failed Dependency",
+        425 => "Too Early",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
         429 => "Too Many Requests",
-        499 => "Client Closed Request",
-        500 => "Internal Server Error",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        501 => "Not Implemented",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
-        _ => "OK",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        506 => "Variant Also Negotiates",
+        507 => "Insufficient Storage",
+        508 => "Loop Detected",
+        510 => "Not Extended",
+        511 => "Network Authentication Required",
+        _ => "Internal Server Error", // covers 500 and every unnamed code, same as httplib's `default: case InternalServerError_500:`
     }
 }
 
@@ -1364,6 +1419,27 @@ mod tests {
         // in practice: split_base_url only requires the scheme prefix.
         let empty_host = Client::with_literal_host("http://", short(), short());
         assert_eq!(empty_host.host_header(), "http://");
+    }
+
+    // reason_phrase is httplib's status_message table, ported verbatim --
+    // including where it differs from what an earlier, smaller Rust table
+    // used to say: a code httplib names but the old 14-entry list did not
+    // (409, 405, 408) must not fall back to "OK", 422 uses RFC 9110's
+    // "Unprocessable Content" rather than the older "Unprocessable Entity",
+    // and 499 -- a code httplib has no case for at all -- lands on the same
+    // "Internal Server Error" default as any other code neither table names.
+    #[test]
+    fn reason_phrase_matches_httplibs_status_message_table() {
+        assert_eq!(reason_phrase(200), "OK");
+        assert_eq!(reason_phrase(404), "Not Found");
+        assert_eq!(reason_phrase(405), "Method Not Allowed");
+        assert_eq!(reason_phrase(408), "Request Timeout");
+        assert_eq!(reason_phrase(409), "Conflict");
+        assert_eq!(reason_phrase(414), "URI Too Long");
+        assert_eq!(reason_phrase(422), "Unprocessable Content");
+        assert_eq!(reason_phrase(499), "Internal Server Error");
+        assert_eq!(reason_phrase(500), "Internal Server Error");
+        assert_eq!(reason_phrase(9999), "Internal Server Error");
     }
 
     #[test]
