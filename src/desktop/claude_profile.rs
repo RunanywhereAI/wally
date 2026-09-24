@@ -45,8 +45,15 @@ fn support_root(third_party: bool) -> String {
 /// Claude Desktop configuration, and silently replacing it would lose whatever
 /// else they had in there.
 fn read_object(path: &str) -> Result<Value, String> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
+    // C++ reads this file through `ifstream`/`istreambuf_iterator` into a raw
+    // `std::string` -- no UTF-8 validation at the read step -- and hands those
+    // bytes straight to `Json::parse`, so invalid UTF-8 fails from the JSON
+    // parser with the same "could not read <path>: ..." message a syntax
+    // error gets. `fs::read_to_string` would validate UTF-8 a step too early,
+    // land in this "file not there" branch instead, and silently turn a real
+    // configuration into an empty one.
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
         Err(_) => return Ok(json!({})),
     };
     // C++ only treats space/tab/CR/LF as blank (`find_first_not_of(" \t\r\n")`);
@@ -54,13 +61,13 @@ fn read_object(path: &str) -> Result<Value, String> {
     // feed, U+2028, ...), which would silently swallow a file the C++ reader
     // hands to the JSON parser and reports a parse error for. Match the C++
     // character set exactly.
-    if !text
-        .bytes()
+    if !bytes
+        .iter()
         .any(|byte| !matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
     {
         return Ok(json!({}));
     }
-    match serde_json::from_str::<Value>(&text) {
+    match serde_json::from_slice::<Value>(&bytes) {
         Ok(parsed) if parsed.is_object() => Ok(parsed),
         Ok(_) => Ok(json!({})),
         Err(failure) => Err(format!("could not read {path}: {failure}")),

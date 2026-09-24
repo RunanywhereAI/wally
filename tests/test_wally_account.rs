@@ -210,6 +210,37 @@ fn credentials_missing_console_url_falls_back() {
     );
 }
 
+// The C++ reads this file through `ifstream`/`istreambuf_iterator` into a raw
+// `std::string` -- no UTF-8 validation happens at the read step -- and hands
+// those bytes straight to `Json::parse`, so invalid UTF-8 fails as "cloud
+// session file is not valid JSON" from the JSON parser, the same message a
+// syntactically broken document gets. `String::from_utf8`/`read_to_string`
+// would validate a step too early and produce "could not read the cloud
+// session" instead, which is what this pins against regressing to.
+#[cfg(not(windows))]
+#[test]
+fn credentials_invalid_utf8_reads_as_not_valid_json() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let mut env = EnvGuard::new();
+    env.set("WALLY_PROFILE_DIR", home.path().to_string_lossy().as_ref());
+    env.unset("WALLY_CONSOLE_URL");
+
+    std::fs::create_dir_all(home.path()).expect("mkdir");
+    std::fs::write(account::credentials_path(), b"{\"email\":\"\xff\"}").expect("write fixture");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            account::credentials_path(),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .expect("chmod");
+    }
+
+    let error = account::load().expect_err("invalid UTF-8 must not load as valid credentials");
+    assert_eq!(error, "cloud session file is not valid JSON");
+}
+
 // The Windows half of the contract above. A session file that will not decrypt
 // has to be reported, not skipped past as if there were no session and not
 // crashed on. DPAPI keys are per-user, so this is what a credentials.dat copied

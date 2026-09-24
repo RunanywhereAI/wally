@@ -459,8 +459,14 @@ mod dpapi {
     }
 }
 
+// Returns raw bytes rather than a `String`: the C++ reads this file through
+// `ifstream`/`istreambuf_iterator` into a `std::string` (no UTF-8 validation
+// at the read step) and hands those bytes straight to `Json::parse`, so
+// invalid UTF-8 surfaces as "cloud session file is not valid JSON" from the
+// parser, not as a distinct read error. `String::from_utf8` here would
+// validate too early and produce the wrong message for that case.
 #[cfg(windows)]
-fn read_document(path: &str) -> Result<Option<String>, String> {
+fn read_document(path: &str) -> Result<Option<Vec<u8>>, String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -470,9 +476,7 @@ fn read_document(path: &str) -> Result<Option<String>, String> {
         return Err("protected cloud session exceeds the safety limit".to_string());
     }
     let plaintext = dpapi::unprotect(&bytes)?;
-    String::from_utf8(plaintext)
-        .map(Some)
-        .map_err(|_| "could not read the cloud session".to_string())
+    Ok(Some(plaintext))
 }
 
 #[cfg(windows)]
@@ -554,8 +558,10 @@ fn write_document(path: &str, document: &str) -> Result<(), String> {
     Ok(())
 }
 
+// Returns raw bytes rather than a `String`: see the Windows `read_document`
+// doc comment above for why UTF-8 validation must not happen at this step.
 #[cfg(not(windows))]
-fn read_document(path: &str) -> Result<Option<String>, String> {
+fn read_document(path: &str) -> Result<Option<Vec<u8>>, String> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
 
@@ -614,9 +620,7 @@ fn read_document(path: &str) -> Result<Option<String>, String> {
     if buffer.len() as u64 > MAXIMUM_CREDENTIAL_BYTES {
         return Err("cloud session exceeds the safety limit".to_string());
     }
-    let body =
-        String::from_utf8(buffer).map_err(|_| "could not read the cloud session".to_string())?;
-    Ok(Some(body))
+    Ok(Some(buffer))
 }
 
 /// Same basename C++'s `mkstemp` template builds (`path + ".tmp.XXXXXX"`): a
@@ -885,7 +889,7 @@ pub fn load() -> Result<Credentials, String> {
         return Ok(credentials);
     };
 
-    let object: serde_json::Value = serde_json::from_str(&document)
+    let object: serde_json::Value = serde_json::from_slice(&document)
         .map_err(|_| "cloud session file is not valid JSON".to_string())?;
     let Some(map) = object.as_object() else {
         return Err("cloud session file is not a JSON object".to_string());
