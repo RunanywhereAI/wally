@@ -880,15 +880,19 @@ fn run_llm(options: &GlobalOptions, verb: LlmVerb, prompt: &str, params: &RunPar
         }
     };
 
-    // An explicit --engine is honoured whatever the ref resolved to. This
-    // used to read `resolved.from_catalog ? UNSPECIFIED : engine_hint.framework`,
-    // which silently DISCARDED the flag for anything that came out of the
-    // built-in catalog -- `--engine <x>` on a catalog model did nothing at
-    // all, with no warning. When the flag is absent engine_hint.framework is
-    // UNSPECIFIED, so catalog entries still fall back to their own declared
-    // framework exactly as before; the only behaviour that changes is that
-    // asking now works. Mirrors cmd_embed.cpp.
-    if !load_model(options, &resolved.model_id, engine_hint.framework, is_vlm) {
+    // NOTE (ported as-is, not fixed here): cmd_run.cpp silently discards an
+    // explicit --engine for anything that resolved through the built-in
+    // catalog -- `--engine <x>` on a catalog model does nothing at all, with
+    // no warning. Only a non-catalog ref (hf.co/..., a URL, a bare file path)
+    // gets engine_hint.framework; a catalog hit always loads with UNSPECIFIED
+    // and falls back to its own declared framework. Flagged for a reviewer to
+    // decide whether this is worth fixing; out of scope for this port.
+    let load_framework = if resolved.from_catalog {
+        v1::InferenceFramework::Unspecified
+    } else {
+        engine_hint.framework
+    };
+    if !load_model(options, &resolved.model_id, load_framework, is_vlm) {
         return 1;
     }
     if !params.lora.is_empty() && !apply_lora_adapter(&params.lora, params.lora_scale) {
