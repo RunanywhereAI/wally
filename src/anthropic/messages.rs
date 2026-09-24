@@ -647,7 +647,7 @@ impl Drop for FinishPipeOnDrop<'_> {
 fn feed_sse_bytes(
     data: &[u8],
     pending: &mut Vec<u8>,
-    payload: &mut String,
+    payload: &mut Vec<u8>,
     has_data: &mut bool,
     saw_done: &mut bool,
     state: &mut translate::StreamState,
@@ -671,9 +671,13 @@ fn feed_sse_bytes(
                     value.remove(0);
                 }
                 if *has_data {
-                    payload.push('\n');
+                    payload.push(b'\n');
                 }
-                payload.push_str(&String::from_utf8_lossy(&value));
+                // Raw bytes, exactly as C++'s `std::string payload` -- never
+                // lossily repaired. Invalid UTF-8 must fail the same way it
+                // fails nlohmann's `Json::parse` below, not get silently
+                // replaced with U+FFFD before parsing ever sees it.
+                payload.extend_from_slice(&value);
                 *has_data = true;
             }
             continue;
@@ -684,11 +688,11 @@ fn feed_sse_bytes(
         *has_data = false;
         let events = if *saw_done {
             translate::stream_error_to_anthropic(state, "the model endpoint sent data after [DONE]")
-        } else if payload == "[DONE]" {
+        } else if payload.as_slice() == b"[DONE]" {
             *saw_done = true;
             String::new()
         } else {
-            match serde_json::from_str::<Value>(payload) {
+            match serde_json::from_slice::<Value>(payload) {
                 Ok(parsed) => translate::stream_chunk_to_anthropic(&parsed, state),
                 Err(_) => translate::stream_error_to_anthropic(
                     state,
@@ -845,7 +849,7 @@ fn handle_streaming(
         state.model = effective.clone();
         state.input_estimate = input_estimate;
         let mut pending: Vec<u8> = Vec::new();
-        let mut payload = String::new();
+        let mut payload: Vec<u8> = Vec::new();
         let mut has_data = false;
         let mut saw_done = false;
 

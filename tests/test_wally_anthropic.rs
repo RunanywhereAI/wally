@@ -990,3 +990,71 @@ fn a_non_boolean_stream_field_answers_the_generic_500_not_a_silent_false() {
     anthropic::stop(&mut shim);
     handle.stop();
 }
+
+// An SSE `data:` line whose JSON string content carries a lone, non-continued
+// UTF-8 lead byte (0xE9 immediately followed by `"`, never a valid
+// continuation byte) is exactly the shape nlohmann's `Json::parse` rejects
+// mid-parse, byte for byte -- not a shape `serde_json::from_slice` should
+// ever get the chance to lossily repair into a normal chunk first. The
+// payload accumulator has to stay raw bytes (never pre-converted through
+// `String::from_utf8_lossy`) for this to surface as the same malformed-frame
+// error event C++ produces instead of a corrupted-but-"successful" delta.
+#[test]
+fn an_invalid_utf8_sse_data_line_is_a_malformed_frame_not_a_silently_repaired_chunk() {
+    let _shim_guard = shim_lock::shim_lock();
+    let mut server = Server::new();
+    server.route("POST", "/v1/chat/completions", |_req, res, _peer| {
+        let mut frame: Vec<u8> = b"data: {\"choices\":[{\"delta\":{\"content\":\"caf".to_vec();
+        frame.push(0xE9); // lead byte of a 2-byte sequence, but the next byte (0x22, '"') is not a continuation byte
+        frame.extend_from_slice(b"\"}}]}\n\n");
+        if res
+            .begin_chunked(200, &[("Content-Type", "text/event-stream")])
+            .is_err()
+        {
+            return;
+        }
+        let _ = res.write_chunk(&frame);
+        let _ = res.end_chunked();
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        console_url: String::new(),
+        serving: false,
+    };
+    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let shim = started.expect("translator did not start");
+    let mut client = Client::new(
+        &shim.base_url,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    let body = serde_json::json!({
+        "model": "test",
+        "stream": true,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    .to_string();
+    let request = Request::post("/v1/messages", body.into_bytes())
+        .header("x-api-key", shim.auth_token.clone())
+        .header("Content-Type", "application/json");
+    let reply = client
+        .send(&request, None, None)
+        .expect("shim answers even on a malformed SSE frame");
+    assert_eq!(reply.status, 200, "the stream itself opens fine");
+    let received = String::from_utf8_lossy(&reply.body);
+    assert!(
+        received.contains("the model endpoint sent a malformed stream frame"),
+        "expected the malformed-frame error event; got: {received}"
+    );
+    assert!(
+        !received.contains("\"text\":\"caf"),
+        "the invalid byte must not surface as a lossily-repaired content delta; got: {received}"
+    );
+    let mut shim = shim;
+    anthropic::stop(&mut shim);
+    handle.stop();
+}
