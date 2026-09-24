@@ -322,7 +322,11 @@ impl App {
     }
 
     /// `add_flag(spec, variable, description)`, including CLI11's
-    /// `--on,--off{false}` value suffixes.
+    /// `--on,--off{false}` value suffixes and `!--negated` names (CLI11's
+    /// `detail::remove_default_flag_values`/`get_default_flag_values`: a
+    /// leading `!` is stripped and the remainder registered as a normal
+    /// name, but giving that name alone records `"false"` instead of the
+    /// usual `"true"`).
     pub fn add_flag(&mut self, spec: &str, description: &str) -> &mut Opt {
         let mut names = Vec::new();
         let mut positional = String::new();
@@ -332,7 +336,12 @@ impl App {
             if token.is_empty() {
                 continue;
             }
-            let (name, value) = split_flag_value(token);
+            let negated = token.starts_with('!');
+            let token = token.strip_prefix('!').unwrap_or(token);
+            let (name, mut value) = split_flag_value(token);
+            if negated && !token.contains('{') {
+                value = "false".to_string();
+            }
             if name.starts_with('-') {
                 flag_values.insert(name.clone(), value);
                 names.push(name);
@@ -716,11 +725,61 @@ impl<'a> ParseState<'a> {
         self.handle_unmatched(depth, args[i].clone(), i)
     }
 
+    /// True when `token` is CLI11's `detail::Classifier::NONE` for the app at
+    /// `frames[level]` (`App::_recognize`): not `--`, not one of this app's
+    /// subcommand names, not `--long`-shaped, and not `-x`-shaped — except a
+    /// digit-led short name (`-1`, `-2`, ...) that isn't itself a registered
+    /// option on this app, which `_recognize` special-cases back to NONE (a
+    /// negative number, not an unmatched short flag).
+    fn is_none_shaped(&self, level: usize, token: &str) -> bool {
+        if token == "--" {
+            return false;
+        }
+        if self.frames[level].app.get_subcommand(token).is_some() {
+            return false;
+        }
+        match classify(token) {
+            Token::Long { .. } => false,
+            Token::Short { name, .. } => {
+                let is_digit_name = name.as_bytes().get(1).is_some_and(u8::is_ascii_digit);
+                if !is_digit_name {
+                    return false;
+                }
+                !self.frames[level]
+                    .app
+                    .options
+                    .iter()
+                    .any(|o| o.names.iter().any(|n| n == name))
+            }
+            Token::Plain => true,
+        }
+    }
+
+    /// `App::_count_remaining_positionals(true)`: how many of this app's own
+    /// `->required()` positionals a greedy `multi` option must leave tokens
+    /// for, computed once before that option starts eating.
+    fn remaining_required_positionals(&self, level: usize) -> usize {
+        let frame = &self.frames[level];
+        let positionals: Vec<usize> = frame
+            .app
+            .options
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| !o.positional.is_empty())
+            .map(|(idx, _)| idx)
+            .collect();
+        let start = frame.positional_cursor.min(positionals.len());
+        positionals[start..]
+            .iter()
+            .filter(|&&idx| frame.app.options[idx].required)
+            .count()
+    }
+
     /// Records one match of `app.options[opt_idx]` at frame `level`: a flag
-    /// (records its `{value}` result) or an option (consumes exactly one
-    /// value — CLI11's `type_size(1, 1)` for a `std::vector<std::string>`-bound
-    /// option; a `multi` option accumulates across *repeated* occurrences of
-    /// the flag, not by greedily eating multiple tokens in one occurrence).
+    /// (records its `{value}` result) or an option. A `multi` (vector-bound)
+    /// option's single occurrence greedily eats every following
+    /// NONE-classified token, not just one — see the comment above the
+    /// greedy loop below and `is_none_shaped`.
     fn consume_matched(
         &mut self,
         args: &[String],
@@ -798,6 +857,7 @@ impl<'a> ParseState<'a> {
 
         let spec = self.frames[level].app.options[opt_idx].spec.clone();
         let value_type = self.frames[level].app.options[opt_idx].value_type;
+        let multi = self.frames[level].app.options[opt_idx].multi;
         let validators = self.frames[level].app.options[opt_idx].validators.clone();
         let type_name = self.frames[level].app.options[opt_idx].type_name.clone();
         let int_bound_override = self.frames[level].app.options[opt_idx].int_bound_override;
@@ -810,17 +870,18 @@ impl<'a> ParseState<'a> {
             .unwrap_or_default();
 
         // Every wally vector-bound option (`--stop`, `--doc,-d`, `--file,-f`,
-        // `--text,-t`, ...) is `std::vector<std::string>`, and CLI11 explicitly
-        // excludes `std::string` from `is_mutable_container` (it's constructible
-        // from a single string), so `type_size(1, 1)` applies: each *occurrence*
-        // of the flag consumes exactly one following token, never a greedy run —
-        // repetition is how the vector accumulates (`expected_count` is
-        // unbounded), not multi-token consumption per occurrence. `multi` here
-        // only distinguishes "may repeat" for downstream accumulation semantics;
-        // it must not change how many tokens a single occurrence consumes. (The
-        // one CLI11 mechanism that *does* make a single occurrence greedy,
-        // `->allow_extra_args()`, is applied in wally only to the "args"
-        // passthrough positional — see `fill_positional`, unaffected by this.)
+        // `--text,-t`, ...) is `std::vector<std::string>`. CLI11's
+        // `add_option` sets such an option's `expected(detail::
+        // expected_count<T>::value)`, and for a mutable container that value
+        // is `expected_max_vector_size`; `Option::expected(int)`'s branch for
+        // exactly that sentinel sets `allow_extra_args_ = true`. Back in
+        // `App::_parse_arg`, `allow_extra_args()` being true skips the
+        // "clamp max_num to one type-width" rewrite and keeps `max_num`
+        // enormous, so *one* occurrence of the flag greedily eats every
+        // following NONE-classified token (`_recognize(...) == NONE`) — not
+        // just its own single value. Confirmed against the real binary:
+        // `embed --text one two` embeds two texts, "one" and "two", from a
+        // single `--text`.
         let mut next = i + 1;
         let mut values: Vec<String> = Vec::new();
         // An inline `=value` only counts as "the value" when it's non-empty
@@ -843,13 +904,44 @@ impl<'a> ParseState<'a> {
                     next += 1;
                 }
                 None => {
-                    self.push_parse_error(format!(
+                    // `ArgumentMismatch::TypedAtLeast` (CLI11.hpp, `_parse_arg`):
+                    // thrown synchronously out of the scan itself, the moment an
+                    // option can't collect its required minimum — this aborts
+                    // the whole parse immediately, before `_process_callbacks()`
+                    // (where a positional's `->check()` validator or another
+                    // option's value conversion would run) is ever reached. It
+                    // therefore always outranks those, regardless of where in
+                    // argv this option appears relative to them — a distinct,
+                    // higher-priority sentinel bucket from `push_parse_error`'s
+                    // (deferred, addition-order) conversion/validator errors.
+                    self.push_scan_error(format!(
                         "{display}: 1 required {} missing",
                         full_type_name(value_type, type_name.as_deref(), &validators)
                     ));
                     return next;
                 }
             },
+        }
+
+        // A `multi` (vector-bound) option keeps eating: CLI11 stops only at
+        // the next option/subcommand-shaped token, a bare `--`, or once too
+        // few tokens remain to also satisfy this app's own not-yet-filled
+        // `->required()` positionals (`_count_remaining_positionals(true)`,
+        // computed once before the loop, same as here).
+        if multi {
+            let remaining_required = self.remaining_required_positionals(level);
+            while next < args.len() {
+                let remaining_tokens = args.len() - next;
+                if remaining_required >= remaining_tokens {
+                    break;
+                }
+                let candidate = args[next].as_str();
+                if !self.is_none_shaped(level, candidate) {
+                    break;
+                }
+                values.push(candidate.to_string());
+                next += 1;
+            }
         }
 
         let mut normalized: Vec<String> = Vec::with_capacity(values.len());
@@ -887,23 +979,7 @@ impl<'a> ParseState<'a> {
     }
 
     fn fill_positional(&mut self, depth: usize, token: &str) {
-        let positional_only = self.frames[depth].positional_only;
-        // CLI11's `App::_parse_positional` tail fallback: once a bare `--`
-        // has set `positional_only`, a NONE-classified token that names one
-        // of *this* (sub)command's own subcommands is handed to that
-        // subcommand's `_parse` directly (`_find_subcommand` + `com->_parse`)
-        // rather than through the normal `SUBCOMMAND` classification —
-        // bypassing the bookkeeping (`_parse_subcommand`) that would
-        // register it in `parsed_subcommands_`. None of wally's subcommands
-        // set `parse_complete_callback_`, so that back-door `_parse` is
-        // observably a no-op: the token vanishes instead of becoming an
-        // extra, and this (sub)command's own required-subcommand check still
-        // sees nothing entered (reproduced against the real C++ binary:
-        // `wally -- version` / `-- about` / `--json -- version` all print the
-        // bare root help and exit 0, the same as no subcommand at all).
-        let swallow_subcommand =
-            positional_only && self.frames[depth].app.get_subcommand(token).is_some();
-        let frame = &mut self.frames[depth];
+        let frame = &self.frames[depth];
         let positionals: Vec<usize> = frame
             .app
             .options
@@ -917,22 +993,66 @@ impl<'a> ParseState<'a> {
             let opt = &frame.app.options[opt_idx];
             let spec = opt.spec.clone();
             let multi = opt.multi;
-            frame
-                .parsed
-                .values
-                .entry(spec)
-                .or_default()
-                .push(token.to_string());
+            let display = opt.positional.clone();
+            let value_type = opt.value_type;
+            let validators = opt.validators.clone();
+            let int_bound_override = opt.int_bound_override;
             if !multi {
-                frame.positional_cursor += 1;
+                self.frames[depth].positional_cursor += 1;
             }
-        } else if swallow_subcommand {
+            // CLI11 runs each option's conversion + `->check(...)` validators
+            // in `Option::run_callback()` as soon as `_process_callbacks()`
+            // reaches it (addition order) — for a positional that coincides
+            // with consuming it here, so validate immediately rather than
+            // waiting for `finish()` to look at raw text.
+            match validate_and_convert(&display, token, value_type, &validators, int_bound_override)
+            {
+                Ok(canonical) => {
+                    self.frames[depth]
+                        .parsed
+                        .values
+                        .entry(spec)
+                        .or_default()
+                        .push(canonical);
+                }
+                Err(msg) => self.push_parse_error(msg),
+            }
+            return;
+        }
+        // No positional slot left on *this* app. CLI11's `_parse_positional`
+        // tries a nameless (anonymous) option-group subcommand next (wally
+        // never registers one) and only then falls through to the parent —
+        // *before* the repeated-subcommand match or reporting an extra
+        // (`App::_parse_positional`, CLI11.hpp): `add_verb_alias`'s verb
+        // subcommands (`stt transcribe`, `tts synthesize`, `vad detect`, ...)
+        // own no positionals of their own and set `.fallthrough(true)` so the
+        // parent namespace's `audio`/`text`/... positional still fills.
+        if frame.app.fallthrough && depth > 0 {
+            self.fill_positional(depth - 1, token);
+            return;
+        }
+        let positional_only = frame.positional_only;
+        // CLI11's `App::_parse_positional` tail fallback: once a bare `--`
+        // has set `positional_only`, a NONE-classified token that names one
+        // of *this* (sub)command's own subcommands is handed to that
+        // subcommand's `_parse` directly (`_find_subcommand` + `com->_parse`)
+        // rather than through the normal `SUBCOMMAND` classification —
+        // bypassing the bookkeeping (`_parse_subcommand`) that would
+        // register it in `parsed_subcommands_`. None of wally's subcommands
+        // set `parse_complete_callback_`, so that back-door `_parse` is
+        // observably a no-op: the token vanishes instead of becoming an
+        // extra, and this (sub)command's own required-subcommand check still
+        // sees nothing entered (reproduced against the real C++ binary:
+        // `wally -- version` / `-- about` / `--json -- version` all print the
+        // bare root help and exit 0, the same as no subcommand at all).
+        let swallow_subcommand = positional_only && frame.app.get_subcommand(token).is_some();
+        if swallow_subcommand {
             // Silently discarded, as in C++ — see the comment above.
         } else {
             // Whether this later gets reported (`_process_extras()`, `finish()`)
             // depends on `prefix_command`/`allow_extras` there, not here — every
             // positional-exhausted token is recorded the same way.
-            frame.parsed.remaining.push(token.to_string());
+            self.frames[depth].parsed.remaining.push(token.to_string());
         }
     }
 
@@ -945,7 +1065,36 @@ impl<'a> ParseState<'a> {
             .push(format!("\0parse-error\0{message}"));
     }
 
+    /// `ArgumentMismatch::TypedAtLeast` (a missing required option value) is
+    /// thrown straight out of CLI11's scan — before `_process_callbacks()`
+    /// ever starts — so it unconditionally outranks a conversion/validator
+    /// error from `push_parse_error`, regardless of scan order between them.
+    fn push_scan_error(&mut self, message: String) {
+        self.frames
+            .last_mut()
+            .unwrap()
+            .parsed
+            .remaining
+            .push(format!("\0scan-error\0{message}"));
+    }
+
     fn finish(self) -> Outcome {
+        // See `push_scan_error`: a missing-required-value error aborts the
+        // scan itself, so it wins over every conversion/validator error below
+        // no matter which was encountered first while walking argv.
+        for frame in &self.frames {
+            if let Some(msg) = frame
+                .parsed
+                .remaining
+                .iter()
+                .find_map(|r| r.strip_prefix("\0scan-error\0"))
+            {
+                return Outcome::ParseErr {
+                    message: msg.to_string(),
+                };
+            }
+        }
+
         // A bad conversion/argument count is recorded as a sentinel in
         // `remaining` the moment it happens (CLI11 throws immediately, from
         // wherever the bad token was) — surface the first one, in scan order,
@@ -2159,6 +2308,299 @@ mod tests {
             Outcome::ParseErr {
                 message: "Could not convert: --version = maybe".to_string(),
             }
+        );
+    }
+
+    /// full-surface sweep, item 1: `add_verb_alias`'s verb subcommand
+    /// (`stt transcribe`, `tts synthesize`, `vad detect`, ...) owns no
+    /// positional of its own and sets `.fallthrough(true)`; CLI11's
+    /// `App::_parse_positional` hands a positional it has no slot for
+    /// straight to the fallthrough parent, so `stt transcribe a.wav` fills
+    /// `stt`'s own `audio` positional exactly like `stt a.wav` does.
+    #[test]
+    fn verb_alias_positional_falls_through_to_the_parent_command() {
+        let captured = Rc::new(RefCell::new(None));
+        let captured2 = captured.clone();
+        let mut app = App::new("root", "wally");
+        let stt = app.add_subcommand("stt", "Turn recorded speech into text");
+        stt.add_option("audio", ValueType::Text, "16-bit PCM WAV file");
+        stt.add_subcommand("transcribe", "Transcribe an audio file")
+            .fallthrough(true);
+        stt.callback(move |p, _g| {
+            *captured2.borrow_mut() = Some(p.get_str("audio"));
+            0
+        });
+
+        let outcome = app.parse(&["stt".into(), "transcribe".into(), "a.wav".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec!["stt".to_string(), "transcribe".to_string()]
+            }
+        );
+        assert_eq!(*captured.borrow(), Some(Some("a.wav".to_string())));
+    }
+
+    /// full-surface sweep, item 1: a verb-alias subcommand with more
+    /// positional-shaped tokens than the fallthrough parent has slots for
+    /// still reports CLI11's `ExtrasError`, exactly like giving the same
+    /// extra tokens directly to the parent.
+    #[test]
+    fn verb_alias_extra_positionals_beyond_the_parents_slot_are_extras() {
+        let mut app = App::new("root", "wally");
+        let stt = app.add_subcommand("stt", "Turn recorded speech into text");
+        stt.add_option("audio", ValueType::Text, "16-bit PCM WAV file");
+        stt.add_subcommand("transcribe", "Transcribe an audio file")
+            .fallthrough(true);
+
+        let outcome = app.parse(&[
+            "stt".into(),
+            "transcribe".into(),
+            "a.wav".into(),
+            "extra".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Extras {
+                message: "The following argument was not expected: extra".to_string(),
+                path: vec!["stt".to_string(), "transcribe".to_string()],
+            }
+        );
+    }
+
+    /// full-surface sweep, item 2: `Option::run_callback()` runs a matched
+    /// option's conversion + `->check(...)` validators as soon as
+    /// `_process_callbacks()` reaches it, in addition order — for a
+    /// positional this means its validator fires immediately when consumed,
+    /// before a later option's conversion failure or a later `->required()`
+    /// violation is ever reached. `fill_positional` used to store a
+    /// positional's raw text with no validation at all, so `--model`'s
+    /// `required()` (checked only in a later pass) used to win instead.
+    #[test]
+    fn positional_check_runs_before_a_later_required_option_error() {
+        let mut app = App::new("root", "wally");
+        let cmd = app.add_subcommand("diarize", "Diarize audio");
+        cmd.add_option("audio", ValueType::Text, "16-bit PCM WAV file")
+            .check(Validator::ExistingFile);
+        cmd.add_option("--model,-m", ValueType::Text, "model")
+            .required();
+        cmd.add_option("--threshold", ValueType::Float, "threshold");
+
+        let outcome = app.parse(&[
+            "diarize".into(),
+            "definitely-missing.wav".into(),
+            "--threshold".into(),
+            "-1".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "audio: File does not exist: definitely-missing.wav".to_string(),
+            }
+        );
+    }
+
+    /// full-surface sweep, item 2 (follow-up): a missing required option
+    /// *value* (`ArgumentMismatch::TypedAtLeast`) is thrown straight out of
+    /// CLI11's scan, before `_process_callbacks()` — where a positional's
+    /// `->check()` validator runs — is ever reached, so it wins even though
+    /// the positional appears earlier in argv and would otherwise be checked
+    /// first (`positional_check_runs_before_a_later_required_option_error`,
+    /// above, is the case where the option *does* get its value).
+    #[test]
+    fn missing_option_value_outranks_an_earlier_positional_validator_error() {
+        let mut app = App::new("root", "wally");
+        let cmd = app.add_subcommand("diarize", "Diarize audio");
+        cmd.add_option("audio", ValueType::Text, "16-bit PCM WAV file")
+            .check(Validator::ExistingFile);
+        cmd.add_option("--model,-m", ValueType::Text, "model");
+
+        let outcome = app.parse(&[
+            "diarize".into(),
+            "definitely-missing.wav".into(),
+            "--model".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--model: 1 required TEXT missing".to_string(),
+            }
+        );
+    }
+
+    /// full-surface sweep, item 3: `detail::remove_default_flag_values`
+    /// strips a `!`-prefixed alias's `!` (keeping its dashes) before normal
+    /// name-parsing, so `!--no-punctuation` registers as a genuine second
+    /// long name — never a positional — and `detail::get_default_flag_values`
+    /// records that giving that alias alone means `"false"`, not the usual
+    /// `"true"`.
+    #[test]
+    fn negated_flag_alias_is_a_flag_name_not_a_positional() {
+        let mut app = App::new("root", "wally");
+        let opt = app.add_flag(
+            "--punctuation,!--no-punctuation",
+            "Punctuate the transcript (default on)",
+        );
+
+        assert!(opt.positional.is_empty());
+        assert_eq!(
+            opt.names,
+            vec!["--punctuation".to_string(), "--no-punctuation".to_string()]
+        );
+        assert_eq!(
+            opt.flag_values.get("--punctuation").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            opt.flag_values.get("--no-punctuation").map(String::as_str),
+            Some("false")
+        );
+    }
+
+    /// full-surface sweep, item 3: giving the negated alias alone sets the
+    /// flag false, end to end through a real parse.
+    #[test]
+    fn negated_flag_alias_sets_false_when_given_without_a_value() {
+        let mut app = App::new("root", "wally");
+        app.add_flag(
+            "--punctuation,!--no-punctuation",
+            "Punctuate the transcript (default on)",
+        );
+        app.callback(|p, _g| i32::from(!p.flag("--punctuation")));
+
+        let outcome = app.parse(&["--no-punctuation".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 1,
+                path: vec![]
+            }
+        );
+    }
+
+    /// full-surface sweep, item 4: a `multi` (vector-bound) option's single
+    /// occurrence greedily eats every following NONE-classified token
+    /// (CLI11's `is_mutable_container` gives it `allow_extra_args_`), not
+    /// just its own one value — `embed --text a b c d` embeds all four,
+    /// it doesn't leave `b`/`c`/`d` to spill into positionals or extras.
+    #[test]
+    fn multi_option_greedily_eats_every_following_none_shaped_token() {
+        let captured = Rc::new(RefCell::new(None));
+        let captured2 = captured.clone();
+        let mut app = App::new("root", "wally");
+        let cmd = app.add_subcommand("embed", "Turn text into embedding vectors");
+        cmd.add_option("input", ValueType::Text, "Text to embed");
+        cmd.add_option("--text,-t", ValueType::Text, "text").multi();
+        cmd.callback(move |p, _g| {
+            *captured2.borrow_mut() = Some(p.get_strs("--text"));
+            0
+        });
+
+        let outcome = app.parse(&[
+            "embed".into(),
+            "--text".into(),
+            "a".into(),
+            "b".into(),
+            "c".into(),
+            "d".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec!["embed".to_string()]
+            }
+        );
+        assert_eq!(
+            *captured.borrow(),
+            Some(vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string()
+            ])
+        );
+    }
+
+    /// full-surface sweep, item 4: the greedy consumption still stops at the
+    /// next occurrence of the same (or any other) option, so repeating a
+    /// `multi` option keeps working exactly like before this fix.
+    #[test]
+    fn multi_option_greedy_consumption_stops_at_the_next_option() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--stop", ValueType::Text, "stop sequence")
+            .multi();
+        app.callback(|p, _g| {
+            assert_eq!(
+                p.get_strs("--stop"),
+                vec!["a".to_string(), "b".to_string(), "c".to_string()]
+            );
+            0
+        });
+
+        let outcome = app.parse(&[
+            "--stop".into(),
+            "a".into(),
+            "b".into(),
+            "--stop".into(),
+            "c".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+    }
+
+    /// full-surface sweep, item 4: a `multi` option still leaves enough
+    /// tokens for a `->required()` positional that comes after it on the
+    /// command line (`_count_remaining_positionals(true)`, checked once
+    /// before the greedy loop starts).
+    #[test]
+    fn multi_option_leaves_room_for_a_later_required_positional() {
+        let captured = Rc::new(RefCell::new(None));
+        let captured2 = captured.clone();
+        let mut app = App::new("root", "wally");
+        let cmd = app.add_subcommand("search", "Search");
+        cmd.add_option("--doc,-d", ValueType::Text, "doc").multi();
+        cmd.add_option("question", ValueType::Text, "query")
+            .required();
+        cmd.callback(move |p, _g| {
+            *captured2.borrow_mut() = Some((p.get_strs("--doc"), p.get_str("question")));
+            0
+        });
+
+        let outcome = app.parse(&[
+            "search".into(),
+            "--doc".into(),
+            "a".into(),
+            "b".into(),
+            "q".into(),
+        ]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec!["search".to_string()]
+            }
+        );
+        assert_eq!(
+            *captured.borrow(),
+            Some((
+                vec!["a".to_string(), "b".to_string()],
+                Some("q".to_string())
+            ))
         );
     }
 }
