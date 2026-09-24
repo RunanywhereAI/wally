@@ -359,7 +359,15 @@ function(wally_bundle_product_dlls target dest_dir)
     # beside the exe or the archive fails with 0xC0000135 on a machine without
     # OpenSSL. Bundle the two the exe actually imports.
     if(TARGET RunAnywhere::server)
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
+        # The compiler's target, not CMAKE_SYSTEM_PROCESSOR: that is the host when
+        # cross-compiling (an x64 build on an ARM64 machine), which looked for
+        # libcrypto-3-arm64.dll and shipped an x64 exe without its OpenSSL.
+        if(DEFINED CMAKE_CXX_COMPILER_ARCHITECTURE_ID AND NOT CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "")
+            set(_wally_target_arch "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
+        else()
+            set(_wally_target_arch "${CMAKE_SYSTEM_PROCESSOR}")
+        endif()
+        if(_wally_target_arch MATCHES "ARM64|arm64|aarch64")
             set(_wally_ssl_arch "arm64")
         else()
             set(_wally_ssl_arch "x64")
