@@ -860,6 +860,14 @@ fn wally_mlx_run_end_to_end() {
         list_json.contains("\"backend\":\"mlx\""),
         "MLX fake LLM row present: {list_json}"
     );
+    assert!(
+        list_json.contains("\"id\":\"qwen3-4b-instruct-2507\"")
+            && !list_json.contains("\"id\":\"qwen3-1.7b\"")
+            && !list_json.contains("\"id\":\"mlx-qwen3-4b-instruct-2507-4bit\"")
+            && !list_json.contains("\"id\":\"mlx-qwen3-1.7b-4bit\"")
+            && list_json.contains("\"harness_compatible\":true"),
+        "certified harness models and compatibility metadata in models list: {list_json}"
+    );
 
     let run_json = run_cli_or_fail(
         &[

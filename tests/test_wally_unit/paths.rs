@@ -65,4 +65,15 @@ fn state_dir() {
             .set("LOCALAPPDATA", "C:\\wally-local");
         assert_eq!(paths::state_dir(), "C:/wally-local/RunAnywhere/state");
     }
+    #[cfg(windows)]
+    {
+        // MSYS2 / Git Bash set HOME on Windows. It must not win over
+        // LOCALAPPDATA, or state lands in a POSIX-shaped directory under the
+        // user profile.
+        let mut env = EnvGuard::new();
+        env.unset("XDG_STATE_HOME")
+            .set("HOME", "C:/msys-home")
+            .set("LOCALAPPDATA", "C:/wally-local");
+        assert_eq!(paths::state_dir(), "C:/wally-local/RunAnywhere/state");
+    }
 }

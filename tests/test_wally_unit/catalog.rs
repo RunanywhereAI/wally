@@ -181,6 +181,18 @@ fn catalog_lookup() {
         );
     }
 
+    #[cfg(wally_has_llamacpp)]
+    {
+        let qwen_harness =
+            catalog::find("qwen3-4b-instruct").expect("qwen3-4b-instruct should resolve");
+        assert!(
+            qwen_harness.harness_compatible
+                && qwen_harness.context_length == 262144
+                && catalog::find("qwen3-1.7b").is_none(),
+            "only the certified Qwen3 4B GGUF row should remain harness-compatible"
+        );
+    }
+
     // Multi-file entries (VLM pairs, embeddings) must carry ≥2 required files.
     // smolvlm2 is a VLM, out of scope for the LLM-only cut (src/app.cpp,
     // src/catalog/catalog.cpp) -- left out, not deleted, so it comes back
@@ -196,6 +208,16 @@ fn catalog_lookup() {
         assert_eq!(mlx_llm.category, v1::ModelCategory::Language);
         assert_eq!(mlx_llm.files.len(), 9);
         assert!(mlx_llm.supports_thinking);
+
+        let mlx_qwen_harness = catalog::find("mlx-qwen3-4b-instruct")
+            .expect("mlx-qwen3-4b-instruct should resolve on Apple");
+        assert!(
+            mlx_qwen_harness.harness_compatible
+                && mlx_qwen_harness.files.len() == 11
+                && mlx_qwen_harness.context_length == 262144
+                && catalog::find("mlx-qwen3-1.7b").is_none(),
+            "only the certified Qwen3 4B MLX row should remain harness-compatible"
+        );
     }
     #[cfg(not(target_os = "macos"))]
     assert!(

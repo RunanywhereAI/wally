@@ -28,7 +28,7 @@ use std::ffi::CString;
 #[cfg(wally_has_server)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const DEFAULT_SERVE_MODEL: &str = "qwen3-0.6b";
+const DEFAULT_SERVE_MODEL: &str = "qwen3-4b-instruct-2507";
 
 #[cfg(wally_has_server)]
 // Async-signal-safe shutdown: the ctrlc handler only sets a flag; the main
@@ -216,7 +216,7 @@ pub fn register_serve(app: &mut App) {
     #[cfg(wally_has_server)]
     {
         cmd.footer(&examples_footer(&[
-            Example::new("wally serve qwen3-0.6b", ""),
+            Example::new("wally serve qwen3-4b-instruct-2507", ""),
             Example::new("wally serve granite-4.2-8b --port 8000", ""),
         ]));
         cmd.add_option(
