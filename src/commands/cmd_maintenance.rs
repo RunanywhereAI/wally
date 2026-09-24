@@ -119,9 +119,12 @@ fn models_directory() -> String {
         .unwrap_or_default()
 }
 
-// Best-effort recursive size, symlinks not followed while walking (avoids a
-// symlink cycle; the C++ recursive_directory_iterator default has the same
-// effect for directory symlinks).
+// Best-effort recursive size, directory symlinks not followed while walking
+// (avoids a symlink cycle; the C++ recursive_directory_iterator default has
+// the same effect for directory symlinks). id 34: C++'s
+// is_regular_file(ec)/file_size(ec) call status(), which DOES follow a
+// symlink to a regular file, so a symlinked file's target size counts here
+// too — matches the same fix already applied for ids 26/29.
 fn dir_size(dir: &Path) -> u64 {
     let mut total = 0u64;
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -137,6 +140,12 @@ fn dir_size(dir: &Path) -> u64 {
             total += std::fs::metadata(entry.path())
                 .map(|m| m.len())
                 .unwrap_or(0);
+        } else if file_type.is_symlink() {
+            if let Ok(target_metadata) = std::fs::metadata(entry.path()) {
+                if target_metadata.is_file() {
+                    total += target_metadata.len();
+                }
+            }
         }
     }
     total
@@ -161,6 +170,25 @@ fn human_size(target: &Path) -> String {
         unit += 1;
     }
     format!("{value:.1} {}", units[unit])
+}
+
+/// id 35: strips the "(os error N)" suffix Rust's `io::Error` Display always
+/// appends after the OS message for an OS-sourced error, so the printed text
+/// matches C++'s `std::error_code::message()`, which is the OS message alone
+/// (e.g. "Permission denied"), with no error-number suffix. Only a trailing
+/// " (os error <digits>)" is removed; a non-OS io::Error's Display (which
+/// never has that exact suffix) passes through unchanged.
+fn os_error_message(error: &std::io::Error) -> String {
+    let full = error.to_string();
+    if let Some(open) = full.rfind(" (os error ") {
+        let tail = &full[open + " (os error ".len()..];
+        if let Some(digits) = tail.strip_suffix(')') {
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                return full[..open].to_string();
+            }
+        }
+    }
+    full
 }
 
 fn confirm(question: &str) -> bool {
@@ -279,13 +307,21 @@ pub fn run_uninstall(yes: bool) -> i32 {
             continue;
         }
         if let Err(e) = remove_all(&target.path) {
-            out::error_line(&format!("could not delete {}: {e}", target.path.display()));
+            out::error_line(&format!(
+                "could not delete {}: {}",
+                target.path.display(),
+                os_error_message(&e)
+            ));
             failures += 1;
         }
     }
     if let Some(binary) = binary {
         if let Err(e) = std::fs::remove_file(&binary) {
-            out::error_line(&format!("could not delete {}: {e}", binary.display()));
+            out::error_line(&format!(
+                "could not delete {}: {}",
+                binary.display(),
+                os_error_message(&e)
+            ));
             failures += 1;
         }
     }
@@ -329,4 +365,43 @@ pub fn register_uninstall(app: &mut App) {
     let cmd = app.add_subcommand("uninstall", "Remove wally, its models and its config");
     cmd.add_flag("-y,--yes", "Skip the confirmation prompt");
     cmd.callback(|parsed, _options| run_uninstall(parsed.flag("--yes")));
+}
+
+#[cfg(test)]
+mod fix_models_regression_tests {
+    use super::*;
+
+    // id 34: dir_size (uninstall's pre-delete size preview) must follow a
+    // symlink to a regular file, matching C++'s is_regular_file(ec)/
+    // file_size(ec) (which call status(), following symlinks).
+    #[test]
+    #[cfg(unix)]
+    fn dir_size_follows_symlinked_regular_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blob = dir.path().join("blob.bin");
+        std::fs::write(&blob, b"uninstall preview bytes").expect("write blob");
+
+        let scan_dir = dir.path().join("scan");
+        std::fs::create_dir(&scan_dir).expect("mkdir");
+        std::os::unix::fs::symlink(&blob, scan_dir.join("blob.bin")).expect("symlink");
+
+        assert_eq!(dir_size(&scan_dir), 23);
+    }
+
+    // id 35: the printed message must be the bare OS message, with no
+    // "(os error N)" suffix (that suffix is Rust io::Error::Display-only and
+    // has no C++ equivalent — std::error_code::message() never appends it).
+    #[test]
+    fn os_error_message_strips_the_os_error_number_suffix() {
+        let error = std::io::Error::from_raw_os_error(13); // EACCES
+        let message = os_error_message(&error);
+        assert!(!message.contains("os error"));
+        assert!(!message.is_empty());
+    }
+
+    #[test]
+    fn os_error_message_leaves_a_non_os_error_display_unchanged() {
+        let error = std::io::Error::new(std::io::ErrorKind::Other, "custom failure text");
+        assert_eq!(os_error_message(&error), "custom failure text");
+    }
 }
