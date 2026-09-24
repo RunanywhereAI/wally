@@ -294,6 +294,174 @@ fn url_is_loopback(url: &str) -> bool {
     }
 }
 
+/// libcurl's real per-scheme proxy env var precedence (see the curl manual's
+/// ENVIRONMENT section): the scheme-specific variable first, then `ALL_PROXY`
+/// as the fallback if it is unset. `http_proxy` is checked in lowercase only
+/// -- curl never reads the uppercase `HTTP_PROXY`, because on a CGI-hosted
+/// server an attacker's `Proxy:` request header is exposed to the target
+/// process as the env var `HTTP_PROXY` (CVE-2016-5385, "httpoxy"); `https_proxy`
+/// and `all_proxy` have no such attacker-controlled uppercase alias and so are
+/// read in both cases, lowercase first. An explicit empty value disables the
+/// proxy for that request outright rather than falling through to `ALL_PROXY`.
+/// `NO_PROXY`/`no_proxy` is deliberately never consulted here: the console
+/// only calls this for a URL that `resolve_proxy_url` has already confirmed
+/// is not loopback, mirroring how the C++ pins `CURLOPT_NOPROXY` to just the
+/// loopback hosts, which replaces (not merges with) whatever `NO_PROXY` says.
+fn proxy_env_value(scheme: &str, get_env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let scheme_specific = match scheme {
+        "https" => get_env("https_proxy").or_else(|| get_env("HTTPS_PROXY")),
+        "http" => get_env("http_proxy"),
+        _ => None,
+    };
+    let value =
+        scheme_specific.or_else(|| get_env("all_proxy").or_else(|| get_env("ALL_PROXY")))?;
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+/// The proxy URL (if any) libcurl's `CURLOPT_NOPROXY "localhost,127.0.0.1,::1"`
+/// plus its normal env-var proxy resolution would pick for `url`: loopback is
+/// always direct regardless of any proxy env var, and everything else follows
+/// `proxy_env_value`. Pure and closure-driven so it is testable without
+/// mutating real process env (which `cargo test`'s parallel threads share).
+fn resolve_proxy_url(url: &str, get_env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    if url_is_loopback(url) {
+        return None;
+    }
+    let scheme = url
+        .parse::<ureq::http::Uri>()
+        .ok()?
+        .scheme_str()?
+        .to_string();
+    proxy_env_value(&scheme, get_env)
+}
+
+/// Windows' `ProxyServer` registry value (the same field
+/// `WinHttpGetIEProxyConfigForCurrentUser` surfaces as `lpszProxy`) is either
+/// a single `host:port` applied to every protocol, or a
+/// `protocol=host:port;protocol=host:port` list -- see
+/// <https://learn.microsoft.com/en-us/windows/win32/api/winhttp/ns-winhttp-winhttp_current_user_ie_proxy_config>.
+/// Pick the entry for `scheme`, falling back to a bare (unprefixed) value.
+///
+/// Its only production caller is Windows-only (`windows_static_system_proxy`);
+/// it stays unconditionally compiled so its parsing rules are covered by
+/// hermetic tests on every platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn static_proxy_for_scheme(proxy_server: &str, scheme: &str) -> Option<String> {
+    if !proxy_server.contains('=') {
+        let trimmed = proxy_server.trim();
+        return if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+    }
+    proxy_server.split(';').find_map(|entry| {
+        let (protocol, value) = entry.split_once('=')?;
+        if !protocol.trim().eq_ignore_ascii_case(scheme) {
+            return None;
+        }
+        let value = value.trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    })
+}
+
+#[cfg(windows)]
+fn windows_static_system_proxy(scheme: &str) -> Option<String> {
+    // The static (non-PAC) half of what the C++ gets from
+    // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY: the same "Use a proxy server"
+    // settings under Internet Options that WinHttpGetIEProxyConfigForCurrentUser
+    // reads. Full WPAD/PAC auto-detection (WinHttpGetProxyForUrl with
+    // auto-detect flags, fetching and running the .pac script) is not
+    // implemented -- a network the console reaches only through PAC, with no
+    // static proxy and no proxy env vars set, will go direct here instead of
+    // through the proxy the C++ would have discovered.
+    use std::ffi::CStr;
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueA, HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+    };
+
+    let subkey = c"Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+
+    let mut enabled: u32 = 0;
+    let mut enabled_size = std::mem::size_of::<u32>() as u32;
+    let enabled_name = c"ProxyEnable";
+    // SAFETY: `subkey`/`enabled_name` are valid NUL-terminated C strings; the
+    // output pointer is a single correctly-sized `u32` and `enabled_size`
+    // matches its capacity.
+    let rc = unsafe {
+        RegGetValueA(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr() as *const u8,
+            enabled_name.as_ptr() as *const u8,
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            &mut enabled as *mut u32 as *mut core::ffi::c_void,
+            &mut enabled_size,
+        )
+    };
+    if rc != 0 || enabled == 0 {
+        return None;
+    }
+
+    let mut proxy_server = [0u8; 1024];
+    let mut proxy_server_size = proxy_server.len() as u32;
+    let proxy_server_name = c"ProxyServer";
+    // SAFETY: `subkey`/`proxy_server_name` are valid NUL-terminated C strings;
+    // `proxy_server`/`proxy_server_size` are a correctly-sized out buffer.
+    let rc = unsafe {
+        RegGetValueA(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr() as *const u8,
+            proxy_server_name.as_ptr() as *const u8,
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            proxy_server.as_mut_ptr() as *mut core::ffi::c_void,
+            &mut proxy_server_size,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    // SAFETY: RegGetValueA NUL-terminates a REG_SZ result on success.
+    let text = unsafe { CStr::from_ptr(proxy_server.as_ptr() as *const i8) }
+        .to_string_lossy()
+        .into_owned();
+    static_proxy_for_scheme(&text, scheme)
+}
+
+#[cfg(not(windows))]
+fn windows_static_system_proxy(_scheme: &str) -> Option<String> {
+    None
+}
+
+/// The proxy (if any) to use for a console request: `resolve_proxy_url`
+/// against the real process environment, falling back on Windows to the
+/// static system proxy setting when no proxy env var is configured.
+fn resolve_console_proxy(url: &str) -> Option<ureq::Proxy> {
+    let from_env = resolve_proxy_url(url, &|name| std::env::var(name).ok());
+    let value = from_env.or_else(|| {
+        if url_is_loopback(url) {
+            None
+        } else {
+            let scheme = url
+                .parse::<ureq::http::Uri>()
+                .ok()?
+                .scheme_str()?
+                .to_string();
+            windows_static_system_proxy(&scheme)
+        }
+    })?;
+    ureq::Proxy::new(&value).ok()
+}
+
 /// TLS for the console: the platform's own stack and trust store, as the C++
 /// had through libcurl and WinHTTP. ureq defaults to rustls with a bundled
 /// root list; with only the `native-tls` feature built, that default panics on
@@ -330,12 +498,10 @@ fn real_transport(request: &HttpRequest) -> Result<HttpResponse, String> {
     let total = total_timeout_ms(request);
     let connect = connect_timeout_ms(request);
     // CURLOPT_NOPROXY "localhost,127.0.0.1,::1": a request to the loopback
-    // (dev consoles, tests) never goes through an env-configured proxy.
-    let proxy = if url_is_loopback(&request.url) {
-        None
-    } else {
-        ureq::Proxy::try_from_env()
-    };
+    // (dev consoles, tests) never goes through an env-configured proxy, and
+    // that list replaces NO_PROXY rather than adding to it -- see
+    // resolve_proxy_url and proxy_env_value.
+    let proxy = resolve_console_proxy(&request.url);
 
     let config = ureq::Agent::config_builder()
         .http_status_as_error(false)
@@ -1219,6 +1385,8 @@ pub fn who_am_i(console_url: &str, token: &str) -> Result<Identity, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     #[test]
     fn console_tls_uses_the_platform_stack_and_trust_store() {
         let tls = super::console_tls_config();
@@ -1227,5 +1395,140 @@ mod tests {
             tls.root_certs(),
             ureq::tls::RootCerts::PlatformVerifier
         ));
+    }
+
+    // resolve_proxy_url / proxy_env_value: libcurl proxy-selection parity.
+    // Closure-driven env lookup, never touching real process env, so these
+    // stay hermetic and safe under cargo test's parallel threads.
+
+    fn env_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn lookup(env: &HashMap<String, String>) -> impl Fn(&str) -> Option<String> + '_ {
+        move |name: &str| env.get(name).cloned()
+    }
+
+    #[test]
+    fn loopback_urls_never_use_a_proxy_even_when_a_matching_env_var_is_set() {
+        let env = env_of(&[("http_proxy", "http://proxy.example:8080")]);
+        let resolved = super::resolve_proxy_url("http://127.0.0.1:9999/x", &lookup(&env));
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn https_scheme_reads_the_lowercase_https_proxy_first() {
+        let env = env_of(&[("https_proxy", "http://proxy.example:8080")]);
+        let resolved = super::resolve_proxy_url("https://console.example/v1/me", &lookup(&env));
+        assert_eq!(resolved.as_deref(), Some("http://proxy.example:8080"));
+    }
+
+    #[test]
+    fn https_scheme_falls_back_to_uppercase_https_proxy_when_lowercase_is_unset() {
+        let env = env_of(&[("HTTPS_PROXY", "http://proxy.example:8080")]);
+        let resolved = super::resolve_proxy_url("https://console.example/v1/me", &lookup(&env));
+        assert_eq!(resolved.as_deref(), Some("http://proxy.example:8080"));
+    }
+
+    #[test]
+    fn http_scheme_only_reads_the_lowercase_http_proxy_and_ignores_the_uppercase_form() {
+        // libcurl deliberately never reads uppercase HTTP_PROXY (httpoxy,
+        // CVE-2016-5385); ureq::Proxy::try_from_env() does read it, which is
+        // exactly the gap this function closes.
+        let env = env_of(&[("HTTP_PROXY", "http://proxy.example:8080")]);
+        let resolved = super::resolve_proxy_url("http://console.example/v1/me", &lookup(&env));
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn scheme_specific_proxy_takes_priority_over_all_proxy() {
+        let env = env_of(&[
+            ("https_proxy", "http://scheme-specific:8080"),
+            ("all_proxy", "http://fallback:9090"),
+        ]);
+        let resolved = super::resolve_proxy_url("https://console.example/v1/me", &lookup(&env));
+        assert_eq!(resolved.as_deref(), Some("http://scheme-specific:8080"));
+    }
+
+    #[test]
+    fn all_proxy_is_used_when_no_scheme_specific_var_is_set() {
+        let env = env_of(&[("all_proxy", "http://fallback:9090")]);
+        let resolved = super::resolve_proxy_url("https://console.example/v1/me", &lookup(&env));
+        assert_eq!(resolved.as_deref(), Some("http://fallback:9090"));
+    }
+
+    #[test]
+    fn uppercase_all_proxy_is_used_when_lowercase_is_unset() {
+        let env = env_of(&[("ALL_PROXY", "http://fallback:9090")]);
+        let resolved = super::resolve_proxy_url("https://console.example/v1/me", &lookup(&env));
+        assert_eq!(resolved.as_deref(), Some("http://fallback:9090"));
+    }
+
+    #[test]
+    fn an_explicit_empty_scheme_specific_value_disables_the_proxy_without_falling_back_to_all_proxy(
+    ) {
+        let env = env_of(&[("https_proxy", ""), ("all_proxy", "http://fallback:9090")]);
+        let resolved = super::resolve_proxy_url("https://console.example/v1/me", &lookup(&env));
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn no_proxy_env_var_is_never_consulted() {
+        // The C++ pins CURLOPT_NOPROXY to the loopback hosts only, which
+        // replaces (not merges with) whatever NO_PROXY says -- so a
+        // non-loopback host still gets the configured proxy even if it
+        // appears in NO_PROXY.
+        let env = env_of(&[
+            ("https_proxy", "http://proxy.example:8080"),
+            ("NO_PROXY", "*"),
+        ]);
+        let resolved = super::resolve_proxy_url("https://console.example/v1/me", &lookup(&env));
+        assert_eq!(resolved.as_deref(), Some("http://proxy.example:8080"));
+    }
+
+    // static_proxy_for_scheme: Windows' ProxyServer registry value format.
+
+    #[test]
+    fn static_proxy_for_scheme_returns_the_bare_value_for_every_scheme_when_there_is_no_per_protocol_list(
+    ) {
+        assert_eq!(
+            super::static_proxy_for_scheme("proxy.example:8080", "https").as_deref(),
+            Some("proxy.example:8080")
+        );
+        assert_eq!(
+            super::static_proxy_for_scheme("proxy.example:8080", "http").as_deref(),
+            Some("proxy.example:8080")
+        );
+    }
+
+    #[test]
+    fn static_proxy_for_scheme_picks_the_matching_protocol_entry_from_a_semicolon_list() {
+        let value = "http=proxy1:8080;https=proxy2:8443;ftp=proxy3:21";
+        assert_eq!(
+            super::static_proxy_for_scheme(value, "https").as_deref(),
+            Some("proxy2:8443")
+        );
+        assert_eq!(
+            super::static_proxy_for_scheme(value, "http").as_deref(),
+            Some("proxy1:8080")
+        );
+    }
+
+    #[test]
+    fn static_proxy_for_scheme_returns_none_when_the_protocol_is_not_listed() {
+        let value = "http=proxy1:8080;ftp=proxy3:21";
+        assert_eq!(super::static_proxy_for_scheme(value, "https"), None);
+    }
+
+    #[test]
+    fn static_proxy_for_scheme_treats_an_empty_value_as_no_proxy() {
+        assert_eq!(super::static_proxy_for_scheme("", "https"), None);
+        assert_eq!(
+            super::static_proxy_for_scheme("http=proxy1:8080;https=", "https"),
+            None
+        );
     }
 }
