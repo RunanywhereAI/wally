@@ -314,15 +314,17 @@ pub fn run(args: &[String]) -> i32 {
     // and forwards the `--help` to the wrapped tool rather than describing
     // the wally command. Prints to stdout as `--help` does.
     if args.len() >= 2 && args[1] == "help" {
-        if args.len() >= 3 && !args[2].is_empty() && !args[2].starts_with('-') {
-            if app.get_subcommand(&args[2]).is_some() {
-                let text = app.render_help(&[args[2].clone()], color_enabled(no_color_requested));
-                output::result_line(text.trim_end_matches('\n'));
-                bootstrap::shutdown();
-                return 0;
-            }
-            // No such command: fall back to the top-level help.
+        if args.len() >= 3
+            && !args[2].is_empty()
+            && !args[2].starts_with('-')
+            && app.get_subcommand(&args[2]).is_some()
+        {
+            let text = app.render_help(&[args[2].clone()], color_enabled(no_color_requested));
+            output::result_line(text.trim_end_matches('\n'));
+            bootstrap::shutdown();
+            return 0;
         }
+        // No such command (or none given): fall back to the top-level help.
         let text = app.render_help(&[], color_enabled(no_color_requested));
         output::result_line(text.trim_end_matches('\n'));
         bootstrap::shutdown();
@@ -335,9 +337,16 @@ pub fn run(args: &[String]) -> i32 {
     let exit_code = match outcome {
         Outcome::Ran { code, path } => {
             if path.is_empty() {
-                // Bare `wally` prints the top-level help.
+                // Bare `wally` prints the top-level help: `out::status_line(app.help())`
+                // in C++. `app.help()` already ends in one "\n" of its own, and
+                // `status_line`'s `%s\n` appends another, so this one call site
+                // deliberately double-newlines (one trailing blank line) unlike
+                // every other help-printing path, which trims first. Do not trim
+                // here — `render_help` is guaranteed to end in exactly one "\n"
+                // (`cli_formatter::tidy`), so passing it straight through
+                // reproduces the doubled newline exactly.
                 let text = app.render_help(&[], color_enabled(no_color_requested));
-                output::status_line(text.trim_end_matches('\n'));
+                output::status_line(&text);
                 0
             } else {
                 code
