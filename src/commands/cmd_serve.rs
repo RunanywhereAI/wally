@@ -158,6 +158,18 @@ fn run_serve(
     // still stops on SIGTERM via ctrlc's own combined handling on Unix, and
     // the process can still be killed).
     let _ = ctrlc::set_handler(serve_signal_handler);
+    // ctrlc's "termination" feature (needed for SIGTERM) also installs the
+    // same handler for SIGHUP on unix, but C++ only installs SIGINT/SIGTERM
+    // and leaves SIGHUP at its default disposition (terminate). Restore that
+    // default so `kill -HUP <pid>` still kills the process outright here too,
+    // instead of running the graceful-shutdown path C++ never takes on
+    // SIGHUP.
+    #[cfg(unix)]
+    // SAFETY: SIGHUP and SIG_DFL are both valid libc constants; signal() with
+    // a valid signal number and disposition is always safe to call.
+    unsafe {
+        libc::signal(libc::SIGHUP, libc::SIG_DFL);
+    }
     // SAFETY: rac_server_is_running() takes no arguments and only reads
     // internal server state.
     while !SERVE_STOP.load(Ordering::SeqCst)
@@ -172,20 +184,23 @@ fn run_serve(
     // SAFETY: no arguments; blocks until the server thread has fully exited.
     let exit_code = unsafe { sys::rac_server_wait() };
 
-    if options.verbose {
-        let mut status = std::mem::MaybeUninit::<sys::rac_server_status_t>::zeroed();
-        // SAFETY: status is a valid, zeroed-out rac_server_status_t the call
-        // fills in; read only after a successful (non-negative) result.
-        let status_rc = unsafe { sys::rac_server_get_status(status.as_mut_ptr()) };
-        if status_rc >= 0 {
-            // SAFETY: status_rc >= 0 means rac_server_get_status fully
-            // initialized every field before returning.
-            let status = unsafe { status.assume_init() };
-            status_line(&format!(
-                "requests: {}, tokens: {}, uptime: {}s",
-                status.total_requests, status.total_tokens_generated, status.uptime_seconds
-            ));
-        }
+    // C++'s `if (RAC_SUCCEEDED(rac_server_get_status(&status)) &&
+    // options.verbose)` short-circuits left-to-right, so the call itself
+    // always happens -- only the subsequent status_line print is gated on
+    // --verbose, its result simply discarded otherwise. Call it
+    // unconditionally here too so both builds make the same SDK calls.
+    let mut status = std::mem::MaybeUninit::<sys::rac_server_status_t>::zeroed();
+    // SAFETY: status is a valid, zeroed-out rac_server_status_t the call
+    // fills in; read only after a successful (non-negative) result.
+    let status_rc = unsafe { sys::rac_server_get_status(status.as_mut_ptr()) };
+    if status_rc >= 0 && options.verbose {
+        // SAFETY: status_rc >= 0 means rac_server_get_status fully
+        // initialized every field before returning.
+        let status = unsafe { status.assume_init() };
+        status_line(&format!(
+            "requests: {}, tokens: {}, uptime: {}s",
+            status.total_requests, status.total_tokens_generated, status.uptime_seconds
+        ));
     }
     exit_code
 }

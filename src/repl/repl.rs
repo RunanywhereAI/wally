@@ -45,8 +45,13 @@ impl LineEditor {
         // meaningful fallback for an interactive REPL at that point.
         let mut editor: Editor<(), DefaultHistory> =
             Editor::new().expect("failed to initialize the line editor");
-        let _ = editor.set_max_history_size(512);
+        // C++ only raises linenoise's history cap (from its compiled-in
+        // default of 100) when persistence is enabled; with an empty
+        // history_path (e.g. RUNANYWHERE_NOHISTORY) it leaves the default
+        // untouched, so a no-history session can still only scroll back 100
+        // lines. Gate this the same way instead of raising it unconditionally.
         if !history_path.is_empty() {
+            let _ = editor.set_max_history_size(512);
             let _ = editor.load_history(history_path);
         }
         LineEditor {
