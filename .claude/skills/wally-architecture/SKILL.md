@@ -5,8 +5,10 @@ description: Where Wally logic belongs — command layering, proto as SOT, kit v
 
 # Wally architecture
 
-Repo: `RunanywhereAI/wally`. Product CLI named `wally`. It consumes a **packaged
-C++ desktop kit** via `find_package(RunAnywhere)`. It does not
+Repo: `RunanywhereAI/wally`. Product CLI named `wally`. The application is a
+Rust crate (`Cargo.toml`); it consumes a **packaged C++ desktop kit** via
+CMake's `find_package(RunAnywhere)`. CMake stays the build entry and the owner
+of the kit, and runs `cargo` for the application code. It does not
 `add_subdirectory` or FetchContent the SDK, and it does not compile llama.cpp /
 Sherpa / ONNX / MLX from source.
 
@@ -17,7 +19,7 @@ of the SDK kit pin in `cmake/sdk-pin.cmake`.
 
 ```text
 argv / flags / env
-  -> src/commands/cmd_*.cpp     thin: parse → bootstrap() → one rac_* → render
+  -> src/commands/cmd_*.rs      thin: parse → bootstrap() → one rac_* → render
   -> C++ desktop kit            catalog, download, lifecycle, generate, serve
   -> engines (in the kit)       llama.cpp, Sherpa, ONNX, MLX (Apple host);
                                 NeuRT / QHexRT only when the private overlay
@@ -31,12 +33,13 @@ SDK — fix it there, then consume a new kit (**wally-kit-pin**).
 
 ## Layering rules
 
-- Command TUs stay thin. Business rules do not live in CLI11 callbacks, Swift,
-  or the REPL.
-- **Proto is the SOT.** Include kit `include/runanywhere/proto/*.pb.h` (same
-  protoc that built commons). Do not run `protoc` here. Do not compile `*.pb.cc`
-  (those objects are already inside `librac_commons.a`). Parse `rac_*` byte
-  buffers with `src/io/proto.h` into `runanywhere::v1::*`.
+- Command modules stay thin. Business rules do not live in command callbacks
+  (`src/cli/mod.rs`'s CLI11-compatible builder), Swift, or the REPL.
+- **Proto is the SOT.** `crate::io::proto::v1::*` (prost) is generated at build
+  time straight from the kit's own `.proto` files (`build.rs`, via `protox`),
+  after checking the kit's `SCHEMA_LOCK` hash against the pin in
+  `versions.toml`. Wally never runs `protoc`, and nothing generated is
+  committed. Parse `rac_*` byte buffers with `io::proto` into `v1::*`.
 - No parallel hand-written enums for values that exist in `idl/*.proto`.
 - Structured errors. Machine-readable codes from the ABI; human text on stderr.
   Results on stdout. `--json` prints exactly one document on stdout.
@@ -49,7 +52,7 @@ built with namespace isolation. Never `find_package(Protobuf)` against Homebrew.
 
 Dual grammar: spec namespaces (`llm generate`, `models download`) plus terminal
 aliases (`run`, `pull`, `stt`). One `configure_*` wires both
-(`src/commands/commands.h`).
+(`src/commands/mod.rs`).
 
 Do not reintroduce FetchContent of the SDK, a second inference backend tree, or
 a retired MetalRT / hardcoded catalog.
@@ -57,14 +60,17 @@ a retired MetalRT / hardcoded catalog.
 ## Apple MLX host
 
 On Apple Silicon, `cmake --build` produces `build/wally` (Swift host wrapping
-`wally_run_main`). Users never run `wally-cxx`; that name exists only so CMake
-cannot overwrite the product binary. Independent clones set `WALLY_SDK_SWIFT_PATH`
-to a runanywhere-sdks checkout (CI does this). Nested `EXTERNAL/Wally` finds
+`wally_run_main`, the crate's exported entry point in `src/lib.rs`). Users
+never run `wally-cxx`; that name exists only so CMake cannot overwrite the
+product binary. Independent clones set `WALLY_SDK_SWIFT_PATH` to a
+runanywhere-sdks checkout (CI does this). Nested `EXTERNAL/Wally` finds
 `../../Package.swift` automatically. Disable with `-DWALLY_APPLE_MLX_HOST=OFF`
-only for a C++-only compile loop.
+only for a fast loop that skips the Swift build.
 
-NeuRT image gen is `#if WALLY_HAS_NEURT` in `src/commands/cmd_image.cpp`, which
-is true only when the NeuRT overlay is applied. Public bottles stay OSS.
+NeuRT image gen is `#[cfg(wally_has_neurt)]` in `src/commands/cmd_image.rs`
+(the `WALLY_HAS_NEURT` capability flag CMake writes to `wally-build.env`
+becomes that `cfg` in `build.rs`), true only when the NeuRT overlay is
+applied. Public bottles stay OSS.
 `--engine qhexrt` / `qnn` / `npu` / `hexagon` map to
 `INFERENCE_FRAMEWORK_QHEXRT`. Local HNPU trees are inferred from `v75`/`v79`/
 `v81`, `context.bin`, or `*_HNPU` directory names.

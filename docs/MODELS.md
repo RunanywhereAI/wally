@@ -15,7 +15,7 @@ resolve.
 There are no Apple Neural Engine (`ane-<id>`) rows in this release. The NeuRT
 engine that runs them is a private overlay, not in the public kit, and the
 published Core ML repos hold directory trees rather than a downloadable
-archive. The rows are commented out in `src/catalog/catalog.cpp` under
+archive. The rows are commented out in `src/catalog/catalog.rs` under
 `TEMP(ane-cut)` and come back together with real artifacts.
 
 ### Language
