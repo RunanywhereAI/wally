@@ -9,4 +9,5 @@ Options:
 
 Examples:
   wally account login
+
   wally account login --no-browser

@@ -10,4 +10,4 @@ Options:
   -f, --force                 Skip the confirmation prompt
 
 Examples:
-  wally models rm qwen3-0.6b
+  wally models rm qwen3-4b-instruct-2507

@@ -11,4 +11,5 @@ Options:
 
 Examples:
   wally models default glm-5.3-flash
+
   wally models default --clear

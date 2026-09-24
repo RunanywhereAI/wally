@@ -1,4 +1,4 @@
-Open opencode with a model
+Open OpenCode with a local or cloud model
 
 Usage: wally opencode [OPTIONS] [args...]
 
@@ -7,9 +7,20 @@ Arguments:
 
 Options:
   -h, --help                  Show help
-  -m, --model TEXT            A model on this machine, or a hosted one from your account
-      --cloud                 Use your account's hosted endpoint (never a local model)
+  -m, --model TEXT            A model on this machine, or a hosted one from your
+                              account
+      --cloud                 Use your account's hosted endpoint (never a local
+                              model)
 
 Examples:
-  wally opencode -m qwen3-0.6b                  A model on this machine
-  wally opencode --cloud -m glm-5.3-flash       A hosted model (needs `wally account login`)
+  # Download the certified local model once
+  wally models pull qwen3-4b-instruct-2507
+
+  # Start OpenCode with the certified local model
+  wally opencode -m qwen3-4b-instruct-2507
+
+  # Use a cloud model after wally account login
+  wally opencode --cloud -m glm-5.3-flash
+
+  # Pass arguments through to OpenCode after --
+  wally opencode -m qwen3-4b-instruct-2507 -- run "explain this project"

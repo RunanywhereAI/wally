@@ -8,6 +8,7 @@ Arguments:
 Options:
   -h, --help                  Show help
       --engine, --framework TEXT
-                              Pin the inference engine (mlx, llamacpp, onnx, sherpa)
-      --category TEXT         Load it as this modality (llm, vlm, stt, tts, vad, embedding,
-                              diffusion)
+                              Pin the inference engine (mlx, llamacpp, onnx,
+                              sherpa)
+      --category TEXT         Load it as this modality (llm, vlm, stt, tts, vad,
+                              embedding, diffusion)

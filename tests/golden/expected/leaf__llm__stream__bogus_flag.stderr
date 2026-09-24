@@ -39,4 +39,4 @@ Reasoning:
       --no-think              Same as --reasoning off
 
 Examples:
-  wally llm stream -m qwen3-0.6b "tell me a short story"
+  wally llm stream -m qwen3-4b-instruct-2507 "tell me a short story"

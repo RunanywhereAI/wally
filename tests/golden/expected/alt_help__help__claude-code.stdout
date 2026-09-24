@@ -7,9 +7,14 @@ Arguments:
 
 Options:
   -h, --help                  Show help
-  -m, --model TEXT            A model on this machine, or a hosted one from your account
-      --serve                 Print the endpoint and keep it open instead of launching
+  -m, --model TEXT            A model on this machine, or a hosted one from your
+                              account
+      --serve                 Print the endpoint and keep it open instead of
+                              launching
 
 Examples:
-  wally claude-code -m qwen3-0.6b               A model on this machine
-  wally claude-code -m glm-5.3-flash            A hosted model (needs `wally account login`)
+  # The certified local coding model
+  wally claude-code -m qwen3-4b-instruct-2507
+
+  # A hosted model (needs `wally account login`)
+  wally claude-code -m glm-5.3-flash
