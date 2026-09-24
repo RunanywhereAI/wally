@@ -54,7 +54,8 @@ fn read_ppm() {
         let path = dir.path().join("valid.ppm");
         std::fs::write(&path, &content).expect("could not write valid PPM fixture");
 
-        let img = image_io::read_ppm(path.to_str().expect("utf8 path")).expect("valid P6 was rejected");
+        let img =
+            image_io::read_ppm(path.to_str().expect("utf8 path")).expect("valid P6 was rejected");
         assert_eq!(img.width, 2, "expected width 2");
         assert_eq!(img.height, 1, "expected height 1");
         assert_eq!(img.rgb, pixels.to_vec(), "RGB payload mismatch");
@@ -70,8 +71,8 @@ fn read_ppm() {
         let path = dir.path().join("comment.ppm");
         std::fs::write(&path, &content).expect("could not write commented PPM fixture");
 
-        let img =
-            image_io::read_ppm(path.to_str().expect("utf8 path")).expect("commented P6 header was rejected");
+        let img = image_io::read_ppm(path.to_str().expect("utf8 path"))
+            .expect("commented P6 header was rejected");
         assert_eq!(img.width, 2);
         assert_eq!(img.height, 1);
         assert_eq!(img.rgb.len(), 6);
@@ -157,10 +158,7 @@ fn write_png_smoke() {
         .expect("write_png failed on a valid RGBA buffer");
 
     let written = std::fs::read(&path).expect("written PNG could not be reopened");
-    assert!(
-        written.len() >= 8,
-        "PNG shorter than its 8-byte signature"
-    );
+    assert!(written.len() >= 8, "PNG shorter than its 8-byte signature");
     let signature: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
     assert_eq!(&written[..8], &signature, "PNG signature mismatch");
 
@@ -260,7 +258,10 @@ fn segment_usage_errors() {
 // -----------------------------------------------------------------------------
 #[test]
 fn segment_option_spec() {
-    let mut app = App::new("RunAnywhere on-device AI CLI — run, manage and serve local models", "wally");
+    let mut app = App::new(
+        "RunAnywhere on-device AI CLI — run, manage and serve local models",
+        "wally",
+    );
     wally::commands::register_segment(&mut app);
 
     let seg = app
