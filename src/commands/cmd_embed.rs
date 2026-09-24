@@ -102,10 +102,11 @@ fn load_embeddings_model(
     let result = match parse_proto_buffer::<v1::ModelLoadResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!(
-                "embedding model load failed: {}",
-                crate::io::output::describe_result(proto_rc)
-            ));
+            // Matches cmd_embed.cpp: parse_proto_buffer only ever writes
+            // `error` on its own failure path. When parsing succeeds but
+            // proto_rc still disagrees, C++'s `error` stays empty, so the
+            // printed line is the bare prefix with nothing after the colon.
+            error_line("embedding model load failed: ");
             return false;
         }
         Err(error) => {
@@ -283,10 +284,11 @@ fn run_embed(
     let result = match parse_proto_buffer::<v1::EmbeddingsResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!(
-                "embedding failed: {}",
-                crate::io::output::describe_result(proto_rc)
-            ));
+            // Matches cmd_embed.cpp run_embed: parse_proto_buffer only ever
+            // writes `error` on its own failure path. When parsing succeeds
+            // but proto_rc still disagrees, C++'s `error` stays empty, so the
+            // printed line is the bare prefix with nothing after the colon.
+            error_line("embedding failed: ");
             return 1;
         }
         Err(error) => {

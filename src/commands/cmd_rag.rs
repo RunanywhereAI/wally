@@ -44,7 +44,12 @@ struct RagParams {
 
 #[cfg(wally_has_rag)]
 fn read_text_file(path: &str) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|_| format!("cannot open file: {path}"))
+    // Matches cmd_rag.cpp read_text_file: opens in binary mode and accepts
+    // any byte sequence verbatim, including non-UTF-8. Only failing to open
+    // the file is an error; the bytes are lossily converted to UTF-8 (proto
+    // string fields require valid UTF-8) rather than rejected.
+    let bytes = std::fs::read(path).map_err(|_| format!("cannot open file: {path}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 // One session covers the whole invocation: open -> ingest every document -> ask
@@ -176,7 +181,7 @@ fn run_rag_query(
     params: &RagParams,
     question: &str,
 ) -> i32 {
-    use crate::io::output::{describe_result, error_line, result_line, status_line, JsonWriter};
+    use crate::io::output::{error_line, result_line, status_line, JsonWriter};
     use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
     use crate::sys;
 
@@ -244,7 +249,14 @@ fn run_rag_query(
     let result = match parse_proto_buffer::<v1::RagResult>(result_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
         Ok(_) => {
-            error_line(&format!("RAG query failed: {}", describe_result(proto_rc)));
+            // Matches cmd_rag.cpp: parse_proto_buffer only ever writes
+            // `error` on its own failure path (buffer status or decode).
+            // When parsing succeeds but proto_rc still disagrees, C++'s
+            // `error` stays empty, so the printed line is the bare prefix
+            // with nothing after the colon — not `describe_result(proto_rc)`.
+            // (Contrast open_and_ingest above, which explicitly falls back to
+            // describe_result when `error` is empty; run_rag_query does not.)
+            error_line("RAG query failed: ");
             // SAFETY: session is the live handle from open_and_ingest; not used
             // again after this.
             unsafe { sys::rac_rag_session_destroy_proto(session) };
@@ -321,7 +333,7 @@ fn run_rag_search(
     params: &RagParams,
     question: &str,
 ) -> i32 {
-    use crate::io::output::{describe_result, error_line, result_line, status_line, JsonWriter};
+    use crate::io::output::{error_line, result_line, status_line, JsonWriter};
     use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
     use crate::sys;
 
@@ -375,7 +387,12 @@ fn run_rag_search(
     let response = match parse_proto_buffer::<v1::RagSearchResponse>(response_buffer) {
         Ok(response) if proto_rc == sys::SUCCESS => response,
         Ok(_) => {
-            error_line(&format!("RAG search failed: {}", describe_result(proto_rc)));
+            // Matches cmd_rag.cpp run_rag_search: parse_proto_buffer only
+            // ever writes `error` on its own failure path. When parsing
+            // succeeds but proto_rc still disagrees, C++'s `error` stays
+            // empty, so the printed line is the bare prefix with nothing
+            // after the colon.
+            error_line("RAG search failed: ");
             // SAFETY: session is the live handle from open_and_ingest; not used
             // again after this.
             unsafe { sys::rac_rag_session_destroy_proto(session) };
@@ -574,6 +591,50 @@ pub fn register_rag(app: &mut App) {
         };
         run_rag_search(g, &params, &p.get_str("question").unwrap_or_default())
     });
+}
+
+#[cfg(all(test, wally_has_rag))]
+mod fix_vision_tests {
+    use super::read_text_file;
+
+    #[test]
+    fn read_text_file_accepts_non_utf8_bytes() {
+        // finding 41: a lone 0xFF is not valid UTF-8; cmd_rag.cpp's binary
+        // read accepts it verbatim, so read_text_file must not reject an
+        // openable-but-non-UTF-8 file as "cannot open".
+        let dir = std::env::temp_dir().join(format!(
+            "wally-fix-vision-rag-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, [b'h', b'i', 0xFFu8, b'!']).expect("write temp file");
+
+        let result = read_text_file(path.to_str().expect("utf8 path"));
+        assert!(
+            result.is_ok(),
+            "non-UTF-8 file must be accepted, not reported as unopenable: {result:?}"
+        );
+        let text = result.expect("checked above");
+        assert!(text.starts_with("hi"));
+        assert!(text.ends_with('!'));
+        assert!(text.contains('\u{FFFD}'));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_text_file_missing_file_still_cannot_open() {
+        let result = read_text_file("/no/such/wally-fix-vision-rag-path.bin");
+        assert_eq!(
+            result,
+            Err("cannot open file: /no/such/wally-fix-vision-rag-path.bin".to_string())
+        );
+    }
 }
 
 // The RAG pipeline is not folded into this binary (RAC_BACKEND_RAG=OFF, e.g.

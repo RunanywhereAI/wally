@@ -7,6 +7,7 @@
 //! (image_media_type "image/raw-rgba"); wally renders them to a real PNG so
 //! `--out foo.png` is a valid image.
 
+use std::io::Write;
 use std::sync::OnceLock;
 
 fn put_u32_be(out: &mut Vec<u8>, v: u32) {
@@ -79,6 +80,18 @@ pub fn write_png(path: &str, rgba: &[u8], width: i32, height: i32) -> Result<(),
     let width = width as usize;
     let height = height as usize;
     let row_bytes = width * 4;
+    // image_io.cpp reads `width * height * 4` bytes through a raw pointer
+    // here regardless of the caller-supplied buffer size (an out-of-bounds
+    // heap read/UB if the buffer is shorter). Rust slicing is bounds-checked,
+    // so instead of reproducing that UB, treat an undersized buffer as a
+    // write failure via the same error path as the other invalid-input guard
+    // above.
+    let Some(needed) = row_bytes.checked_mul(height) else {
+        return Err("invalid image dimensions or data".to_string());
+    };
+    if rgba.len() < needed {
+        return Err("invalid image dimensions or data".to_string());
+    }
     let mut raw = Vec::with_capacity(height * (1 + row_bytes));
     for y in 0..height {
         raw.push(0); // filter type: none
@@ -125,7 +138,14 @@ pub fn write_png(path: &str, rgba: &[u8], width: i32, height: i32) -> Result<(),
     write_chunk(&mut png, b"IDAT", &zlib);
     write_chunk(&mut png, b"IEND", &[]);
 
-    std::fs::write(path, &png).map_err(|_| format!("cannot open {path} for writing"))?;
+    // Matches image_io.cpp: fopen failure and a short/interrupted fwrite
+    // (e.g. ENOSPC mid-write) are distinct error messages. `std::fs::write`
+    // collapses open+write+close into one io::Error, so open and write are
+    // split out here to keep the two messages distinguishable.
+    let mut file =
+        std::fs::File::create(path).map_err(|_| format!("cannot open {path} for writing"))?;
+    file.write_all(&png)
+        .map_err(|_| format!("short write to {path}"))?;
     Ok(())
 }
 
