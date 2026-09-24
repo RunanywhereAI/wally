@@ -22,7 +22,7 @@ let mlxPackage: Package.Dependency = {
     if let local = Context.environment["WALLY_SDK_SWIFT_PATH"], !local.isEmpty {
         return .package(path: local)
     }
-    return .package(url: "https://github.com/RunanywhereAI/runanywhere-swift.git", exact: "0.20.25")
+    return .package(url: "https://github.com/RunanywhereAI/runanywhere-swift.git", exact: "0.20.37")
 }()
 
 let mlxPackageName: String = {

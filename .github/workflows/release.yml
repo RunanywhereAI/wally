@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
           repository: RunanywhereAI/runanywhere-sdks
-          ref: v0.20.31
+          ref: b3a2b0147d8c66190c14a53bc04286efd6a4d64a
           path: .deps/runanywhere-sdks
       - name: Install ninja
         run: brew install ninja
@@ -239,7 +239,9 @@ jobs:
           if-no-files-found: error
 
   linux:
-    runs-on: ubuntu-24.04
+    # Release compatibility floor. Ubuntu 24.04 produced a bottle requiring
+    # GLIBC_2.38 and GLIBCXX_3.4.31/32, which fails on Ubuntu 22.04.
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -252,7 +254,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev
+          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev patchelf
       - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
         with:
           key: ccache-release-linux-x64

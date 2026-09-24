@@ -74,6 +74,10 @@ llm_out="$(wally run "$LLM_MODEL" "Say OK in one short sentence. /no_think" --ma
 require_text "LLM" "$llm_out"
 printf '%s\n' "$llm_out"
 
+# Availability and direct-path inference alone missed the install-symlink
+# regression: MLX's actual library loader follows a different resource path.
+RUNANYWHERE_HOME="$HOME_DIR" bash "$ROOT/scripts/test/smoke-mlx-symlink.sh" "$BIN" "$LLM_MODEL"
+
 echo "TTS: $TTS_MODEL"
 pull_if_enabled "$TTS_MODEL"
 tts_wav="$HOME_DIR/mlx-smoke-tts.wav"
