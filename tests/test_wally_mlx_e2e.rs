@@ -965,3 +965,378 @@ fn wally_mlx_run_end_to_end() {
         "MLX create/initialize should run once per LLM/VLM model"
     );
 }
+
+/// Ports the `#else` (non-`WALLY_LLM_ONLY_CUT`) branch of
+/// `test_wally_mlx_run_end_to_end` in tests/test_wally_mlx_e2e.cpp: the same
+/// LLM/VLM setup as `wally_mlx_run_end_to_end` above, continued past the
+/// `run` calls into `embed`/`stt`/`tts`, which are standalone top-level
+/// commands (`register_embed`/`register_stt`/`register_tts` in the C++
+/// source) that `src/app.rs` currently leaves unregistered for the LLM-only
+/// release. Setup is duplicated rather than shared with
+/// `wally_mlx_run_end_to_end` (both are ports of the same C++ function body,
+/// split by the `#if`/`#else` the C++ source uses to compile out this half)
+/// so that test stays untouched.
+///
+/// `#[ignore]`d following the convention in tests/test_wally_unit/diarize.rs:
+/// once `register_embed`/`register_stt`/`register_tts` are wired back into
+/// `src/app.rs`, dropping this attribute is the whole re-enable step.
+#[test]
+#[ignore = "embed/stt/tts are not registered in src/app.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT)"]
+fn wally_mlx_run_end_to_end_embed_stt_tts() {
+    let _lock = fakes::mlx_lock();
+    fakes::reset_state();
+    assert!(
+        fakes::install_fake_mlx_callbacks(),
+        "install fake MLX callbacks"
+    );
+
+    let home = tempfile::tempdir().expect("temp home");
+    let llm_dir = tempfile::tempdir().expect("temp llm dir");
+    let vlm_dir = tempfile::tempdir().expect("temp vlm dir");
+    let embedding_dir = tempfile::tempdir().expect("temp embedding dir");
+    let stt_dir = tempfile::tempdir().expect("temp stt dir");
+    let tts_dir = tempfile::tempdir().expect("temp tts dir");
+    for dir in [&llm_dir, &vlm_dir, &embedding_dir, &stt_dir, &tts_dir] {
+        write_file(&dir.path().join("config.json"), r#"{"model_type":"qwen3"}"#)
+            .expect("write config.json");
+        write_file(&dir.path().join("model.safetensors"), "fake-weights")
+            .expect("write model.safetensors");
+        write_file(&dir.path().join("tokenizer.json"), "{}").expect("write tokenizer.json");
+    }
+
+    let input_wav = home.path().join("input.wav");
+    let output_wav = home.path().join("output.wav");
+    let input_image = home.path().join("image.rgb");
+    write_file(&input_image, "fake image").expect("write fake VLM image");
+    let pcm_samples: [i16; 8] = [0, 1024, -1024, 2048, -2048, 1024, -1024, 0];
+    wally::io::wav_io::write_wav(input_wav.to_str().expect("utf-8 path"), &pcm_samples, 16000)
+        .expect("write input wav");
+
+    let options = wally::bootstrap::GlobalOptions {
+        home_override: home.path().to_string_lossy().into_owned(),
+        json: true,
+        no_progress: true,
+        ..Default::default()
+    };
+    let _bootstrapped = wally::bootstrap::bootstrap(&options).expect("bootstrap");
+
+    assert!(
+        register_local_mlx_model(
+            llm_dir.path(),
+            "mlx.fake.llm",
+            "Fake MLX LLM",
+            v1::ModelCategory::Language
+        ),
+        "register local MLX LLM model"
+    );
+    assert!(
+        register_local_mlx_model(
+            vlm_dir.path(),
+            "mlx.fake.vlm",
+            "Fake MLX VLM",
+            v1::ModelCategory::Multimodal
+        ),
+        "register local MLX VLM model"
+    );
+    assert!(
+        register_local_mlx_model(
+            embedding_dir.path(),
+            "mlx.fake.embed",
+            "Fake MLX Embeddings",
+            v1::ModelCategory::Embedding
+        ),
+        "register local MLX embedding model"
+    );
+    assert!(
+        register_local_mlx_model(
+            stt_dir.path(),
+            "mlx.fake.stt",
+            "Fake MLX STT",
+            v1::ModelCategory::SpeechRecognition
+        ),
+        "register local MLX STT model"
+    );
+    assert!(
+        register_local_mlx_model(
+            tts_dir.path(),
+            "mlx.fake.tts",
+            "Fake MLX TTS",
+            v1::ModelCategory::SpeechSynthesis
+        ),
+        "register local MLX TTS model"
+    );
+
+    let home_str = home.path().to_string_lossy().into_owned();
+
+    let backends_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "backends",
+        ],
+        "backends",
+    )
+    .expect("backends command");
+    backend_has_primitives(&backends_json, "mlx", &["generate_text", "vlm", "embed", "transcribe", "synthesize"])
+        .unwrap_or_else(|e| panic!("mlx backend with generate_text/vlm/embed/transcribe/synthesize primitives: {e}: {backends_json}"));
+
+    let list_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "models",
+            "list",
+            "--all",
+        ],
+        "models list",
+    )
+    .expect("models list command");
+    assert!(
+        list_json.contains("\"id\":\"mlx.fake.llm\""),
+        "MLX fake LLM row present: {list_json}"
+    );
+    assert!(
+        list_json.contains("\"modality\":\"llm\""),
+        "MLX fake LLM row present: {list_json}"
+    );
+    assert!(
+        list_json.contains("\"backend\":\"mlx\""),
+        "MLX fake LLM row present: {list_json}"
+    );
+
+    let run_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "run",
+            "mlx.fake.llm",
+            "Hello MLX",
+            "--engine",
+            "mlx",
+            "--max-tokens",
+            "4",
+        ],
+        "LLM",
+    )
+    .expect("run LLM command");
+    assert!(
+        run_json.contains("\"model\":\"mlx.fake.llm\""),
+        "JSON response from MLX stream callback: {run_json}"
+    );
+    assert!(
+        run_json.contains("\"response\":\"mlx-stub: Hello MLX\""),
+        "JSON response from MLX stream callback: {run_json}"
+    );
+    {
+        let state = fakes::lock_state();
+        assert_eq!(state.create_count, 1);
+        assert_eq!(state.initialize_count, 1);
+        assert_eq!(state.stream_count, 1);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_LLM as sys::rac_mlx_session_kind_t
+        );
+        assert_eq!(
+            state.last_model_path,
+            llm_dir.path().to_string_lossy(),
+            "MLX LLM runtime should receive the model folder, not model.safetensors"
+        );
+    }
+
+    let vlm_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "run",
+            "mlx.fake.vlm",
+            "What is in the image?",
+            "--image",
+            input_image.to_str().expect("utf-8 path"),
+            "--engine",
+            "mlx",
+            "--max-tokens",
+            "4",
+        ],
+        "VLM",
+    )
+    .expect("run VLM command");
+    assert!(
+        vlm_json.contains("\"model\":\"mlx.fake.vlm\""),
+        "JSON VLM response from MLX callback: {vlm_json}"
+    );
+    assert!(
+        vlm_json.contains("\"response\":\"mlx-vlm-stub: What is in the image?\""),
+        "JSON VLM response from MLX callback: {vlm_json}"
+    );
+    {
+        let state = fakes::lock_state();
+        assert_eq!(state.vlm_process_count, 1);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_VLM as sys::rac_mlx_session_kind_t
+        );
+        assert_eq!(state.last_model_path, vlm_dir.path().to_string_lossy());
+    }
+
+    // embed/stt/tts are standalone top-level commands
+    // (register_embed/register_stt/register_tts). `run`'s LLM/VLM coverage
+    // above is unaffected: it goes through register_llm_aliases, which the
+    // LLM-only cut does not touch.
+    let embed_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "embed",
+            "Hello MLX embeddings",
+            "--model",
+            "mlx.fake.embed",
+            "--text",
+            "Batch item",
+        ],
+        "embedding",
+    )
+    .expect("embed command");
+    assert!(
+        embed_json.contains("\"model\":\"mlx.fake.embed\""),
+        "JSON embedding vectors from MLX callback: {embed_json}"
+    );
+    assert!(
+        embed_json.contains("\"dimension\":2"),
+        "JSON embedding vectors from MLX callback: {embed_json}"
+    );
+    assert!(
+        embed_json.contains("\"count\":2"),
+        "JSON embedding vectors from MLX callback: {embed_json}"
+    );
+    assert!(
+        embed_json.contains("\"values\":[1,0.5]"),
+        "JSON embedding vectors from MLX callback: {embed_json}"
+    );
+    {
+        let state = fakes::lock_state();
+        assert_eq!(state.embed_batch_count, 1);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_EMBEDDINGS as sys::rac_mlx_session_kind_t
+        );
+        assert_eq!(state.last_embed_batch_size, 2);
+        assert_eq!(
+            state.last_model_path,
+            embedding_dir.path().to_string_lossy(),
+            "MLX embedding runtime should receive the model folder, not model.safetensors"
+        );
+    }
+
+    let stt_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "stt",
+            "--model",
+            "mlx.fake.stt",
+            "--input",
+            input_wav.to_str().expect("utf-8 path"),
+        ],
+        "STT",
+    )
+    .expect("stt command");
+    assert!(
+        stt_json.contains("\"model\":\"mlx.fake.stt\""),
+        "JSON STT response from MLX callback: {stt_json}"
+    );
+    assert!(
+        stt_json.contains("\"text\":\"mlx-stt-stub: "),
+        "JSON STT response from MLX callback: {stt_json}"
+    );
+    {
+        let state = fakes::lock_state();
+        assert_eq!(state.stt_transcribe_count, 1);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_STT as sys::rac_mlx_session_kind_t
+        );
+        assert_eq!(
+            state.last_audio_size,
+            pcm_samples.len() * std::mem::size_of::<i16>()
+        );
+        assert_eq!(
+            state.last_model_path,
+            stt_dir.path().to_string_lossy(),
+            "MLX STT runtime should receive the model folder, not model.safetensors"
+        );
+    }
+
+    let tts_json = run_cli_or_fail(
+        &[
+            "wally",
+            "--json",
+            "--no-progress",
+            "--home",
+            &home_str,
+            "tts",
+            "--model",
+            "mlx.fake.tts",
+            "--text",
+            "Hello MLX audio",
+            "--output",
+            output_wav.to_str().expect("utf-8 path"),
+        ],
+        "TTS",
+    )
+    .expect("tts command");
+    assert!(
+        tts_json.contains("\"voice\":\"mlx.fake.tts\""),
+        "JSON TTS response from MLX callback: {tts_json}"
+    );
+    assert!(
+        tts_json.contains("\"sample_rate\":22050"),
+        "JSON TTS response from MLX callback: {tts_json}"
+    );
+    let written = std::fs::metadata(&output_wav).expect("TTS output WAV exists");
+    assert!(
+        written.len() > 44,
+        "TTS output WAV should contain audio data beyond the header"
+    );
+    {
+        let state = fakes::lock_state();
+        assert_eq!(state.tts_synthesize_count, 1);
+        assert_eq!(
+            state.last_kind,
+            sys::RAC_MLX_SESSION_KIND_TTS as sys::rac_mlx_session_kind_t
+        );
+        assert_eq!(state.last_tts_text, "Hello MLX audio");
+        assert_eq!(
+            state.last_model_path,
+            tts_dir.path().to_string_lossy(),
+            "MLX TTS runtime should receive the model folder, not model.safetensors"
+        );
+        assert_eq!(
+            state.create_count, 5,
+            "MLX create/initialize should run once per LLM/VLM/embedding/STT/TTS model"
+        );
+        assert_eq!(
+            state.initialize_count, 5,
+            "MLX create/initialize should run once per LLM/VLM/embedding/STT/TTS model"
+        );
+    }
+
+    wally::bootstrap::shutdown();
+}

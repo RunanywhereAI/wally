@@ -26,6 +26,22 @@ fn to_cstring(value: &str) -> CString {
     CString::new(value).unwrap_or_default()
 }
 
+/// Literal mirror of `RAC_STT_OPTIONS_DEFAULT` from rac_stt_types.h:
+/// header-only `static const` (internal C linkage per translation unit), so
+/// there is no symbol to link against from Rust.
+fn default_stt_options() -> sys::rac_stt_options_t {
+    sys::rac_stt_options_t {
+        language: c"en".as_ptr(),       // header default: "en" (overridden below)
+        detect_language: sys::FALSE,    // header default: RAC_FALSE (overridden below)
+        enable_punctuation: sys::TRUE,  // header default: RAC_TRUE (overridden below)
+        enable_diarization: sys::FALSE, // header default: RAC_FALSE (overridden below)
+        max_speakers: 0,                // header default: 0 (overridden below)
+        enable_timestamps: sys::TRUE,   // header default: RAC_TRUE (overridden below)
+        audio_format: sys::RAC_AUDIO_FORMAT_PCM, // header default: RAC_AUDIO_FORMAT_PCM (never overridden by this CLI)
+        sample_rate: 16000,                      // header default: 16000 (overridden below)
+    }
+}
+
 fn ptr_to_string(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
@@ -108,14 +124,9 @@ fn run_stt(options: &GlobalOptions, p: &Parsed) -> i32 {
     let diarization = p.flag("--diarization");
     let max_speakers = p.get_i64("--max-speakers").unwrap_or(0) as i32;
 
-    // RAC_STT_OPTIONS_DEFAULT is a header-only `static const` (internal C
-    // linkage per translation unit), so there is no symbol to link against
-    // from Rust; every field below is set explicitly instead. Every field
-    // this CLI does not otherwise control keeps the header's own default
-    // (only audio_format, since every other field is overridden below).
-    // SAFETY: rac_stt_options_t is plain data; zeroed is a valid bit pattern
-    // for every field, all of which are set below.
-    let mut stt_options: sys::rac_stt_options_t = unsafe { std::mem::zeroed() };
+    // audio_format is the only field this CLI does not otherwise control;
+    // it keeps default_stt_options()'s header default.
+    let mut stt_options = default_stt_options();
     stt_options.language = if language.is_empty() {
         std::ptr::null()
     } else {
@@ -134,7 +145,6 @@ fn run_stt(options: &GlobalOptions, p: &Parsed) -> i32 {
     };
     stt_options.enable_diarization = if diarization { sys::TRUE } else { sys::FALSE };
     stt_options.max_speakers = max_speakers;
-    stt_options.audio_format = sys::RAC_AUDIO_FORMAT_PCM;
     stt_options.sample_rate = STT_SAMPLE_RATE;
 
     let mut result: sys::rac_stt_result_t = unsafe { std::mem::zeroed() };
@@ -235,4 +245,29 @@ pub fn register_stt(app: &mut App) {
     );
 
     cmd.callback(|p, g| run_stt(g, p));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+
+    // Pins default_stt_options() to rac_stt_types.h's RAC_STT_OPTIONS_DEFAULT
+    // field by field.
+    #[test]
+    fn default_stt_options_matches_header_default() {
+        let options = default_stt_options();
+        // SAFETY: default_stt_options() sets language to a static
+        // NUL-terminated string literal.
+        unsafe {
+            assert_eq!(CStr::from_ptr(options.language).to_str().unwrap(), "en");
+        }
+        assert_eq!(options.detect_language, sys::FALSE);
+        assert_eq!(options.enable_punctuation, sys::TRUE);
+        assert_eq!(options.enable_diarization, sys::FALSE);
+        assert_eq!(options.max_speakers, 0);
+        assert_eq!(options.enable_timestamps, sys::TRUE);
+        assert_eq!(options.audio_format, sys::RAC_AUDIO_FORMAT_PCM);
+        assert_eq!(options.sample_rate, 16000);
+    }
 }

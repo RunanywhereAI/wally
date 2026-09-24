@@ -24,6 +24,36 @@ fn to_cstring(value: &str) -> CString {
     CString::new(value).unwrap_or_default()
 }
 
+/// Literal mirror of `RAC_VOICE_AGENT_CONFIG_DEFAULT` from
+/// rac_voice_agent.h: header-only `static const` (internal C linkage per
+/// translation unit), so there is no symbol to link against from Rust.
+fn default_voice_agent_config() -> sys::rac_voice_agent_config_t {
+    sys::rac_voice_agent_config_t {
+        // Matches RAC_VOICE_AGENT_VAD_CONFIG_DEFAULT, never overridden by
+        // this CLI.
+        vad_config: sys::rac_voice_agent_vad_config_t {
+            sample_rate: 16000,
+            frame_length: 0.1,
+            energy_threshold: 0.005,
+        },
+        stt_config: sys::rac_voice_agent_stt_config_t {
+            model_path: std::ptr::null(), // header default: RAC_NULL (overridden below)
+            model_id: std::ptr::null(),   // header default: RAC_NULL (overridden below)
+            model_name: std::ptr::null(), // header default: RAC_NULL (overridden below)
+        },
+        llm_config: sys::rac_voice_agent_llm_config_t {
+            model_path: std::ptr::null(),
+            model_id: std::ptr::null(),
+            model_name: std::ptr::null(),
+        },
+        tts_config: sys::rac_voice_agent_tts_config_t {
+            voice_path: std::ptr::null(),
+            voice_id: std::ptr::null(),
+            voice_name: std::ptr::null(),
+        },
+    }
+}
+
 fn run_voice(options: &GlobalOptions, p: &Parsed) -> i32 {
     let Ok(_env) = bootstrap(options) else {
         return 1;
@@ -110,34 +140,10 @@ fn run_voice(options: &GlobalOptions, p: &Parsed) -> i32 {
     let tts_id_c = to_cstring(&tts.model_id);
     let tts_name_c = to_cstring(&tts.display_name);
 
-    // RAC_VOICE_AGENT_CONFIG_DEFAULT is a header-only `static const`
-    // (internal C linkage per translation unit), so there is no symbol to
-    // link against from Rust; the header's own default values are
-    // reproduced here instead. This CLI never sets vad_config, so it keeps
-    // the header default for the life of this struct; every stt/llm/tts
+    // This CLI never sets vad_config, so it keeps
+    // default_voice_agent_config()'s header default; every stt/llm/tts
     // field is overridden below.
-    let mut config = sys::rac_voice_agent_config_t {
-        vad_config: sys::rac_voice_agent_vad_config_t {
-            sample_rate: 16000,
-            frame_length: 0.1,
-            energy_threshold: 0.005,
-        },
-        stt_config: sys::rac_voice_agent_stt_config_t {
-            model_path: std::ptr::null(),
-            model_id: std::ptr::null(),
-            model_name: std::ptr::null(),
-        },
-        llm_config: sys::rac_voice_agent_llm_config_t {
-            model_path: std::ptr::null(),
-            model_id: std::ptr::null(),
-            model_name: std::ptr::null(),
-        },
-        tts_config: sys::rac_voice_agent_tts_config_t {
-            voice_path: std::ptr::null(),
-            voice_id: std::ptr::null(),
-            voice_name: std::ptr::null(),
-        },
-    };
+    let mut config = default_voice_agent_config();
     config.stt_config.model_path = stt_path_c.as_ptr();
     config.stt_config.model_id = stt_id_c.as_ptr();
     config.stt_config.model_name = stt_name_c.as_ptr();
@@ -271,4 +277,31 @@ pub fn register_voice(app: &mut App) {
     );
 
     cmd.callback(|p, g| run_voice(g, p));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pins default_voice_agent_config() to rac_voice_agent.h's
+    // RAC_VOICE_AGENT_CONFIG_DEFAULT field by field, including the nested
+    // RAC_VOICE_AGENT_VAD_CONFIG_DEFAULT (whose energy_threshold, 0.005,
+    // differs from the generic RAC_ENERGY_VAD_CONFIG_DEFAULT's 0.5 --
+    // they are separate defaults for separate structs).
+    #[test]
+    fn default_voice_agent_config_matches_header_default() {
+        let config = default_voice_agent_config();
+        assert_eq!(config.vad_config.sample_rate, 16000);
+        assert_eq!(config.vad_config.frame_length, 0.1);
+        assert_eq!(config.vad_config.energy_threshold, 0.005);
+        assert!(config.stt_config.model_path.is_null());
+        assert!(config.stt_config.model_id.is_null());
+        assert!(config.stt_config.model_name.is_null());
+        assert!(config.llm_config.model_path.is_null());
+        assert!(config.llm_config.model_id.is_null());
+        assert!(config.llm_config.model_name.is_null());
+        assert!(config.tts_config.voice_path.is_null());
+        assert!(config.tts_config.voice_id.is_null());
+        assert!(config.tts_config.voice_name.is_null());
+    }
 }

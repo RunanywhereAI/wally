@@ -284,6 +284,150 @@ fn catalog_lookup() {
     let _ = entries;
 }
 
+/// Ports the smolvlm2 case that the comment at the top of `catalog_lookup`
+/// (`// smolvlm2 is a VLM, out of scope for the LLM-only cut`) leaves out:
+/// multi-file entries (VLM pairs, embeddings) must carry >= 2 required files.
+/// Matches explore-main/tests/test_wally_unit.cpp's commented-out
+/// `wally::catalog::find("smolvlm2")` case.
+///
+/// `#[ignore]`d following the convention in tests/test_wally_unit/diarize.rs.
+/// Unlike diarize (gated only by command registration), this row is hidden
+/// at the catalog data layer itself: `catalog::find`/`catalog::all` route
+/// every lookup through `listed()`, which requires `is_llm()`
+/// (src/catalog/catalog.rs), the same `is_llm()` cut the C++ reference
+/// applies in src/catalog/catalog.cpp (see its comment "Delete is_llm and its
+/// four uses below to restore the full catalog"). So this stays red under
+/// `--ignored` until *both* the LLM-only cut is reverted in src/app.rs *and*
+/// `is_llm()`'s filtering is removed from src/catalog/catalog.rs, not just
+/// the former.
+#[test]
+#[ignore = "smolvlm2 is hidden by is_llm() in src/catalog/catalog.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT in src/catalog/catalog.cpp)"]
+fn catalog_lookup_vlm_two_file_artifact() {
+    let vlm = catalog::find("smolvlm2").expect("smolvlm2 should resolve");
+    assert_eq!(vlm.files.len(), 2, "smolvlm2 should be a two-file artifact");
+}
+
+/// Ports the VLM/embedding block that the comment before the Apple-only
+/// nemotron checks in `catalog_lookup`
+/// (`// VLM (multimodal) and embedding catalog entries are out of scope for
+/// the LLM-only cut`) leaves out. Matches the commented-out block in
+/// explore-main/tests/test_wally_unit.cpp between that same comment and the
+/// `mlx-nemotron-nano` Apple-only checks: mlx-qwen2-vl and mlx-fastvlm (MLX
+/// VLM bundles), mlx-qwen3-embed (MLX embedding bundle), and three portable
+/// llama.cpp GGUF embedding models with pinned revisions.
+///
+/// `#[ignore]`d following the convention in tests/test_wally_unit/diarize.rs.
+/// Like `catalog_lookup_vlm_two_file_artifact` above, these rows are hidden
+/// by `is_llm()`/`listed()` in src/catalog/catalog.rs (mirroring
+/// src/catalog/catalog.cpp), a data-layer gate on top of src/app.rs's
+/// command registration -- both need to revert for this to pass.
+#[test]
+#[ignore = "VLM/embed rows are hidden by is_llm() in src/catalog/catalog.rs for the LLM-only release (mirrors C++ WALLY_LLM_ONLY_CUT in src/catalog/catalog.cpp)"]
+fn catalog_lookup_vlm_and_embedding_bundles() {
+    let mlx_vlm = catalog::find("mlx-qwen2-vl").expect("mlx-qwen2-vl should resolve");
+    assert_eq!(mlx_vlm.category, v1::ModelCategory::Multimodal);
+    assert_eq!(mlx_vlm.framework, v1::InferenceFramework::Mlx);
+    assert_eq!(
+        mlx_vlm.files.len(),
+        11,
+        "mlx-qwen2-vl should be a complete MLX VLM bundle"
+    );
+    assert!(
+        mlx_vlm
+            .files
+            .iter()
+            .any(|f| f.filename == "preprocessor_config.json"),
+        "MLX VLM catalog entry must include preprocessor_config.json"
+    );
+
+    let mlx_fastvlm = catalog::find("mlx-fastvlm").expect("mlx-fastvlm should resolve");
+    assert_eq!(mlx_fastvlm.category, v1::ModelCategory::Multimodal);
+    assert_eq!(mlx_fastvlm.framework, v1::InferenceFramework::Mlx);
+    assert_eq!(
+        mlx_fastvlm.files.len(),
+        14,
+        "mlx-fastvlm should be a complete MLX VLM bundle"
+    );
+    assert!(
+        mlx_fastvlm
+            .files
+            .iter()
+            .any(|f| f.filename == "processor_config.json"),
+        "MLX FastVLM catalog entry must include processor config"
+    );
+    assert!(
+        mlx_fastvlm.files.iter().any(|f| !f.required
+            && (f.filename == "processing_fastvlm.py" || f.filename == "llava_qwen.py")),
+        "MLX FastVLM catalog entry must include its optional companions"
+    );
+
+    let mlx_embed = catalog::find("mlx-qwen3-embed").expect("mlx-qwen3-embed should resolve");
+    assert_eq!(mlx_embed.category, v1::ModelCategory::Embedding);
+    assert_eq!(mlx_embed.framework, v1::InferenceFramework::Mlx);
+    assert_eq!(
+        mlx_embed.files.len(),
+        11,
+        "mlx-qwen3-embed should be a complete MLX embedding bundle"
+    );
+
+    // Portable llama.cpp GGUF embeddings; hidden entirely on a kit without
+    // that backend (platform_supports() in src/catalog/catalog.rs), same as
+    // the maple-preview check above.
+    #[cfg(wally_has_llamacpp)]
+    {
+        struct PortableNvidiaEmbeddingCase {
+            id: &'static str,
+            alias: &'static str,
+            revision: &'static str,
+            download_size_bytes: i64,
+        }
+        let cases = [
+            PortableNvidiaEmbeddingCase {
+                id: "nemotron-3-embed-1b-q4_k_m",
+                alias: "nemotron-3-embed",
+                revision: "06df1fde6f7009c91f6cc3cd520081921929a678",
+                download_size_bytes: 749352096,
+            },
+            PortableNvidiaEmbeddingCase {
+                id: "llama-nemotron-embed-1b-v2-q4_k_m",
+                alias: "llama-nemotron-embed",
+                revision: "bf7c9832b1d76f86777379e58b7b74805ee58006",
+                download_size_bytes: 807690624,
+            },
+            PortableNvidiaEmbeddingCase {
+                id: "llama-embed-nemotron-8b-q4_k_m",
+                alias: "llama-embed-nemotron",
+                revision: "e7ae3cbae4f7693bbd75ec959bf293f39e1f2e25",
+                download_size_bytes: 4625233184,
+            },
+        ];
+        for case in cases {
+            let by_id =
+                catalog::find(case.id).unwrap_or_else(|| panic!("{} should resolve", case.id));
+            let by_alias = catalog::find(case.alias)
+                .unwrap_or_else(|| panic!("{} should resolve", case.alias));
+            assert_eq!(
+                by_id.id, by_alias.id,
+                "{} should be an exact pinned llama.cpp embedding",
+                case.id
+            );
+            assert_eq!(by_id.category, v1::ModelCategory::Embedding);
+            assert_eq!(by_id.framework, v1::InferenceFramework::LlamaCpp);
+            assert_eq!(by_id.format, v1::ModelFormat::Gguf);
+            assert!(by_id.files.is_empty());
+            let url = by_id.url.unwrap_or_else(|| {
+                panic!("{} should be an exact pinned llama.cpp embedding", case.id)
+            });
+            assert_eq!(by_id.download_size_bytes, case.download_size_bytes);
+            assert!(
+                url.contains(case.revision),
+                "{} should be an exact pinned llama.cpp embedding",
+                case.id
+            );
+        }
+    }
+}
+
 #[test]
 fn overlay_catalog() {
     struct Row {

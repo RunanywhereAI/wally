@@ -26,6 +26,15 @@ use crate::io::image_io;
 use crate::io::output::{describe_result, error_line, result_line, status_line, table, JsonWriter};
 use crate::sys;
 
+/// Literal mirror of `RAC_SEGMENTATION_OPTIONS_DEFAULT` from
+/// rac_segmentation_types.h: header-only `static const` (internal C linkage
+/// per translation unit), so there is no symbol to link against from Rust.
+fn default_segmentation_options() -> sys::rac_segmentation_options_t {
+    sys::rac_segmentation_options_t {
+        include_diagnostic_rgba: sys::FALSE, // header default: RAC_FALSE
+    }
+}
+
 /// Resolve through ensure_model_ready so a catalog id is never shadowed by a
 /// same-named file in cwd. Local paths still work: model_ref requires a
 /// separator (or Windows drive) before treating a ref as an on-disk path.
@@ -177,18 +186,13 @@ fn run_segment(
         pixel_format: sys::RAC_SEGMENTATION_PIXEL_FORMAT_RGB8,
     };
 
-    // rac_segmentation_options_t default (rac_segmentation_types.h
-    // RAC_SEGMENTATION_OPTIONS_DEFAULT: { include_diagnostic_rgba: RAC_FALSE }),
-    // built from the header literal rather than the kit's extern static: that
-    // static is header-only (declared `static const` in the header, not
-    // present in any kit archive), so `cargo check` accepts a reference to it
-    // but linking fails. Only include_diagnostic_rgba varies here anyway.
-    let seg_options = sys::rac_segmentation_options_t {
-        include_diagnostic_rgba: if diagnostic_path.is_empty() {
-            sys::FALSE
-        } else {
-            sys::TRUE
-        },
+    // include_diagnostic_rgba is the only field this CLI varies away from
+    // default_segmentation_options()'s header default.
+    let mut seg_options = default_segmentation_options();
+    seg_options.include_diagnostic_rgba = if diagnostic_path.is_empty() {
+        sys::FALSE
+    } else {
+        sys::TRUE
     };
 
     // SAFETY: result is zero-initialized plain data; the kit fills it in.
@@ -272,4 +276,17 @@ pub fn register_segment(app: &mut App) {
             &p.get_str("--diagnostic-image").unwrap_or_default(),
         )
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pins default_segmentation_options() to rac_segmentation_types.h's
+    // RAC_SEGMENTATION_OPTIONS_DEFAULT.
+    #[test]
+    fn default_segmentation_options_matches_header_default() {
+        let options = default_segmentation_options();
+        assert_eq!(options.include_diagnostic_rgba, sys::FALSE);
+    }
 }
