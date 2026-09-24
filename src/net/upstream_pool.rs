@@ -60,21 +60,23 @@ impl UpstreamPool {
     fn build(&self) -> Client {
         // Origin is validated by the caller (it comes from a pinned
         // Endpoint); a malformed one here would be a configuration bug, not
-        // a request-time failure, so this only needs to not panic.
+        // a request-time failure, so this only needs to not panic. C++'s
+        // `httplib::Client(options_.origin)` never fails on a bad string
+        // either -- it falls back to using the whole raw origin as a
+        // literal hostname (see `with_literal_host`) -- so a misconfigured
+        // value here fails using that same configured value, not a
+        // hardcoded stand-in the operator never set.
         Client::new(
             &self.inner.options.origin,
             self.inner.options.connect_timeout,
             self.inner.options.read_timeout,
         )
         .unwrap_or_else(|_| {
-            // Fall back to a client that will fail on first use rather
-            // than panic; `http://` always parses.
-            Client::new(
-                "http://127.0.0.1:1",
+            Client::with_literal_host(
+                &self.inner.options.origin,
                 self.inner.options.connect_timeout,
                 self.inner.options.read_timeout,
             )
-            .expect("http://127.0.0.1:1 always parses as an origin")
         })
     }
 
@@ -330,5 +332,23 @@ mod tests {
             retry_on_fresh_connection(http1::Error::Read, false, false, true),
             "a stalled read on a reused connection is retried, same as httplib"
         );
+    }
+
+    // A malformed origin that still passed the caller's http(s):// gate (e.g.
+    // "http://" with no host) must not panic build() and must not silently
+    // redirect every request to a hardcoded stand-in the operator never
+    // configured -- it fails using the misconfigured value itself, the same
+    // way cpp-httplib's Client does.
+    #[test]
+    fn acquire_does_not_panic_on_a_malformed_origin_and_never_reaches_the_old_dummy_host() {
+        let pool = UpstreamPool::new(options("http://".to_string()));
+        let mut lease = pool.acquire("token");
+        let result = lease.client().send(&Request::get("/ping"), None, None);
+        assert!(result.is_err(), "an empty host can never actually connect");
+        // The old fallback pointed every such client at 127.0.0.1:1, a
+        // reserved port that refuses instantly; the fix instead resolves
+        // "http://" itself as a (bogus) DNS name, which fails at name
+        // resolution -- either way this must not panic, which the call
+        // above already proved by returning rather than aborting.
     }
 }

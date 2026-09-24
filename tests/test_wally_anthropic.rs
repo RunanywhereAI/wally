@@ -4,6 +4,8 @@
 
 #[path = "common/fake_upstream.rs"]
 mod fake_upstream;
+#[path = "common/shim_lock.rs"]
+mod shim_lock;
 
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -196,6 +198,7 @@ impl Editor {
 // answers it as a normal reply.
 #[test]
 fn overload_headers_survive_streaming() {
+    let _shim_guard = shim_lock::shim_lock();
     let mut server = Server::new();
     let calls = Arc::new(AtomicI32::new(0));
     let calls_route = calls.clone();
@@ -287,6 +290,7 @@ fn overload_headers_survive_streaming() {
 // would open a new connection each time, so the ports would differ.
 #[test]
 fn sequential_requests_reuse_the_upstream_connection() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     let shim = RunningShim::local(&upstream.base_url());
     assert!(shim.started(), "translator did not start");
@@ -313,6 +317,7 @@ fn sequential_requests_reuse_the_upstream_connection() {
 // connection and make the test pass by legitimate reuse.
 #[test]
 fn concurrent_requests_use_separate_connections() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_streams_until(2);
     let shim = Arc::new(RunningShim::local(&upstream.base_url()));
@@ -340,6 +345,7 @@ fn concurrent_requests_use_separate_connections() {
 // The pool on its own, no translator in front of it.
 #[test]
 fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
+    let _shim_guard = shim_lock::shim_lock();
     let pool = UpstreamPool::new(UpstreamOptions {
         origin: "http://127.0.0.1:9".to_string(),
         idle_limit: 2,
@@ -374,6 +380,7 @@ fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
 // must not leave the lease pointing at freed memory.
 #[test]
 fn pool_outlives_an_outstanding_lease() {
+    let _shim_guard = shim_lock::shim_lock();
     let pool = UpstreamPool::new(UpstreamOptions {
         origin: "http://127.0.0.1:9".to_string(),
         ..Default::default()
@@ -393,6 +400,7 @@ fn pool_outlives_an_outstanding_lease() {
 
 #[test]
 fn retry_rule_only_on_a_stale_reused_connection() {
+    let _shim_guard = shim_lock::shim_lock();
     use wally::net::http1::Error as E;
 
     struct Case {
@@ -517,6 +525,7 @@ fn retry_rule_only_on_a_stale_reused_connection() {
 // sockets, so it runs on every platform and this case is not skipped here.
 #[test]
 fn stale_reused_connection_is_retried_once_on_a_fresh_one() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = HalfOpenUpstream::new();
     assert!(upstream.ok(), "could not bind the half-open upstream");
     let shim = RunningShim::local(&upstream.base_url());
@@ -538,6 +547,7 @@ fn stale_reused_connection_is_retried_once_on_a_fresh_one() {
 // requests: the one that warmed the connection and the one that died on it.
 #[test]
 fn upstream_dying_mid_stream_is_not_retried() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     let shim = RunningShim::local(&upstream.base_url());
     assert!(shim.started(), "translator did not start");
@@ -559,6 +569,7 @@ fn upstream_dying_mid_stream_is_not_retried() {
 // the stale-retry rule does not re-send the prompt: arrivals stay at two.
 #[test]
 fn an_abandoned_stream_is_cancelled_by_name_and_never_resent() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
     assert!(shim.started(), "translator did not start");
@@ -598,6 +609,7 @@ fn an_abandoned_stream_is_cancelled_by_name_and_never_resent() {
 // upstream socket so the drip stops.
 #[test]
 fn leaving_while_tokens_flow_cancels_by_name() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
     assert!(shim.started(), "translator did not start");
@@ -646,6 +658,7 @@ fn leaving_while_tokens_flow_cancels_by_name() {
 // A stream that completed is never cancelled, whenever the editor goes.
 #[test]
 fn a_completed_stream_is_not_cancelled() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.die_mid_stream(false);
     let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
@@ -673,6 +686,7 @@ fn a_completed_stream_is_not_cancelled() {
 // logged and no cancel is attempted anywhere.
 #[test]
 fn a_local_endpoint_is_never_cancelled() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_streams_until(99);
     let shim = RunningShim::local(&upstream.base_url()); // no console_url
@@ -696,6 +710,7 @@ fn a_local_endpoint_is_never_cancelled() {
 // waiting for the engine's first token.
 #[test]
 fn stop_sends_the_last_cancel_before_returning() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_streams_until(99);
     upstream.delay_cancel_reply(500);
@@ -731,6 +746,7 @@ fn leaving_during_prefill_cancels_at_the_first_token() {}
 #[test]
 #[cfg(not(windows))]
 fn leaving_during_prefill_cancels_at_the_first_token() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_headers(true);
     let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
@@ -760,6 +776,7 @@ fn leaving_during_prefill_cancels_at_the_first_token() {
 // gives up within a poll instead of waiting for the first token.
 #[test]
 fn stopping_during_prefill_does_not_wait_for_the_first_token() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_headers(true);
     let mut shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
@@ -775,4 +792,269 @@ fn stopping_during_prefill_does_not_wait_for_the_first_token() {
         took <= Duration::from_millis(1500),
         "stop() waited for the first token: {took:?}"
     );
+}
+
+// A connection the shim never manages to open must answer 502 with "the
+// model endpoint did not answer" -- not the 502 status folded into the
+// status *reported to the translator*, which used to make it say "the model
+// endpoint returned status 502" instead (and would have logged 502, not 0,
+// to shim.log). Covers the non-streaming and pre-stream-failure streaming
+// paths, both of which keep a raw/possibly-zero status separate from the
+// client-visible one.
+#[test]
+fn a_dead_upstream_answers_502_with_the_did_not_answer_message() {
+    let _shim_guard = shim_lock::shim_lock();
+    // A port with nothing listening: bind to grab a free one, then drop the
+    // listener so the connect the shim attempts is refused immediately
+    // rather than hanging.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{dead_port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        console_url: String::new(),
+        serving: false,
+    };
+    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let shim = started.expect("translator did not start");
+    let mut client = Client::new(
+        &shim.base_url,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    for streaming in [false, true] {
+        let body = serde_json::json!({
+            "model": "test",
+            "stream": streaming,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        .to_string();
+        let request = Request::post("/v1/messages", body.into_bytes())
+            .header("x-api-key", shim.auth_token.clone())
+            .header("Content-Type", "application/json");
+        let reply = client
+            .send(&request, None, None)
+            .expect("shim answers even when the upstream is unreachable");
+        assert_eq!(reply.status, 502, "streaming={streaming}");
+        let parsed: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(
+            parsed["error"]["message"],
+            "the model endpoint did not answer",
+            "streaming={streaming} body={:?}",
+            String::from_utf8_lossy(&reply.body)
+        );
+    }
+    let mut shim = shim;
+    anthropic::stop(&mut shim);
+}
+
+// A raw upstream error body cut at 1000 bytes (not 1000 characters) can land
+// mid-character; nlohmann's `.dump()` throws serializing the result. Neither
+// `HandleNonStreaming` nor `HandleStreaming` catches that locally, so it
+// unwinds to the try/catch wrapped directly around them in the `POST
+// /v1/messages` handler (not httplib's own routing()-level catch -- nothing
+// registers an exception_handler_, but this closer one fires first), which
+// answers 500 with `error.what()` re-wrapped as a fresh `api_error` body --
+// not the (impossible to construct in Rust, since a `String` can never hold
+// invalid UTF-8) translated error it would otherwise have been. Covers both
+// the non-streaming and the streaming pre-stream-failure paths, which share
+// the same cascade.
+#[test]
+fn a_1000_byte_cut_that_splits_a_utf8_character_falls_back_to_the_generic_500() {
+    let _shim_guard = shim_lock::shim_lock();
+    let mut server = Server::new();
+    // 999 ASCII bytes, then a 2-byte UTF-8 character (U+00E9, "e"): the cut
+    // at byte 1000 keeps the 999 ASCII bytes plus exactly the character's
+    // first byte, an invalid, un-terminated sequence. Not JSON, so
+    // `upstream_failure` never gets a message from `payload_error` first.
+    let mut raw_body = "a".repeat(999).into_bytes();
+    raw_body.extend_from_slice("\u{00e9}\u{00e9}".as_bytes());
+    server.route("POST", "/v1/chat/completions", move |_req, res, _peer| {
+        let _ = res.send_full(400, &[("Content-Type", "text/plain")], &raw_body);
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        console_url: String::new(),
+        serving: false,
+    };
+    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let shim = started.expect("translator did not start");
+    let mut client = Client::new(
+        &shim.base_url,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    for streaming in [false, true] {
+        let body = serde_json::json!({
+            "model": "test",
+            "stream": streaming,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        .to_string();
+        let request = Request::post("/v1/messages", body.into_bytes())
+            .header("x-api-key", shim.auth_token.clone())
+            .header("Content-Type", "application/json");
+        let reply = client
+            .send(&request, None, None)
+            .expect("shim answers even on the malformed-UTF-8 cascade");
+        assert_eq!(reply.status, 500, "streaming={streaming}");
+        let parsed: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(
+            parsed["error"]["type"], "api_error",
+            "streaming={streaming}"
+        );
+        // Byte 999 of the raw body is 0xC3, the lead byte of the first "e"'s
+        // 2-byte encoding; the cut at byte 1000 keeps only that lead byte.
+        assert_eq!(
+            parsed["error"]["message"],
+            "[json.exception.type_error.316] incomplete UTF-8 string; last byte: 0xC3",
+            "streaming={streaming}"
+        );
+    }
+    let mut shim = shim;
+    anthropic::stop(&mut shim);
+    handle.stop();
+}
+
+// `parsed.value("stream", false)` on the C++ side calls nlohmann's
+// `get<bool>()` once the key is present, which throws a `type_error` for any
+// non-boolean value instead of silently defaulting to false -- and that
+// throw lands in the same try/catch around `HandleStreaming`/
+// `HandleNonStreaming`, answering 500 with a fresh `api_error` body before
+// either handler (or any upstream call) is ever reached.
+#[test]
+fn a_non_boolean_stream_field_answers_the_generic_500_not_a_silent_false() {
+    let _shim_guard = shim_lock::shim_lock();
+    let mut server = Server::new();
+    server.route("POST", "/v1/chat/completions", |_req, _res, _peer| {
+        panic!("upstream must never be called for a request the shim itself rejects");
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        console_url: String::new(),
+        serving: false,
+    };
+    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let shim = started.expect("translator did not start");
+    let mut client = Client::new(
+        &shim.base_url,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    let cases: [(serde_json::Value, &str); 4] = [
+        (serde_json::json!("true"), "string"),
+        (serde_json::json!(1), "number"),
+        (serde_json::Value::Null, "null"),
+        (serde_json::json!([true]), "array"),
+    ];
+    for (stream_value, want_type_name) in cases {
+        let body = serde_json::json!({
+            "model": "test",
+            "stream": stream_value,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        .to_string();
+        let request = Request::post("/v1/messages", body.into_bytes())
+            .header("x-api-key", shim.auth_token.clone())
+            .header("Content-Type", "application/json");
+        let reply = client
+            .send(&request, None, None)
+            .expect("shim answers even for a rejected request shape");
+        assert_eq!(reply.status, 500, "stream={want_type_name}");
+        let parsed: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(
+            parsed["error"]["type"], "api_error",
+            "stream={want_type_name}"
+        );
+        assert_eq!(
+            parsed["error"]["message"],
+            format!(
+                "[json.exception.type_error.302] type must be boolean, but is {want_type_name}"
+            ),
+            "stream={want_type_name}"
+        );
+    }
+    let mut shim = shim;
+    anthropic::stop(&mut shim);
+    handle.stop();
+}
+
+// An SSE `data:` line whose JSON string content carries a lone, non-continued
+// UTF-8 lead byte (0xE9 immediately followed by `"`, never a valid
+// continuation byte) is exactly the shape nlohmann's `Json::parse` rejects
+// mid-parse, byte for byte -- not a shape `serde_json::from_slice` should
+// ever get the chance to lossily repair into a normal chunk first. The
+// payload accumulator has to stay raw bytes (never pre-converted through
+// `String::from_utf8_lossy`) for this to surface as the same malformed-frame
+// error event C++ produces instead of a corrupted-but-"successful" delta.
+#[test]
+fn an_invalid_utf8_sse_data_line_is_a_malformed_frame_not_a_silently_repaired_chunk() {
+    let _shim_guard = shim_lock::shim_lock();
+    let mut server = Server::new();
+    server.route("POST", "/v1/chat/completions", |_req, res, _peer| {
+        let mut frame: Vec<u8> = b"data: {\"choices\":[{\"delta\":{\"content\":\"caf".to_vec();
+        frame.push(0xE9); // lead byte of a 2-byte sequence, but the next byte (0x22, '"') is not a continuation byte
+        frame.extend_from_slice(b"\"}}]}\n\n");
+        if res
+            .begin_chunked(200, &[("Content-Type", "text/event-stream")])
+            .is_err()
+        {
+            return;
+        }
+        let _ = res.write_chunk(&frame);
+        let _ = res.end_chunked();
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        console_url: String::new(),
+        serving: false,
+    };
+    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let shim = started.expect("translator did not start");
+    let mut client = Client::new(
+        &shim.base_url,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    let body = serde_json::json!({
+        "model": "test",
+        "stream": true,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    .to_string();
+    let request = Request::post("/v1/messages", body.into_bytes())
+        .header("x-api-key", shim.auth_token.clone())
+        .header("Content-Type", "application/json");
+    let reply = client
+        .send(&request, None, None)
+        .expect("shim answers even on a malformed SSE frame");
+    assert_eq!(reply.status, 200, "the stream itself opens fine");
+    let received = String::from_utf8_lossy(&reply.body);
+    assert!(
+        received.contains("the model endpoint sent a malformed stream frame"),
+        "expected the malformed-frame error event; got: {received}"
+    );
+    assert!(
+        !received.contains("\"text\":\"caf"),
+        "the invalid byte must not surface as a lossily-repaired content delta; got: {received}"
+    );
+    let mut shim = shim;
+    anthropic::stop(&mut shim);
+    handle.stop();
 }

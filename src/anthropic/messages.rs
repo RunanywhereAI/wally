@@ -430,8 +430,13 @@ fn handle_non_streaming(
     };
 
     if result.abandoned {
-        // Nobody is reading; whatever is written here goes nowhere.
-        let _ = writer.send_full(499, &[], b"");
+        // Nobody is reading; whatever is written here goes nowhere. C++
+        // leaves `response.body` empty here too, but cpp-httplib's
+        // error_handler_ fires for ANY response >= 400 with an empty body,
+        // not just a routed 404, so the bytes it actually writes carry the
+        // same generic not_found_error JSON write_translator_error below
+        // produces for a routed 404.
+        write_translator_error(writer, 499, "POST", "/v1/messages");
         return;
     }
     let non_2xx = match &result.reply {
@@ -439,7 +444,18 @@ fn handle_non_streaming(
         Ok(reply) => reply.status < 200 || reply.status >= 300,
     };
     if non_2xx {
-        let status = match &result.reply {
+        // C++ keeps two distinct status values here: `status` (the raw,
+        // possibly-zero reply status, `reply ? reply->status : 0`) feeds the
+        // log line and the translator, while `response.status` (the
+        // client-visible one, `reply ? reply->status : 502`) is what the
+        // editor actually sees. Collapsing them into one already-502'd
+        // variable would send the wrong status to both the log and the
+        // translator on a connection failure.
+        let raw_status = match &result.reply {
+            Ok(reply) => reply.status,
+            Err(_) => 0,
+        };
+        let client_status = match &result.reply {
             Ok(reply) => reply.status,
             Err(_) => 502,
         };
@@ -447,20 +463,34 @@ fn handle_non_streaming(
             Ok(reply) => reply.body.clone(),
             Err(_) => Vec::new(),
         };
-        log_upstream_error(&runtime.model, false, status, &body);
+        log_upstream_error(&runtime.model, false, raw_status, &body);
         // A 429 or 503 from the hosted API carries a Retry-After the
         // wrapped tool should honor.
         let retry_after = match &result.reply {
             Ok(reply) => reply.header("Retry-After").map(|v| v.to_string()),
             Err(_) => None,
         };
-        let (kind, message) = translate::upstream_failure(status, &String::from_utf8_lossy(&body));
-        let payload = translate::error_body(&kind, &message);
-        let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
-        if let Some(ra) = retry_after.as_deref() {
-            headers.push(("Retry-After", ra));
+        match translate::upstream_failure(raw_status, &String::from_utf8_lossy(&body)) {
+            translate::UpstreamFailureBody::Translated(kind, message) => {
+                let payload = translate::error_body(&kind, &message);
+                let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
+                if let Some(ra) = retry_after.as_deref() {
+                    headers.push(("Retry-After", ra));
+                }
+                let _ = writer.send_full(client_status, &headers, payload.as_bytes());
+            }
+            translate::UpstreamFailureBody::MalformedUtf8Truncation(diagnostic) => {
+                // nlohmann's `.dump()` throws on a 1000-byte cut that split a
+                // multi-byte UTF-8 character; `HandleNonStreaming` has no
+                // local catch of its own, so the throw unwinds to the one
+                // wrapped directly around it in the `POST /v1/messages`
+                // handler (messages.cpp:664-680), which answers 500 with
+                // `error.what()` as an `api_error`. The `catch_unwind` below
+                // us is that same wrapper; panicking here reaches it exactly
+                // the way an uncaught C++ exception would.
+                panic!("{diagnostic}");
+            }
         }
-        let _ = writer.send_full(status, &headers, payload.as_bytes());
         return;
     }
     let reply = match result.reply {
@@ -617,7 +647,7 @@ impl Drop for FinishPipeOnDrop<'_> {
 fn feed_sse_bytes(
     data: &[u8],
     pending: &mut Vec<u8>,
-    payload: &mut String,
+    payload: &mut Vec<u8>,
     has_data: &mut bool,
     saw_done: &mut bool,
     state: &mut translate::StreamState,
@@ -641,9 +671,13 @@ fn feed_sse_bytes(
                     value.remove(0);
                 }
                 if *has_data {
-                    payload.push('\n');
+                    payload.push(b'\n');
                 }
-                payload.push_str(&String::from_utf8_lossy(&value));
+                // Raw bytes, exactly as C++'s `std::string payload` -- never
+                // lossily repaired. Invalid UTF-8 must fail the same way it
+                // fails nlohmann's `Json::parse` below, not get silently
+                // replaced with U+FFFD before parsing ever sees it.
+                payload.extend_from_slice(&value);
                 *has_data = true;
             }
             continue;
@@ -654,11 +688,11 @@ fn feed_sse_bytes(
         *has_data = false;
         let events = if *saw_done {
             translate::stream_error_to_anthropic(state, "the model endpoint sent data after [DONE]")
-        } else if payload == "[DONE]" {
+        } else if payload.as_slice() == b"[DONE]" {
             *saw_done = true;
             String::new()
         } else {
-            match serde_json::from_str::<Value>(payload) {
+            match serde_json::from_slice::<Value>(payload) {
                 Ok(parsed) => translate::stream_chunk_to_anthropic(&parsed, state),
                 Err(_) => translate::stream_error_to_anthropic(
                     state,
@@ -768,22 +802,39 @@ fn handle_streaming(
             }
             if guard.abandoned {
                 drop(guard);
-                let _ = writer.send_full(499, &[], b"");
+                // Same generic error_handler_ body as the non-streaming
+                // abandoned path above -- see the comment there.
+                write_translator_error(writer, 499, "POST", "/v1/messages");
                 return;
             }
-            let status = if guard.status != 0 { guard.status } else { 502 };
+            // Same raw-vs-client status split as the non-streaming path
+            // (`pipe->status` feeds the log and translator; `response.status`
+            // is `pipe->status ? pipe->status : 502`).
+            let raw_status = guard.status;
+            let client_status = if guard.status != 0 { guard.status } else { 502 };
             let retry_after = guard.retry_after.clone();
             let error_body = guard.error_body.clone();
             drop(guard);
-            log_upstream_error(&effective, true, status, &error_body);
-            let (kind, message) =
-                translate::upstream_failure(status, &String::from_utf8_lossy(&error_body));
-            let payload = translate::error_body(&kind, &message);
-            let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
-            if !retry_after.is_empty() {
-                headers.push(("Retry-After", &retry_after));
+            log_upstream_error(&effective, true, raw_status, &error_body);
+            match translate::upstream_failure(raw_status, &String::from_utf8_lossy(&error_body)) {
+                translate::UpstreamFailureBody::Translated(kind, message) => {
+                    let payload = translate::error_body(&kind, &message);
+                    let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
+                    if !retry_after.is_empty() {
+                        headers.push(("Retry-After", &retry_after));
+                    }
+                    let _ = writer.send_full(client_status, &headers, payload.as_bytes());
+                }
+                translate::UpstreamFailureBody::MalformedUtf8Truncation(diagnostic) => {
+                    // Same cascade as the non-streaming path: this still runs
+                    // before any bytes of the response have gone out (the
+                    // C++ side has not yet registered its chunked content
+                    // provider, so the equivalent throw is still inside the
+                    // handler's own try/catch), so panicking here reaches
+                    // the same `catch_unwind` the non-streaming path does.
+                    panic!("{diagnostic}");
+                }
             }
-            let _ = writer.send_full(status, &headers, payload.as_bytes());
             return;
         }
         drop(guard);
@@ -798,7 +849,7 @@ fn handle_streaming(
         state.model = effective.clone();
         state.input_estimate = input_estimate;
         let mut pending: Vec<u8> = Vec::new();
-        let mut payload = String::new();
+        let mut payload: Vec<u8> = Vec::new();
         let mut has_data = false;
         let mut saw_done = false;
 
@@ -827,10 +878,36 @@ fn handle_streaming(
             return;
         }
         if !successful {
+            // Unlike the two pre-stream sites, C++ hardcodes `status = 0`
+            // here too -- there is no raw-vs-client split to restore.
             let status = 0;
             log_upstream_error(&effective, true, status, &error_body);
-            let (_kind, message) =
-                translate::upstream_failure(status, &String::from_utf8_lossy(&error_body));
+            let message =
+                match translate::upstream_failure(status, &String::from_utf8_lossy(&error_body)) {
+                    translate::UpstreamFailureBody::Translated(_kind, message) => message,
+                    translate::UpstreamFailureBody::MalformedUtf8Truncation(_) => {
+                        // Unlike the two pre-stream sites, panicking here
+                        // must NOT happen even though `handle_messages_route`'s
+                        // `catch_unwind` would technically catch it: `writer`
+                        // has already sent a 200 status line and
+                        // `Transfer-Encoding: chunked` (and possibly earlier
+                        // chunks), and `ResponseWriter::send_full` has no
+                        // notion of "already responded" -- it would write a
+                        // second, invalid status line into the middle of the
+                        // chunked body, corrupting the connection. C++'s
+                        // equivalent throw happens inside the chunked
+                        // content-provider callback, which runs *outside*
+                        // routing()'s try/catch and outside any other catch up
+                        // to the connection's worker thread, so it is an
+                        // uncaught exception -> std::terminate, crashing the
+                        // whole process -- also not something to reproduce, as
+                        // it would take every other in-flight connection down
+                        // too. This is a deliberate, narrow deviation: close
+                        // the SSE stream with a fixed, always-valid-UTF-8
+                        // message instead of crashing or corrupting the wire.
+                        "the model endpoint's error response could not be decoded".to_string()
+                    }
+                };
             let body = translate::stream_error_to_anthropic(&mut state, &message);
             if !body.is_empty() {
                 let _ = writer.write_chunk(body.as_bytes());
@@ -865,6 +942,21 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         s.clone()
     } else {
         "unknown panic".to_string()
+    }
+}
+
+/// nlohmann's `json::type_name()`, the word a `type_error.302` diagnostic
+/// names the offending value's kind with. `serde_json::Value` has no
+/// separate binary/discarded variants, so only the five reachable here are
+/// mapped.
+fn nlohmann_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -921,11 +1013,20 @@ fn handle_messages_route(
     // thread silently; answer a clean 500 instead, matching the C++'s
     // explicit try/catch around request handling (httplib does not catch).
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if parsed
-            .get("stream")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        // `parsed.value("stream", false)` on the C++ side calls nlohmann's
+        // `get<bool>()` once the key is present, which throws a type_error
+        // for any non-boolean value (string, number, null, array, object)
+        // instead of silently defaulting -- and that throw lands in this
+        // same try/catch, not inside HandleStreaming/HandleNonStreaming.
+        let want_stream = match parsed.get("stream") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(other) => panic!(
+                "[json.exception.type_error.302] type must be boolean, but is {}",
+                nlohmann_type_name(other)
+            ),
+        };
+        if want_stream {
             handle_streaming(runtime, stream, &parsed, writer);
         } else {
             handle_non_streaming(runtime, stream, &parsed, writer);
@@ -1010,24 +1111,46 @@ fn register_routes(server: &mut Server, runtime: Arc<Runtime>) {
 
     // A route we do not translate should say so, not 404 into a silence the
     // reader has to guess at.
-    let not_found_runtime = runtime;
+    let not_found_runtime = runtime.clone();
     server.not_found(move |req, writer| {
         if not_found_runtime.verbose {
             status_line(&format!("anthropic: {} {} -> 404", req.method, req.path));
         }
-        let payload = translate::error_body(
-            "not_found_error",
-            &format!(
-                "{} {} is not something wally translates",
-                req.method, req.path
-            ),
-        );
-        let _ = writer.send_full(
-            404,
-            &[("Content-Type", "application/json")],
-            payload.as_bytes(),
-        );
+        write_translator_error(writer, 404, &req.method, &req.path);
     });
+
+    // cpp-httplib's `set_error_handler` fires for ANY response with status
+    // >= 400, not just a routed 404 -- including a malformed request line,
+    // bad headers, or an over-long URI that never made it to routing at
+    // all. `not_found` above covers the routed case (it has a full
+    // `ServerRequest`); this covers the earlier ones with whatever parsing
+    // reached.
+    let on_error_runtime = runtime;
+    server.on_error(move |status, method, path, writer| {
+        if on_error_runtime.verbose {
+            status_line(&format!("anthropic: {method} {path} -> {status}"));
+        }
+        write_translator_error(writer, status, method, path);
+    });
+}
+
+/// The JSON body cpp-httplib's `error_handler_` (installed by
+/// `messages.cpp`) fills in for any response `set_error_handler` sees with
+/// an empty body -- a routed 404, an earlier 400/414 wally never got far
+/// enough to route, or a routed handler (like the abandoned-request 499s in
+/// `handle_non_streaming`/`handle_streaming`) that set a status without ever
+/// writing content. The message text is the same generic "is not something
+/// wally translates" line regardless of which of those triggered it.
+fn write_translator_error(writer: &mut ResponseWriter<'_>, status: i32, method: &str, path: &str) {
+    let payload = translate::error_body(
+        "not_found_error",
+        &format!("{method} {path} is not something wally translates"),
+    );
+    let _ = writer.send_full(
+        status,
+        &[("Content-Type", "application/json")],
+        payload.as_bytes(),
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -1257,5 +1380,49 @@ mod tests {
         assert_eq!(panic_message(&*s), "boom");
         let s: Box<dyn std::any::Any + Send> = Box::new(42i32);
         assert_eq!(panic_message(&*s), "unknown panic");
+    }
+
+    #[test]
+    fn nlohmann_type_name_covers_every_serde_json_variant() {
+        assert_eq!(nlohmann_type_name(&Value::Null), "null");
+        assert_eq!(nlohmann_type_name(&Value::Bool(true)), "boolean");
+        assert_eq!(nlohmann_type_name(&json!(1)), "number");
+        assert_eq!(nlohmann_type_name(&json!("s")), "string");
+        assert_eq!(nlohmann_type_name(&json!([1])), "array");
+        assert_eq!(nlohmann_type_name(&json!({"a": 1})), "object");
+    }
+
+    // A route that sets a status >= 400 without ever writing content (an
+    // abandoned-request 499, here and in handle_non_streaming/
+    // handle_streaming) is NOT a routed 404, but cpp-httplib's
+    // error_handler_ fires for any such response regardless -- so it must
+    // still carry the same generic not_found_error body write_translator_error
+    // produces for a routed 404, just naming the status that actually fired.
+    #[test]
+    fn write_translator_error_shapes_a_499_the_same_as_a_404() {
+        use crate::net::http1::{Client, Request, Server};
+        use std::time::Duration;
+
+        let mut server = Server::new();
+        server.route("POST", "/v1/messages", |_req, writer, _stream| {
+            write_translator_error(writer, 499, "POST", "/v1/messages");
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client = Client::new(
+            &format!("http://127.0.0.1:{port}"),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let request = Request::post("/v1/messages", Vec::new());
+        let reply = client.send(&request, None, None).unwrap();
+        assert_eq!(reply.status, 499);
+        let parsed: Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(parsed["error"]["type"], "not_found_error");
+        assert_eq!(
+            parsed["error"]["message"],
+            "POST /v1/messages is not something wally translates"
+        );
+        handle.stop();
     }
 }

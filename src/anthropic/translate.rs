@@ -542,7 +542,14 @@ pub fn stream_chunk_to_anthropic(chunk: &Value, state: &mut StreamState) -> Stri
                 id
             }
         };
-        state.model = field(chunk, "model");
+        // `state.model` is the caller-resolved/client-requested model (set
+        // once, before streaming starts -- see messages.rs's
+        // `state.model = effective.clone()`), never the upstream chunk's own
+        // "model" field: message_start always echoes back the model the
+        // client asked for, matching translate.h's documented contract
+        // ("`model` replaces whatever model the caller named"). An upstream
+        // reporting its own internal model id (or omitting/nulling the
+        // field) must never leak into, or blank out, this response.
         out += &event(
             "message_start",
             &json!({
@@ -914,10 +921,36 @@ fn trim_ascii_ws(s: &str) -> &str {
     s.trim_matches(|c| c == ' ' || c == '\t' || c == '\r' || c == '\n')
 }
 
+/// What `upstream_failure` produced.
+pub enum UpstreamFailureBody {
+    /// The normal case: a well-formed `(type, message)` pair.
+    Translated(String, String),
+    /// The C++ side (`trimmed.substr(0, 1000)`, a raw byte count with no
+    /// UTF-8 awareness) can cut a multi-byte sequence in half, leaving
+    /// invalid UTF-8 in `message` before it ever reaches
+    /// `translate::ErrorBody`'s `Json{...}.dump()`. nlohmann's *default*
+    /// (strict) `error_handler_t` rejects that by throwing `type_error.316`
+    /// -- and since a truncation of an already-valid string can only ever
+    /// end mid-sequence (never contain a genuinely wrong byte earlier), it
+    /// is specifically nlohmann's "incomplete UTF-8 string" form of that
+    /// throw (`json.hpp`'s `dump_escaped`, the `state != UTF8_ACCEPT` branch
+    /// after its decode loop ends). The payload here is that exact message,
+    /// matching `std::exception::what()`. `HandleNonStreaming` /
+    /// `HandleStreaming` call this with no local try/catch of their own, so
+    /// the throw unwinds to the `catch` wrapped directly around them in the
+    /// `POST /v1/messages` handler (`messages.cpp:664-680`), which sets
+    /// `response.status = 500` and re-wraps `error.what()` as a fresh
+    /// (always-ASCII, so never re-throwing) `api_error` body -- a Rust
+    /// `String` can never hold invalid UTF-8 in the first place, so this
+    /// variant names the C++ outcome instead of attempting to construct one.
+    MalformedUtf8Truncation(String),
+}
+
 /// A failed (non-2xx, or transport-level `status == 0`) upstream reply
 /// translated to `(type, message)`, trying the JSON error body first, then
-/// the raw body (capped at 1000 bytes), then a generic status-line note.
-pub fn upstream_failure(status: i32, body: &str) -> (String, String) {
+/// the raw body (capped at the C++ side's 1000 *bytes*, not 1000 Unicode
+/// scalars), then a generic status-line note.
+pub fn upstream_failure(status: i32, body: &str) -> UpstreamFailureBody {
     let mut extracted = String::new();
     if let Ok(parsed) = serde_json::from_str::<Value>(body) {
         if let Some((_, message)) = payload_error(&parsed) {
@@ -927,9 +960,22 @@ pub fn upstream_failure(status: i32, body: &str) -> (String, String) {
     if extracted.is_empty() {
         let trimmed = trim_ascii_ws(body);
         if !trimmed.is_empty() {
-            extracted = match trimmed.char_indices().nth(1000) {
-                Some((byte_idx, _)) => trimmed[..byte_idx].to_string(),
-                None => trimmed.to_string(),
+            let bytes = trimmed.as_bytes();
+            let cut = bytes.len().min(1000);
+            extracted = match std::str::from_utf8(&bytes[..cut]) {
+                Ok(s) => s.to_string(),
+                Err(_) => {
+                    // `bytes[..cut]` is a prefix of the already-valid
+                    // `trimmed.as_bytes()`, so the only way this can fail is
+                    // the cut landing mid-sequence -- nlohmann's "incomplete
+                    // UTF-8 string" throw, whose message names only the
+                    // slice's last byte (`s.back()`), not the whole invalid
+                    // tail.
+                    let last = bytes[cut - 1];
+                    return UpstreamFailureBody::MalformedUtf8Truncation(format!(
+                        "[json.exception.type_error.316] incomplete UTF-8 string; last byte: 0x{last:02X}"
+                    ));
+                }
             };
         } else if status != 0 {
             extracted = format!("the model endpoint returned status {status}");
@@ -942,7 +988,7 @@ pub fn upstream_failure(status: i32, body: &str) -> (String, String) {
     } else {
         error_type_for_status(status)
     };
-    (kind, extracted)
+    UpstreamFailureBody::Translated(kind, extracted)
 }
 
 #[cfg(test)]
@@ -978,8 +1024,89 @@ mod tests {
 
     #[test]
     fn upstream_failure_no_status_is_api_error() {
-        let (kind, message) = upstream_failure(0, "");
-        assert_eq!(kind, "api_error");
-        assert_eq!(message, "the model endpoint did not answer");
+        match upstream_failure(0, "") {
+            UpstreamFailureBody::Translated(kind, message) => {
+                assert_eq!(kind, "api_error");
+                assert_eq!(message, "the model endpoint did not answer");
+            }
+            UpstreamFailureBody::MalformedUtf8Truncation(_) => {
+                panic!("expected a translated body")
+            }
+        }
+    }
+
+    // The C++ side truncates the raw error body at 1000 *bytes*
+    // (`std::string::substr(0, 1000)`), not 1000 Unicode scalar values --
+    // for multi-byte UTF-8 text those differ by up to 4x.
+    #[test]
+    fn upstream_failure_truncates_the_raw_body_at_1000_bytes_not_1000_chars() {
+        // 400 three-byte CJK characters = 1200 bytes, well past the cap but
+        // landing exactly on a character boundary at byte 999 is unlikely by
+        // construction here, so pick a body where byte 1000 lands mid
+        // character and assert the malformed-cut outcome instead.
+        let body = "a".repeat(999) + "\u{4e2d}\u{6587}"; // ASCII pad, then 2 CJK chars (3 bytes each)
+        match upstream_failure(500, &body) {
+            // Byte 999 is 0xE4, the lead byte of \u{4e2d}'s 3-byte encoding
+            // (E4 B8 AD); the cut at byte 1000 keeps only that lead byte, so
+            // nlohmann's diagnostic names it as the string's last byte.
+            UpstreamFailureBody::MalformedUtf8Truncation(message) => assert_eq!(
+                message,
+                "[json.exception.type_error.316] incomplete UTF-8 string; last byte: 0xE4"
+            ),
+            UpstreamFailureBody::Translated(_, message) => {
+                panic!(
+                    "expected the mid-character cut to be reported as malformed, got: {message:?}"
+                )
+            }
+        }
+    }
+
+    #[test]
+    fn upstream_failure_truncation_on_a_character_boundary_keeps_exactly_1000_bytes() {
+        // 1000 ASCII bytes: the byte cut always lands on a character
+        // boundary, so this must still translate normally, at exactly 1000
+        // bytes (not fewer, as a Unicode-scalar-based cut of equal count
+        // would never differ from byte count for ASCII -- this pins the
+        // *byte* semantics explicitly).
+        let body = "x".repeat(1500);
+        match upstream_failure(500, &body) {
+            UpstreamFailureBody::Translated(_, message) => assert_eq!(message.len(), 1000),
+            UpstreamFailureBody::MalformedUtf8Truncation(_) => {
+                panic!("expected a translated body")
+            }
+        }
+    }
+
+    // message_start must echo the caller's resolved model
+    // (state.model, set by the caller before streaming starts), never the
+    // upstream chunk's own "model" field -- an internal upstream id (or a
+    // missing/null field) must not leak into, or blank out, the response.
+    #[test]
+    fn message_start_keeps_the_callers_model_not_the_upstream_chunks() {
+        let mut state = StreamState::new();
+        state.model = "claude-3-5-sonnet-20241022".to_string();
+        let chunk = json!({
+            "id": "chatcmpl-1",
+            "model": "glm-4-9b-chat",
+            "choices": [{"index": 0, "delta": {"role": "assistant"}}],
+        });
+        let out = stream_chunk_to_anthropic(&chunk, &mut state);
+        assert!(out.contains("\"model\":\"claude-3-5-sonnet-20241022\""));
+        assert!(!out.contains("glm-4-9b-chat"));
+        assert_eq!(state.model, "claude-3-5-sonnet-20241022");
+    }
+
+    #[test]
+    fn message_start_keeps_the_callers_model_when_upstream_omits_it() {
+        let mut state = StreamState::new();
+        state.model = "claude-3-5-sonnet-20241022".to_string();
+        let chunk = json!({
+            "id": "chatcmpl-1",
+            "model": Value::Null,
+            "choices": [{"index": 0, "delta": {"role": "assistant"}}],
+        });
+        let out = stream_chunk_to_anthropic(&chunk, &mut state);
+        assert!(out.contains("\"model\":\"claude-3-5-sonnet-20241022\""));
+        assert_eq!(state.model, "claude-3-5-sonnet-20241022");
     }
 }
