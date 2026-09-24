@@ -9,4 +9,5 @@ Options:
 
 Examples:
   wally account usage
+
   wally --json account usage

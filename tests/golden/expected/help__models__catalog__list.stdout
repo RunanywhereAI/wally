@@ -7,4 +7,5 @@ Options:
   -a, --all                   Include catalog models not yet downloaded
 
 Examples:
-  wally models list --all                       Browse the whole catalog
+  # Browse the whole catalog
+  wally models list --all

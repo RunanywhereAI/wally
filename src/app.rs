@@ -3,6 +3,7 @@
 
 use crate::bootstrap::{self, GlobalOptions};
 use crate::cli::{App, Outcome};
+use crate::cli_formatter::{examples_footer_with_heading, Example};
 use crate::io::output;
 
 #[cfg(not(test))]
@@ -176,6 +177,8 @@ fn is_wally_flag(token: &str) -> bool {
         || token == "--serve"
         || token == "--restore"
         || token == "--cloud"
+        || token == "-h"
+        || token == "--help"
 }
 
 /// Inserts a `--` ahead of the first token that belongs to the wrapped tool,
@@ -307,18 +310,29 @@ pub fn run(args: &[String]) -> i32 {
         "wally",
     );
     configure_app(&mut app);
-    // `run` only loads models on this machine; a hosted model is reached
-    // through a coding tool. One line for each path, so a first-time reader
-    // sees both exist and can paste either.
-    app.footer(
-        "Get started:\n  wally models pull qwen3-0.6b && wally run qwen3-0.6b\n  wally account login && wally opencode --cloud -m glm-5.3-flash\n\nRun \"wally <command> --help\" for details.",
+    // Show the local chat and hosted coding-tool paths together. Each example
+    // can be pasted, including its explanatory shell comment.
+    let footer = examples_footer_with_heading(
+        &[
+            Example::new(
+                "wally models pull qwen3-4b-instruct-2507 && wally run qwen3-4b-instruct-2507",
+                "Download a local model and chat on this machine",
+            ),
+            Example::new(
+                "wally account login && wally opencode --cloud -m glm-5.3-flash",
+                "Sign in and use a cloud model",
+            ),
+        ],
+        "Get started",
     );
+    app.footer(&format!(
+        "{footer}\n\nRun \"wally <command> --help\" for details."
+    ));
 
     // `wally help [command]` is a plain-word alias for `--help`, answered
-    // here before the parse. Routing it through parse() instead would hand
-    // `wally help opencode` to split_passthrough_argv, which inserts a `--`
-    // and forwards the `--help` to the wrapped tool rather than describing
-    // the wally command. Prints to stdout as `--help` does.
+    // here before the parse so the named command is looked up without
+    // invoking its callback. Prints to stdout as `--help` does, and reaches
+    // shutdown() the same way the Outcome::Help path below does.
     if args.len() >= 2 && args[1] == "help" {
         if args.len() >= 3
             && !args[2].is_empty()

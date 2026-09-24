@@ -4,7 +4,7 @@ Serve a model over an OpenAI-compatible API
 Usage: wally serve [OPTIONS] [model]
 
 Arguments:
-  model                       Model to serve (default qwen3-0.6b)
+  model                       Model to serve (default qwen3-4b-instruct-2507)
 
 Options:
   -h, --help                  Show help
@@ -15,8 +15,10 @@ Options:
   -t, --threads INT           Inference threads (default 4)
       --gpu-layers, --ngl INT
                               Layers to offload to the GPU
-      --cors                  Allow cross-origin browser requests (off by default)
+      --cors                  Allow cross-origin browser requests (off by
+                              default)
 
 Examples:
-  wally serve qwen3-0.6b
+  wally serve qwen3-4b-instruct-2507
+
   wally serve granite-4.2-8b --port 8000

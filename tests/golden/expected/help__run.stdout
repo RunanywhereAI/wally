@@ -39,5 +39,8 @@ Reasoning:
       --no-think              Same as --reasoning off
 
 Examples:
-  wally run qwen3-0.6b                          Chat interactively
-  wally run qwen3-0.6b "write a haiku"          Answer one prompt
+  # Chat interactively
+  wally run qwen3-4b-instruct-2507
+
+  # Answer one prompt
+  wally run qwen3-4b-instruct-2507 "write a haiku"

@@ -7,8 +7,15 @@ Arguments:
 
 Options:
   -h, --help                  Show help
-  -m, --model TEXT            A model on this machine, or a hosted one from your account
+  -m, --model TEXT            A model on this machine, or a hosted one from your
+                              account
 
 Examples:
-  wally hermes -m qwen3-0.6b                    A model on this machine
-  wally hermes -m glm-5.3-flash                 A hosted model (needs `wally account login`)
+  # Download the certified local model once
+  wally models pull qwen3-4b-instruct-2507
+
+  # Start the tool with the certified local model
+  wally hermes -m qwen3-4b-instruct-2507
+
+  # Use a cloud model after wally account login
+  wally hermes -m glm-5.3-flash

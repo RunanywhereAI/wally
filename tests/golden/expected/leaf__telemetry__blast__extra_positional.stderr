@@ -6,7 +6,8 @@ Usage: wally telemetry blast [OPTIONS]
 Options:
   -h, --help                  Show help
       --count POSITIVE        Events per modality (default 1)
-      --session-id TEXT       Session id attached to every event (default: fresh UUID)
+      --session-id TEXT       Session id attached to every event (default: fresh
+                              UUID)
       --processing-ms FLOAT   processing_time_ms metric for every event
       --input-tokens INT      input_tokens metric (llm/vlm modalities)
       --output-tokens INT     output_tokens metric (llm/vlm modalities)

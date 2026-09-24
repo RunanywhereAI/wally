@@ -16,7 +16,7 @@ Models:
 Coding tools:
   claude-code                 Open Claude Code with a model
   claude-desktop              Open Claude Desktop with a model
-  opencode                    Open opencode with a model
+  opencode                    Open OpenCode with a local or cloud model
   hermes                      Open Hermes with a model
   openclaw                    Open OpenClaw with a model
   deepseek                    Open DeepSeek Harness with a model
@@ -44,7 +44,10 @@ Options:
                               ~/.local/share/runanywhere)
 
 Get started:
-  wally models pull qwen3-0.6b && wally run qwen3-0.6b
+  # Download a local model and chat on this machine
+  wally models pull qwen3-4b-instruct-2507 && wally run qwen3-4b-instruct-2507
+
+  # Sign in and use a cloud model
   wally account login && wally opencode --cloud -m glm-5.3-flash
 
 Run "wally <command> --help" for details.

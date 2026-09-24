@@ -9,4 +9,5 @@ Options:
 
 Examples:
   wally account whoami
+
   wally --json account whoami

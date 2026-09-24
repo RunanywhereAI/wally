@@ -8,4 +8,5 @@ Arguments:
 
 Options:
   -h, --help                  Show help
-      --engine TEXT           Pin the inference engine (mlx, llamacpp, onnx, sherpa)
+      --engine TEXT           Pin the inference engine (mlx, llamacpp, onnx,
+                              sherpa)

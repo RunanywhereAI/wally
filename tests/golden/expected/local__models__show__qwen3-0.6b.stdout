@@ -2,6 +2,6 @@ id          qwen3-0.6b
 name        Qwen3 0.6B Q8_0
 backend     llama.cpp
 size        639.0 MB
-context     4096
+context     32768
 downloaded  no
 thinking    yes
