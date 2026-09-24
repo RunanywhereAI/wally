@@ -439,7 +439,18 @@ fn handle_non_streaming(
         Ok(reply) => reply.status < 200 || reply.status >= 300,
     };
     if non_2xx {
-        let status = match &result.reply {
+        // C++ keeps two distinct status values here: `status` (the raw,
+        // possibly-zero reply status, `reply ? reply->status : 0`) feeds the
+        // log line and the translator, while `response.status` (the
+        // client-visible one, `reply ? reply->status : 502`) is what the
+        // editor actually sees. Collapsing them into one already-502'd
+        // variable would send the wrong status to both the log and the
+        // translator on a connection failure.
+        let raw_status = match &result.reply {
+            Ok(reply) => reply.status,
+            Err(_) => 0,
+        };
+        let client_status = match &result.reply {
             Ok(reply) => reply.status,
             Err(_) => 502,
         };
@@ -447,20 +458,34 @@ fn handle_non_streaming(
             Ok(reply) => reply.body.clone(),
             Err(_) => Vec::new(),
         };
-        log_upstream_error(&runtime.model, false, status, &body);
+        log_upstream_error(&runtime.model, false, raw_status, &body);
         // A 429 or 503 from the hosted API carries a Retry-After the
         // wrapped tool should honor.
         let retry_after = match &result.reply {
             Ok(reply) => reply.header("Retry-After").map(|v| v.to_string()),
             Err(_) => None,
         };
-        let (kind, message) = translate::upstream_failure(status, &String::from_utf8_lossy(&body));
-        let payload = translate::error_body(&kind, &message);
-        let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
-        if let Some(ra) = retry_after.as_deref() {
-            headers.push(("Retry-After", ra));
+        match translate::upstream_failure(raw_status, &String::from_utf8_lossy(&body)) {
+            translate::UpstreamFailureBody::Translated(kind, message) => {
+                let payload = translate::error_body(&kind, &message);
+                let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
+                if let Some(ra) = retry_after.as_deref() {
+                    headers.push(("Retry-After", ra));
+                }
+                let _ = writer.send_full(client_status, &headers, payload.as_bytes());
+            }
+            translate::UpstreamFailureBody::MalformedUtf8Truncation(diagnostic) => {
+                // nlohmann's `.dump()` throws on a 1000-byte cut that split a
+                // multi-byte UTF-8 character; `HandleNonStreaming` has no
+                // local catch of its own, so the throw unwinds to the one
+                // wrapped directly around it in the `POST /v1/messages`
+                // handler (messages.cpp:664-680), which answers 500 with
+                // `error.what()` as an `api_error`. The `catch_unwind` below
+                // us is that same wrapper; panicking here reaches it exactly
+                // the way an uncaught C++ exception would.
+                panic!("{diagnostic}");
+            }
         }
-        let _ = writer.send_full(status, &headers, payload.as_bytes());
         return;
     }
     let reply = match result.reply {
@@ -771,19 +796,34 @@ fn handle_streaming(
                 let _ = writer.send_full(499, &[], b"");
                 return;
             }
-            let status = if guard.status != 0 { guard.status } else { 502 };
+            // Same raw-vs-client status split as the non-streaming path
+            // (`pipe->status` feeds the log and translator; `response.status`
+            // is `pipe->status ? pipe->status : 502`).
+            let raw_status = guard.status;
+            let client_status = if guard.status != 0 { guard.status } else { 502 };
             let retry_after = guard.retry_after.clone();
             let error_body = guard.error_body.clone();
             drop(guard);
-            log_upstream_error(&effective, true, status, &error_body);
-            let (kind, message) =
-                translate::upstream_failure(status, &String::from_utf8_lossy(&error_body));
-            let payload = translate::error_body(&kind, &message);
-            let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
-            if !retry_after.is_empty() {
-                headers.push(("Retry-After", &retry_after));
+            log_upstream_error(&effective, true, raw_status, &error_body);
+            match translate::upstream_failure(raw_status, &String::from_utf8_lossy(&error_body)) {
+                translate::UpstreamFailureBody::Translated(kind, message) => {
+                    let payload = translate::error_body(&kind, &message);
+                    let mut headers: Vec<(&str, &str)> = vec![("Content-Type", "application/json")];
+                    if !retry_after.is_empty() {
+                        headers.push(("Retry-After", &retry_after));
+                    }
+                    let _ = writer.send_full(client_status, &headers, payload.as_bytes());
+                }
+                translate::UpstreamFailureBody::MalformedUtf8Truncation(diagnostic) => {
+                    // Same cascade as the non-streaming path: this still runs
+                    // before any bytes of the response have gone out (the
+                    // C++ side has not yet registered its chunked content
+                    // provider, so the equivalent throw is still inside the
+                    // handler's own try/catch), so panicking here reaches
+                    // the same `catch_unwind` the non-streaming path does.
+                    panic!("{diagnostic}");
+                }
             }
-            let _ = writer.send_full(status, &headers, payload.as_bytes());
             return;
         }
         drop(guard);
@@ -827,10 +867,36 @@ fn handle_streaming(
             return;
         }
         if !successful {
+            // Unlike the two pre-stream sites, C++ hardcodes `status = 0`
+            // here too -- there is no raw-vs-client split to restore.
             let status = 0;
             log_upstream_error(&effective, true, status, &error_body);
-            let (_kind, message) =
-                translate::upstream_failure(status, &String::from_utf8_lossy(&error_body));
+            let message =
+                match translate::upstream_failure(status, &String::from_utf8_lossy(&error_body)) {
+                    translate::UpstreamFailureBody::Translated(_kind, message) => message,
+                    translate::UpstreamFailureBody::MalformedUtf8Truncation(_) => {
+                        // Unlike the two pre-stream sites, panicking here
+                        // must NOT happen even though `handle_messages_route`'s
+                        // `catch_unwind` would technically catch it: `writer`
+                        // has already sent a 200 status line and
+                        // `Transfer-Encoding: chunked` (and possibly earlier
+                        // chunks), and `ResponseWriter::send_full` has no
+                        // notion of "already responded" -- it would write a
+                        // second, invalid status line into the middle of the
+                        // chunked body, corrupting the connection. C++'s
+                        // equivalent throw happens inside the chunked
+                        // content-provider callback, which runs *outside*
+                        // routing()'s try/catch and outside any other catch up
+                        // to the connection's worker thread, so it is an
+                        // uncaught exception -> std::terminate, crashing the
+                        // whole process -- also not something to reproduce, as
+                        // it would take every other in-flight connection down
+                        // too. This is a deliberate, narrow deviation: close
+                        // the SSE stream with a fixed, always-valid-UTF-8
+                        // message instead of crashing or corrupting the wire.
+                        "the model endpoint's error response could not be decoded".to_string()
+                    }
+                };
             let body = translate::stream_error_to_anthropic(&mut state, &message);
             if !body.is_empty() {
                 let _ = writer.write_chunk(body.as_bytes());

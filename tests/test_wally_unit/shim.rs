@@ -61,9 +61,15 @@ fn upstream_failure_mapping() {
         ),
     ];
     for (status, body, want_type, want_message) in cases {
-        let (kind, message) = tr::upstream_failure(status, body);
-        assert_eq!(kind, want_type, "status {status} type");
-        assert_eq!(message, want_message, "status {status} message");
+        match tr::upstream_failure(status, body) {
+            tr::UpstreamFailureBody::Translated(kind, message) => {
+                assert_eq!(kind, want_type, "status {status} type");
+                assert_eq!(message, want_message, "status {status} message");
+            }
+            tr::UpstreamFailureBody::MalformedUtf8Truncation(_) => {
+                panic!("status {status}: every case body here is valid UTF-8, got a truncation")
+            }
+        }
     }
 }
 

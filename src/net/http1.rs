@@ -1510,7 +1510,7 @@ mod tests {
         handle.stop();
     }
 
-    // shim-10: an idle keep-alive connection is dropped after
+    // An idle keep-alive connection is dropped after
     // `KEEP_ALIVE_TIMEOUT_SEC`, mirroring cpp-httplib's `keep_alive()`
     // timing out in `process_server_socket_core` -- not left to block a
     // connection-handler thread (and thus `ServerHandle::stop`) forever.
@@ -1539,7 +1539,7 @@ mod tests {
         handle.stop();
     }
 
-    // shim-10: a connection is force-closed (Connection: close) after its
+    // A connection is force-closed (Connection: close) after its
     // `KEEP_ALIVE_MAX_COUNT`th request, mirroring cpp-httplib's
     // `close_connection = count == 1`.
     #[test]
@@ -1566,7 +1566,7 @@ mod tests {
         handle.stop();
     }
 
-    // shim-8: a request line httplib's grammar rejects (unknown method, bad
+    // A request line httplib's grammar rejects (unknown method, bad
     // HTTP version, ...) gets a real 400 response, not a silently dropped
     // connection -- with no `on_error` handler registered, the bare-status
     // fallback still writes a status line.
@@ -1588,7 +1588,7 @@ mod tests {
         handle.stop();
     }
 
-    // shim-8: the registered `on_error` handler (messages.rs's translator
+    // The registered `on_error` handler (messages.rs's translator
     // error body, in production) fires for a pre-routing failure the same
     // way it fires for a routed 404, with the status/method/path parsing
     // reached.
@@ -1615,7 +1615,7 @@ mod tests {
         handle.stop();
     }
 
-    // shim-8: a URI past httplib's CPPHTTPLIB_REQUEST_URI_MAX_LENGTH is 414,
+    // A URI past httplib's CPPHTTPLIB_REQUEST_URI_MAX_LENGTH is 414,
     // not silently dropped.
     #[test]
     fn an_over_long_uri_gets_a_414() {
@@ -1637,7 +1637,7 @@ mod tests {
         handle.stop();
     }
 
-    // shim-14: RFC 9112 6.3 -- a request carrying both a nonzero
+    // RFC 9112 6.3 -- a request carrying both a nonzero
     // Content-Length and a Transfer-Encoding is rejected with 400 before
     // the body is read, never treated as chunked. Content-Length: 0
     // alongside Transfer-Encoding is tolerated (below).
@@ -1704,7 +1704,7 @@ mod tests {
         handle.stop();
     }
 
-    // shim-15: httplib caps a request body at `CPPHTTPLIB_PAYLOAD_MAX_LENGTH`
+    // httplib caps a request body at `CPPHTTPLIB_PAYLOAD_MAX_LENGTH`
     // (100MB, unmodified) and answers 413 once the running total passes it,
     // for both Content-Length-framed and chunked bodies, instead of
     // buffering an unbounded body and handing it to the route.
