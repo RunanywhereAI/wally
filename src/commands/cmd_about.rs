@@ -13,7 +13,7 @@ use crate::device_info::collect_device_snapshot;
 use crate::io::output as out;
 use crate::sys;
 
-use super::cmd_backends::collect_llm_backend_rows;
+use super::cmd_backends::collect_backend_rows;
 
 #[cfg(target_os = "macos")]
 const PLATFORM: &str = "macos";
@@ -88,7 +88,7 @@ pub fn register_about(app: &mut App) {
             }
         }
 
-        let engines = collect_llm_backend_rows();
+        let engines = collect_backend_rows();
 
         // Which bottle this binary is: WALLY_BAKED_CONSOLE_API_URL is compiled
         // in empty for a production build and non-empty for a dev one (see
