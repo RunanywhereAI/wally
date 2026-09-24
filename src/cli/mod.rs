@@ -369,8 +369,10 @@ impl App {
 pub enum Outcome {
     /// The deepest matched command's callback ran (CLI11's bottom-up
     /// `run_callback()`, after `_process()` and `_process_extras()` both
-    /// succeeded); carries its exit code.
-    Ran(i32),
+    /// succeeded); carries its exit code and the subcommand chain entered
+    /// (empty for a bare `wally` with no subcommand at all — app.rs prints
+    /// the root help to stderr for that case, C++'s `out::status_line(app.help())`).
+    Ran { code: i32, path: Vec<String> },
     /// `-h`/`--help` matched anywhere in the chain (`_process_help_flags`
     /// takes precedence over every other outcome, including a later required
     /// or extra argument).
@@ -452,7 +454,10 @@ struct ParseState<'a> {
 /// `detail::split_long`/`split_short` do.
 enum Token<'a> {
     /// `--name` or `--name=value`.
-    Long { name: &'a str, inline: Option<&'a str> },
+    Long {
+        name: &'a str,
+        inline: Option<&'a str>,
+    },
     /// `-x` (one char) possibly followed by an inline value or more clustered
     /// short flags (`-xvalue`, `-ab`).
     Short { name: &'a str, rest: &'a str },
@@ -510,7 +515,10 @@ impl<'a> ParseState<'a> {
     }
 
     fn path(&self) -> Vec<String> {
-        self.frames[1..].iter().map(|f| f.app.name.clone()).collect()
+        self.frames[1..]
+            .iter()
+            .map(|f| f.app.name.clone())
+            .collect()
     }
 
     fn run(&mut self, args: &[String]) {
@@ -565,7 +573,13 @@ impl<'a> ParseState<'a> {
     /// version flags and options reachable by fallthrough from the deepest
     /// frame up to the root, deepest first — CLI11's own bubbling order.
     /// Returns the next index to resume scanning from.
-    fn consume_option(&mut self, args: &[String], i: usize, name: &str, inline: Option<&str>) -> usize {
+    fn consume_option(
+        &mut self,
+        args: &[String],
+        i: usize,
+        name: &str,
+        inline: Option<&str>,
+    ) -> usize {
         let depth = self.frames.len() - 1;
         for level in (0..=depth).rev() {
             if self.frames[level]
@@ -591,7 +605,12 @@ impl<'a> ParseState<'a> {
                     return i + 1;
                 }
             }
-            if let Some(opt_idx) = self.frames[level].app.options.iter().position(|o| o.names.iter().any(|n| n == name)) {
+            if let Some(opt_idx) = self.frames[level]
+                .app
+                .options
+                .iter()
+                .position(|o| o.names.iter().any(|n| n == name))
+            {
                 return self.consume_matched(args, i, level, opt_idx, inline, None);
             }
         }
@@ -622,10 +641,23 @@ impl<'a> ParseState<'a> {
                 .as_ref()
                 .is_some_and(|(names, _, _)| names.split(',').any(|n| n.trim() == name))
             {
-                self.version_text = Some(self.frames[level].app.version_flag.as_ref().unwrap().1.clone());
+                self.version_text = Some(
+                    self.frames[level]
+                        .app
+                        .version_flag
+                        .as_ref()
+                        .unwrap()
+                        .1
+                        .clone(),
+                );
                 return i + 1;
             }
-            if let Some(opt_idx) = self.frames[level].app.options.iter().position(|o| o.names.iter().any(|n| n == name)) {
+            if let Some(opt_idx) = self.frames[level]
+                .app
+                .options
+                .iter()
+                .position(|o| o.names.iter().any(|n| n == name))
+            {
                 let inline = if rest.is_empty() { None } else { Some(rest) };
                 return self.consume_matched(args, i, level, opt_idx, inline, Some(rest));
             }
@@ -665,9 +697,18 @@ impl<'a> ParseState<'a> {
                 .find(|n| args[i].starts_with(n.as_str()))
                 .cloned()
                 .unwrap_or_default();
-            let value = opt.flag_values.get(&typed_name).cloned().unwrap_or_else(|| "true".to_string());
+            let value = opt
+                .flag_values
+                .get(&typed_name)
+                .cloned()
+                .unwrap_or_else(|| "true".to_string());
             let spec = opt.spec.clone();
-            self.frames[level].parsed.flag_values.entry(spec).or_default().push(value);
+            self.frames[level]
+                .parsed
+                .flag_values
+                .entry(spec)
+                .or_default()
+                .push(value);
             return if short_cluster_rest.is_some_and(|r| !r.is_empty()) && inline.is_none() {
                 i + 1
             } else {
@@ -722,7 +763,12 @@ impl<'a> ParseState<'a> {
                 return next;
             }
         }
-        self.frames[level].parsed.values.entry(spec).or_default().extend(values);
+        self.frames[level]
+            .parsed
+            .values
+            .entry(spec)
+            .or_default()
+            .extend(values);
         next
     }
 
@@ -756,7 +802,12 @@ impl<'a> ParseState<'a> {
             let opt = &frame.app.options[opt_idx];
             let spec = opt.spec.clone();
             let multi = opt.multi;
-            frame.parsed.values.entry(spec).or_default().push(token.to_string());
+            frame
+                .parsed
+                .values
+                .entry(spec)
+                .or_default()
+                .push(token.to_string());
             if !multi {
                 frame.positional_cursor += 1;
             }
@@ -768,7 +819,12 @@ impl<'a> ParseState<'a> {
     }
 
     fn push_parse_error(&mut self, message: String) {
-        self.frames.last_mut().unwrap().parsed.remaining.push(format!("\0parse-error\0{message}"));
+        self.frames
+            .last_mut()
+            .unwrap()
+            .parsed
+            .remaining
+            .push(format!("\0parse-error\0{message}"));
     }
 
     fn finish(self) -> Outcome {
@@ -777,8 +833,15 @@ impl<'a> ParseState<'a> {
         // wherever the bad token was) — surface the first one, in scan order,
         // ahead of anything else.
         for frame in &self.frames {
-            if let Some(msg) = frame.parsed.remaining.iter().find_map(|r| r.strip_prefix("\0parse-error\0")) {
-                return Outcome::ParseErr { message: msg.to_string() };
+            if let Some(msg) = frame
+                .parsed
+                .remaining
+                .iter()
+                .find_map(|r| r.strip_prefix("\0parse-error\0"))
+            {
+                return Outcome::ParseErr {
+                    message: msg.to_string(),
+                };
             }
         }
 
@@ -814,7 +877,10 @@ impl<'a> ParseState<'a> {
                             frame.app.require_subcommand_min
                         )
                     };
-                    return Outcome::Required { message, path: path.clone() };
+                    return Outcome::Required {
+                        message,
+                        path: path.clone(),
+                    };
                 }
             }
         }
@@ -831,7 +897,11 @@ impl<'a> ParseState<'a> {
                 let message = if extras.len() > 1 {
                     format!(
                         "The following arguments were not expected: {}",
-                        extras.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ")
+                        extras
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
                     )
                 } else {
                     format!("The following argument was not expected: {}", extras[0])
@@ -849,7 +919,7 @@ impl<'a> ParseState<'a> {
                 code = callback(&frame.parsed, &global);
             }
         }
-        Outcome::Ran(code)
+        Outcome::Ran { code, path }
     }
 }
 
@@ -896,7 +966,10 @@ fn parse_cli_int(raw: &str) -> Option<i64> {
         Some(rest) => (true, rest),
         None => (false, cleaned.strip_prefix('+').unwrap_or(&cleaned)),
     };
-    let value = if let Some(hex) = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+    let value = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
         i64::from_str_radix(hex, 16).ok()?
     } else if digits.len() > 1 && digits.starts_with('0') && digits.chars().all(|c| c.is_digit(8)) {
         i64::from_str_radix(digits, 8).ok()?
@@ -972,7 +1045,9 @@ fn check_validator(validator: &Validator, raw: &str) -> Option<String> {
 fn index_names(app: &App, parsed: &mut Parsed) {
     for opt in &app.options {
         if !opt.positional.is_empty() {
-            parsed.name_to_spec.insert(opt.positional.clone(), opt.spec.clone());
+            parsed
+                .name_to_spec
+                .insert(opt.positional.clone(), opt.spec.clone());
         }
         for name in &opt.names {
             parsed.name_to_spec.insert(name.clone(), opt.spec.clone());
