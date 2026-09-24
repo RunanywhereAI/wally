@@ -17,6 +17,9 @@ name = "wally"
 path = "src/lib.rs"
 # staticlib: what CMake and the Swift MLX host link. rlib: tests and the dev bin.
 crate-type = ["staticlib", "rlib"]
+# The generated SDK bindings carry the kit headers' C examples as doc comments;
+# rustdoc would try to compile them. wally has no doc-tests of its own.
+doctest = false
 
 # Developer entry (`cargo run`, integration tests). The shipped binaries come
 # from CMake: cmake/wally_main.cpp and the Swift host both call wally_run_main.
