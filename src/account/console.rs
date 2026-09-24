@@ -294,6 +294,17 @@ fn url_is_loopback(url: &str) -> bool {
     }
 }
 
+/// TLS for the console: the platform's own stack and trust store, as the C++
+/// had through libcurl and WinHTTP. ureq defaults to rustls with a bundled
+/// root list; with only the `native-tls` feature built, that default panics on
+/// the first https:// request.
+fn console_tls_config() -> ureq::tls::TlsConfig {
+    ureq::tls::TlsConfig::builder()
+        .provider(ureq::tls::TlsProvider::NativeTls)
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .build()
+}
+
 fn map_transport_error(error: ureq::Error) -> String {
     match error {
         // curl's write callback refused the body past kMaximumResponseBytes;
@@ -329,6 +340,7 @@ fn real_transport(request: &HttpRequest) -> Result<HttpResponse, String> {
     let config = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .max_redirects(0)
+        .tls_config(console_tls_config())
         .proxy(proxy)
         .user_agent("wally-cloud-auth/1")
         .timeout_connect(Some(Duration::from_millis(connect.max(0) as u64)))
@@ -1202,5 +1214,18 @@ pub fn who_am_i(console_url: &str, token: &str) -> Result<Identity, String> {
     match ConsoleClient::default().who_am_i(console_url, token) {
         (IdentityResult::Ok, identity, _) => Ok(identity),
         (_, _, error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn console_tls_uses_the_platform_stack_and_trust_store() {
+        let tls = super::console_tls_config();
+        assert_eq!(tls.provider(), ureq::tls::TlsProvider::NativeTls);
+        assert!(matches!(
+            tls.root_certs(),
+            ureq::tls::RootCerts::PlatformVerifier
+        ));
     }
 }
