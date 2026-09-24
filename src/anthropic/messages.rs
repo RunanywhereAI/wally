@@ -208,13 +208,6 @@ static CURRENT: Mutex<Option<RunningInstance>> = Mutex::new(None);
 // The token the wrapped tool presents, read from either header Claude Code
 // may send it in: Authorization: Bearer <t> (from ANTHROPIC_AUTH_TOKEN) or
 // x-api-key: <t> (from ANTHROPIC_API_KEY). Both carry the same value.
-fn dbg_now_ms2() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis()
-}
-
 fn presented_token(request: &ServerRequest) -> String {
     if let Some(value) = request.header("x-api-key") {
         return value.to_string();
@@ -239,16 +232,6 @@ fn on_abandoned(
     status: i32,
     during_prefill: bool,
 ) {
-    eprintln!(
-        "XDBG on_abandoned t={} id={} status={} prefill={}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis(),
-        request_id,
-        status,
-        during_prefill
-    );
     let line = format!(
         "abandoned during={} id={} status={} stream={}",
         if during_prefill { "prefill" } else { "stream" },
@@ -752,13 +735,6 @@ fn handle_streaming(
     // arrives.
     let input_estimate = translate::estimate_request_tokens(request);
     let probe = ReaderGoneProbe::new(stream);
-    eprintln!(
-        "XDBG probe created t={}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    );
     let pipe = StreamPipe::new();
 
     std::thread::scope(|scope| {
@@ -768,14 +744,6 @@ fn handle_streaming(
             let _finish_on_drop = FinishPipeOnDrop(&pipe);
             let reader_gone = || probe.is_gone();
             let mut receiver = |data: &[u8]| -> bool {
-                eprintln!(
-                    "XDBG shim receiver got {} bytes t={}",
-                    data.len(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis()
-                );
                 let mut guard = pipe.shared.lock().unwrap();
                 if guard.status < 200 || guard.status >= 300 {
                     // A non-2xx body is the error body, kept bounded so a
@@ -900,26 +868,14 @@ fn handle_streaming(
 
         loop {
             let bytes = match pipe.read() {
-                StreamReadResult::Finished => {
-                    eprintln!("XDBG main loop Finished t={}", dbg_now_ms2());
-                    break;
-                }
+                StreamReadResult::Finished => break,
                 StreamReadResult::KeepAlive => {
-                    eprintln!("XDBG main loop KeepAlive t={}", dbg_now_ms2());
                     if writer.write_chunk(b": keepalive\n\n").is_err() {
-                        eprintln!("XDBG main loop keepalive write failed t={}", dbg_now_ms2());
                         return;
                     }
                     continue;
                 }
-                StreamReadResult::Chunk(bytes) => {
-                    eprintln!(
-                        "XDBG main loop got Chunk {} bytes t={}",
-                        bytes.len(),
-                        dbg_now_ms2()
-                    );
-                    bytes
-                }
+                StreamReadResult::Chunk(bytes) => bytes,
             };
             if !feed_sse_bytes(
                 &bytes,
@@ -930,7 +886,6 @@ fn handle_streaming(
                 &mut state,
                 writer,
             ) {
-                eprintln!("XDBG main loop feed_sse_bytes write failed t={}", dbg_now_ms2());
                 return;
             }
         }

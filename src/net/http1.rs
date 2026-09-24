@@ -820,19 +820,12 @@ impl LivenessProbe {
 
     pub fn is_gone(&self) -> bool {
         let mut buf = [0u8; 1];
-        let result = self.0.peek(&mut buf);
-        let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
-        let gone = match &result {
+        match self.0.peek(&mut buf) {
             Ok(0) => true,
             Ok(_) => false,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
             Err(_) => true,
-        };
-        eprintln!("XDBG is_gone t={t} result={result:?} gone={gone}");
-        gone
+        }
     }
 
     pub fn restore_blocking(&self) -> io::Result<()> {

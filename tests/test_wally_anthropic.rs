@@ -17,13 +17,6 @@ use wally::harness::Endpoint;
 use wally::net::http1::{Client, Request, Server, StopHandle};
 use wally::net::upstream_pool::{retry_on_fresh_connection, UpstreamOptions, UpstreamPool};
 
-fn dbg_now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis()
-}
-
 /// A translator started against `upstream`, stopped on drop.
 struct RunningShim {
     shim: Shim,
@@ -168,21 +161,10 @@ impl Editor {
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json");
             let mut receiver = |data: &[u8]| -> bool {
-                eprintln!(
-                    "XDBG editor receiver got {} bytes t={}",
-                    data.len(),
-                    dbg_now_ms()
-                );
                 received.lock().unwrap().extend_from_slice(data);
                 true
             };
-            eprintln!("XDBG editor client.send() start t={}", dbg_now_ms());
             let reply = client.send(&request, None, Some(&mut receiver));
-            eprintln!(
-                "XDBG editor client.send() returned t={} reply={:?}",
-                dbg_now_ms(),
-                reply.as_ref().map(|r| r.status)
-            );
             status.store(reply.map(|r| r.status).unwrap_or(0), Ordering::SeqCst);
         }));
     }
@@ -623,9 +605,7 @@ fn an_abandoned_stream_is_cancelled_by_name_and_never_resent() {
     let mut editor = Editor::new(shim.shim());
     editor.start_streaming();
     std::thread::sleep(Duration::from_millis(300));
-    eprintln!("XDBG editor.leave() t={}", dbg_now_ms());
     editor.leave();
-    eprintln!("XDBG editor.leave() returned t={}", dbg_now_ms());
     editor.join();
 
     assert!(
