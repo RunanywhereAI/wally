@@ -633,7 +633,26 @@ impl<'a> ParseState<'a> {
                     .split(',')
                     .any(|n| n.trim() == name)
                 {
-                    self.version_text = Some(version.clone());
+                    // `-V`/`--version` is a normal CLI11 flag underneath its
+                    // `CallForVersion` callback: a long-form `=value` still
+                    // runs through `to_flag_value` + boolean `lexical_cast`
+                    // like any other flag (see `consume_matched`'s `is_flag`
+                    // branch) — `--version=false` is consumed without
+                    // triggering the version outcome, and an unconvertible
+                    // value is "Could not convert", exit 2, not a version
+                    // print.
+                    match inline {
+                        None | Some("") => {
+                            self.version_text = Some(version.clone());
+                        }
+                        Some(v) => match flag_value_bool(v) {
+                            Some(true) => self.version_text = Some(version.clone()),
+                            Some(false) => {}
+                            None => {
+                                self.push_parse_error(format!("Could not convert: {name} = {v}"))
+                            }
+                        },
+                    }
                     return i + 1;
                 }
             }
@@ -1341,8 +1360,17 @@ fn check_validator(validator: &Validator, raw: &str) -> Option<String> {
                 Some(format!("File does not exist: {raw}"))
             }
         }
-        Validator::Range(min, max) => match raw.trim().parse::<i64>() {
-            Ok(v) if v >= *min && v <= *max => None,
+        // CLI11's `Range` validator does not do a naive decimal parse: its
+        // `func_` runs the option's own `lexical_cast<T>` on the raw string
+        // first (same hex/octal/binary/separator/whitespace grammar as a
+        // direct type conversion, see `cli_lexical_int` above) and only
+        // then bounds-checks the numeric result — so "0x10" is accepted as
+        // 16 before comparing against `[min, max]`. Every `Range(min, max)`
+        // in this codebase binds a non-negative `min`, matching CLI11's own
+        // signed-int lexical_cast (which still tolerates a `-` sign; the
+        // bounds check below rejects an out-of-range negative same as C++).
+        Validator::Range(min, max) => match cli_lexical_int(raw, false) {
+            Some(v) if v >= i128::from(*min) && v <= i128::from(*max) => None,
             _ => Some(format!("Value {raw} not in range [{min} - {max}]")),
         },
         Validator::RangeF(min, max) => match raw.trim().parse::<f64>() {
@@ -1760,6 +1788,376 @@ mod tests {
             outcome,
             Outcome::Version {
                 text: "wally 1.2.3".to_string()
+            }
+        );
+    }
+
+    /// CLI11's `AtMost` error: a single-value option (`type_size(1, 1)`,
+    /// `multi` false) given twice, not silently overwritten.
+    #[test]
+    fn repeated_single_value_option_is_at_most_error() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--home", ValueType::Text, "home dir");
+
+        let outcome = app.parse(&["--home".into(), "a".into(), "--home".into(), "b".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--home: At Most 1 required but received 2".to_string(),
+            }
+        );
+    }
+
+    /// A `multi` (vector-bound) option still accumulates every occurrence —
+    /// the `AtMost` check must not regress `--stop`/`--doc`/`--file`/`--text`.
+    #[test]
+    fn repeated_vector_option_still_accumulates() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--stop", ValueType::Text, "stop sequence")
+            .multi();
+        app.callback(|p, _g| {
+            assert_eq!(p.get_strs("--stop"), vec!["a".to_string(), "b".to_string()]);
+            0
+        });
+
+        let outcome = app.parse(&["--stop".into(), "a".into(), "--stop".into(), "b".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+    }
+
+    /// A repeated flag (`-v -v`, `--json --json`) is not an `AtMost` error —
+    /// only single-value options are checked, never flags.
+    #[test]
+    fn repeated_flag_is_not_at_most_error() {
+        let mut app = App::new("root", "wally");
+        app.add_flag("--json", "json flag");
+        app.callback(|p, _g| i32::from(p.flag("--json")));
+
+        let outcome = app.parse(&["--json".into(), "--json".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 1,
+                path: vec![]
+            }
+        );
+    }
+
+    /// A bare `--` at the top level with a subcommand-shaped token after it
+    /// (`wally -- version`) is swallowed as a positional and discarded, not
+    /// routed into the subcommand — the same bare-help outcome as plain
+    /// `wally`, matching the real C++ binary.
+    #[test]
+    fn bare_dash_dash_at_top_level_swallows_a_subcommand_shaped_token() {
+        let mut app = App::new("root", "wally");
+        app.callback(|_p, _g| 0);
+        app.add_subcommand("version", "print version")
+            .callback(|_p, _g| 99);
+
+        let outcome = app.parse(&["--".into(), "version".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+    }
+
+    /// fuzz-values item 1: an empty value token (`--opt ''`) is accepted —
+    /// CLI11's `lexical_assign` bypasses the type's own conversion for an
+    /// empty string, storing the type's default/zero value instead of
+    /// erroring.
+    #[test]
+    fn empty_value_token_is_accepted_as_type_default() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--top-k", ValueType::Int, "sampling top-k");
+        app.callback(|p, _g| {
+            assert_eq!(p.get_str("--top-k").as_deref(), Some("0"));
+            0
+        });
+
+        let outcome = app.parse(&["--top-k".into(), String::new()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+    }
+
+    /// fuzz-values item 2: `--opt=` (empty inline) does not count as "value
+    /// provided" — it falls through to normal mandatory-token consumption,
+    /// producing "N required TYPE missing" when nothing follows.
+    #[test]
+    fn empty_inline_value_falls_through_to_mandatory_token_consumption() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--top-k", ValueType::Int, "sampling top-k");
+
+        let outcome = app.parse(&["--top-k=".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--top-k: 1 required INT missing".to_string(),
+            }
+        );
+    }
+
+    /// fuzz-values item 3: CLI11's integer lexical rules — whitespace trim,
+    /// `0x`/`0o`/`0b` prefixes, and digit separators are all accepted.
+    #[test]
+    fn integer_lexical_accepts_hex_octal_binary_separators_and_whitespace() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        for raw in ["0x1F", "0o17", "0b101", "1_000", " 42 "] {
+            let seen2 = seen.clone();
+            let mut app = App::new("root", "wally");
+            app.add_option("--top-k", ValueType::Int, "sampling top-k");
+            app.callback(move |p, _g| {
+                seen2.borrow_mut().push(p.get_str("--top-k").unwrap());
+                0
+            });
+            let outcome = app.parse(&["--top-k".into(), raw.to_string()]);
+            assert_eq!(
+                outcome,
+                Outcome::Ran {
+                    code: 0,
+                    path: vec![]
+                },
+                "input {raw:?} should parse"
+            );
+        }
+        assert_eq!(
+            *seen.borrow(),
+            vec!["31", "15", "5", "1000", "42"],
+            "every form should canonicalize to plain decimal"
+        );
+    }
+
+    /// fuzz-values item 3: out-of-range for the SPECIFIC C++ bound width is
+    /// a conversion error, even when the value would fit a wider type —
+    /// exercised through `Opt::int_bounds`, the mechanism `serve --port`
+    /// (a `uint16_t` in C++) uses instead of a dedicated `ValueType`
+    /// variant (kept out of `ValueType` because it's matched exhaustively
+    /// by the separately-owned `cli_formatter.rs`).
+    #[test]
+    fn integer_out_of_range_for_bound_width_is_conversion_error() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--port", ValueType::UInt, "port")
+            .int_bounds(0, i128::from(u16::MAX));
+
+        let in_range = app.parse(&["--port".into(), "65535".into()]);
+        assert_eq!(
+            in_range,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+
+        let out_of_range = app.parse(&["--port".into(), "70000".into()]);
+        assert_eq!(
+            out_of_range,
+            Outcome::ParseErr {
+                message: "Could not convert: --port = 70000".to_string(),
+            }
+        );
+
+        let overflows_u32_too = app.parse(&["--port".into(), "4294967296".into()]);
+        assert_eq!(
+            overflows_u32_too,
+            Outcome::ParseErr {
+                message: "Could not convert: --port = 4294967296".to_string(),
+            }
+        );
+    }
+
+    /// fuzz-values item 4: a negative number is taken as the value, not
+    /// misparsed as "missing" — CLI11's own loop has no option-shape check
+    /// on the token it grabs.
+    #[test]
+    fn negative_number_is_taken_as_the_value() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--top-k", ValueType::Int, "sampling top-k");
+        app.callback(|p, _g| {
+            assert_eq!(p.get_str("--top-k").as_deref(), Some("-1"));
+            0
+        });
+
+        let outcome = app.parse(&["--top-k".into(), "-1".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+    }
+
+    /// fuzz-values item 5: the first required value is taken unconditionally
+    /// even when it looks like an option (`--system-prompt -x`), never left
+    /// for later parsing.
+    #[test]
+    fn first_required_value_is_taken_unconditionally_even_if_option_shaped() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--system-prompt", ValueType::Text, "system prompt");
+        app.callback(|p, _g| {
+            assert_eq!(p.get_str("--system-prompt").as_deref(), Some("-x"));
+            0
+        });
+
+        let outcome = app.parse(&["--system-prompt".into(), "-x".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+    }
+
+    /// fuzz-values item 6: `--flag=value` on a boolean flag runs CLI11's
+    /// `to_flag_value` + boolean `lexical_cast` — `false`/`0`/`off`/`no` (and
+    /// more) convert to false, and an unrecognized value is a conversion
+    /// error, exit 2.
+    #[test]
+    fn flag_inline_value_is_converted_per_cli11_bool_semantics() {
+        let mut app = App::new("root", "wally");
+        app.add_flag("--all", "include everything");
+        app.callback(|p, _g| i32::from(p.flag("--all")));
+
+        let outcome = app.parse(&["--all=false".into()]);
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+
+        let mut app = App::new("root", "wally");
+        app.add_flag("--all", "include everything");
+
+        let outcome = app.parse(&["--all=maybe".into()]);
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "Could not convert: --all = maybe".to_string(),
+            }
+        );
+    }
+
+    /// fuzz-values item 6: `--flag=` (empty inline) is not run through
+    /// `to_flag_value` at all — CLI11's `get_flag_value` treats an empty
+    /// input the same as no `=` present, so it falls back to the flag's
+    /// default/`true` text.
+    #[test]
+    fn empty_inline_flag_value_falls_back_to_default() {
+        let mut app = App::new("root", "wally");
+        app.add_flag("--all", "include everything");
+        app.callback(|p, _g| i32::from(p.flag("--all")));
+
+        let outcome = app.parse(&["--all=".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 1,
+                path: vec![]
+            }
+        );
+    }
+
+    /// fuzz-values re-sweep: CLI11's `Range` validator runs the option's own
+    /// lexical_cast (hex/octal/binary/separator grammar) on the raw string
+    /// before bounds-checking, not a naive decimal parse — so `0x10` (16)
+    /// passes a `Range(1, 2147483647)` check exactly like C++'s
+    /// `--trials`/`--max-output-tokens`.
+    #[test]
+    fn range_validator_accepts_cli11_lexical_forms_before_bounds_check() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--trials", ValueType::Int, "trials")
+            .check(Validator::Range(1, 2147483647));
+        app.callback(|p, _g| {
+            assert_eq!(p.get_str("--trials").as_deref(), Some("16"));
+            0
+        });
+
+        let outcome = app.parse(&["--trials".into(), "0x10".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+    }
+
+    /// fuzz-values re-sweep: a value that fails the CLI11 lexical_cast
+    /// entirely (not just the bounds) still reports the same
+    /// "not in range" message C++'s `Range::func_` produces on a failed
+    /// `lexical_cast`.
+    #[test]
+    fn range_validator_rejects_value_out_of_bounds() {
+        let mut app = App::new("root", "wally");
+        app.add_option("--trials", ValueType::Int, "trials")
+            .check(Validator::Range(1, 2147483647));
+
+        let outcome = app.parse(&["--trials".into(), "0".into()]);
+
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "--trials: Value 0 not in range [1 - 2147483647]".to_string(),
+            }
+        );
+    }
+
+    /// fuzz-values re-sweep: `-V`/`--version` is an ordinary CLI11 flag
+    /// underneath its `CallForVersion` callback — a long-form `=value`
+    /// still runs through `to_flag_value` + boolean `lexical_cast` exactly
+    /// like any other flag. `--version=false` converts to false (not the
+    /// default/true), so the version outcome never fires and parsing
+    /// continues normally; an unconvertible value is a genuine
+    /// "Could not convert" parse error, not a version print.
+    #[test]
+    fn version_flag_inline_value_follows_cli11_bool_semantics() {
+        let mut app = App::new("root", "wally");
+        app.set_version_flag("--version,-V", "wally 0.6.0", "Show version");
+        app.callback(|_p, _g| 0);
+
+        let outcome = app.parse(&["--version=false".into()]);
+        assert_eq!(
+            outcome,
+            Outcome::Ran {
+                code: 0,
+                path: vec![]
+            }
+        );
+
+        let mut app = App::new("root", "wally");
+        app.set_version_flag("--version,-V", "wally 0.6.0", "Show version");
+        app.callback(|_p, _g| 0);
+
+        let outcome = app.parse(&["--version=maybe".into()]);
+        assert_eq!(
+            outcome,
+            Outcome::ParseErr {
+                message: "Could not convert: --version = maybe".to_string(),
             }
         );
     }
