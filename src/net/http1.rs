@@ -539,10 +539,11 @@ impl Client {
     /// `receiver` (when given) is called with each body chunk as it arrives
     /// instead of buffering into `Reply.body`; it too may cancel by
     /// returning false, e.g. because the reader this stream was for is gone.
+    #[allow(clippy::type_complexity)]
     pub fn send(
         &mut self,
         request: &Request,
-        mut on_headers: Option<&mut dyn FnMut(&ResponseHead) -> bool>,
+        on_headers: Option<&mut dyn FnMut(&ResponseHead) -> bool>,
         mut receiver: Option<&mut dyn FnMut(&[u8]) -> bool>,
     ) -> Result<Reply, Error> {
         self.ensure_connected()?;
@@ -557,7 +558,7 @@ impl Client {
                 return Err(e);
             }
         };
-        if let Some(cb) = on_headers.as_deref_mut() {
+        if let Some(cb) = on_headers {
             if !cb(&head) {
                 self.conn = None;
                 return Err(Error::Canceled);
@@ -687,11 +688,28 @@ impl ServerRequest {
     }
 }
 
+/// The default cpp-httplib serves: `CPPHTTPLIB_KEEPALIVE_TIMEOUT_SECOND` and
+/// `CPPHTTPLIB_KEEPALIVE_MAX_COUNT`, neither overridden by the shim server it
+/// replaces (`httplib::Server`, no `set_keep_alive_*` calls). A fixed pair on
+/// every response that stays open, not a countdown: httplib's
+/// `write_response_core` writes `keep_alive_max_count_` verbatim each time,
+/// it never decrements it.
+const KEEP_ALIVE_TIMEOUT_SEC: i32 = 5;
+const KEEP_ALIVE_MAX_COUNT: i32 = 100;
+
 /// Writes the response for one request. Either `send_full` once, or
 /// `begin_chunked` followed by any number of `write_chunk` and a final
 /// `end_chunked` -- never both.
 pub struct ResponseWriter<'a> {
     stream: &'a mut TcpStream,
+    /// The incoming request already asked to close (its own `Connection:
+    /// close`), independent of this response's status.
+    request_wants_close: bool,
+    /// Whether the connection closes after the response written so far --
+    /// starts at `request_wants_close`; a `send_full`/`begin_chunked` call
+    /// with `status >= 400` raises it, mirroring httplib's "don't leave
+    /// connections open after errors".
+    closing: bool,
 }
 
 fn reason_phrase(status: i32) -> &'static str {
@@ -714,7 +732,44 @@ fn reason_phrase(status: i32) -> &'static str {
     }
 }
 
-impl ResponseWriter<'_> {
+impl<'a> ResponseWriter<'a> {
+    fn new(stream: &'a mut TcpStream, request_wants_close: bool) -> Self {
+        ResponseWriter {
+            stream,
+            request_wants_close,
+            closing: request_wants_close,
+        }
+    }
+
+    /// Whether the connection closes after the response written so far --
+    /// what `handle_connection` reads once the handler returns to decide
+    /// whether to read another request off this socket. Mirrors cpp-httplib's
+    /// `write_response_core`: the request asked to close, or the last status
+    /// written was `>= 400`.
+    pub fn will_close(&self) -> bool {
+        self.closing
+    }
+
+    /// The `Connection`/`Keep-Alive` header cpp-httplib's `write_response_core`
+    /// would add to this response, unless the caller already set one --
+    /// `Connection: close` when closing, else the fixed
+    /// `Keep-Alive: timeout=<n>, max=<n>` (not decremented per response; see
+    /// `KEEP_ALIVE_MAX_COUNT`). Also updates `closing` for `will_close()`.
+    fn connection_header(&mut self, status: i32, headers: &[(&str, &str)]) -> Option<String> {
+        let close = self.request_wants_close || status >= 400;
+        self.closing = close;
+        if headers.iter().any(|(k, _)| {
+            k.eq_ignore_ascii_case("connection") || k.eq_ignore_ascii_case("keep-alive")
+        }) {
+            return None; // the caller already set it explicitly
+        }
+        Some(if close {
+            "Connection: close\r\n".to_string()
+        } else {
+            format!("Keep-Alive: timeout={KEEP_ALIVE_TIMEOUT_SEC}, max={KEEP_ALIVE_MAX_COUNT}\r\n")
+        })
+    }
+
     pub fn send_full(
         &mut self,
         status: i32,
@@ -724,6 +779,9 @@ impl ResponseWriter<'_> {
         let mut head = format!("HTTP/1.1 {} {}\r\n", status, reason_phrase(status));
         for (k, v) in headers {
             head += &format!("{k}: {v}\r\n");
+        }
+        if let Some(line) = self.connection_header(status, headers) {
+            head += &line;
         }
         if !headers
             .iter()
@@ -741,6 +799,9 @@ impl ResponseWriter<'_> {
         let mut head = format!("HTTP/1.1 {} {}\r\n", status, reason_phrase(status));
         for (k, v) in headers {
             head += &format!("{k}: {v}\r\n");
+        }
+        if let Some(line) = self.connection_header(status, headers) {
+            head += &line;
         }
         if !headers
             .iter()
@@ -977,10 +1038,8 @@ fn handle_connection(mut stream: TcpStream, routes: &[Route], not_found: Option<
         let route = routes
             .iter()
             .find(|r| r.method.eq_ignore_ascii_case(&method) && r.path == path);
-        {
-            let mut writer = ResponseWriter {
-                stream: &mut stream,
-            };
+        let should_close = {
+            let mut writer = ResponseWriter::new(&mut stream, !keep_alive);
             match route {
                 Some(r) => (r.handler)(&request, &mut writer, &probe_stream),
                 None => match not_found {
@@ -990,9 +1049,10 @@ fn handle_connection(mut stream: TcpStream, routes: &[Route], not_found: Option<
                     }
                 },
             }
-        }
+            writer.will_close()
+        };
 
-        if !keep_alive {
+        if should_close {
             return;
         }
     }
@@ -1016,7 +1076,7 @@ mod tests {
         let refused = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
         assert_eq!(classify_connect_error(&refused), Error::Connection);
 
-        let unreachable = io::Error::new(io::ErrorKind::Other, "network unreachable");
+        let unreachable = io::Error::other("network unreachable");
         assert_eq!(classify_connect_error(&unreachable), Error::Connection);
     }
 

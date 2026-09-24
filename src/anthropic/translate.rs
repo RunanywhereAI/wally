@@ -274,7 +274,7 @@ fn estimate_tokens_from_chars(chars: usize) -> i32 {
     if chars == 0 {
         0
     } else {
-        ((chars + 3) / 4) as i32
+        chars.div_ceil(4) as i32
     }
 }
 

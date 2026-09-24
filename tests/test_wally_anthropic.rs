@@ -1,0 +1,778 @@
+//! Port of tests/test_wally_anthropic.cpp: the Anthropic translator's
+//! upstream connection behaviour, against the fake upstreams in
+//! tests/common/fake_upstream.rs.
+
+#[path = "common/fake_upstream.rs"]
+mod fake_upstream;
+
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use fake_upstream::{describe, FakeUpstream, HalfOpenUpstream};
+use wally::anthropic::{self, ModelAliases, Shim};
+use wally::harness::Endpoint;
+use wally::net::http1::{Client, Request, Server, StopHandle};
+use wally::net::upstream_pool::{retry_on_fresh_connection, UpstreamOptions, UpstreamPool};
+
+/// A translator started against `upstream`, stopped on drop.
+struct RunningShim {
+    shim: Shim,
+    started: bool,
+}
+
+impl RunningShim {
+    /// `console_url` is where the shim cancels an abandoned request: the fake
+    /// upstream serves the cancel route on its own origin, so tests pass its
+    /// base without the `/v1`. Empty means a local server -- no cancel is
+    /// ever sent.
+    fn new(upstream_base_url: &str, console_url: &str) -> Self {
+        let endpoint = Endpoint {
+            base_url: upstream_base_url.to_string(),
+            api_key: "test-upstream-key".to_string(),
+            console_url: console_url.to_string(),
+            serving: false,
+        };
+        match anthropic::start(&endpoint, "glm-5.3", false, "", &ModelAliases::new()) {
+            Some(shim) => RunningShim {
+                shim,
+                started: true,
+            },
+            None => RunningShim {
+                shim: Shim::default(),
+                started: false,
+            },
+        }
+    }
+
+    fn local(upstream_base_url: &str) -> Self {
+        Self::new(upstream_base_url, "")
+    }
+
+    /// Stops the translator now (what the wrapper does when the editor
+    /// exits) and returns how long that took.
+    fn stop_now(&mut self) -> Duration {
+        let started = Instant::now();
+        anthropic::stop(&mut self.shim);
+        started.elapsed()
+    }
+
+    fn started(&self) -> bool {
+        self.started
+    }
+
+    fn shim(&self) -> &Shim {
+        &self.shim
+    }
+
+    /// One Anthropic-shaped request through the translator; the status it
+    /// answered with, or 0 when nothing came back.
+    fn send(&self, streaming: bool) -> i32 {
+        let mut client = match Client::new(
+            &self.shim.base_url,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        ) {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+        let body = serde_json::json!({
+            "model": "claude-x",
+            "max_tokens": 16,
+            "stream": streaming,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        .to_string();
+        let request = Request::post("/v1/messages", body.into_bytes())
+            .header("Authorization", format!("Bearer {}", self.shim.auth_token))
+            .header("Content-Type", "application/json");
+        match client.send(&request, None, None) {
+            Ok(reply) => reply.status,
+            Err(_) => 0,
+        }
+    }
+}
+
+impl Drop for RunningShim {
+    fn drop(&mut self) {
+        anthropic::stop(&mut self.shim);
+    }
+}
+
+/// The origin of a fake upstream's base URL: "http://127.0.0.1:port/v1" ->
+/// "http://127.0.0.1:port". What the shim treats as the console for cancels.
+fn origin_of(base_url: &str) -> String {
+    match base_url.rfind("/v1") {
+        Some(idx) => base_url[..idx].to_string(),
+        None => base_url.to_string(),
+    }
+}
+
+/// An editor that opens a streaming request to the shim on its own thread and
+/// can leave in the middle of it -- `leave()` force-closes its socket via the
+/// client's `StopHandle`, which is what Claude Code's abort does (undici
+/// destroys the socket: a FIN).
+struct Editor {
+    client: Option<Client>,
+    stop_handle: StopHandle,
+    token: String,
+    thread: Option<std::thread::JoinHandle<()>>,
+    received: Arc<Mutex<Vec<u8>>>,
+    status: Arc<AtomicI32>,
+}
+
+impl Editor {
+    fn new(shim: &Shim) -> Self {
+        let client = Client::new(
+            &shim.base_url,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        )
+        .expect("build editor client");
+        let stop_handle = client.stop_handle();
+        Editor {
+            client: Some(client),
+            stop_handle,
+            token: shim.auth_token.clone(),
+            thread: None,
+            received: Arc::new(Mutex::new(Vec::new())),
+            status: Arc::new(AtomicI32::new(0)),
+        }
+    }
+
+    fn start_streaming(&mut self) {
+        let mut client = self.client.take().expect("editor client already taken");
+        let token = self.token.clone();
+        let received = self.received.clone();
+        let status = self.status.clone();
+        self.thread = Some(std::thread::spawn(move || {
+            let body = serde_json::json!({
+                "model": "claude-x",
+                "max_tokens": 16,
+                "stream": true,
+                "messages": [{"role": "user", "content": "hi"}],
+            })
+            .to_string();
+            let request = Request::post("/v1/messages", body.into_bytes())
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json");
+            let mut receiver = |data: &[u8]| -> bool {
+                received.lock().unwrap().extend_from_slice(data);
+                true
+            };
+            let reply = client.send(&request, None, Some(&mut receiver));
+            status.store(reply.map(|r| r.status).unwrap_or(0), Ordering::SeqCst);
+        }));
+    }
+
+    /// Leaves the way an editor does: the socket is force-closed (Claude Code
+    /// aborts the fetch; a quitting app closes everything), so the shim's
+    /// next write to it fails.
+    fn leave(&mut self) {
+        self.stop_handle.stop();
+        self.join();
+        self.client = None;
+    }
+
+    fn join(&mut self) {
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+
+    fn received(&self) -> Vec<u8> {
+        self.received.lock().unwrap().clone()
+    }
+
+    fn status(&self) -> i32 {
+        self.status.load(Ordering::SeqCst)
+    }
+}
+
+// A pre-stream overload (429/503) must reach the editor as that status, with
+// the upstream Retry-After intact, whether the request streamed or not --
+// never a blind 200 event-stream carrying the error inside it. The
+// header-peek worker learns the status before the sink is committed and
+// answers it as a normal reply.
+#[test]
+fn overload_headers_survive_streaming() {
+    let mut server = Server::new();
+    let calls = Arc::new(AtomicI32::new(0));
+    let calls_route = calls.clone();
+    server.route("POST", "/v1/chat/completions", move |req, res, _peer| {
+        calls_route.fetch_add(1, Ordering::SeqCst);
+        let max_tokens = serde_json::from_slice::<serde_json::Value>(&req.body)
+            .ok()
+            .and_then(|v| v.get("max_tokens").and_then(|m| m.as_i64()))
+            .unwrap_or(429) as i32;
+        let mut status = max_tokens;
+        let retry_after = if status == 429 {
+            "7"
+        } else {
+            "Wed, 21 Oct 2037 07:28:00 GMT"
+        };
+        if req.header("Authorization") != Some("Bearer test-upstream-key") {
+            status = 401;
+        }
+        let _ = res.send_full(
+            status,
+            &[
+                ("Retry-After", retry_after),
+                ("Content-Type", "application/json"),
+            ],
+            br#"{"error":{"message":"capacity exhausted"}}"#,
+        );
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        console_url: String::new(),
+        serving: false,
+    };
+    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let mut okay = started.is_some();
+    if let Some(shim) = &started {
+        let mut client = Client::new(
+            &shim.base_url,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        for streaming in [false, true] {
+            for status in [429, 503] {
+                let body = serde_json::json!({
+                    "model": "test",
+                    "stream": streaming,
+                    "max_tokens": status,
+                    "messages": [{"role": "user", "content": "hi"}],
+                })
+                .to_string();
+                let request = Request::post("/v1/messages", body.into_bytes())
+                    .header("x-api-key", shim.auth_token.clone())
+                    .header("Content-Type", "application/json");
+                let reply = client.send(&request, None, None);
+                let expected_retry = if status == 429 {
+                    "7"
+                } else {
+                    "Wed, 21 Oct 2037 07:28:00 GMT"
+                };
+                let ok_this = match &reply {
+                    Ok(r) => {
+                        r.status == status
+                            && r.header("Retry-After") == Some(expected_retry)
+                            && r.header("Content-Type")
+                                .map(|c| c.starts_with("application/json"))
+                                .unwrap_or(false)
+                            && String::from_utf8_lossy(&r.body).contains("capacity exhausted")
+                    }
+                    Err(_) => false,
+                };
+                okay = okay && ok_this;
+            }
+        }
+    }
+    if let Some(mut shim) = started {
+        anthropic::stop(&mut shim);
+    }
+    handle.stop();
+    assert!(
+        okay && calls.load(Ordering::SeqCst) == 4,
+        "stream/nonstream preserve 429/503 and numeric/date Retry-After; authenticated once each"
+    );
+}
+
+// Two requests, one after the other, must arrive at the upstream on the same
+// connection. Building a client per request (rather than reusing the pool)
+// would open a new connection each time, so the ports would differ.
+#[test]
+fn sequential_requests_reuse_the_upstream_connection() {
+    let upstream = FakeUpstream::new();
+    let shim = RunningShim::local(&upstream.base_url());
+    assert!(shim.started(), "translator did not start");
+    let first = shim.send(true);
+    let second = shim.send(false);
+    let ports = upstream.ports();
+    assert!(
+        first == 200 && second == 200 && ports.len() == 2,
+        "two 200s and two upstream requests: {first}, {second}, {}",
+        describe(&ports)
+    );
+    assert_eq!(
+        ports[0],
+        ports[1],
+        "same peer port on both upstream requests (one connection): {}",
+        describe(&ports)
+    );
+}
+
+// Two requests in flight at once must NOT share a connection: a single
+// shared client serialises requests on its socket, so a single shared client
+// would queue the second stream behind the first. The upstream holds both
+// streams until both have arrived, so a finished stream cannot lend its
+// connection and make the test pass by legitimate reuse.
+#[test]
+fn concurrent_requests_use_separate_connections() {
+    let upstream = FakeUpstream::new();
+    upstream.hold_streams_until(2);
+    let shim = Arc::new(RunningShim::local(&upstream.base_url()));
+    assert!(shim.started(), "translator did not start");
+    let a_shim = shim.clone();
+    let b_shim = shim.clone();
+    let a = std::thread::spawn(move || a_shim.send(true));
+    let b = std::thread::spawn(move || b_shim.send(true));
+    let first = a.join().unwrap();
+    let second = b.join().unwrap();
+    let ports = upstream.ports();
+    assert!(
+        first == 200 && second == 200 && ports.len() == 2,
+        "two 200s and two upstream requests: {first}, {second}, {}",
+        describe(&ports)
+    );
+    assert_ne!(
+        ports[0],
+        ports[1],
+        "different peer ports (two connections in flight): {}",
+        describe(&ports)
+    );
+}
+
+// The pool on its own, no translator in front of it.
+#[test]
+fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
+    let pool = UpstreamPool::new(UpstreamOptions {
+        origin: "http://127.0.0.1:9".to_string(),
+        idle_limit: 2,
+        ..Default::default()
+    });
+    {
+        let first = pool.acquire("k");
+        assert!(!first.reused(), "a fresh lease from an empty pool");
+        assert_eq!(
+            pool.idle(),
+            0,
+            "no idle client while the fresh lease is out"
+        );
+    }
+    assert_eq!(pool.idle(), 1, "1 idle client after a clean lease ends");
+    {
+        let mut second = pool.acquire("k");
+        assert!(second.reused(), "the idle client reused");
+        second.discard();
+    }
+    assert_eq!(pool.idle(), 0, "0 idle after a discarded lease ends");
+    // Three clean leases at once, then returned: the idle set stops at the limit.
+    {
+        let _a = pool.acquire("k");
+        let _b = pool.acquire("k");
+        let _c = pool.acquire("k");
+    }
+    assert_eq!(pool.idle(), 2, "idle capped at 2");
+}
+
+// A pool outlives its leases: dropping the last Arc while a lease is out
+// must not leave the lease pointing at freed memory.
+#[test]
+fn pool_outlives_an_outstanding_lease() {
+    let pool = UpstreamPool::new(UpstreamOptions {
+        origin: "http://127.0.0.1:9".to_string(),
+        ..Default::default()
+    });
+    let weak = Arc::downgrade(&pool);
+    {
+        let lease = pool.acquire("k");
+        drop(pool);
+        assert!(weak.upgrade().is_some(), "pool alive while a lease is out");
+        drop(lease);
+    }
+    assert!(
+        weak.upgrade().is_none(),
+        "pool freed once the last lease returned"
+    );
+}
+
+#[test]
+fn retry_rule_only_on_a_stale_reused_connection() {
+    use wally::net::http1::Error as E;
+
+    struct Case {
+        error: E,
+        has_response: bool,
+        received_any: bool,
+        reused: bool,
+        expect: bool,
+        why: &'static str,
+    }
+    // The C++ table has 12 rows; two are omitted here. `E::Timeout` and
+    // `E::SSLServerVerification` have no Rust `http1::Error` equivalent --
+    // see `retry_on_fresh_connection`'s doc comment in upstream_pool.rs for
+    // why this crate's Error is deliberately smaller than httplib's.
+    let cases = [
+        Case {
+            error: E::Read,
+            has_response: false,
+            received_any: false,
+            reused: true,
+            expect: true,
+            why: "stale reused socket, nothing back",
+        },
+        Case {
+            error: E::Connection,
+            has_response: false,
+            received_any: false,
+            reused: true,
+            expect: true,
+            why: "reused, connect-class error",
+        },
+        Case {
+            error: E::ConnectionClosed,
+            has_response: false,
+            received_any: false,
+            reused: true,
+            expect: true,
+            why: "reused, closed by peer",
+        },
+        Case {
+            error: E::Write,
+            has_response: false,
+            received_any: false,
+            reused: true,
+            expect: true,
+            why: "reused, write failed",
+        },
+        Case {
+            error: E::SslConnection,
+            has_response: false,
+            received_any: false,
+            reused: true,
+            expect: true,
+            why: "reused, TLS layer reset",
+        },
+        Case {
+            error: E::Read,
+            has_response: false,
+            received_any: false,
+            reused: false,
+            expect: false,
+            why: "fresh connection: a real outage surfaces",
+        },
+        Case {
+            error: E::Read,
+            has_response: true,
+            received_any: false,
+            reused: true,
+            expect: false,
+            why: "a status arrived: never repeat",
+        },
+        Case {
+            error: E::Read,
+            has_response: false,
+            received_any: true,
+            reused: true,
+            expect: false,
+            why: "bytes reached the caller: never repeat",
+        },
+        Case {
+            error: E::ConnectionTimeout,
+            has_response: false,
+            received_any: false,
+            reused: true,
+            expect: false,
+            why: "connect timeout is the network",
+        },
+        Case {
+            error: E::Canceled,
+            has_response: false,
+            received_any: false,
+            reused: true,
+            expect: false,
+            why: "a reader that left is not a stale socket",
+        },
+    ];
+    for case in cases {
+        let got = retry_on_fresh_connection(
+            case.error,
+            case.has_response,
+            case.received_any,
+            case.reused,
+        );
+        assert_eq!(
+            got,
+            case.expect,
+            "{} -> expected {}",
+            case.why,
+            if case.expect { "retry" } else { "no retry" }
+        );
+    }
+}
+
+// A reused connection the far side has quietly stopped serving: the request
+// goes out, nothing comes back, the connection ends. The translator must try
+// once more on a fresh connection and answer 200, and the upstream must see
+// exactly three requests: the first (answered), the stale one (dropped), and
+// the retry (answered) on a NEW connection.
+//
+// Unlike the C++ original (POSIX-only, `#if defined(_WIN32)` skipped): this
+// crate's `HalfOpenUpstream` is built on plain `std::net`, not raw POSIX
+// sockets, so it runs on every platform and this case is not skipped here.
+#[test]
+fn stale_reused_connection_is_retried_once_on_a_fresh_one() {
+    let upstream = HalfOpenUpstream::new();
+    assert!(upstream.ok(), "could not bind the half-open upstream");
+    let shim = RunningShim::local(&upstream.base_url());
+    assert!(shim.started(), "translator did not start");
+    let first = shim.send(false);
+    let second = shim.send(false);
+    let ports = upstream.ports();
+    assert!(
+        first == 200 && second == 200 && ports.len() == 3 && ports[0] == ports[1] && ports[2] != ports[0],
+        "200, 200; three upstream requests, the first two on one connection, the third on another: {first}, {second}; {}",
+        describe(&ports)
+    );
+}
+
+// The case received_any exists for: a REUSED connection whose far side dies
+// after it has started answering. The error is connection-class and there is
+// no status, so only the "bytes reached the caller" rule stops a retry -- and
+// a retry would run the generation twice. The upstream must see exactly two
+// requests: the one that warmed the connection and the one that died on it.
+#[test]
+fn upstream_dying_mid_stream_is_not_retried() {
+    let upstream = FakeUpstream::new();
+    let shim = RunningShim::local(&upstream.base_url());
+    assert!(shim.started(), "translator did not start");
+    let warm = shim.send(false);
+    upstream.die_mid_stream(true);
+    let dying = shim.send(true);
+    let ports = upstream.ports();
+    assert!(
+        warm == 200 && dying == 200 && ports.len() == 2 && ports[0] == ports[1],
+        "200, 200 (the error rides inside the stream); exactly two upstream requests on one connection: {warm}, {dying}; {}",
+        describe(&ports)
+    );
+}
+
+// The editor leaves while the upstream is still producing the body (the
+// engine is decoding; the id is already in hand). Within a second the fake's
+// cancel route sees that id with this session's bearer, the upstream socket
+// is dropped, and -- the pool having been warmed so the lease is REUSED --
+// the stale-retry rule does not re-send the prompt: arrivals stay at two.
+#[test]
+fn an_abandoned_stream_is_cancelled_by_name_and_never_resent() {
+    let upstream = FakeUpstream::new();
+    let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
+    assert!(shim.started(), "translator did not start");
+    // Warm the pool: the second request goes out on a reused connection.
+    assert_eq!(shim.send(false), 200, "warm-up request failed");
+    upstream.hold_streams_until(99); // the body never comes on its own
+    let mut editor = Editor::new(shim.shim());
+    editor.start_streaming();
+    std::thread::sleep(Duration::from_millis(300));
+    editor.leave();
+    editor.join();
+
+    assert!(
+        upstream.wait_for_cancels(1, Duration::from_secs(1)),
+        "no cancel reached the endpoint within 1s of the editor leaving"
+    );
+    let cancels = upstream.cancels();
+    assert!(
+        cancels[0].request_id == FakeUpstream::request_id_of(2)
+            && cancels[0].authorization == "Bearer test-upstream-key",
+        "the cancel must name the abandoned request with the session's bearer: id={} auth={}",
+        cancels[0].request_id,
+        cancels[0].authorization
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        upstream.arrivals(),
+        2,
+        "two upstream requests (warm-up + the abandoned one); no re-send"
+    );
+}
+
+// Leaving while tokens are FLOWING -- Esc mid-answer, the common case. Here
+// the leave is noticed by the failed write to the editor, not by the poll
+// (the fake drips a frame every 5ms; the 100ms poll rarely gets there
+// first), and that path must name the cancel just the same, and drop the
+// upstream socket so the drip stops.
+#[test]
+fn leaving_while_tokens_flow_cancels_by_name() {
+    let upstream = FakeUpstream::new();
+    let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
+    assert!(shim.started(), "translator did not start");
+    assert_eq!(shim.send(false), 200, "warm-up request failed"); // warm the pool: the stream's lease is reused
+    upstream.drip(1000, 2); // ~2s of tokens
+    let mut editor = Editor::new(shim.shim());
+    editor.start_streaming();
+    std::thread::sleep(Duration::from_millis(300));
+    editor.leave();
+    editor.join();
+    assert!(
+        upstream.wait_for_cancels(1, Duration::from_secs(1)),
+        "no cancel reached the endpoint within 1s of the editor leaving"
+    );
+    let cancels = upstream.cancels();
+    assert!(
+        cancels.len() == 1
+            && cancels[0].request_id == FakeUpstream::request_id_of(2)
+            && cancels[0].authorization == "Bearer test-upstream-key",
+        "one cancel naming the abandoned request: n={}",
+        cancels.len()
+    );
+    // The upstream socket is dropped: the fake's drip stops growing.
+    std::thread::sleep(Duration::from_millis(200));
+    let dripped = upstream.dripped();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(
+        upstream.dripped() == dripped && dripped < 1000,
+        "the upstream socket must be dropped once the editor left: dripped {} then {}",
+        dripped,
+        upstream.dripped()
+    );
+    assert!(
+        upstream.arrivals() == 2 && upstream.cancels().len() == 1,
+        "no re-send and no second cancel: arrivals={} cancels={}",
+        upstream.arrivals(),
+        upstream.cancels().len()
+    );
+    let received = editor.received();
+    assert!(
+        String::from_utf8_lossy(&received).contains("content_block_delta"),
+        "the frames before the leave must have reached the editor"
+    );
+}
+
+// A stream that completed is never cancelled, whenever the editor goes.
+#[test]
+fn a_completed_stream_is_not_cancelled() {
+    let upstream = FakeUpstream::new();
+    upstream.die_mid_stream(false);
+    let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
+    assert!(shim.started(), "translator did not start");
+    // A stream the fake finishes on its own is over in a millisecond, so the
+    // editor leaves after it -- that must NOT cancel (nothing is running).
+    let mut editor = Editor::new(shim.shim());
+    editor.start_streaming();
+    editor.join();
+    editor.leave();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        upstream.cancels().is_empty(),
+        "a completed stream must never be cancelled"
+    );
+    assert_eq!(editor.status(), 200);
+    let received = editor.received();
+    assert!(
+        String::from_utf8_lossy(&received).contains("message_stop"),
+        "the completed stream must have reached the editor whole"
+    );
+}
+
+// A local endpoint (no console, no key) has nothing to cancel: the abandon is
+// logged and no cancel is attempted anywhere.
+#[test]
+fn a_local_endpoint_is_never_cancelled() {
+    let upstream = FakeUpstream::new();
+    upstream.hold_streams_until(99);
+    let shim = RunningShim::local(&upstream.base_url()); // no console_url
+    assert!(shim.started(), "translator did not start");
+    let mut editor = Editor::new(shim.shim());
+    editor.start_streaming();
+    std::thread::sleep(Duration::from_millis(300));
+    editor.leave();
+    editor.join();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        upstream.cancels().is_empty(),
+        "a local server must not be asked to cancel"
+    );
+}
+
+// The wrapper exits right after the editor abandoned a stream (app quit):
+// stop() must let the cancel go out before returning -- the fake sits on its
+// answer for 500ms, so an un-joined stop() would return without it -- and
+// must still return within the bound (3s per queued cancel), not after
+// waiting for the engine's first token.
+#[test]
+fn stop_sends_the_last_cancel_before_returning() {
+    let upstream = FakeUpstream::new();
+    upstream.hold_streams_until(99);
+    upstream.delay_cancel_reply(500);
+    let mut shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
+    assert!(shim.started(), "translator did not start");
+    let mut editor = Editor::new(shim.shim());
+    editor.start_streaming();
+    std::thread::sleep(Duration::from_millis(300));
+    editor.leave();
+    editor.join();
+    let took = shim.stop_now();
+    assert_eq!(
+        upstream.cancels().len(),
+        1,
+        "stop() returned without sending the abandoned request's cancel"
+    );
+    assert!(took <= Duration::from_millis(3500), "stop() took {took:?}");
+}
+
+// The editor leaves during PREFILL -- the upstream has not sent its headers,
+// so no id exists yet. The shim keeps the upstream open, and when the
+// headers arrive it cancels by the id they carry.
+//
+// Scoped to POSIX -- see reader_gone_mid_body_names_the_cancel_and_drops_the_socket
+// in test_wally_net_call.rs: the loopback fake signals a gone reader by
+// closing a POSIX-shaped connection, and abandon detection reads that close
+// differently on winsock, so this hermetic timing test would hang on the
+// fake's 5s wait rather than measuring the product.
+#[test]
+#[cfg(windows)]
+fn leaving_during_prefill_cancels_at_the_first_token() {}
+
+#[test]
+#[cfg(not(windows))]
+fn leaving_during_prefill_cancels_at_the_first_token() {
+    let upstream = FakeUpstream::new();
+    upstream.hold_headers(true);
+    let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
+    assert!(shim.started(), "translator did not start");
+    let mut editor = Editor::new(shim.shim());
+    editor.start_streaming();
+    std::thread::sleep(Duration::from_millis(300));
+    editor.leave();
+    editor.join();
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        upstream.cancels().is_empty(),
+        "nothing can be cancelled before the id exists"
+    );
+    upstream.release_headers(); // the first token
+    assert!(
+        upstream.wait_for_cancels(1, Duration::from_secs(1)),
+        "the cancel must follow the headers within 1s"
+    );
+    assert_eq!(
+        upstream.cancels()[0].request_id,
+        FakeUpstream::request_id_of(1)
+    );
+}
+
+// If the wrapper exits first (rather than the headers ever arriving), it
+// gives up within a poll instead of waiting for the first token.
+#[test]
+fn stopping_during_prefill_does_not_wait_for_the_first_token() {
+    let upstream = FakeUpstream::new();
+    upstream.hold_headers(true);
+    let mut shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
+    assert!(shim.started(), "translator did not start");
+    let mut editor = Editor::new(shim.shim());
+    editor.start_streaming();
+    std::thread::sleep(Duration::from_millis(300));
+    editor.leave();
+    editor.join();
+    let took = shim.stop_now();
+    upstream.release_headers();
+    assert!(
+        took <= Duration::from_millis(1500),
+        "stop() waited for the first token: {took:?}"
+    );
+}
