@@ -18,12 +18,17 @@ pub type SpawnFunction = std::sync::Arc<dyn Fn(&str, &[String]) -> i32 + Send + 
 const CONFIG_VARIABLE: &str = "OPENCODE_CONFIG_CONTENT";
 
 fn set_environment(name: &str, value: &str) -> bool {
-    if name.is_empty() || name.contains('=') || name.contains('\0') || value.contains('\0') {
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
         return false;
     }
-    // SAFETY: name/value were just checked for the byte sequences that make
-    // set_var panic; ScopedOpenCodeConfig holds this for one launch at a
-    // time.
+    // setenv(name, value.c_str()) stops at the first NUL; so does this.
+    let value = match value.find('\0') {
+        Some(index) => &value[..index],
+        None => value,
+    };
+    // SAFETY: name was just checked for the byte sequences that make set_var
+    // panic, and `value` was truncated at its first NUL (if any);
+    // ScopedOpenCodeConfig holds this for one launch at a time.
     unsafe { std::env::set_var(name, value) };
     true
 }
