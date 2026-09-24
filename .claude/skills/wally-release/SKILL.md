@@ -5,9 +5,11 @@ description: Cut an Wally product release (independent of SDK version) — versi
 
 # Wally release
 
-Repo: `RunanywhereAI/wally`. Product version is `project(wally VERSION x.y.z)` in
-`CMakeLists.txt` (also stamped into `Formula/wally.rb`). Independent of the SDK
-kit pin.
+Repo: `RunanywhereAI/wally`. Product version is `[product] version` in
+`versions.toml` — CMake's `project(wally VERSION …)` reads it directly;
+`Cargo.toml`'s `version` and `Formula/wally.rb`'s version stamp must match it
+(`scripts/ci/check-versions.py`, and `build.rs` asserts the `Cargo.toml` /
+`versions.toml` pair at build time). Independent of the SDK kit pin.
 
 Do this **after** the SDK GitHub Release this pin targets is **published**
 (not draft). Companion: **wally-kit-pin**, then this skill.
@@ -37,8 +39,9 @@ version.
 
 ## 2. Product version + label
 
-Next patch after `0.5.0` is `0.5.1`. Bump `CMakeLists.txt` `project(wally
-VERSION …)` and any Formula version stamp in the same commit. Open/update the
+Next patch after `0.5.0` is `0.5.1`. Bump `versions.toml [product] version`,
+`Cargo.toml`'s `version`, and any Formula version stamp in the same commit
+(`scripts/ci/check-versions.py` fails the PR if they drift). Open/update the
 PR and apply **exactly one** `release:patch` (or minor/major).
 
 `gh pr create --label release:patch` is not atomic with the `opened` event —

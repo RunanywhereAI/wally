@@ -44,7 +44,14 @@ only an env var to "try" a newer kit — checksums are keyed to the pin.
 
 Configure fails if the extracted kit's `SCHEMA_LOCK` does not match the IDL
 pin. When the schema changes, consume a new kit and bump the pin — never
-regenerate headers locally. Wally never runs `protoc`.
+hand-write proto types locally. Wally never runs `protoc`: `crate::io::proto::v1::*`
+is generated at build time by prost/protox straight from the new kit's `.proto`
+files (`build.rs`), and nothing generated is committed.
+
+`src/sys/bindings.rs` (the `rac_*` C ABI declarations) **is** committed and
+derived from the kit's C headers by bindgen — regenerate it after a kit pin
+bump with `scripts/build/gen-sys-bindings.sh` (`--check` verifies it is
+current; CI runs that on macOS).
 
 ## CI Swift tree
 

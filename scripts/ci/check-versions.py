@@ -2,11 +2,13 @@
 """Fail if a version that cannot read versions.toml at its own build step has
 drifted from it.
 
-CMake reads versions.toml directly, so the build always agrees with it. Two
-files cannot: the Homebrew formula's `version` line and the download URLs it
-builds from that version, and the Swift package's exact SDK pin. This checks
-both against versions.toml so a bump in one place that misses the other fails
-CI rather than shipping a mismatch.
+CMake reads versions.toml directly, so the build always agrees with it. Cargo
+and rustup cannot: Cargo.toml's `version` and rust-toolchain.toml's `channel`
+are each their own tool's source of truth and never open versions.toml. Same
+for the Homebrew formula's `version` line and the download URLs it builds from
+that version, and the Swift package's exact SDK pin. This checks all of them
+against versions.toml so a bump in one place that misses the others fails CI
+rather than shipping a mismatch.
 
     python3 scripts/ci/check-versions.py
 
@@ -24,22 +26,24 @@ VERSIONS = ROOT / "versions.toml"
 FORMULA = ROOT / "Formula" / "wally.rb"
 PACKAGE = ROOT / "swift" / "Package.swift"
 CMAKELISTS = ROOT / "CMakeLists.txt"
+CARGO_TOML = ROOT / "Cargo.toml"
+RUST_TOOLCHAIN = ROOT / "rust-toolchain.toml"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
-def read_toml_value(key: str) -> str:
+def read_toml_value(key: str, path: Path = VERSIONS) -> str:
     pattern = re.compile(rf'^\s*{re.escape(key)}\s*=\s*"([^"]*)"', re.M)
-    match = pattern.search(VERSIONS.read_text(encoding="utf-8"))
+    match = pattern.search(path.read_text(encoding="utf-8"))
     if not match:
-        sys.exit(f"versions.toml is missing '{key}'")
+        sys.exit(f"{path} is missing '{key}'")
     return match.group(1)
 
 
-def read_toml_section(name: str) -> dict[str, str]:
-    text = VERSIONS.read_text(encoding="utf-8")
+def read_toml_section(name: str, path: Path = VERSIONS) -> dict[str, str]:
+    text = path.read_text(encoding="utf-8")
     body = re.search(rf'^\[{re.escape(name)}\]\n(.*?)(?=^\[|\Z)', text, re.M | re.S)
     if not body:
-        sys.exit(f"versions.toml is missing section '[{name}]'")
+        sys.exit(f"{path} is missing section '[{name}]'")
     return dict(re.findall(r'^\s*(\w+)\s*=\s*"([^"]*)"', body.group(1), re.M))
 
 
@@ -90,6 +94,18 @@ def main() -> None:
 
     # CMake declares its own floor and C++ standard; hold them to the pins here.
     toolchain = read_toml_section("toolchain")
+
+    # Cargo's own version, and rustup's own channel pin, each read by a tool
+    # that never opens versions.toml.
+    cargo_version = read_toml_section("package", CARGO_TOML).get("version")
+    if cargo_version != product:
+        failures.append(f"{CARGO_TOML}: version \"{cargo_version}\" != versions.toml \"{product}\"")
+    rust_channel = read_toml_section("toolchain", RUST_TOOLCHAIN).get("channel")
+    if rust_channel != toolchain.get("rust"):
+        failures.append(
+            f"{RUST_TOOLCHAIN}: channel \"{rust_channel}\" != versions.toml toolchain.rust \"{toolchain.get('rust')}\""
+        )
+
     cmake = CMAKELISTS.read_text(encoding="utf-8")
     for label, pattern, key in (
         ("cmake_minimum_required", r"cmake_minimum_required\(VERSION\s+([0-9.]+)", "cmake_minimum"),

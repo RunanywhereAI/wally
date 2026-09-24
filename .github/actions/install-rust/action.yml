@@ -1,0 +1,38 @@
+name: Install Rust toolchain
+description: >-
+  Install (or reuse) the rust-toolchain.toml-pinned toolchain via rustup.
+  Shared by build-wally and any workflow job that runs cargo directly, so the
+  pin lives in exactly one place: rust-toolchain.toml.
+
+inputs:
+  platform:
+    description: >-
+      macos-arm64 | linux-x64 | windows-x64 | windows-arm64 | '' (host default).
+      Only windows-arm64 changes behaviour: the runner's default rustup host is
+      the x64 MSVC triple, which would fetch a toolchain that runs under
+      emulation instead of the native aarch64 one wally needs there.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: rustup + pinned toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v rustup >/dev/null 2>&1; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+        fi
+        if [[ "${{ inputs.platform }}" == "windows-arm64" ]]; then
+          rustup set default-host aarch64-pc-windows-msvc
+        fi
+        # rust-toolchain.toml (channel/profile/components) is the single pin;
+        # `rustup show` installs it here if missing and fails loudly in this
+        # step instead of silently inside the first cargo invocation.
+        rustup show
+        rustc --version
+        cargo --version

@@ -54,6 +54,16 @@ jobs:
         with:
           path: kit
           key: kit-macos-arm64-${{ hashFiles('versions.toml') }}
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            build/cargo
+          key: cargo-macos-arm64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-macos-arm64-
       - name: Download C++ desktop kit
         if: steps.kit.outputs.cache-hit != 'true'
         env:
@@ -107,6 +117,16 @@ jobs:
         with:
           path: kit
           key: kit-windows-arm64-${{ hashFiles('versions.toml') }}
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            build/cargo
+          key: cargo-windows-arm64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-windows-arm64-
       - name: Download C++ desktop kit
         if: steps.kit.outputs.cache-hit != 'true'
         env:
@@ -169,6 +189,16 @@ jobs:
         with:
           path: kit
           key: kit-windows-x64-${{ hashFiles('versions.toml') }}
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            build/cargo
+          key: cargo-windows-x64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-windows-x64-
       - name: Download C++ desktop kit
         if: steps.kit.outputs.cache-hit != 'true'
         env:
@@ -232,6 +262,16 @@ jobs:
         with:
           path: kit
           key: kit-linux-x64-${{ hashFiles('versions.toml') }}
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            build/cargo
+          key: cargo-linux-x64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-linux-x64-
       - name: Download C++ desktop kit
         if: steps.kit.outputs.cache-hit != 'true'
         env:
