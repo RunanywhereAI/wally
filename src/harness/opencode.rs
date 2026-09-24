@@ -175,13 +175,13 @@ fn spawn(executable: &str, arguments: &[String]) -> i32 {
     }
 }
 
-/// OpenCode's complete, ephemeral provider configuration for the hosted
-/// catalog. Every model in `models` becomes a selectable entry with its real
-/// limits (context/output) and price so OpenCode's compaction and usage
+/// OpenCode's complete, ephemeral provider configuration for a local or
+/// hosted model. Every model in `models` becomes a selectable entry with its
+/// real limits (context/output) and price so OpenCode's compaction and usage
 /// display are correct; a 0 for any of them omits that field. `primary` is
 /// the default selection. Built through `io::json::dump`, as the C++
 /// `.dump()`'d it.
-pub fn build_open_code_cloud_config(
+pub fn build_open_code_config(
     primary: &str,
     base_url: &str,
     access_token: &str,
@@ -214,10 +214,17 @@ pub fn build_open_code_cloud_config(
         }
         entries[model.id.as_str()] = entry;
     }
+    // A key is always present because opencode's OpenAI client sends an
+    // Authorization header regardless; a local server ignores what is in it.
+    let key = if access_token.is_empty() {
+        "local"
+    } else {
+        access_token
+    };
     let provider = json!({
         "npm": "@ai-sdk/openai-compatible",
         "name": "RunAnywhere",
-        "options": { "baseURL": base_url, "apiKey": access_token },
+        "options": { "baseURL": base_url, "apiKey": key },
         "models": entries,
     });
     let config = json!({
@@ -225,6 +232,16 @@ pub fn build_open_code_cloud_config(
         "model": format!("runanywhere/{primary}"),
     });
     dump(&config)
+}
+
+/// Compatibility name for callers configuring a hosted catalog.
+pub fn build_open_code_cloud_config(
+    primary: &str,
+    base_url: &str,
+    access_token: &str,
+    models: &[CatalogModel],
+) -> String {
+    build_open_code_config(primary, base_url, access_token, models)
 }
 
 /// Test seam for the console refresh transport and child process.

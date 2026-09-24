@@ -9,12 +9,23 @@ use crate::io::output as out;
 pub fn register_harness(app: &mut App) {
     // `wally opencode <model>` rather than a flag on `run`: it hands the terminal
     // to another program, which is a different thing to do than talk to a model.
-    let opencode = app.add_subcommand("opencode", "Open opencode with a model");
+    let opencode = app.add_subcommand("opencode", "Open OpenCode with a local or cloud model");
     opencode.footer(&examples_footer(&[
-        Example::new("wally opencode -m qwen3-0.6b", "A model on this machine"),
+        Example::new(
+            "wally models pull qwen3-4b-instruct-2507",
+            "Download the certified local model once",
+        ),
+        Example::new(
+            "wally opencode -m qwen3-4b-instruct-2507",
+            "Start OpenCode with the certified local model",
+        ),
         Example::new(
             "wally opencode --cloud -m glm-5.3-flash",
-            "A hosted model (needs `wally account login`)",
+            "Use a cloud model after wally account login",
+        ),
+        Example::new(
+            "wally opencode -m qwen3-4b-instruct-2507 -- run \"explain this project\"",
+            "Pass arguments through to OpenCode after --",
         ),
     ]));
     // A named option rather than a positional: with two positionals there is no
@@ -51,7 +62,7 @@ pub fn register_harness(app: &mut App) {
             }
             return harness::launch_open_code_cloud(&effective, &p.get_strs("args"));
         }
-        harness::launch("opencode", &effective, &p.get_strs("args"))
+        harness::launch("opencode", &effective, &p.get_strs("args"), g)
     });
 
     // The OpenAI-shaped agents, one subcommand per row of the table. They need
@@ -63,12 +74,16 @@ pub fn register_harness(app: &mut App) {
         let invocation = format!("wally {}", agent.id);
         command.footer(&examples_footer(&[
             Example::new(
-                &format!("{invocation} -m qwen3-0.6b"),
-                "A model on this machine",
+                "wally models pull qwen3-4b-instruct-2507",
+                "Download the certified local model once",
+            ),
+            Example::new(
+                &format!("{invocation} -m qwen3-4b-instruct-2507"),
+                "Start the tool with the certified local model",
             ),
             Example::new(
                 &format!("{invocation} -m glm-5.3-flash"),
-                "A hosted model (needs `wally account login`)",
+                "Use a cloud model after wally account login",
             ),
         ]));
         command.add_option(
@@ -90,6 +105,7 @@ pub fn register_harness(app: &mut App) {
                 &agent,
                 &resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color),
                 &p.get_strs("args"),
+                g,
             )
         });
     }

@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::account::{self, ConsoleClient};
+use crate::bootstrap::GlobalOptions;
 use crate::io::json::dump;
 use crate::io::output as out;
 
 use super::catalog_models::{catalog_models_for, CatalogModel};
 use super::harness::{launch, release, resolve, Endpoint};
-use super::local_models::local_context_size;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handoff {
@@ -316,6 +316,14 @@ fn open_claw_state_directory() -> PathBuf {
             return Path::new(&home).join(".openclaw");
         }
     }
+    // PowerShell and cmd.exe leave HOME unset; openclaw falls back to the
+    // profile.
+    #[cfg(windows)]
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        if !profile.is_empty() {
+            return Path::new(&profile).join(".openclaw");
+        }
+    }
     PathBuf::new()
 }
 
@@ -336,7 +344,9 @@ fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
     let mut limits = ModelLimits::default();
     if endpoint.api_key.is_empty() {
         // The size `harness::resolve` started the local server with.
-        limits.context_window = local_context_size(model);
+        let local = &catalog_models_for(endpoint, model)[0];
+        limits.context_window = local.context_window;
+        limits.max_output = local.max_output;
         return limits;
     }
 
@@ -663,14 +673,14 @@ pub fn build_deep_seek_patch(settings_path: &str, model: &str) -> String {
     )
 }
 
-pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
+pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &GlobalOptions) -> i32 {
     if model.is_empty() {
         // Nothing to wire, so do not pretend to. Same contract as
         // `wally opencode` with no model.
-        return launch(agent.command, "", args);
+        return launch(agent.command, "", args, options);
     }
 
-    let Some(endpoint) = resolve(model) else {
+    let Some(endpoint) = resolve(model, options, agent.id) else {
         return 1;
     };
     let child_args = effective_args(agent, args);
@@ -732,7 +742,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
                 "{} will talk to {model} through {}",
                 agent.id, endpoint.base_url
             ));
-            launch(agent.id, "", &hermes_argv(model, &child_args))
+            launch(agent.id, "", &hermes_argv(model, &child_args), options)
         }
         Handoff::ConfigFile => {
             let catalog = catalog_models_for(&endpoint, model);
@@ -774,7 +784,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
                 "{} will talk to {model} through {}",
                 agent.id, endpoint.base_url
             ));
-            launch(agent.command, "", &child_args)
+            launch(agent.command, "", &child_args, options)
         }
         Handoff::PatchOverlay => {
             let catalog = catalog_models_for(&endpoint, model);
@@ -837,7 +847,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
                 "{} will talk to {model} through {}",
                 agent.id, endpoint.base_url
             ));
-            launch(agent.command, "", &launch_args)
+            launch(agent.command, "", &launch_args, options)
         }
     };
 

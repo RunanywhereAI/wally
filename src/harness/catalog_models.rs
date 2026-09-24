@@ -8,7 +8,7 @@
 use crate::account::ConsoleClient;
 
 use super::harness::Endpoint;
-use super::local_models::local_context_size;
+use super::local_models::{local_context_size, local_output_size};
 
 /// One catalog model with the window and price a harness needs to declare it.
 /// A zero field means the catalog did not carry that number.
@@ -85,13 +85,27 @@ pub fn catalog_models(console_url: &str, access_token: &str, primary: &str) -> V
 
 /// The same, resolved from a launch `endpoint`. A local endpoint (empty
 /// `api_key`) has no catalog, so it yields just `primary` at the context size a
-/// local server is started with.
+/// local server was started with, and an output budget that leaves room for
+/// the coding prompt and conversation.
 pub fn catalog_models_for(endpoint: &Endpoint, primary: &str) -> Vec<CatalogModel> {
     if endpoint.api_key.is_empty() {
+        // Use the exact selected backend's limits, including when `primary` is
+        // an alias or merged model id. Recomputing from that spelling can
+        // produce a different window from the server we already started.
+        let context = if endpoint.context_window > 0 {
+            endpoint.context_window
+        } else {
+            local_context_size(primary)
+        };
+        let output = if endpoint.max_output > 0 {
+            endpoint.max_output
+        } else {
+            local_output_size(context)
+        };
         return vec![CatalogModel {
             id: primary.to_string(),
-            context_window: local_context_size(primary),
-            max_output: 0,
+            context_window: context,
+            max_output: output,
             input_per_mtok: 0,
             output_per_mtok: 0,
         }];

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::account;
 use crate::anthropic::{self, ModelAliases, Shim};
+use crate::bootstrap::GlobalOptions;
 use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};
 use crate::commands::editor_env;
@@ -201,7 +202,17 @@ fn prepare_claude_config_dir() -> String {
     let ours_str = format!("{}/claude", cli_paths::state_dir());
     let ours = Path::new(&ours_str);
 
+    // PowerShell and cmd.exe leave HOME unset; Claude Code's home there is the
+    // profile.
+    #[cfg(windows)]
+    let home = getenv("HOME")
+        .filter(|h| !h.is_empty())
+        .or_else(|| getenv("USERPROFILE"));
+    #[cfg(not(windows))]
     let home = getenv("HOME");
+    // An empty value would resolve against the working directory, so treat it
+    // as unset.
+    let home = home.filter(|h| !h.is_empty());
     let og_dir = home.as_ref().map(|home| Path::new(home).join(".claude"));
     let og_json = home
         .as_ref()
@@ -296,11 +307,12 @@ fn cloud_context_window(model: &str) -> i64 {
 /// Worth having beyond debugging: it is how anything that speaks the Anthropic
 /// API but is not on the list above gets wired up, without wally needing to know
 /// that tool exists.
-fn serve(model: &str, verbose: bool) -> i32 {
-    let Some(endpoint) = harness::resolve(model) else {
+fn serve(editor: &Editor, model: &str, options: &GlobalOptions) -> i32 {
+    let Some(endpoint) = harness::resolve(model, options, editor.id) else {
         return 1;
     };
-    let Some(shim) = anthropic::start(&endpoint, model, verbose, "", &ModelAliases::new()) else {
+    let Some(shim) = anthropic::start(&endpoint, model, options.verbose, "", &ModelAliases::new())
+    else {
         harness::release(&endpoint);
         return 1;
     };
@@ -329,7 +341,7 @@ fn restore(editor: &Editor) -> i32 {
     0
 }
 
-fn run(editor: &Editor, model: &str, args: &[String], verbose: bool) -> i32 {
+fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -> i32 {
     let is_bundle = !editor.bundle.is_empty();
     // Only macOS fills this in; elsewhere a bundle editor is an error.
     #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
@@ -358,13 +370,14 @@ fn run(editor: &Editor, model: &str, args: &[String], verbose: bool) -> i32 {
                 "open",
                 "",
                 &editor_env::open_args(&bundle, &Shim::default(), args, ""),
+                options,
             )
         } else {
-            harness::launch(editor.command, "", args)
+            harness::launch(editor.command, "", args, options)
         };
     }
 
-    let Some(endpoint) = harness::resolve(model) else {
+    let Some(endpoint) = harness::resolve(model, options, editor.id) else {
         return 1;
     };
 
@@ -395,8 +408,13 @@ fn run(editor: &Editor, model: &str, args: &[String], verbose: bool) -> i32 {
         }
     }
 
-    let Some(mut shim) = anthropic::start(&endpoint, model, verbose, &advertised, &desktop_aliases)
-    else {
+    let Some(mut shim) = anthropic::start(
+        &endpoint,
+        model,
+        options.verbose,
+        &advertised,
+        &desktop_aliases,
+    ) else {
         harness::release(&endpoint);
         return 1;
     };
@@ -433,6 +451,7 @@ fn run(editor: &Editor, model: &str, args: &[String], verbose: bool) -> i32 {
             "open",
             "",
             &editor_env::open_args(&bundle, &shim, args, model),
+            options,
         );
         if let Err(failure) = desktop::restore_gateway() {
             out::error_line(&failure);
@@ -446,6 +465,7 @@ fn run(editor: &Editor, model: &str, args: &[String], verbose: bool) -> i32 {
             "open",
             "",
             &editor_env::open_args(&bundle, &shim, args, model),
+            options,
         );
     } else {
         // Scoped so the reader's own environment is back before we report
@@ -462,20 +482,20 @@ fn run(editor: &Editor, model: &str, args: &[String], verbose: bool) -> i32 {
         // so there is no claude.ai session to collide with (no warning) but their
         // settings and memory still apply. See prepare_claude_config_dir.
         let _config_dir = ScopedEnv::new("CLAUDE_CONFIG_DIR", &prepare_claude_config_dir());
-        // The real context window, for an upstream model, so Claude Code's
-        // auto-compaction fires at the model's limit rather than its own guess.
-        // Only for a hosted model (a local one is not in `/v1/models`), and only
-        // when the catalog actually answered — a miss just launches as before.
+        // Claude Code budgets against the local server's configured window, or
+        // the hosted catalog when available.
         let mut _context_window = None;
-        if !endpoint.serving {
-            let context = cloud_context_window(model);
-            if context > 0 {
-                _context_window = Some(ScopedEnv::new(
-                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-                    &context.to_string(),
-                ));
-                out::status_line(&format!("context window: {context} tokens"));
-            }
+        let context = if endpoint.serving {
+            endpoint.context_window
+        } else {
+            cloud_context_window(model)
+        };
+        if context > 0 {
+            _context_window = Some(ScopedEnv::new(
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+                &context.to_string(),
+            ));
+            out::status_line(&format!("context window: {context} tokens"));
         }
         // TELL CLAUDE CODE WHICH MODEL IT IS TALKING TO, because otherwise it
         // labels our answers with its own default and reports that as fact.
@@ -524,7 +544,7 @@ fn run(editor: &Editor, model: &str, args: &[String], verbose: bool) -> i32 {
         for (index, catalog_model) in catalog.iter().take(3).enumerate() {
             _family_slots.push(ScopedEnv::new(FAMILY_SLOTS[index], &catalog_model.id));
         }
-        status = harness::launch(editor.command, "", args);
+        status = harness::launch(editor.command, "", args, options);
     }
 
     anthropic::stop(&mut shim);
@@ -539,8 +559,8 @@ pub fn register_editors(app: &mut App) {
         let invocation = format!("wally {}", editor.id);
         command.footer(&examples_footer(&[
             Example::new(
-                &format!("{invocation} -m qwen3-0.6b"),
-                "A model on this machine",
+                &format!("{invocation} -m qwen3-4b-instruct-2507"),
+                "The certified local coding model",
             ),
             Example::new(
                 &format!("{invocation} -m glm-5.3-flash"),
@@ -598,9 +618,9 @@ pub fn register_editors(app: &mut App) {
             let effective =
                 resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color);
             if p.flag("--serve") {
-                serve(&effective, g.verbose)
+                serve(&editor, &effective, g)
             } else {
-                run(&editor, &effective, &p.get_strs("args"), g.verbose)
+                run(&editor, &effective, &p.get_strs("args"), g)
             }
         });
     }
