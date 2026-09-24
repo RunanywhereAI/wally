@@ -42,8 +42,11 @@ impl HttpResponse {
         if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
             return -1;
         }
-        match value.parse::<i64>() {
-            Ok(seconds) => std::cmp::min(seconds, 86400) as i32,
+        // Parse into a 32-bit width (matches C++'s `int` via std::from_chars):
+        // a digit string that overflows i32 (e.g. an accidental millisecond
+        // epoch) must report "no valid Retry-After", not clamp to the ceiling.
+        match value.parse::<i32>() {
+            Ok(seconds) => std::cmp::min(seconds, 86400),
             Err(_) => -1,
         }
     }

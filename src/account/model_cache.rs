@@ -63,10 +63,16 @@ fn write_cache(ids: &[String]) {
     );
     let text = crate::io::json::dump_pretty(&serde_json::Value::Object(document), 2) + "\n";
 
+    // C++ WriteCache only flushes the ofstream and checks `out.good()` -- no
+    // fsync/fdatasync at all -- so a write succeeds here as soon as the
+    // buffered write/flush succeeds. Calling sync_all() would fail (and skip
+    // the rename, leaving the old cache stale) on a filesystem where fsync is
+    // unsupported even though plain writes succeed, a failure mode the C++
+    // side can never hit because it never asks the kernel to fsync.
     let temp = parent.join(format!("{FILE_NAME}.tmp"));
     match std::fs::File::create(&temp) {
         Ok(mut file) => {
-            if file.write_all(text.as_bytes()).is_err() || file.sync_all().is_err() {
+            if file.write_all(text.as_bytes()).is_err() {
                 return;
             }
         }

@@ -1,6 +1,7 @@
 //! Port of src/commands/cmd_account.cpp. Owner: the account port.
 
-use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::account::{
@@ -118,19 +119,62 @@ fn open_browser(url: &str) {
             out::status_line("could not open a browser; use the URL printed above");
         }
     }
+    // Not `std::process::Command`: Rust's `spawn()`/`status()` report a failed
+    // exec (e.g. a missing `xdg-open`) as `Err`, indistinguishable from
+    // `fork()` itself failing. C++'s OpenBrowser forks, execvp's in the child
+    // and _exit(127)s on exec failure, and the parent only waitpid's to absorb
+    // EINTR without inspecting the exit status -- so a missing opener binary
+    // is silent, and only fork() failing prints the fallback line. Matching
+    // that needs the same fork/exec split, not the higher-level `Command` API.
     #[cfg(not(windows))]
     {
         #[cfg(target_os = "macos")]
         let opener = "open";
         #[cfg(not(target_os = "macos"))]
         let opener = "xdg-open";
-        let status = Command::new(opener)
-            .arg(url)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if status.is_err() {
+
+        let Ok(opener_c) = std::ffi::CString::new(opener) else {
             out::status_line("could not open a browser; use the URL printed above");
+            return;
+        };
+        let Ok(url_c) = std::ffi::CString::new(url) else {
+            out::status_line("could not open a browser; use the URL printed above");
+            return;
+        };
+        let argv: [*const libc::c_char; 3] = [opener_c.as_ptr(), url_c.as_ptr(), std::ptr::null()];
+
+        // SAFETY: fork() duplicates this process; both branches below only
+        // touch the (already-owned, exec-only-uses) fds and pointers prepared
+        // above, matching C++'s OpenBrowser.
+        let child = unsafe { libc::fork() };
+        if child < 0 {
+            out::status_line("could not open a browser; use the URL printed above");
+            return;
+        }
+        if child == 0 {
+            // SAFETY: this is the forked child. It only redirects its own
+            // stdout/stderr to /dev/null, then either exec's (which replaces
+            // this process image and never returns) or _exit(127)s; it never
+            // returns to the caller.
+            unsafe {
+                let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+                if devnull >= 0 {
+                    libc::dup2(devnull, libc::STDOUT_FILENO);
+                    libc::dup2(devnull, libc::STDERR_FILENO);
+                    libc::close(devnull);
+                }
+                libc::execvp(opener_c.as_ptr(), argv.as_ptr());
+                libc::_exit(127);
+            }
+        }
+        // SAFETY: `child` is the pid fork() just returned to the parent; this
+        // only waits on it, discarding the exit status like C++ does, and
+        // loops solely to absorb EINTR.
+        unsafe {
+            let mut status: libc::c_int = 0;
+            while libc::waitpid(child, &mut status, 0) < 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+            {}
         }
     }
 }
@@ -431,4 +475,92 @@ pub fn register_account(app: &mut App) {
     // `wally --json account whoami` and `... whoami --json` mean the same
     // thing; see the identical fix in register_usage (cmd_usage.rs).
     whoami_cmd.callback(|p, g| who_am_i(p.flag("--json") || g.json));
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    use super::open_browser;
+
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    // C++'s OpenBrowser only prints the fallback line when fork() itself
+    // fails; the parent never inspects the child's exec outcome. A missing
+    // opener binary (PATH with nothing in it) must be just as silent here,
+    // not surfaced as an extra status line.
+    #[test]
+    fn open_browser_stays_silent_when_opener_binary_is_missing() {
+        let _lock = env_lock();
+        let empty_path_dir = tempfile::tempdir().expect("temp dir");
+        let saved_path = std::env::var_os("PATH");
+        // SAFETY: `_lock` serializes every test in this process that touches
+        // PATH or process-wide fds 1/2.
+        unsafe { std::env::set_var("PATH", empty_path_dir.path()) };
+
+        let mut pipe_fds = [0i32; 2];
+        // SAFETY: `pipe_fds` is a valid 2-element buffer for pipe(2) to fill.
+        assert_eq!(unsafe { libc::pipe(pipe_fds.as_mut_ptr()) }, 0);
+        let [read_fd, write_fd] = pipe_fds;
+        // SAFETY: STDERR_FILENO is always open in a test process; dup()
+        // returns a new fd referencing the same open file description.
+        let saved_stderr = unsafe { libc::dup(libc::STDERR_FILENO) };
+        assert!(saved_stderr >= 0);
+        // SAFETY: redirects this process's stderr to the pipe's write end for
+        // the duration of the call below, then `write_fd` is redundant and
+        // closed; `open_browser`'s own child redirects its inherited copy of
+        // fd 2 to /dev/null before it ever execs, so only a `status_line` call
+        // in the parent (this process) can land in the pipe.
+        unsafe {
+            assert_eq!(
+                libc::dup2(write_fd, libc::STDERR_FILENO),
+                libc::STDERR_FILENO
+            );
+            libc::close(write_fd);
+        }
+
+        open_browser("https://example.test/approve");
+
+        // SAFETY: restores the real stderr and drops the pipe-writing fd, so
+        // the read below observes end-of-file once drained.
+        unsafe {
+            assert_eq!(
+                libc::dup2(saved_stderr, libc::STDERR_FILENO),
+                libc::STDERR_FILENO
+            );
+            libc::close(saved_stderr);
+        }
+        if let Some(path) = saved_path {
+            // SAFETY: still under `_lock`.
+            unsafe { std::env::set_var("PATH", path) };
+        } else {
+            // SAFETY: still under `_lock`.
+            unsafe { std::env::remove_var("PATH") };
+        }
+
+        let mut buffer = Vec::new();
+        // SAFETY: `read_fd` is the pipe's read end; every writer was closed
+        // above, so this drains whatever was written and then returns 0.
+        loop {
+            let mut chunk = [0u8; 256];
+            let read = unsafe { libc::read(read_fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+            if read <= 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read as usize]);
+        }
+        // SAFETY: closes the read end now that draining is done.
+        unsafe { libc::close(read_fd) };
+
+        assert!(
+            buffer.is_empty(),
+            "open_browser must stay silent on a missing opener binary, like C++; got: {:?}",
+            String::from_utf8_lossy(&buffer)
+        );
+    }
 }
