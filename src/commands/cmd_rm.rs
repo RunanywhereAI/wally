@@ -82,6 +82,28 @@ fn confirm_on_tty(prompt: &str) -> bool {
     matches!(buffer.chars().next(), Some('y') | Some('Y'))
 }
 
+/// Chooses the registry-unregister warning text the same way C++'s
+/// `cmd_rm.cpp` does: `!parse_proto_buffer(&remove_out, &remove_result,
+/// &error) || proto_rc != RAC_SUCCESS` always prints the shared `error`
+/// local, which is only overwritten by a genuine parse failure (buffer
+/// status != SUCCESS or decode failure) — NOT by a clean parse paired with a
+/// failing `proto_rc` alone. So when the buffer parses cleanly but
+/// `proto_rc` signals failure, C++ prints whatever `error` held before this
+/// call (`stale_error`: empty, or a message left over from an earlier
+/// registry-refresh failure in the same run), not a fresh
+/// `describe_result(proto_rc)`. Returns `None` on overall success.
+fn registry_unregister_warning(
+    proto_rc: sys::rac_result_t,
+    parsed: Result<v1::ModelDeleteResult, String>,
+    stale_error: &str,
+) -> Option<String> {
+    match parsed {
+        Ok(_) if proto_rc == sys::SUCCESS => None,
+        Ok(_) => Some(stale_error.to_string()),
+        Err(fresh_error) => Some(fresh_error),
+    }
+}
+
 fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
     let Ok(env) = bootstrap(options) else {
         return 1;
@@ -95,10 +117,19 @@ fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
         }
     };
 
+    // C++ reuses a single `std::string error` across resolve/refresh/get/
+    // remove, only overwriting it when a parse actually fails; on a later
+    // step that fails solely via a non-SUCCESS rc (proto parses cleanly),
+    // the warning below prints whatever `error` was last set to — empty, or
+    // a stale message from this refresh_registry() failure. Preserve that
+    // exact (buggy) reuse instead of computing a fresh message each time.
+    let mut error = String::new();
+
     // Link on-disk artifacts before deciding what to delete — mirrors
     // list/ensure_model_ready so rm sees the same downloaded state.
-    if let Err(error) = refresh_registry() {
-        out::status_line(&format!("warning: registry refresh failed: {error}"));
+    if let Err(err) = refresh_registry() {
+        out::status_line(&format!("warning: registry refresh failed: {err}"));
+        error = err;
     }
 
     let mut model_out = ProtoBuffer::new();
@@ -167,14 +198,10 @@ fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
             remove_out.as_mut_ptr(),
         )
     };
-    if let Err(error) = parse_proto_buffer::<v1::ModelDeleteResult>(remove_out).and_then(|_| {
-        if proto_rc == sys::SUCCESS {
-            Ok(())
-        } else {
-            Err(out::describe_result(proto_rc))
-        }
-    }) {
-        out::status_line(&format!("warning: registry unregister failed: {error}"));
+    if let Some(message) =
+        registry_unregister_warning(proto_rc, parse_proto_buffer(remove_out), &error)
+    {
+        out::status_line(&format!("warning: registry unregister failed: {message}"));
     }
 
     if options.json {
@@ -207,6 +234,19 @@ fn directory_size(target: &Path) -> u64 {
                 total += directory_size(&path);
             } else if metadata.is_file() {
                 total += metadata.len();
+            } else if metadata.is_symlink() {
+                // C++'s fs::recursive_directory_iterator +
+                // is_regular_file(ec)/file_size(ec) resolve through status(),
+                // which follows symlinks, so a symlinked file's target size
+                // is added into freed_bytes. It does not recurse into
+                // symlinked directories (the iterator's default
+                // follow_directory_symlink is off), so only symlinks to a
+                // regular file are counted here.
+                if let Ok(target_metadata) = std::fs::metadata(&path) {
+                    if target_metadata.is_file() {
+                        total += target_metadata.len();
+                    }
+                }
             }
         }
     }
@@ -230,4 +270,67 @@ pub fn configure_models_delete(cmd: &mut App) {
         let force = p.flag("--force");
         run_rm(g, &reference, force)
     });
+}
+
+#[cfg(test)]
+mod fix_models_regression_tests {
+    use super::*;
+
+    // id 28: a clean parse (buffer status SUCCESS, decode OK) paired with a
+    // failing proto_rc must print the stale/empty `error` C++ carries over,
+    // not a freshly computed describe_result(proto_rc).
+    #[test]
+    fn clean_parse_with_failing_rc_uses_stale_error_not_a_fresh_description() {
+        let parsed: Result<v1::ModelDeleteResult, String> = Ok(v1::ModelDeleteResult::default());
+        let warning = registry_unregister_warning(sys::RAC_ERROR_NOT_INITIALIZED, parsed, "");
+        assert_eq!(warning, Some(String::new()));
+
+        let parsed: Result<v1::ModelDeleteResult, String> = Ok(v1::ModelDeleteResult::default());
+        let warning = registry_unregister_warning(
+            sys::RAC_ERROR_NOT_INITIALIZED,
+            parsed,
+            "warning: registry refresh failed: disk full",
+        );
+        assert_eq!(
+            warning,
+            Some("warning: registry refresh failed: disk full".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_failure_surfaces_its_own_fresh_message_regardless_of_stale_error() {
+        let parsed: Result<v1::ModelDeleteResult, String> =
+            Err("failed to parse ModelDeleteResult bytes".to_string());
+        let warning = registry_unregister_warning(sys::SUCCESS, parsed, "some stale text");
+        assert_eq!(
+            warning,
+            Some("failed to parse ModelDeleteResult bytes".to_string())
+        );
+    }
+
+    #[test]
+    fn success_on_both_axes_warns_nothing() {
+        let parsed: Result<v1::ModelDeleteResult, String> = Ok(v1::ModelDeleteResult::default());
+        let warning = registry_unregister_warning(sys::SUCCESS, parsed, "irrelevant");
+        assert_eq!(warning, None);
+    }
+
+    // id 29: directory_size must follow symlinks to a regular file, matching
+    // C++'s recursive_directory_iterator + is_regular_file(ec)/file_size(ec).
+    #[test]
+    fn directory_size_follows_symlinked_regular_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blob = dir.path().join("blob.bin");
+        std::fs::write(&blob, b"shared model bytes").expect("write blob");
+
+        let model_dir = dir.path().join("model");
+        std::fs::create_dir(&model_dir).expect("mkdir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&blob, model_dir.join("blob.bin")).expect("symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&blob, model_dir.join("blob.bin")).expect("symlink");
+
+        #[cfg(unix)]
+        assert_eq!(directory_size(&model_dir), 18);
+    }
 }
