@@ -6,7 +6,7 @@
     python3 contracts/sync_from_inferenceinfra.py --check --from /path/to/InferenceInfra
 
 `--check` without `--from` is the hermetic CI gate: the generated
-`console_contract.h` matches the committed extract, and the extract records
+`console_contract.rs` matches the committed extract, and the extract records
 the InferenceInfra commit it was carved from. Freshness against InferenceInfra
 HEAD is enforced on the InferenceInfra PR (consumer-impact); this public
 consumer cannot read that private repository from CI.
@@ -28,7 +28,7 @@ EXTRACT = ROOT / "wally-cli-v1.openapi.json"
 CONTROL_PLANE = "contracts/control-plane-v1.openapi.json"
 # The two files a sync regenerates from scratch. Named once so the destination
 # guard and the error message cannot drift apart.
-GENERATED = ("contracts/wally-cli-v1.openapi.json", "src/account/console_contract.h")
+GENERATED = ("contracts/wally-cli-v1.openapi.json", "src/account/console_contract.rs")
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -99,7 +99,7 @@ def check_local(extract: Path = EXTRACT) -> None:
         # The caveat goes to stderr so stdout carries only the result.
         print(
             f"note: {extract} is not the committed extract; "
-            "console_contract.h and the committed pin were NOT checked",
+            "console_contract.rs and the committed pin were NOT checked",
             file=sys.stderr,
         )
         print(f"alternate extract provenance OK ({stamp})")
@@ -203,7 +203,7 @@ def main() -> None:
         help=(
             "check provenance in this extract instead of the committed one "
             "(a testing aid: it verifies neither the committed pin nor "
-            "console_contract.h, and never reports the lock as OK)"
+            "console_contract.rs, and never reports the lock as OK)"
         ),
     )
     args = parser.parse_args()
