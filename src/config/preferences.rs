@@ -9,9 +9,25 @@
 //!   3. `default_model` in the preferences file
 //!   4. the id compiled into the binary (crate::WALLY_DEFAULT_MODEL_ID)
 
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+use crate::io::output;
+
+const FILE_NAME: &str = "preferences.json";
+const DEFAULT_MODEL_KEY: &str = "default_model";
+
 /// {ProfileDirectory}/preferences.json, or empty when $HOME is unresolvable.
 pub fn preferences_path() -> String {
-    todo!("models port: PreferencesPath")
+    let directory = crate::account::credentials::profile_directory();
+    if directory.is_empty() {
+        return String::new();
+    }
+    Path::new(&directory)
+        .join(FILE_NAME)
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -39,28 +55,118 @@ impl DefaultModel {
     }
 }
 
-/// The default model in effect. A malformed file is treated as no default (a
-/// warning goes to stderr); it never fails a launch.
-pub fn effective_default_model() -> DefaultModel {
-    todo!("models port: EffectiveDefaultModel")
+/// Reads and parses the preferences file. Returns an empty object for a
+/// missing file, and — on a parse error — an empty object plus a stderr
+/// warning, so a corrupt file degrades to "no preferences" rather than
+/// breaking a launch.
+fn read_file() -> Value {
+    let path = preferences_path();
+    if path.is_empty() {
+        return Value::Object(Default::default());
+    }
+    let contents = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => return Value::Object(Default::default()),
+    };
+    match serde_json::from_slice::<Value>(&contents) {
+        Ok(parsed) if parsed.is_object() => parsed,
+        _ => {
+            output::status_line(&format!("ignoring unreadable preferences file at {path}"));
+            Value::Object(Default::default())
+        }
+    }
+}
+
+/// Writes `document` to the preferences file atomically: a sibling temp file
+/// then a rename, so a reader never sees a half-written file.
+fn write_file(document: &Value) -> Result<(), String> {
+    let path = preferences_path();
+    if path.is_empty() {
+        return Err("cannot resolve a home directory for preferences".to_string());
+    }
+
+    let target = PathBuf::from(&path);
+    let parent = target
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&parent)
+        .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+
+    let temp = parent.join(format!("{FILE_NAME}.tmp"));
+    let body = format!("{}\n", crate::io::json::dump_pretty(document, 2));
+    std::fs::write(&temp, body).map_err(|_| format!("cannot write {}", temp.display()))?;
+
+    std::fs::rename(&temp, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("cannot replace {}: {e}", target.display())
+    })
 }
 
 /// The default model recorded in the file, ignoring the environment override.
 pub fn file_default_model() -> Option<String> {
-    todo!("models port: FileDefaultModel")
+    let document = read_file();
+    let value = document.get(DEFAULT_MODEL_KEY)?.as_str()?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+/// The default model in effect. A malformed file is treated as no default (a
+/// warning goes to stderr); it never fails a launch.
+pub fn effective_default_model() -> DefaultModel {
+    let env = crate::util::getenv_or_empty("WALLY_DEFAULT_MODEL");
+    if !env.is_empty() {
+        return DefaultModel {
+            id: env,
+            source: DefaultModelSource::Environment,
+        };
+    }
+    if let Some(file) = file_default_model() {
+        return DefaultModel {
+            id: file,
+            source: DefaultModelSource::File,
+        };
+    }
+    if !crate::WALLY_DEFAULT_MODEL_ID.is_empty() {
+        return DefaultModel {
+            id: crate::WALLY_DEFAULT_MODEL_ID.to_string(),
+            source: DefaultModelSource::BuiltIn,
+        };
+    }
+    DefaultModel::default()
 }
 
 /// `explicit_model` unchanged when non-empty, else the effective default, else "".
 pub fn resolve_model(explicit_model: &str) -> String {
-    todo!("models port: ResolveModel ({explicit_model})")
+    if !explicit_model.is_empty() {
+        return explicit_model.to_string();
+    }
+    effective_default_model().id
 }
 
 /// Persist `id` as the default model (rejects ids failing harness::model_id_is_safe).
 pub fn set_default_model(id: &str) -> Result<(), String> {
-    todo!("models port: SetDefaultModel ({id})")
+    if !crate::harness::model_id_is_safe(id) {
+        return Err(format!("not a usable model id: {id}"));
+    }
+    let mut document = read_file();
+    if let Value::Object(map) = &mut document {
+        map.insert(DEFAULT_MODEL_KEY.to_string(), Value::String(id.to_string()));
+    }
+    write_file(&document)
 }
 
 /// Remove the default model from the file. Succeeds when none was set.
 pub fn clear_default_model() -> Result<(), String> {
-    todo!("models port: ClearDefaultModel")
+    let mut document = read_file();
+    let Value::Object(map) = &mut document else {
+        return Ok(());
+    };
+    if !map.contains_key(DEFAULT_MODEL_KEY) {
+        return Ok(());
+    }
+    map.remove(DEFAULT_MODEL_KEY);
+    write_file(&document)
 }

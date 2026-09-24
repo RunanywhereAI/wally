@@ -1,7 +1,262 @@
-//! Port of src/commands/cmd_list.cpp. Owner: the models port.
+//! `wally models list` (alias `wally models ls`) — downloaded models by
+//! default, the whole catalog with --all (port of src/commands/cmd_list.cpp).
+//!
+//! The registry is refreshed with rescan_local so on-disk artifacts pulled by
+//! previous runs (or by the test rig / playground tooling) are linked before
+//! listing.
+
+use std::collections::HashMap;
+
+use crate::bootstrap::{bootstrap, GlobalOptions};
 use crate::cli::App;
+use crate::commands::model_labels;
+use crate::commands::model_setup::refresh_registry;
+use crate::io::output as out;
+use crate::io::proto::{parse_proto_buffer, v1, ProtoBuffer};
+use crate::sys;
+
+// The same model is registered once per backend it runs on (llama.cpp / MLX /
+// ANE / NPU). `models list` collapses those into one row keyed by the catalog's
+// merge_key, joining the backends into "mlx/llama.cpp"-style tags. Lower rank =
+// listed first in the joined tag and preferred for the row's name/size.
+fn backend_rank(framework: v1::InferenceFramework) -> i32 {
+    match framework {
+        v1::InferenceFramework::Mlx => 0,
+        v1::InferenceFramework::LlamaCpp => 1,
+        v1::InferenceFramework::Coreml => 2,
+        v1::InferenceFramework::Qhexrt => 3,
+        _ => 4,
+    }
+}
+
+struct GroupedRow {
+    id: String, // merge key by default; see the override below
+    #[allow(dead_code)]
+    // id of the variant that set size_bytes; kept for parity with the C++ struct
+    size_id: String,
+    local_path: String, // local_path of the variant backing `id`, if downloaded
+    name: String,
+    category: v1::ModelCategory,
+    size_bytes: i64,
+    name_rank: i32, // rank of the variant that set name/category
+    size_rank: i32, // rank of the variant that set a positive size
+    // Rank of the downloaded variant currently backing `id`/`local_path`
+    // (i32::MAX = none downloaded yet). The merge key is always a real, listed
+    // catalog id (today, the llama.cpp variant's own), so it is a fine default
+    // for a row nothing has been downloaded for. But once some other backend
+    // is the one actually on disk, printing the bare merge key left
+    // `models show/rm/pull` silently resolving to that other, undownloaded
+    // variant instead — so a downloaded variant's own id always wins here.
+    id_rank: i32,
+    downloaded: bool,
+    // Distinct backends, ordered by (rank, label) so the join is stable.
+    backends: std::collections::BTreeSet<(i32, &'static str)>,
+}
+
+impl Default for GroupedRow {
+    fn default() -> Self {
+        GroupedRow {
+            id: String::new(),
+            size_id: String::new(),
+            local_path: String::new(),
+            name: String::new(),
+            category: v1::ModelCategory::Unspecified,
+            size_bytes: 0,
+            name_rank: i32::MAX,
+            size_rank: i32::MAX,
+            id_rank: i32::MAX,
+            downloaded: false,
+            backends: std::collections::BTreeSet::new(),
+        }
+    }
+}
+
+// A short "how do I download one?" header for the human list. The pull id
+// differs by backend, so show one example per backend this build can run:
+// llama.cpp everywhere; on Apple also MLX. Never printed in --json.
+fn print_pull_examples() {
+    out::result_line("Download a model with `wally models pull <id>`:");
+    out::result_line("  wally models pull qwen3-0.6b        # llama.cpp");
+    #[cfg(target_os = "macos")]
+    out::result_line("  wally models pull mlx-qwen3-0.6b    # MLX (Apple GPU)");
+    // TEMP(ane-cut): no ANE rows in the catalog, so nothing to point at.
+    // out::result_line("  wally models pull ane-lfm2.5-350m   # ANE (Apple Neural Engine)");
+    out::result_line("");
+}
+
+fn join_backends(row: &GroupedRow) -> String {
+    let mut joined = String::new();
+    for (_, label) in &row.backends {
+        if !joined.is_empty() {
+            joined.push('/');
+        }
+        joined.push_str(label);
+    }
+    joined
+}
+
+fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
+    let Ok(_env) = bootstrap(options) else {
+        return 1;
+    };
+
+    if let Err(error) = refresh_registry() {
+        out::status_line(&format!("warning: registry refresh failed: {error}"));
+    }
+
+    // Full list + downloaded list; membership marks the DOWNLOADED column.
+    let mut all_out = ProtoBuffer::new();
+    // SAFETY: rac_get_model_registry() returns the process-wide registry
+    // handle (valid for the process lifetime); all_out is a valid out-param.
+    let proto_rc = unsafe {
+        sys::rac_model_registry_list_proto_buffer(
+            sys::rac_get_model_registry(),
+            all_out.as_mut_ptr(),
+        )
+    };
+    let all_models: v1::ModelInfoList = match parse_proto_buffer(all_out) {
+        Ok(models) if proto_rc == sys::SUCCESS => models,
+        Ok(_) => {
+            out::error_line("failed to list models: ");
+            return 1;
+        }
+        Err(error) => {
+            out::error_line(&format!("failed to list models: {error}"));
+            return 1;
+        }
+    };
+
+    let mut downloaded_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let mut downloaded_out = ProtoBuffer::new();
+        // SAFETY: as above.
+        let rc = unsafe {
+            sys::rac_model_registry_list_downloaded_proto_buffer(
+                sys::rac_get_model_registry(),
+                downloaded_out.as_mut_ptr(),
+            )
+        };
+        if rc == sys::SUCCESS {
+            if let Ok(downloaded) = parse_proto_buffer::<v1::ModelInfoList>(downloaded_out) {
+                for model in &downloaded.models {
+                    downloaded_ids.insert(model.id.clone());
+                }
+            }
+        }
+    }
+
+    // Collapse per-backend variants of the same model into one row, grouped by
+    // the catalog merge_key (a non-catalog id groups with itself). `row.id`
+    // starts as that merge key but can be displaced — see `GroupedRow::id_rank`.
+    // Insertion order is kept so the list reads the same as the registry.
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, GroupedRow> = HashMap::new();
+    for model in &all_models.models {
+        let is_downloaded = downloaded_ids.contains(&model.id)
+            || model.registry_status == Some(v1::ModelRegistryStatus::Downloaded as i32);
+        if !show_all && !is_downloaded {
+            continue;
+        }
+        // LLM-only surface: a downloaded non-LLM model restored from a manifest
+        // must not reappear in the list.
+        if model.category != v1::ModelCategory::Language as i32 {
+            continue;
+        }
+        let key = crate::catalog::merge_key_for(&model.id);
+        let row = groups.entry(key.clone()).or_insert_with(|| {
+            order.push(key.clone());
+            GroupedRow {
+                id: key.clone(),
+                ..GroupedRow::default()
+            }
+        });
+        let framework = v1::InferenceFramework::try_from(model.framework)
+            .unwrap_or(v1::InferenceFramework::Unspecified);
+        let rank = backend_rank(framework);
+        row.backends
+            .insert((rank, model_labels::short_backend(framework)));
+        row.downloaded = row.downloaded || is_downloaded;
+        // A downloaded variant's own id/local_path always displaces the merge
+        // key default, best rank first among downloaded variants.
+        if is_downloaded && rank < row.id_rank {
+            row.id_rank = rank;
+            row.id = model.id.clone();
+            row.local_path = model.local_path.clone();
+        }
+        if rank < row.name_rank {
+            row.name_rank = rank;
+            row.name = model.name.clone();
+            row.category = v1::ModelCategory::try_from(model.category)
+                .unwrap_or(v1::ModelCategory::Unspecified);
+        }
+        let size = model.download_size_bytes;
+        if size > 0 && rank < row.size_rank {
+            row.size_rank = rank;
+            row.size_bytes = size;
+            row.size_id = model.id.clone();
+        }
+    }
+
+    if options.json {
+        let mut json = out::JsonWriter::new();
+        json.begin_object().begin_array("models");
+        for key in &order {
+            let row = &groups[key];
+            json.begin_array_object()
+                .field_str("id", &row.id)
+                .field_str("name", &row.name)
+                .field_str("modality", model_labels::category(row.category))
+                .field_str("backend", &join_backends(row))
+                .field_i64("size_bytes", row.size_bytes)
+                .field_bool("downloaded", row.downloaded)
+                // Path of the variant `id` refers to; empty when nothing in
+                // the group is downloaded (mirrors the pre-merge shape, which
+                // callers already treat "" as "not downloaded").
+                .field_str("local_path", &row.local_path)
+                .end_object();
+        }
+        json.end_array().end_object();
+        out::result_line(json.str());
+        return 0;
+    }
+
+    print_pull_examples();
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for key in &order {
+        let row = &groups[key];
+        rows.push(vec![
+            row.id.clone(),
+            model_labels::category(row.category).to_string(),
+            join_backends(row),
+            if row.size_bytes > 0 {
+                out::human_bytes(row.size_bytes as u64)
+            } else {
+                "-".to_string()
+            },
+            if row.downloaded { "yes" } else { "no" }.to_string(),
+        ]);
+    }
+
+    if rows.is_empty() {
+        out::result_line(if show_all {
+            "no models registered"
+        } else {
+            "no models downloaded — try `wally models list --all` then `wally models pull <id>`"
+        });
+        return 0;
+    }
+    out::table(
+        &["ID", "MODALITY", "BACKEND", "SIZE", "DOWNLOADED"].map(String::from),
+        &rows,
+    );
+    0
+}
 
 pub fn configure_models_list(cmd: &mut App) {
-    let _ = cmd;
-    todo!("models port: configure_models_list")
+    cmd.add_flag("--all,-a", "Include catalog models not yet downloaded");
+    cmd.callback(|p, g| {
+        let show_all = p.flag("--all");
+        run_list(g, show_all)
+    });
 }
