@@ -1044,6 +1044,21 @@ fn handle_messages_route(
     // thread silently; answer a clean 500 instead, matching the C++'s
     // explicit try/catch around request handling (httplib does not catch).
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // `parsed.value("stream", false)` on the C++ side is nlohmann's
+        // `value()`, which only works `is_object()`: a `null`/array/string/
+        // number/boolean top-level body throws type_error.306 ("cannot use
+        // value() with <type>") before ever calling `get<bool>()` -- so a
+        // malformed body never reaches HandleStreaming/HandleNonStreaming,
+        // and nothing goes upstream. `serde_json::Value::get` has no such
+        // guard (it just returns `None` for a non-object), so that has to be
+        // checked explicitly to keep the same input from being silently
+        // treated as `{}`.
+        if !parsed.is_object() {
+            throw(format!(
+                "[json.exception.type_error.306] cannot use value() with {}",
+                nlohmann_type_name(&parsed)
+            ));
+        }
         // `parsed.value("stream", false)` on the C++ side calls nlohmann's
         // `get<bool>()` once the key is present, which throws a type_error
         // for any non-boolean value (string, number, null, array, object)

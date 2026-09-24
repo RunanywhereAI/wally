@@ -1025,6 +1025,74 @@ fn a_non_boolean_stream_field_answers_the_generic_500_not_a_silent_false() {
     handle.stop();
 }
 
+// `parsed.value("stream", false)` on the C++ side is nlohmann's `value()`,
+// which only works on `is_object()`: a `null`/array/string/number/boolean
+// top-level body throws `type_error.306` ("cannot use value() with <type>")
+// before `value()` ever looks at the "stream" key -- so a malformed body
+// never reaches `HandleStreaming`/`HandleNonStreaming`, and nothing goes
+// upstream. `serde_json::Value::get` has no such guard on a non-object (it
+// just returns `None`), so a body that is not a JSON object has to be
+// rejected explicitly to avoid being silently treated as `{}` and forwarded.
+#[test]
+fn a_non_object_top_level_body_answers_the_generic_500_and_never_reaches_upstream() {
+    let _shim_guard = shim_lock::shim_lock();
+    let mut server = Server::new();
+    server.route("POST", "/v1/chat/completions", |_req, _res, _peer| {
+        panic!("upstream must never be called for a request the shim itself rejects");
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        console_url: String::new(),
+        serving: false,
+        context_window: 0,
+        max_output: 0,
+    };
+    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let shim = started.expect("translator did not start");
+    let mut client = Client::new(
+        &shim.base_url,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    // The exact bodies the C++/Rust diff harness's shim_probe.py drives as
+    // json_null/json_array/json_string/json_number/json_true: the whole
+    // request body, not a field inside one.
+    let cases: [(&str, &str); 5] = [
+        ("null", "null"),
+        ("[]", "array"),
+        ("\"hi\"", "string"),
+        ("123", "number"),
+        ("true", "boolean"),
+    ];
+    for (body, want_type_name) in cases {
+        let request = Request::post("/v1/messages", body.as_bytes().to_vec())
+            .header("x-api-key", shim.auth_token.clone())
+            .header("Content-Type", "application/json");
+        let reply = client
+            .send(&request, None, None)
+            .expect("shim answers even for a non-object top-level body");
+        assert_eq!(reply.status, 500, "body={body}");
+        assert_eq!(
+            reply.header("Content-Type"),
+            Some("application/json"),
+            "body={body}"
+        );
+        assert_eq!(
+            String::from_utf8(reply.body.clone()).unwrap(),
+            format!(
+                "{{\"error\":{{\"message\":\"[json.exception.type_error.306] cannot use value() with {want_type_name}\",\"type\":\"api_error\"}},\"type\":\"error\"}}"
+            ),
+            "body={body}"
+        );
+    }
+    let mut shim = shim;
+    anthropic::stop(&mut shim);
+    handle.stop();
+}
+
 // An SSE `data:` line whose JSON string content carries a lone, non-continued
 // UTF-8 lead byte (0xE9 immediately followed by `"`, never a valid
 // continuation byte) is exactly the shape nlohmann's `Json::parse` rejects
