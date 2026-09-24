@@ -70,7 +70,7 @@ wally --json backends | grep -q '"name":"llamacpp"'
 
 echo "LLM: $LLM_MODEL"
 pull_if_enabled "$LLM_MODEL"
-llm_out="$(wally run "$LLM_MODEL" "Say OK in one short sentence." --max-tokens 16 --temp 0.1)"
+llm_out="$(wally run "$LLM_MODEL" "Say OK in one short sentence. /no_think" --max-tokens 32 --temp 0.1)"
 require_text "LLM" "$llm_out"
 printf '%s\n' "$llm_out"
 
