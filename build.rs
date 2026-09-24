@@ -146,6 +146,21 @@ fn parse_env(text: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// `\r\n` → `\n`; any other byte, lone `\r` included, is kept.
+fn crlf_to_lf(bytes: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Verify the kit's IDL against the pin, then generate `runanywhere.v1` types.
 ///
 /// IDL_SCHEMA_SHA256 is sha256 over "<basename>\n<sha256-of-contents>\n" for every
@@ -166,7 +181,9 @@ fn generate_proto(idl: &Path, versions: &BTreeMap<String, String>) {
 
     let mut lock = Sha256::new();
     for proto in &protos {
-        let contents = fs::read(proto).unwrap();
+        // The Windows kits ship their .proto files with CRLF line endings;
+        // the lock is defined over the LF text the SDK hashed.
+        let contents = crlf_to_lf(fs::read(proto).unwrap());
         let name = proto.file_name().unwrap().to_str().unwrap();
         lock.update(format!("{name}\n{}\n", hex::encode(Sha256::digest(&contents))).as_bytes());
     }
@@ -305,6 +322,12 @@ fn is_compile_only(arg: &str) -> bool {
     if arg.starts_with("-Wl,") {
         return false;
     }
+    if let Some(msvc) = arg.strip_prefix('/') {
+        return is_msvc_compile_only(msvc);
+    }
+    if matches!(arg, "-MD" | "-MDd" | "-MT" | "-MTd") {
+        return true;
+    }
     [
         "-D",
         "-U",
@@ -318,6 +341,37 @@ fn is_compile_only(arg: &str) -> bool {
     ]
     .iter()
     .any(|p| arg.starts_with(p))
+}
+
+/// MSVC spells CMAKE_CXX_FLAGS with `/` (`/DWIN32 /EHsc /O2 /Ob2 /DNDEBUG`), and
+/// `link.exe` warns LNK4044 on each one it is handed. `/D` is a define unless it
+/// is one of the linker's own `/D…` options.
+fn is_msvc_compile_only(opt: &str) -> bool {
+    const LINKER_D: [&str; 11] = [
+        "DEBUG",
+        "DEBUGTYPE",
+        "DEF",
+        "DEFAULTLIB",
+        "DELAY",
+        "DELAYLOAD",
+        "DELAYSIGN",
+        "DEPENDENTLOADFLAG",
+        "DLL",
+        "DRIVER",
+        "DYNAMICBASE",
+    ];
+    if let Some(define) = opt.strip_prefix('D') {
+        let name = define.split([':', '=']).next().unwrap_or(define);
+        let head = format!("D{name}").to_ascii_uppercase();
+        return !LINKER_D.iter().any(|l| head == *l);
+    }
+    matches!(
+        opt,
+        "GR" | "GR-" | "MD" | "MDd" | "MT" | "MTd" | "Zi" | "Z7" | "utf-8" | "bigobj" | "MP"
+    ) || opt.starts_with("EH")
+        || opt.starts_with("std:")
+        || (opt.starts_with('O') && opt.len() <= 3 && !opt.contains(':'))
+        || (opt.len() == 2 && opt.starts_with('W') && opt.as_bytes()[1].is_ascii_digit())
 }
 
 /// A file API fragment can hold several arguments ("-framework IOKit",
