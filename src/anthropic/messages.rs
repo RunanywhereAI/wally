@@ -934,6 +934,21 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+/// nlohmann's `json::type_name()`, the word a `type_error.302` diagnostic
+/// names the offending value's kind with. `serde_json::Value` has no
+/// separate binary/discarded variants, so only the five reachable here are
+/// mapped.
+fn nlohmann_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
 // ---------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------
@@ -987,11 +1002,20 @@ fn handle_messages_route(
     // thread silently; answer a clean 500 instead, matching the C++'s
     // explicit try/catch around request handling (httplib does not catch).
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if parsed
-            .get("stream")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        // `parsed.value("stream", false)` on the C++ side calls nlohmann's
+        // `get<bool>()` once the key is present, which throws a type_error
+        // for any non-boolean value (string, number, null, array, object)
+        // instead of silently defaulting -- and that throw lands in this
+        // same try/catch, not inside HandleStreaming/HandleNonStreaming.
+        let want_stream = match parsed.get("stream") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(other) => panic!(
+                "[json.exception.type_error.302] type must be boolean, but is {}",
+                nlohmann_type_name(other)
+            ),
+        };
+        if want_stream {
             handle_streaming(runtime, stream, &parsed, writer);
         } else {
             handle_non_streaming(runtime, stream, &parsed, writer);

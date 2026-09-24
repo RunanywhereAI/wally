@@ -923,3 +923,70 @@ fn a_1000_byte_cut_that_splits_a_utf8_character_falls_back_to_the_generic_500() 
     anthropic::stop(&mut shim);
     handle.stop();
 }
+
+// `parsed.value("stream", false)` on the C++ side calls nlohmann's
+// `get<bool>()` once the key is present, which throws a `type_error` for any
+// non-boolean value instead of silently defaulting to false -- and that
+// throw lands in the same try/catch around `HandleStreaming`/
+// `HandleNonStreaming`, answering 500 with a fresh `api_error` body before
+// either handler (or any upstream call) is ever reached.
+#[test]
+fn a_non_boolean_stream_field_answers_the_generic_500_not_a_silent_false() {
+    let _shim_guard = shim_lock::shim_lock();
+    let mut server = Server::new();
+    server.route("POST", "/v1/chat/completions", |_req, _res, _peer| {
+        panic!("upstream must never be called for a request the shim itself rejects");
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        console_url: String::new(),
+        serving: false,
+    };
+    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let shim = started.expect("translator did not start");
+    let mut client = Client::new(
+        &shim.base_url,
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    let cases: [(serde_json::Value, &str); 4] = [
+        (serde_json::json!("true"), "string"),
+        (serde_json::json!(1), "number"),
+        (serde_json::Value::Null, "null"),
+        (serde_json::json!([true]), "array"),
+    ];
+    for (stream_value, want_type_name) in cases {
+        let body = serde_json::json!({
+            "model": "test",
+            "stream": stream_value,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+        .to_string();
+        let request = Request::post("/v1/messages", body.into_bytes())
+            .header("x-api-key", shim.auth_token.clone())
+            .header("Content-Type", "application/json");
+        let reply = client
+            .send(&request, None, None)
+            .expect("shim answers even for a rejected request shape");
+        assert_eq!(reply.status, 500, "stream={want_type_name}");
+        let parsed: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(
+            parsed["error"]["type"], "api_error",
+            "stream={want_type_name}"
+        );
+        assert_eq!(
+            parsed["error"]["message"],
+            format!(
+                "[json.exception.type_error.302] type must be boolean, but is {want_type_name}"
+            ),
+            "stream={want_type_name}"
+        );
+    }
+    let mut shim = shim;
+    anthropic::stop(&mut shim);
+    handle.stop();
+}
