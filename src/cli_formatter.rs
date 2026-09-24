@@ -446,10 +446,7 @@ fn make_usage(app: &App, parents: &str, pal: &cli_color::Palette) -> String {
             usage.push(']');
         }
     }
-    format!(
-        "{} {usage}\n\n",
-        colorize("Usage:", pal.bold, pal.reset)
-    )
+    format!("{} {usage}\n\n", colorize("Usage:", pal.bold, pal.reset))
 }
 
 /// `CliFormatter::style_footer`: applies the same heading/command palette to
@@ -822,9 +819,9 @@ mod tests {
     /// `add_generation_options` + `register_llm_aliases` in cmd_run.cpp).
     fn build_run_app() -> App {
         let footer = examples_footer(&[
-            Example::new("wally run qwen3-0.6b", "Chat interactively"),
+            Example::new("wally run qwen3-4b-instruct-2507", "Chat interactively"),
             Example::new(
-                "wally run qwen3-0.6b \"write a haiku\"",
+                "wally run qwen3-4b-instruct-2507 \"write a haiku\"",
                 "Answer one prompt",
             ),
         ]);
@@ -977,7 +974,7 @@ mod tests {
     /// golden corpus).
     fn build_serve_app() -> App {
         let footer = examples_footer(&[
-            Example::new("wally serve qwen3-0.6b", ""),
+            Example::new("wally serve qwen3-4b-instruct-2507", ""),
             Example::new("wally serve granite-4.2-8b --port 8000", ""),
         ]);
         App {
@@ -986,7 +983,11 @@ mod tests {
             footer,
             help_flag: root_help_flag(),
             options: vec![
-                positional("model", "Model to serve (default qwen3-0.6b)", false),
+                positional(
+                    "model",
+                    "Model to serve (default qwen3-4b-instruct-2507)",
+                    false,
+                ),
                 opt(
                     &["-H", "--host"],
                     ValueType::Text,
@@ -1128,7 +1129,9 @@ mod tests {
         App {
             name: "wally".to_string(),
             description: "Run models on this machine or on your RunAnywhere account".to_string(),
-            footer: "Get started:\n  wally models pull qwen3-0.6b && wally run qwen3-0.6b\n  \
+            footer: "Get started:\n  # Download a local model and chat on this machine\n  \
+                wally models pull qwen3-4b-instruct-2507 && wally run qwen3-4b-instruct-2507\n\n  \
+                # Sign in and use a cloud model\n  \
                 wally account login && wally opencode --cloud -m glm-5.3-flash\n\n\
                 Run \"wally <command> --help\" for details."
                 .to_string(),
@@ -1181,7 +1184,11 @@ mod tests {
                     "Open Claude Desktop with a model",
                     "Coding tools",
                 ),
-                leaf("opencode", "Open opencode with a model", "Coding tools"),
+                leaf(
+                    "opencode",
+                    "Open OpenCode with a local or cloud model",
+                    "Coding tools",
+                ),
                 leaf("hermes", "Open Hermes with a model", "Coding tools"),
                 leaf("openclaw", "Open OpenClaw with a model", "Coding tools"),
                 leaf(

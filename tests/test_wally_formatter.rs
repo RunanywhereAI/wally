@@ -42,13 +42,14 @@ fn build_test_app() -> wally::cli::App {
         "A long explanation of an option that should wrap within an ordinary terminal \
          without moving the next line back to the left margin.",
     );
-    app.add_subcommand("opencode", "Open a coding tool").footer(&examples_footer(&[
-        Example::new("wally opencode -m qwen3-0.6b", "Use a downloaded model"),
-        Example::new(
-            "wally opencode --cloud -m glm-5.3-flash",
-            "Use a cloud model",
-        ),
-    ]));
+    app.add_subcommand("opencode", "Open a coding tool")
+        .footer(&examples_footer(&[
+            Example::new("wally opencode -m qwen3-0.6b", "Use a downloaded model"),
+            Example::new(
+                "wally opencode --cloud -m glm-5.3-flash",
+                "Use a cloud model",
+            ),
+        ]));
     app.footer(&examples_footer_with_heading(
         &[Example::new("wally models list", "Browse models")],
         "Get started",
