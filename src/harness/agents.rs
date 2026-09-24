@@ -644,9 +644,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
     // The second document the dsh overlay needs; unused by the other
     // handoffs and removed with the first.
     let mut settings = TemporaryConfig::new();
-    let status;
-
-    match agent.handoff {
+    let status = match agent.handoff {
         Handoff::CustomEndpointEnvironment => {
             let base = ScopedEnv::new("CUSTOM_BASE_URL", &endpoint.base_url);
             let provider = ScopedEnv::new("HERMES_INFERENCE_PROVIDER", "custom");
@@ -699,7 +697,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
                 "{} will talk to {model} through {}",
                 agent.id, endpoint.base_url
             ));
-            status = launch(agent.id, "", &hermes_argv(model, &child_args));
+            launch(agent.id, "", &hermes_argv(model, &child_args))
         }
         Handoff::ConfigFile => {
             let catalog = catalog_models_for(&endpoint, model);
@@ -741,7 +739,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
                 "{} will talk to {model} through {}",
                 agent.id, endpoint.base_url
             ));
-            status = launch(agent.command, "", &child_args);
+            launch(agent.command, "", &child_args)
         }
         Handoff::PatchOverlay => {
             let catalog = catalog_models_for(&endpoint, model);
@@ -804,9 +802,9 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String]) -> i32 {
                 "{} will talk to {model} through {}",
                 agent.id, endpoint.base_url
             ));
-            status = launch(agent.command, "", &launch_args);
+            launch(agent.command, "", &launch_args)
         }
-    }
+    };
 
     release(&endpoint);
     status

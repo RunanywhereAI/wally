@@ -23,7 +23,7 @@ pub fn measured_prefill_ms(prompt_eval_time_ms: i64, usage_prefill_ms: i64) -> f
 }
 
 pub fn fill_llm(r: &v1::LlmGenerationResult, measured_e2e_ms: f64) -> Option<LlmVlmMetrics> {
-    let usage = r.usage.clone().unwrap_or_default();
+    let usage = r.usage.unwrap_or_default();
     let out_tokens = usage.output_tokens;
     if out_tokens <= 0 {
         return None;
@@ -46,7 +46,7 @@ pub fn fill_llm(r: &v1::LlmGenerationResult, measured_e2e_ms: f64) -> Option<Llm
 }
 
 pub fn fill_vlm(r: &v1::VlmResult, measured_e2e_ms: f64) -> Option<LlmVlmMetrics> {
-    let usage = r.usage.clone().unwrap_or_default();
+    let usage = r.usage.unwrap_or_default();
     let out_tokens = usage.output_tokens;
     if out_tokens <= 0 {
         return None;

@@ -357,6 +357,8 @@ fn disk_space_available(path: &Path) -> Option<u64> {
     if rc != 0 {
         return None;
     }
+    // The field widths differ by platform (fsblkcnt_t is 32-bit on macOS).
+    #[allow(clippy::unnecessary_cast)]
     Some(stat.f_bavail as u64 * stat.f_frsize as u64)
 }
 

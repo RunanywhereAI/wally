@@ -760,10 +760,12 @@ fn wally_mlx_run_end_to_end() {
     wally::io::wav_io::write_wav(input_wav.to_str().expect("utf-8 path"), &pcm_samples, 16000)
         .expect("write input wav");
 
-    let mut options = wally::bootstrap::GlobalOptions::default();
-    options.home_override = home.path().to_string_lossy().into_owned();
-    options.json = true;
-    options.no_progress = true;
+    let options = wally::bootstrap::GlobalOptions {
+        home_override: home.path().to_string_lossy().into_owned(),
+        json: true,
+        no_progress: true,
+        ..Default::default()
+    };
     let _bootstrapped = wally::bootstrap::bootstrap(&options).expect("bootstrap");
 
     assert!(

@@ -120,13 +120,10 @@ extern "C" fn demo_executor(
         // out_result was just initialized above.
         unsafe { sys::rac_proto_buffer_copy(data_ptr, bytes.len(), out_result) }
     });
-    match outcome {
-        Ok(rc) => rc,
-        // A generic failure code; the specific value doesn't matter since
-        // run_tool_call reports from the parsed ToolCallingResult envelope,
-        // not from this raw rc.
-        Err(_) => -1,
-    }
+    // On a panic, a generic failure code; the specific value doesn't matter
+    // since run_tool_call reports from the parsed ToolCallingResult envelope,
+    // not from this raw rc.
+    outcome.unwrap_or(-1)
 }
 
 /// `rac_tool_calling_run_loop_proto` invokes this synchronously and

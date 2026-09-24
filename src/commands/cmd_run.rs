@@ -522,7 +522,7 @@ fn generate_once(options: &GlobalOptions, model_id: &str, prompt: &str, params: 
         }
     };
 
-    let usage = result.usage.clone().unwrap_or_default();
+    let usage = result.usage.unwrap_or_default();
     if options.json {
         let model_used = if result.model_used.is_empty() {
             model_id
@@ -681,7 +681,7 @@ fn run_vlm(
         }
     }
 
-    let usage = result.usage.clone().unwrap_or_default();
+    let usage = result.usage.unwrap_or_default();
     if options.json {
         let mut json = JsonWriter::new();
         json.begin_object()

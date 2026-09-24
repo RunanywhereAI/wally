@@ -169,7 +169,6 @@ fn available_ram_bytes() -> i64 {
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("MemAvailable:") {
             let kb: i64 = rest
-                .trim()
                 .split_whitespace()
                 .next()
                 .and_then(|s| s.parse().ok())
@@ -427,16 +426,14 @@ fn llm_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
     m.load_ms = load_model_timed(&c.model_id, c.category, c.framework)?;
 
     let w0 = now_ms();
-    llm_generate(5, false).map_err(|err| {
+    llm_generate(5, false).inspect_err(|_| {
         unload_category(c.category);
-        err
     })?;
     m.warmup_ms = (now_ms() - w0) as f64;
 
     let t0 = now_ms();
-    let r = llm_generate(c.scenario.max_tokens, true).map_err(|err| {
+    let r = llm_generate(c.scenario.max_tokens, true).inspect_err(|_| {
         unload_category(c.category);
-        err
     })?;
     let measured_e2e = (now_ms() - t0) as f64;
     m.memory_delta_bytes = mem_before - available_ram_bytes();
@@ -460,9 +457,8 @@ fn stt_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
     let _ = stt_transcribe(&make_pcm16(0.5, false)); // warmup, errors ignored
 
     let t0 = now_ms();
-    let r = stt_transcribe(&make_pcm16(c.scenario.seconds, c.scenario.sine)).map_err(|err| {
+    let r = stt_transcribe(&make_pcm16(c.scenario.seconds, c.scenario.sine)).inspect_err(|_| {
         unload_category(c.category);
-        err
     })?;
     m.end_to_end_ms = (now_ms() - t0) as f64;
     m.memory_delta_bytes = mem_before - available_ram_bytes();
@@ -485,9 +481,8 @@ fn tts_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
 
     let text = c.scenario.text.unwrap_or("");
     let t0 = now_ms();
-    let r = tts_synthesize(text).map_err(|err| {
+    let r = tts_synthesize(text).inspect_err(|_| {
         unload_category(c.category);
-        err
     })?;
     m.end_to_end_ms = (now_ms() - t0) as f64;
     m.memory_delta_bytes = mem_before - available_ram_bytes();
@@ -508,9 +503,8 @@ fn vlm_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
     let _ = vlm_process(&c.vlm_image, 1); // warmup, errors ignored
 
     let t0 = now_ms();
-    let r = vlm_process(&c.vlm_image, c.scenario.max_tokens).map_err(|err| {
+    let r = vlm_process(&c.vlm_image, c.scenario.max_tokens).inspect_err(|_| {
         unload_category(c.category);
-        err
     })?;
     let measured_e2e = (now_ms() - t0) as f64;
     m.memory_delta_bytes = mem_before - available_ram_bytes();

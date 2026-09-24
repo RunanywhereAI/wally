@@ -56,7 +56,7 @@ pub fn format_g(value: f64) -> String {
     let sci = format!("{:.*e}", (P - 1) as usize, value);
     let (mantissa, exp) = sci.split_once('e').expect("{:e} always has an exponent");
     let x: i32 = exp.parse().expect("{:e} exponent is an integer");
-    if x < -4 || x >= P {
+    if !(-4..P).contains(&x) {
         let mantissa = strip_fraction_zeros(mantissa);
         let sign = if x < 0 { '-' } else { '+' };
         format!("{mantissa}e{sign}{:02}", x.abs())

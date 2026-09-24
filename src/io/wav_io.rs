@@ -135,7 +135,7 @@ pub fn write_wav(path: &str, samples: &[i16], sample_rate: i32) -> Result<(), St
     let rc = unsafe {
         sys::rac_audio_int16_to_wav(
             samples.as_ptr() as *const std::os::raw::c_void,
-            samples.len() * std::mem::size_of::<i16>(),
+            std::mem::size_of_val(samples),
             sample_rate,
             &mut wav_data,
             &mut wav_size,
@@ -167,7 +167,7 @@ pub fn write_wav_f32(path: &str, samples: &[f32], sample_rate: i32) -> Result<()
     let rc = unsafe {
         sys::rac_audio_float32_to_wav(
             samples.as_ptr() as *const std::os::raw::c_void,
-            samples.len() * std::mem::size_of::<f32>(),
+            std::mem::size_of_val(samples),
             sample_rate,
             &mut wav_data,
             &mut wav_size,
