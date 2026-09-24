@@ -593,6 +593,50 @@ pub fn register_rag(app: &mut App) {
     });
 }
 
+#[cfg(all(test, wally_has_rag))]
+mod fix_vision_tests {
+    use super::read_text_file;
+
+    #[test]
+    fn read_text_file_accepts_non_utf8_bytes() {
+        // finding 41: a lone 0xFF is not valid UTF-8; cmd_rag.cpp's binary
+        // read accepts it verbatim, so read_text_file must not reject an
+        // openable-but-non-UTF-8 file as "cannot open".
+        let dir = std::env::temp_dir().join(format!(
+            "wally-fix-vision-rag-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, [b'h', b'i', 0xFFu8, b'!']).expect("write temp file");
+
+        let result = read_text_file(path.to_str().expect("utf8 path"));
+        assert!(
+            result.is_ok(),
+            "non-UTF-8 file must be accepted, not reported as unopenable: {result:?}"
+        );
+        let text = result.expect("checked above");
+        assert!(text.starts_with("hi"));
+        assert!(text.ends_with('!'));
+        assert!(text.contains('\u{FFFD}'));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_text_file_missing_file_still_cannot_open() {
+        let result = read_text_file("/no/such/wally-fix-vision-rag-path.bin");
+        assert_eq!(
+            result,
+            Err("cannot open file: /no/such/wally-fix-vision-rag-path.bin".to_string())
+        );
+    }
+}
+
 // The RAG pipeline is not folded into this binary (RAC_BACKEND_RAG=OFF, e.g.
 // the Windows CLI preset), so the rac_rag_*_proto symbols are unavailable.
 // Register no `rag` subcommand rather than fail to link.

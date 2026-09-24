@@ -56,6 +56,93 @@ fn read_text_file(path: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// The rendered DOCUMENT column for one rerank result row. Matches
+/// cmd_rerank.cpp's `documents[index].substr(0, 57) + "..."`: a raw
+/// byte-index cut with no UTF-8 awareness, so a document whose byte offset
+/// 57 falls inside a multi-byte character is truncated mid-character rather
+/// than sanitized.
+fn document_preview_bytes(doc_bytes: &[u8]) -> Vec<u8> {
+    if doc_bytes.len() > 60 {
+        let mut cut = doc_bytes[..57.min(doc_bytes.len())].to_vec();
+        cut.extend_from_slice(b"...");
+        cut
+    } else {
+        doc_bytes.to_vec()
+    }
+}
+
+#[cfg(test)]
+mod fix_vision_tests {
+    use super::*;
+
+    #[test]
+    fn read_text_file_accepts_non_utf8_bytes() {
+        // finding 36: a lone 0xFF is not valid UTF-8; cmd_rerank.cpp's binary
+        // read accepts it verbatim, so read_text_file must not reject an
+        // openable-but-non-UTF-8 file as "cannot open".
+        let dir = std::env::temp_dir().join(format!(
+            "wally-fix-vision-rerank-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("doc.bin");
+        std::fs::write(&path, [b'h', b'i', 0xFFu8, b'!']).expect("write temp file");
+
+        let result = read_text_file(path.to_str().expect("utf8 path"));
+        assert!(
+            result.is_ok(),
+            "non-UTF-8 file must be accepted, not reported as unopenable: {result:?}"
+        );
+        // The lone 0xFF is lossily replaced (Rust `String` cannot hold raw
+        // invalid UTF-8), but the surrounding valid bytes survive intact.
+        let text = result.expect("checked above");
+        assert!(text.starts_with("hi"));
+        assert!(text.ends_with('!'));
+        assert!(text.contains('\u{FFFD}'));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_text_file_missing_file_still_cannot_open() {
+        let result = read_text_file("/no/such/wally-fix-vision-rerank-path.bin");
+        assert_eq!(
+            result,
+            Err("cannot open file: /no/such/wally-fix-vision-rerank-path.bin".to_string())
+        );
+    }
+
+    #[test]
+    fn document_preview_short_document_is_unchanged() {
+        let doc = b"short document";
+        assert_eq!(document_preview_bytes(doc), doc.to_vec());
+    }
+
+    #[test]
+    fn document_preview_cuts_mid_multibyte_character_as_raw_bytes() {
+        // finding 37: 56 ASCII bytes followed by 'e' with an acute accent
+        // (U+00E9, UTF-8 bytes 0xC3 0xA9) straddles the byte-57 cut point.
+        // C++'s substr(0, 57) keeps the raw dangling lead byte 0xC3 verbatim;
+        // Rust must not replace it with U+FFFD (EF BF BD).
+        let mut doc = vec![b'a'; 56];
+        doc.extend_from_slice("é more text to push past 60 bytes total".as_bytes());
+        assert!(doc.len() > 60, "fixture must exceed the 60-byte threshold");
+
+        let preview = document_preview_bytes(&doc);
+
+        let mut expected = vec![b'a'; 56];
+        expected.push(0xC3); // dangling lead byte of 'é', emitted verbatim
+        expected.extend_from_slice(b"...");
+        assert_eq!(preview, expected);
+        // Must NOT contain the lossy replacement character's bytes.
+        assert!(!preview.windows(3).any(|w| w == [0xEF, 0xBF, 0xBD]));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_rerank(
     options: &GlobalOptions,
@@ -209,20 +296,7 @@ fn run_rerank(
                 .get(item.index as usize)
                 .map(String::as_str)
                 .unwrap_or("");
-            let doc_bytes = doc.as_bytes();
-            // Raw byte-index cut, matching cmd_rerank.cpp's
-            // `documents[index].substr(0, 57) + "..."` exactly, including
-            // splitting a multi-byte UTF-8 character mid-sequence. Do not
-            // route this through `String`/`str::from_utf8_lossy`: that would
-            // substitute U+FFFD for a dangling byte sequence and change the
-            // bytes actually written to stdout.
-            let preview: Vec<u8> = if doc_bytes.len() > 60 {
-                let mut cut = doc_bytes[..57.min(doc_bytes.len())].to_vec();
-                cut.extend_from_slice(b"...");
-                cut
-            } else {
-                doc_bytes.to_vec()
-            };
+            let preview = document_preview_bytes(doc.as_bytes());
             rows.push(vec![
                 (i + 1).to_string().into_bytes(),
                 item.index.to_string().into_bytes(),
