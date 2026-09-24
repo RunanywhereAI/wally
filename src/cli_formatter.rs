@@ -1,9 +1,9 @@
 //! `--help` layout for wally (port of src/cli_formatter.cpp): a `Usage:` line,
 //! sentence-case section headings, one `-m, --model TEXT` column for options,
 //! commands grouped by intent with namespaces shown as full paths
-//! (`models pull`), and a verbatim `Examples:` footer. On a terminal, headings
-//! are bold and anything typeable is cyan; anywhere else the text is plain and
-//! byte-identical.
+//! (`models pull`), and a verbatim `Examples:` footer with copyable commands.
+//! On a terminal, headings are bold and anything typeable is cyan; anywhere
+//! else the text is plain and byte-identical.
 //!
 //! This is a from-scratch port, not just of `cli_formatter.cpp` but of every
 //! piece of CLI11's own `Formatter`/`FormatterBase` it calls into (wally never
@@ -25,9 +25,12 @@
 //! here, always first.
 
 /// True when ANSI color is safe to emit on stdout: not forced off by
-/// --no-color or NO_COLOR, and stdout is actually a terminal.
+/// --no-color, NO_COLOR, or TERM=dumb, and stdout is actually a terminal.
 pub fn color_output_enabled(no_color_flag: bool) -> bool {
     if no_color_flag || std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    if std::env::var_os("TERM").as_deref() == Some(std::ffi::OsStr::new("dumb")) {
         return false;
     }
     crate::util::term::stdout_is_tty()
@@ -62,7 +65,8 @@ pub mod cli_color {
     }
 }
 
-/// One line of an `Examples:` block: the command, and an optional note.
+/// One entry in an `Examples:` block: the command, and an optional note that
+/// says what it does.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Example {
     pub command: String,
@@ -78,28 +82,46 @@ impl Example {
     }
 }
 
-const EXAMPLE_NOTE_COLUMN: usize = 48;
+// Help remains readable in an ordinary 80-column terminal. Commands in
+// examples stay intact so copying them never inserts a line break mid-argument.
+const HELP_WIDTH: usize = 80;
+
+// Shortest gap between a row's left column and its description.
 const COLUMN_GAP: usize = 2;
 
-/// The `Examples:` footer a command's help ends with. Commands sit at a
-/// two-space indent and every note starts at the same column. No trailing newline.
+/// The footer a command's help ends with. Notes are wrapped shell comments
+/// above their commands, which stay intact for copying. No trailing newline.
 pub fn examples_footer(rows: &[Example]) -> String {
-    let mut out = String::from("Examples:");
+    examples_footer_with_heading(rows, "Examples")
+}
+
+/// `examples_footer` with a heading other than "Examples" (the root
+/// command's "Get started:" footer).
+pub fn examples_footer_with_heading(rows: &[Example], heading: &str) -> String {
+    let mut out = format!("{heading}:");
+    let mut first = true;
     for row in rows {
-        let mut line = format!("  {}", row.command);
+        out.push_str(if first { "\n" } else { "\n\n" });
+        first = false;
         if !row.note.is_empty() {
-            let pad = if line.len() + COLUMN_GAP <= EXAMPLE_NOTE_COLUMN {
-                EXAMPLE_NOTE_COLUMN - line.len()
-            } else {
-                COLUMN_GAP
-            };
-            line.push_str(&" ".repeat(pad));
-            line.push_str(&row.note);
+            // A note is a shell comment on its own line: the entire example
+            // can be pasted, and a long explanation never crowds the command.
+            out.push_str(&stream_out_as_paragraph(
+                &row.note,
+                HELP_WIDTH - 4,
+                "  # ",
+                false,
+            ));
+            out.push('\n');
         }
-        out.push('\n');
-        out.push_str(&line);
+        out.push_str("  ");
+        out.push_str(&row.command);
     }
-    out
+    let mut footer = tidy(&out);
+    if !footer.is_empty() {
+        footer.pop(); // the caller supplies the final newline
+    }
+    footer
 }
 
 // ---------------------------------------------------------------------------
@@ -108,8 +130,10 @@ pub fn examples_footer(rows: &[Example]) -> String {
 
 /// `FormatterBase::column_width_`.
 const COLUMN_WIDTH: usize = 30;
-/// `FormatterBase::right_column_width_`.
-const RIGHT_COLUMN_WIDTH: usize = 65;
+/// `FormatterBase::right_column_width_`, overridden by `CliFormatter`'s
+/// constructor (`right_column_width(kHelpWidth - get_column_width())`) so
+/// help wraps inside an 80-column terminal instead of CLI11's own default of 65.
+const RIGHT_COLUMN_WIDTH: usize = HELP_WIDTH - COLUMN_WIDTH;
 // `FormatterBase::description_paragraph_width_` has no counterpart here:
 // that width only matters in CLI11's own `Formatter::make_help`, which wraps
 // `make_description(app)` through `streamOutAsParagraph` before using it.
@@ -382,8 +406,8 @@ fn make_option_usage(opt: &Opt) -> String {
 }
 
 /// `CliFormatter::make_usage`: CLI11's `Formatter::make_usage` with its
-/// leading newline stripped and "Usage: " prepended instead.
-fn make_usage(app: &App, parents: &str) -> String {
+/// leading newline stripped and a colorized "Usage:" prepended instead.
+fn make_usage(app: &App, parents: &str, pal: &cli_color::Palette) -> String {
     let mut usage = if parents.is_empty() {
         app.name.clone()
     } else {
@@ -422,7 +446,30 @@ fn make_usage(app: &App, parents: &str) -> String {
             usage.push(']');
         }
     }
-    format!("Usage: {usage}\n\n")
+    format!(
+        "{} {usage}\n\n",
+        colorize("Usage:", pal.bold, pal.reset)
+    )
+}
+
+/// `CliFormatter::style_footer`: applies the same heading/command palette to
+/// a preformatted footer while preserving its whitespace and copyable
+/// examples. A line is a heading if it starts at the margin and ends with
+/// `:`; a command if it starts at the two-space indent and is not a `  # `
+/// shell-comment note.
+fn style_footer(footer: &str, pal: &cli_color::Palette) -> String {
+    let mut out = String::new();
+    for line in footer.lines() {
+        if !line.is_empty() && !line.starts_with(' ') && line.ends_with(':') {
+            out.push_str(&colorize(line, pal.bold, pal.reset));
+        } else if line.starts_with("  ") && !line.starts_with("  # ") {
+            out.push_str(&colorize(line, pal.bold_cyan, pal.reset));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// `CliFormatter::make_option`, positional and non-positional branches.
@@ -623,7 +670,7 @@ pub fn make_help(app: &crate::cli::App, parents: &str, color_enabled: bool) -> S
     let pal = cli_color::make_palette(color_enabled);
     let mut out = String::new();
     out.push_str(&make_description(app));
-    out.push_str(&make_usage(app, parents));
+    out.push_str(&make_usage(app, parents, &pal));
     out.push_str(&make_positionals(app, &pal));
     let is_root = parents.is_empty();
     if is_root {
@@ -637,7 +684,7 @@ pub fn make_help(app: &crate::cli::App, parents: &str, color_enabled: bool) -> S
     }
     if !app.footer.is_empty() {
         out.push('\n');
-        out.push_str(&app.footer);
+        out.push_str(&style_footer(&app.footer, &pal));
         out.push('\n');
     }
     tidy(&out)
@@ -767,7 +814,7 @@ mod tests {
         let footer = examples_footer(&rows);
         assert_eq!(
             footer,
-            "Examples:\n  wally run qwen3-0.6b                          Chat interactively\n  wally run qwen3-0.6b \"write a haiku\"          Answer one prompt"
+            "Examples:\n  # Chat interactively\n  wally run qwen3-0.6b\n\n  # Answer one prompt\n  wally run qwen3-0.6b \"write a haiku\""
         );
     }
 
@@ -1200,7 +1247,7 @@ mod tests {
     #[test]
     fn make_usage_renders_vector_positional_with_ellipsis() {
         let app = build_claude_code_app();
-        let usage = make_usage(&app, "wally");
+        let usage = make_usage(&app, "wally", &cli_color::make_palette(false));
         assert_eq!(usage, "Usage: wally claude-code [OPTIONS] [args...]\n\n");
     }
 
@@ -1259,7 +1306,7 @@ mod tests {
     #[test]
     fn make_usage_root_subcommand_is_singular_and_not_bracketed() {
         let app = build_models_app();
-        let usage = make_usage(&app, "wally");
+        let usage = make_usage(&app, "wally", &cli_color::make_palette(false));
         assert_eq!(usage, "Usage: wally models [OPTIONS] COMMAND\n\n");
     }
 
