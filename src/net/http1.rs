@@ -488,7 +488,20 @@ impl Client {
                 }
             };
             let _ = tcp.set_nodelay(true);
-            let _ = tcp.set_read_timeout(Some(self.read_timeout));
+            // The TLS handshake reads travel over this same socket before
+            // any request is written, so it must not inherit the 600s read
+            // budget: a peer that accepts the TCP connection and then never
+            // answers the ClientHello would otherwise hold the request for
+            // the full read timeout instead of failing fast. cpp-httplib
+            // gives its connection timeout to the handshake too (explore-main
+            // src/net/upstream_pool.cpp:43 calls only `set_connection_timeout`
+            // and `set_read_timeout`; httplib applies the former to connect
+            // *and* the TLS handshake, the latter only once the handshake is
+            // done) -- match that by holding the connect budget here and
+            // switching to the read budget only after a successful
+            // handshake (or immediately for a plain-HTTP connection, which
+            // has no handshake to protect).
+            let _ = tcp.set_read_timeout(Some(self.connect_timeout));
             let _ = tcp.set_write_timeout(Some(Self::WRITE_TIMEOUT));
             let raw_clone = tcp.try_clone().ok();
             let stream = if self.https {
@@ -497,10 +510,14 @@ impl Client {
                     Err(_) => return Err(Error::SslConnection),
                 };
                 match connector.connect(&self.host, tcp) {
-                    Ok(tls) => Stream::Tls(Box::new(tls)),
+                    Ok(tls) => {
+                        let _ = tls.get_ref().set_read_timeout(Some(self.read_timeout));
+                        Stream::Tls(Box::new(tls))
+                    }
                     Err(_) => return Err(Error::SslConnection),
                 }
             } else {
+                let _ = tcp.set_read_timeout(Some(self.read_timeout));
                 Stream::Plain(tcp)
             };
             *self.active.lock().unwrap() = raw_clone;
@@ -1508,6 +1525,52 @@ mod tests {
             raw.read_timeout().unwrap(),
             "read and write timeouts must be independently configurable, not coupled together"
         );
+    }
+
+    // A peer that accepts the TCP connection and then never answers the
+    // ClientHello must fail the handshake on the connect budget, not hold
+    // the request for the full (production-shaped, 600s) read timeout --
+    // cpp-httplib gives its connection timeout to the TLS handshake too
+    // (explore-main src/net/upstream_pool.cpp:43 sets only
+    // `set_connection_timeout(10, 0)` and `set_read_timeout(600, 0)`).
+    #[test]
+    fn tls_handshake_is_bounded_by_the_connect_timeout_not_the_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept_thread = thread::spawn(move || {
+            // Accept and hold the socket open without ever writing a
+            // ServerHello -- the stalled side of a TLS handshake. Sleeps
+            // only long enough to outlast the assertion below, so the test
+            // does not wait on the full production-shaped read timeout to
+            // join this thread.
+            let (stream, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_secs(3));
+            drop(stream);
+        });
+
+        let handshake_timeout = Duration::from_secs(1);
+        let production_shaped_read_timeout = Duration::from_secs(600);
+        let mut client = Client::new(
+            &format!("https://127.0.0.1:{port}"),
+            handshake_timeout,
+            production_shaped_read_timeout,
+        )
+        .unwrap();
+
+        let started = Instant::now();
+        let result = client.ensure_connected();
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a stalled ClientHello must fail the handshake, not hang"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "expected the handshake to fail near the {handshake_timeout:?} connect \
+             timeout, not the {production_shaped_read_timeout:?} read timeout, took {elapsed:?}"
+        );
+        accept_thread.join().unwrap();
     }
 
     // reason_phrase is httplib's status_message table, ported verbatim --
