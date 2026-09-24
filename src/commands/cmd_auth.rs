@@ -87,7 +87,11 @@ fn run_auth_login(options: &GlobalOptions) -> i32 {
         out::result_line(&format!("organization   {}", summary.organization_id));
         out::result_line(&format!(
             "user           {}",
-            if summary.user_id.is_empty() { "-" } else { &summary.user_id }
+            if summary.user_id.is_empty() {
+                "-"
+            } else {
+                &summary.user_id
+            }
         ));
         out::result_line(&format!("device         {}", summary.backend_device_id));
         out::result_line(&format!("device-uuid    {}", summary.persistent_device_id));
@@ -97,7 +101,11 @@ fn run_auth_login(options: &GlobalOptions) -> i32 {
         ));
         out::result_line(&format!(
             "http setup     {}",
-            if summary.has_completed_http_setup { "completed" } else { "NOT completed" }
+            if summary.has_completed_http_setup {
+                "completed"
+            } else {
+                "NOT completed"
+            }
         ));
         out::result_line(&format!(
             "assignments    {} model(s)",

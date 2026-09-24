@@ -2,7 +2,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::account::{self as account, ConsoleClient, Credentials, IdentityResult, Usage, UsageQuery, UsageWindow};
+use crate::account::{
+    self as account, ConsoleClient, Credentials, IdentityResult, Usage, UsageQuery, UsageWindow,
+};
 use crate::cli::App;
 use crate::cli_formatter::{examples_footer, Example};
 use crate::io::output as out;
@@ -16,7 +18,11 @@ fn epoch_seconds() -> i64 {
 
 /// Money is integer micro-dollars: one dollar is 1,000,000.
 fn money(micros: i64) -> String {
-    let places = if micros != 0 && micros < 1_000_000 { 4 } else { 2 };
+    let places = if micros != 0 && micros < 1_000_000 {
+        4
+    } else {
+        2
+    };
     format!("${:.*}", places, micros as f64 / 1_000_000.0)
 }
 
@@ -48,8 +54,12 @@ fn refresh_session(client: &ConsoleClient, credentials: &mut Credentials) -> Res
     if !grant.refresh_token.is_empty() {
         credentials.refresh_token = grant.refresh_token;
     }
-    credentials.expires_at =
-        epoch_seconds() + if grant.expires_in > 0 { grant.expires_in } else { 3600 };
+    credentials.expires_at = epoch_seconds()
+        + if grant.expires_in > 0 {
+            grant.expires_in
+        } else {
+            3600
+        };
     account::save(credentials)
 }
 
@@ -210,7 +220,8 @@ pub fn register_usage(app: &mut App) {
         );
         std::process::exit(1);
     };
-    let usage_cmd = account_cmd.add_subcommand("usage", "Show remaining credit and the last day's spend");
+    let usage_cmd =
+        account_cmd.add_subcommand("usage", "Show remaining credit and the last day's spend");
     usage_cmd.add_flag("--json", "Print as JSON");
     usage_cmd.footer(&examples_footer(&[
         Example::new("wally account usage", ""),

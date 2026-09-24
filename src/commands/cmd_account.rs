@@ -3,7 +3,9 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::account::{self as account, ConsoleClient, Credentials, Grant, IdentityResult, PollResult};
+use crate::account::{
+    self as account, ConsoleClient, Credentials, Grant, IdentityResult, PollResult,
+};
 use crate::cli::App;
 use crate::cli_formatter::{examples_footer, Example};
 use crate::io::output as out;
@@ -95,7 +97,8 @@ fn hostname() -> String {
     let mut buffer = [0u8; 256];
     // SAFETY: `buffer` is sized and passed with its exact length; gethostname
     // writes at most that many bytes and we only read what it wrote.
-    let rc = unsafe { libc::gethostname(buffer.as_mut_ptr() as *mut libc::c_char, buffer.len() - 1) };
+    let rc =
+        unsafe { libc::gethostname(buffer.as_mut_ptr() as *mut libc::c_char, buffer.len() - 1) };
     if rc == 0 {
         let end = buffer.iter().position(|&b| b == 0).unwrap_or(0);
         if end > 0 {
@@ -150,8 +153,12 @@ fn apply_grant(grant: &Grant, credentials: &mut Credentials) {
     if !grant.email.is_empty() {
         credentials.email = grant.email.clone();
     }
-    credentials.expires_at =
-        epoch_seconds() + if grant.expires_in > 0 { grant.expires_in } else { 3600 };
+    credentials.expires_at = epoch_seconds()
+        + if grant.expires_in > 0 {
+            grant.expires_in
+        } else {
+            3600
+        };
 }
 
 fn refresh_session(client: &ConsoleClient, credentials: &mut Credentials) -> Result<(), String> {
@@ -232,7 +239,8 @@ fn login(requested_console: &str, open: bool) -> i32 {
                 if !outcome.error.is_empty() && outcome.retry_after <= authorization.interval {
                     out::status_line("server busy, retrying");
                 }
-                let delay = account::next_poll_delay_seconds(authorization.interval, outcome.retry_after);
+                let delay =
+                    account::next_poll_delay_seconds(authorization.interval, outcome.retry_after);
                 let wait = Duration::from_secs(delay.max(0) as u64);
                 let now = Instant::now();
                 if now >= deadline {
@@ -360,7 +368,8 @@ fn who_am_i(as_json: bool) -> i32 {
             out::error_line(&failure);
             return 1;
         }
-        (result, identity, failure) = client.who_am_i(&credentials.console_url, &credentials.access_token);
+        (result, identity, failure) =
+            client.who_am_i(&credentials.console_url, &credentials.access_token);
     }
     if result != IdentityResult::Ok {
         out::error_line(&failure);
@@ -393,7 +402,10 @@ pub fn register_account(app: &mut App) {
     account_cmd.require_subcommand(1, 1);
 
     let login_cmd = account_cmd.add_subcommand("login", "Sign in through the browser");
-    login_cmd.add_flag("--no-browser", "Print the sign-in URL instead of opening it");
+    login_cmd.add_flag(
+        "--no-browser",
+        "Print the sign-in URL instead of opening it",
+    );
     login_cmd.footer(&examples_footer(&[
         Example::new("wally account login", ""),
         Example::new("wally account login --no-browser", ""),
@@ -404,7 +416,10 @@ pub fn register_account(app: &mut App) {
     login_cmd.callback(|p, _g| login("", !p.flag("--no-browser")));
 
     let logout_cmd = account_cmd.add_subcommand("logout", "Sign out and revoke the session");
-    logout_cmd.footer(&examples_footer(&[Example::new("wally account logout", "")]));
+    logout_cmd.footer(&examples_footer(&[Example::new(
+        "wally account logout",
+        "",
+    )]));
     logout_cmd.callback(|_p, _g| logout());
 
     let whoami_cmd = account_cmd.add_subcommand("whoami", "Show the signed-in account");
