@@ -430,3 +430,47 @@ pub fn resolve(
     }
     Err((sys::RAC_ERROR_NOT_FOUND, error))
 }
+
+#[cfg(test)]
+mod fix_run_tests {
+    use super::*;
+
+    /// A directory whose ONLY QHexRT signal is the `_HNPU` name suffix (no
+    /// v75/v79/v81 arch folder, no context.bin, no qualifying json+bin pair)
+    /// so detection can only succeed via the name-suffix shortcut.
+    fn make_hnpu_dir_with_no_other_signal() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let bundle = dir.path().join("MyModel_HNPU");
+        std::fs::create_dir(&bundle).expect("create bundle dir");
+        std::fs::write(bundle.join("readme.txt"), b"nothing here").expect("write stray file");
+        dir
+    }
+
+    #[test]
+    fn trailing_slash_defeats_hnpu_suffix_detection_like_cpp_filename() {
+        let dir = make_hnpu_dir_with_no_other_signal();
+        let bundle = dir.path().join("MyModel_HNPU");
+
+        // No trailing slash: the `_HNPU` suffix shortcut fires.
+        let (framework, format) = infer_local_kind(bundle.to_str().unwrap());
+        assert_eq!(framework, v1::InferenceFramework::Qhexrt);
+        assert_eq!(format, v1::ModelFormat::QnnContext);
+
+        // Trailing slash: std::filesystem::path::filename() on the raw,
+        // unstripped input returns "" here, so C++ (and now this port) misses
+        // the shortcut and falls through to the other checks, which also
+        // fail for this bundle's contents -- framework/format stay
+        // UNSPECIFIED.
+        let with_slash = format!("{}/", bundle.to_str().unwrap());
+        let (framework, format) = infer_local_kind(&with_slash);
+        assert_eq!(framework, v1::InferenceFramework::Unspecified);
+        assert_eq!(format, v1::ModelFormat::Unspecified);
+    }
+
+    #[test]
+    fn cpp_style_filename_is_empty_on_trailing_separator() {
+        assert_eq!(cpp_style_filename("/a/b/HNPU/"), "");
+        assert_eq!(cpp_style_filename("/a/b/HNPU"), "HNPU");
+        assert_eq!(cpp_style_filename("HNPU"), "HNPU");
+    }
+}
