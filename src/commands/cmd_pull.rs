@@ -452,7 +452,10 @@ mod download_start_result_tests {
         let parsed: Result<v1::DownloadStartResult, String> =
             Err("no space left on device".to_string());
         let result = download_start_result(sys::RAC_ERROR_NOT_INITIALIZED, parsed);
-        assert_eq!(result, Err(out::describe_result(sys::RAC_ERROR_NOT_INITIALIZED)));
+        assert_eq!(
+            result,
+            Err(out::describe_result(sys::RAC_ERROR_NOT_INITIALIZED))
+        );
         assert_ne!(result, Err("no space left on device".to_string()));
     }
 

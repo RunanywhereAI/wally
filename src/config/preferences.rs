@@ -199,7 +199,10 @@ mod write_temp_file_tests {
     fn open_failure_uses_cannot_write_text() {
         let dir = tempfile::tempdir().expect("tempdir");
         // Parent directory does not exist, so File::create fails to open.
-        let temp = dir.path().join("missing-subdir").join("preferences.json.tmp");
+        let temp = dir
+            .path()
+            .join("missing-subdir")
+            .join("preferences.json.tmp");
         let error = write_temp_file(&temp, "{}\n").unwrap_err();
         assert_eq!(error, format!("cannot write {}", temp.display()));
     }

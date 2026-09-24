@@ -621,7 +621,10 @@ mod recursive_file_size_tests {
         // resolve through status(), which follows the symlink to the real
         // 16-byte target; the old Rust code used the non-following
         // DirEntry::metadata() and silently skipped the entry (0 bytes).
-        assert_eq!(recursive_file_size(Path::new(model_dir.to_str().unwrap())), 16);
+        assert_eq!(
+            recursive_file_size(Path::new(model_dir.to_str().unwrap())),
+            16
+        );
     }
 
     #[test]

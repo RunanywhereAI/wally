@@ -4,12 +4,14 @@
 //! wally, its on-device models, and its config -- never the coding tools a
 //! person installed themselves).
 
+use std::cell::RefCell;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::account::credentials;
 use crate::cli::{App, ValueType};
-use crate::cli_formatter::{self, color_output_enabled};
+use crate::cli_formatter::color_output_enabled;
 use crate::config::cli_paths;
 use crate::io::output as out;
 use crate::util::{getenv, term};
@@ -333,32 +335,56 @@ pub fn run_uninstall(yes: bool) -> i32 {
     0
 }
 
-/// `wally help [command]`. Renders the same text `--help` would, either for
-/// `command` or (with no argument, or an unknown one) the top level.
+/// `wally help [command]`. Renders the same text `app.get_subcommand(topic)
+/// ->help(app.get_name())` would in C++ for a known `topic`; with no topic,
+/// or an unknown one, C++ falls back to `app.help()` -- which CLI11
+/// delegates to whichever subcommand was actually parsed (`help` itself
+/// here), i.e. it prints the `help` subcommand's OWN help, never the
+/// top-level help.
 ///
-/// Caveat: the Callback type has no access to the App tree at call time, so
-/// this clones the root `App` at *registration* time instead. That snapshot
-/// only contains subcommands registered on `app` before `register_help` runs
-/// -- `configure_app` must call this after every other `register_*`.
-pub fn register_help(app: &mut App) {
-    let root = app.clone();
+/// The Callback type has no access to the App tree at call time, and this
+/// callback is bound at *registration* time -- before bench/backends/
+/// telemetry (and everything registered after `register_help`) exist. A
+/// plain clone of `app` here would miss them (id 44). Instead this returns a
+/// handle `configure_app` fills with a clone of the COMPLETE tree after the
+/// last `register_*` call, so topic lookups made through the handle at call
+/// time see every subcommand.
+/// Which subcommand's help `wally help <topic>` should render: `topic`
+/// itself when it names a real subcommand of `root`, otherwise the `help`
+/// subcommand's OWN help -- matching C++'s `app.help()`, which CLI11
+/// delegates to whichever subcommand was actually parsed ("help" itself)
+/// rather than rendering the top level.
+fn help_render_path(root: &App, topic: &str) -> Vec<String> {
+    if !topic.is_empty() && root.get_subcommand(topic).is_some() {
+        vec![topic.to_string()]
+    } else {
+        vec!["help".to_string()]
+    }
+}
+
+pub fn register_help(app: &mut App) -> Rc<RefCell<Option<App>>> {
+    let tree: Rc<RefCell<Option<App>>> = Rc::new(RefCell::new(None));
+    let tree_for_closure = Rc::clone(&tree);
     let cmd = app.add_subcommand("help", "Show help for a command");
     cmd.add_option("command", ValueType::Text, "Command to describe");
     cmd.callback(move |parsed, options| {
         let topic = parsed.get_str("command").unwrap_or_default();
         let color = color_output_enabled(options.no_color);
-        let text = if !topic.is_empty() {
-            root.get_subcommand(&topic)
-                .map(|sub| cli_formatter::make_help(sub, &root.name, color))
-        } else {
-            None
+        let borrowed = tree_for_closure.borrow();
+        // Only unpopulated if configure_app never filled the handle (a
+        // wiring bug, not a runtime condition) -- degrade to nothing printed
+        // rather than panic.
+        let Some(root) = borrowed.as_ref() else {
+            return 0;
         };
-        let text = text.unwrap_or_else(|| cli_formatter::make_help(&root, "", color));
+        let path = help_render_path(root, &topic);
+        let text = root.render_help(&path, color);
         let mut stdout = std::io::stdout().lock();
         let _ = stdout.write_all(text.as_bytes());
         let _ = stdout.flush();
         0
     });
+    tree
 }
 
 pub fn register_uninstall(app: &mut App) {
@@ -401,7 +427,43 @@ mod fix_models_regression_tests {
 
     #[test]
     fn os_error_message_leaves_a_non_os_error_display_unchanged() {
-        let error = std::io::Error::new(std::io::ErrorKind::Other, "custom failure text");
+        let error = std::io::Error::other("custom failure text");
         assert_eq!(os_error_message(&error), "custom failure text");
     }
+
+    // id 44: `wally help <topic>` reached through a leading global flag runs
+    // the `help` subcommand's own registered callback, not app::run's
+    // pre-parse shortcut. help_render_path is what that callback uses to
+    // pick which subcommand's help to render.
+    fn app_with_help_and_bench() -> App {
+        let mut app = App::new("root description", "wally");
+        app.add_subcommand("help", "Show help for a command");
+        app.add_subcommand("bench", "Measure throughput and load time");
+        app
+    }
+
+    #[test]
+    fn help_render_path_resolves_a_real_topic() {
+        let app = app_with_help_and_bench();
+        assert_eq!(help_render_path(&app, "bench"), vec!["bench".to_string()]);
+    }
+
+    #[test]
+    fn help_render_path_falls_back_to_helps_own_help_for_an_empty_topic() {
+        let app = app_with_help_and_bench();
+        assert_eq!(help_render_path(&app, ""), vec!["help".to_string()]);
+    }
+
+    #[test]
+    fn help_render_path_falls_back_to_helps_own_help_for_an_unknown_topic() {
+        let app = app_with_help_and_bench();
+        // "pull" is never a bare top-level name (only "models pull"), so this
+        // is the same "unknown topic" case as a typo.
+        assert_eq!(help_render_path(&app, "pull"), vec!["help".to_string()]);
+    }
+
+    // End-to-end coverage of the staleness half of id 44 (a snapshot cloned
+    // at register_help's registration time, before bench/backends/telemetry
+    // exist) lives in tests/test_wally_fix_models.rs, which drives the real
+    // built binary through app::run's non-shortcut parse path.
 }
