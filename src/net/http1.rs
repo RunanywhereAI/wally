@@ -896,6 +896,14 @@ impl Server {
 
         let loop_stopping = stopping.clone();
         let join = thread::spawn(move || {
+            // Mirrors cpp-httplib's `task_queue` (a local in `listen_internal`,
+            // `shutdown()`-ed -- joining every worker -- before the accept loop
+            // returns): every dispatched connection is tracked here so a caller
+            // that joins this accept thread also waits for whatever request
+            // each one is mid-handling, not just for accept() to stop. That is
+            // what lets `stop_running_instance` observe an abandon's cancel as
+            // already enqueued once it moves on to draining the cancel queue.
+            let mut handlers: Vec<thread::JoinHandle<()>> = Vec::new();
             for incoming in listener.incoming() {
                 let stream = match incoming {
                     Ok(s) => s,
@@ -908,7 +916,17 @@ impl Server {
                 }
                 let routes = routes.clone();
                 let not_found = not_found.clone();
-                thread::spawn(move || handle_connection(stream, &routes, not_found.as_deref()));
+                handlers.push(thread::spawn(move || {
+                    handle_connection(stream, &routes, not_found.as_deref())
+                }));
+                // Bound the bookkeeping the same way the pool's own worker
+                // list stays small in practice: drop handles for threads that
+                // are already done instead of letting this grow unbounded
+                // across a long keep-alive session.
+                handlers.retain(|h| !h.is_finished());
+            }
+            for handler in handlers {
+                let _ = handler.join();
             }
         });
 
@@ -923,7 +941,10 @@ impl Server {
     }
 }
 
-/// Owns the accept-loop thread. Stops and joins it on `stop()` or drop.
+/// Owns the accept-loop thread. Stops and joins it on `stop()` or drop; the
+/// accept thread itself does not return until every connection it dispatched
+/// has also finished (see `bind_and_run`), so joining this handle is joining
+/// every handler.
 pub struct ServerHandle {
     stopping: Arc<AtomicBool>,
     addr: SocketAddr,

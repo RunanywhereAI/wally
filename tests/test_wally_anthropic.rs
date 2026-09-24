@@ -4,6 +4,8 @@
 
 #[path = "common/fake_upstream.rs"]
 mod fake_upstream;
+#[path = "common/shim_lock.rs"]
+mod shim_lock;
 
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -196,6 +198,7 @@ impl Editor {
 // answers it as a normal reply.
 #[test]
 fn overload_headers_survive_streaming() {
+    let _shim_guard = shim_lock::shim_lock();
     let mut server = Server::new();
     let calls = Arc::new(AtomicI32::new(0));
     let calls_route = calls.clone();
@@ -287,6 +290,7 @@ fn overload_headers_survive_streaming() {
 // would open a new connection each time, so the ports would differ.
 #[test]
 fn sequential_requests_reuse_the_upstream_connection() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     let shim = RunningShim::local(&upstream.base_url());
     assert!(shim.started(), "translator did not start");
@@ -313,6 +317,7 @@ fn sequential_requests_reuse_the_upstream_connection() {
 // connection and make the test pass by legitimate reuse.
 #[test]
 fn concurrent_requests_use_separate_connections() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_streams_until(2);
     let shim = Arc::new(RunningShim::local(&upstream.base_url()));
@@ -340,6 +345,7 @@ fn concurrent_requests_use_separate_connections() {
 // The pool on its own, no translator in front of it.
 #[test]
 fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
+    let _shim_guard = shim_lock::shim_lock();
     let pool = UpstreamPool::new(UpstreamOptions {
         origin: "http://127.0.0.1:9".to_string(),
         idle_limit: 2,
@@ -374,6 +380,7 @@ fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
 // must not leave the lease pointing at freed memory.
 #[test]
 fn pool_outlives_an_outstanding_lease() {
+    let _shim_guard = shim_lock::shim_lock();
     let pool = UpstreamPool::new(UpstreamOptions {
         origin: "http://127.0.0.1:9".to_string(),
         ..Default::default()
@@ -393,6 +400,7 @@ fn pool_outlives_an_outstanding_lease() {
 
 #[test]
 fn retry_rule_only_on_a_stale_reused_connection() {
+    let _shim_guard = shim_lock::shim_lock();
     use wally::net::http1::Error as E;
 
     struct Case {
@@ -517,6 +525,7 @@ fn retry_rule_only_on_a_stale_reused_connection() {
 // sockets, so it runs on every platform and this case is not skipped here.
 #[test]
 fn stale_reused_connection_is_retried_once_on_a_fresh_one() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = HalfOpenUpstream::new();
     assert!(upstream.ok(), "could not bind the half-open upstream");
     let shim = RunningShim::local(&upstream.base_url());
@@ -538,6 +547,7 @@ fn stale_reused_connection_is_retried_once_on_a_fresh_one() {
 // requests: the one that warmed the connection and the one that died on it.
 #[test]
 fn upstream_dying_mid_stream_is_not_retried() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     let shim = RunningShim::local(&upstream.base_url());
     assert!(shim.started(), "translator did not start");
@@ -559,6 +569,7 @@ fn upstream_dying_mid_stream_is_not_retried() {
 // the stale-retry rule does not re-send the prompt: arrivals stay at two.
 #[test]
 fn an_abandoned_stream_is_cancelled_by_name_and_never_resent() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
     assert!(shim.started(), "translator did not start");
@@ -598,6 +609,7 @@ fn an_abandoned_stream_is_cancelled_by_name_and_never_resent() {
 // upstream socket so the drip stops.
 #[test]
 fn leaving_while_tokens_flow_cancels_by_name() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
     assert!(shim.started(), "translator did not start");
@@ -646,6 +658,7 @@ fn leaving_while_tokens_flow_cancels_by_name() {
 // A stream that completed is never cancelled, whenever the editor goes.
 #[test]
 fn a_completed_stream_is_not_cancelled() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.die_mid_stream(false);
     let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
@@ -673,6 +686,7 @@ fn a_completed_stream_is_not_cancelled() {
 // logged and no cancel is attempted anywhere.
 #[test]
 fn a_local_endpoint_is_never_cancelled() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_streams_until(99);
     let shim = RunningShim::local(&upstream.base_url()); // no console_url
@@ -696,6 +710,7 @@ fn a_local_endpoint_is_never_cancelled() {
 // waiting for the engine's first token.
 #[test]
 fn stop_sends_the_last_cancel_before_returning() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_streams_until(99);
     upstream.delay_cancel_reply(500);
@@ -731,6 +746,7 @@ fn leaving_during_prefill_cancels_at_the_first_token() {}
 #[test]
 #[cfg(not(windows))]
 fn leaving_during_prefill_cancels_at_the_first_token() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_headers(true);
     let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
@@ -760,6 +776,7 @@ fn leaving_during_prefill_cancels_at_the_first_token() {
 // gives up within a poll instead of waiting for the first token.
 #[test]
 fn stopping_during_prefill_does_not_wait_for_the_first_token() {
+    let _shim_guard = shim_lock::shim_lock();
     let upstream = FakeUpstream::new();
     upstream.hold_headers(true);
     let mut shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
