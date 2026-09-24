@@ -1,0 +1,13 @@
+Load a model now instead of on first use
+
+Usage: wally models load [OPTIONS] model
+
+Arguments:
+  model                       Model id, alias, hf.co/... ref or URL
+
+Options:
+  -h, --help                  Show help
+      --engine, --framework TEXT
+                              Pin the inference engine (mlx, llamacpp, onnx, sherpa)
+      --category TEXT         Load it as this modality (llm, vlm, stt, tts, vad, embedding,
+                              diffusion)

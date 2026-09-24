@@ -1,0 +1,12 @@
+Error: The following argument was not expected: --bogus-flag
+Show remaining credit and the last day's spend
+
+Usage: wally account usage [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+      --json                  Print as JSON
+
+Examples:
+  wally account usage
+  wally --json account usage

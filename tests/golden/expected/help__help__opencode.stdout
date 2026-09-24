@@ -1,0 +1,15 @@
+Open opencode with a model
+
+Usage: wally opencode [OPTIONS] [args...]
+
+Arguments:
+  args                        Passed through to opencode
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your account
+      --cloud                 Use your account's hosted endpoint (never a local model)
+
+Examples:
+  wally opencode -m qwen3-0.6b                  A model on this machine
+  wally opencode --cloud -m glm-5.3-flash       A hosted model (needs `wally account login`)

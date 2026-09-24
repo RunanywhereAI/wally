@@ -1,0 +1,7 @@
+Error: The following arguments were not expected: four three two one
+Versions, backends, paths and account
+
+Usage: wally about [OPTIONS]
+
+Options:
+  -h, --help                  Show help

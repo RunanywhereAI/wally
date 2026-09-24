@@ -1,0 +1,15 @@
+Error: The following argument was not expected: --bogus-flag
+Show or set the default model for coding tools
+
+Usage: wally models default [OPTIONS] [model]
+
+Arguments:
+  model                       Model id to save as the default (omit to show it)
+
+Options:
+  -h, --help                  Show help
+      --clear                 Forget the saved default
+
+Examples:
+  wally models default glm-5.3-flash
+  wally models default --clear

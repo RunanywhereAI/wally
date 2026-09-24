@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Apple shipping binary: CMake `wally-cxx` objects + Swift MLX host → build/wally.
+# Apple shipping binary: the Rust crate's static library + Swift MLX host → build/wally.
 #
 #   scripts/build/build-mlx.sh [build-dir]
 #
 # Requires:
-#   - cmake already built the wally target (wally-cxx + link.txt)
+#   - cmake already built the wally target (the crate's libwally.a and
+#     build/wally-native-link-args.txt, the kit link line build.rs resolved)
 #   - a kit prefix on CMAKE_PREFIX_PATH / WALLY_SDK_KIT (public headers)
 #   - Xcode (xcodebuild compiles MLX Metal shaders; `swift build` cannot)
 set -euo pipefail
@@ -28,13 +29,36 @@ if [[ -z "${KIT}" || ! -d "${KIT}/include" ]]; then
     exit 1
 fi
 
-"${ROOT}/scripts/build/bundle-core.sh" "${BUILD}"
+RUST_LIB="${WALLY_RUST_STATICLIB:-${BUILD}/cargo/release/libwally.a}"
+LINK_ARGS="${BUILD}/wally-native-link-args.txt"
+[[ -f "${RUST_LIB}" ]] || { echo "error: ${RUST_LIB} not found - build the wally target first" >&2; exit 1; }
+[[ -s "${LINK_ARGS}" ]] || { echo "error: ${LINK_ARGS} not found - build the wally target first" >&2; exit 1; }
 
+# swiftc (Xcode 27) rejects raw `-Wl,` options and ignores bare archive paths in
+# OTHER_LDFLAGS, so everything aimed at ld goes through -Xlinker; -l/-L/-F and
+# -framework are swiftc options and pass as they are.
 flags=()
-while IFS= read -r entry; do
-    [[ -n "${entry}" ]] || continue
-    flags+=("${entry}")
-done < "${BUILD}/wally-link-flags.txt"
+pending_framework=0
+while IFS= read -r arg; do
+    [[ -n "${arg}" ]] || continue
+    if [[ "${pending_framework}" -eq 1 ]]; then
+        flags+=("-framework" "${arg}")
+        pending_framework=0
+        continue
+    fi
+    case "${arg}" in
+        -framework) pending_framework=1 ;;
+        -l*|-L*|-F*) flags+=("${arg}") ;;
+        -Wl,*)
+            IFS=',' read -r -a parts <<< "${arg#-Wl,}"
+            for part in "${parts[@]}"; do flags+=("-Xlinker" "${part}"); done
+            ;;
+        *) flags+=("-Xlinker" "${arg}") ;;
+    esac
+done < "${LINK_ARGS}"
+# The static library's own native dependencies (Rust std, native-tls's
+# Security.framework), then the C++ runtime the kit needs.
+rust_native=(-framework CoreFoundation -framework Security -liconv)
 
 # The published runanywhere-swift tarball does not export RunAnywhereMLXRuntime
 # (Swift MLX without a second commons archive). Apple wally therefore needs the
@@ -53,15 +77,9 @@ fi
 
 cd "${ROOT}/swift"
 xcode_log="${BUILD}/xcodebuild-mlx.log"
-# Bare .a paths are ignored by SwiftPM's swiftc; -Wl,-force_load is not.
-# Only plugin backends are force-loaded (static registrars). The rest of the
-# C++ objects, including llama-common, are a regular archive so download.cpp.o
-# is not pulled (it references cpp-httplib methods the kit never emitted).
+# The kit's plugin backends arrive force-loaded in the link args (static
+# registrars); the Rust archive is a regular archive.
 # Comments must not sit in a `\` continuation — they cut the command in half.
-plugin_ldflags=()
-if [[ -f "${BUILD}/libwally_plugins.a" ]]; then
-    plugin_ldflags+=("-Wl,-force_load,${BUILD}/libwally_plugins.a")
-fi
 set +e
 RUNANYWHERE_BUILD_MLX_DISTRIBUTION_FRAMEWORK=1 \
     xcodebuild build \
@@ -70,7 +88,7 @@ RUNANYWHERE_BUILD_MLX_DISTRIBUTION_FRAMEWORK=1 \
     -configuration Release \
     -derivedDataPath .build/xcode \
     HEADER_SEARCH_PATHS="\$(inherited) ${KIT}/include ${ROOT}/include" \
-    OTHER_LDFLAGS="${plugin_ldflags[*]:-} -L${BUILD} -lwally_bundle -lc++ ${flags[*]}" \
+    OTHER_LDFLAGS="-L$(dirname "${RUST_LIB}") -lwally ${flags[*]} ${rust_native[*]} -lc++" \
     >"${xcode_log}" 2>&1
 xcodebuild_status=$?
 set -e

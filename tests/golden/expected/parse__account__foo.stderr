@@ -1,0 +1,13 @@
+Error: A subcommand is required
+Manage your RunAnywhere cloud account
+
+Usage: wally account [OPTIONS] COMMAND
+
+Options:
+  -h, --help                  Show help
+
+Commands:
+  login                       Sign in through the browser
+  logout                      Sign out and revoke the session
+  whoami                      Show the signed-in account
+  usage                       Show remaining credit and the last day's spend

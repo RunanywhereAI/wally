@@ -1,0 +1,6 @@
+Show wally and SDK versions
+
+Usage: wally version [OPTIONS]
+
+Options:
+  -h, --help                  Show help

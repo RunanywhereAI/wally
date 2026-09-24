@@ -1,0 +1,4 @@
+NAME        PRIORITY    PRIMITIVES
+llamacpp    100         embed, generate_text, rerank, vlm
+onnx        50          diarize, embed, segment
+sherpa      90          detect_voice, synthesize, transcribe

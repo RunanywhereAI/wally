@@ -1,0 +1,14 @@
+//! Signing in to a RunAnywhere console, the stored credential, and the hosted
+//! model/usage calls. Owner: the account port (also cmd_account/cmd_usage/cmd_auth).
+//! One namespace, as C++ `wally::account` was across several files.
+
+pub mod cancel_worker;
+pub mod console;
+pub mod console_contract;
+pub mod credentials;
+pub mod model_cache;
+
+pub use cancel_worker::*;
+pub use console::*;
+pub use credentials::*;
+pub use model_cache::*;

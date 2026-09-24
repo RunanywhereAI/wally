@@ -1,0 +1,16 @@
+Open Claude Desktop with a model
+
+Usage: wally claude-desktop [OPTIONS] [args...]
+
+Arguments:
+  args                        Passed through to the tool
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your account
+      --serve                 Print the endpoint and keep it open instead of launching
+      --restore               Put Claude Desktop back on Anthropic and exit
+
+Examples:
+  wally claude-desktop -m qwen3-0.6b            A model on this machine
+  wally claude-desktop -m glm-5.3-flash         A hosted model (needs `wally account login`)

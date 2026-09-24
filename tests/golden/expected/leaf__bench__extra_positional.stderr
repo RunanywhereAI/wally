@@ -1,0 +1,14 @@
+Error: The following arguments were not expected: four three two
+Measure throughput and load time of downloaded models
+
+Usage: wally bench [OPTIONS] [model]
+
+Arguments:
+  model                       Model id, local bundle path, hf.co/... or URL (default: all
+                              downloaded)
+
+Options:
+  -h, --help                  Show help
+      --engine TEXT           Engine hint (mlx, llamacpp, onnx, sherpa)
+  -n, --trials INT            Measured trials per scenario (median reported)
+      --vlm-image TEXT        Image file for VLM benchmarking

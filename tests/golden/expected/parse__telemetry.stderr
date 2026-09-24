@@ -1,0 +1,16 @@
+Error: A subcommand is required
+Emit model-free telemetry through the real control-plane pipeline
+
+Usage: wally telemetry [OPTIONS] COMMAND
+
+Options:
+  -h, --help                  Show help
+
+Commands:
+  emit                        Track N events of one modality, flush to
+                              /api/v2/sdk/telemetry/{modality} and report the backend's
+                              accounting. Production runs the auth handshake first; development
+                              is keyless. Exits non-zero when any POST fails.
+  blast                       Emit --count events of EVERY modality (all 12) in one run, flush,
+                              and print a per-modality result table parsed from the backend's
+                              batch responses. Emits one event of every modality.

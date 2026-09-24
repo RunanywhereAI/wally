@@ -1,0 +1,13 @@
+Error: The following arguments were not expected: four three two one
+Show a model's details
+
+Usage: wally models show [OPTIONS] model
+
+Arguments:
+  model                       Model id, alias or URL
+
+Options:
+  -h, --help                  Show help
+
+Examples:
+  wally models show granite-4.2-8b

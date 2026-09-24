@@ -1,0 +1,6 @@
+Versions, backends, paths and account
+
+Usage: wally about [OPTIONS]
+
+Options:
+  -h, --help                  Show help

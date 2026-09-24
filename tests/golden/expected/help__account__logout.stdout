@@ -1,0 +1,9 @@
+Sign out and revoke the session
+
+Usage: wally account logout [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+
+Examples:
+  wally account logout

@@ -1,0 +1,11 @@
+Error: The following argument was not expected: --bogus-flag
+List downloaded models (--all for the catalog)
+
+Usage: wally models list [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+  -a, --all                   Include catalog models not yet downloaded
+
+Examples:
+  wally models list --all                       Browse the whole catalog

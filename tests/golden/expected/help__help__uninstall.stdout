@@ -1,0 +1,7 @@
+Remove wally, its models and its config
+
+Usage: wally uninstall [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+  -y, --yes                   Skip the confirmation prompt

@@ -1,0 +1,14 @@
+Open DeepSeek Harness with a model
+
+Usage: wally deepseek [OPTIONS] [args...]
+
+Arguments:
+  args                        Passed through to the tool
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your account
+
+Examples:
+  wally deepseek -m qwen3-0.6b                  A model on this machine
+  wally deepseek -m glm-5.3-flash               A hosted model (needs `wally account login`)

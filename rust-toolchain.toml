@@ -1,0 +1,7 @@
+# The Rust toolchain wally builds with. rustup reads this automatically; CI
+# installs the same channel (scripts/ci/check-versions.py holds it to
+# versions.toml [toolchain] rust).
+[toolchain]
+channel = "1.93.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

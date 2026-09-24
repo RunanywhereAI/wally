@@ -1,0 +1,14 @@
+Download a model
+
+Usage: wally models pull [OPTIONS] model
+
+Arguments:
+  model                       Model id, alias, hf.co/org/repo/file or URL
+
+Options:
+  -h, --help                  Show help
+      --engine TEXT           Engine to fetch for (mlx, llamacpp, onnx, sherpa)
+
+Examples:
+  wally models pull qwen3-0.6b                  From the catalog
+  wally models pull hf.co/<org>/<repo>/<file>   From Hugging Face

@@ -1,0 +1,7 @@
+Error: The following argument was not expected: --bogus-flag
+Versions, backends, paths and account
+
+Usage: wally about [OPTIONS]
+
+Options:
+  -h, --help                  Show help

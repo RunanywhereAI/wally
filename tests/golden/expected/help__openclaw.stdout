@@ -1,0 +1,14 @@
+Open OpenClaw with a model
+
+Usage: wally openclaw [OPTIONS] [args...]
+
+Arguments:
+  args                        Passed through to the tool
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your account
+
+Examples:
+  wally openclaw -m qwen3-0.6b                  A model on this machine
+  wally openclaw -m glm-5.3-flash               A hosted model (needs `wally account login`)

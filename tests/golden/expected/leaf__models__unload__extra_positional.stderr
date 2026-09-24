@@ -1,0 +1,11 @@
+Error: The following arguments were not expected: four three two
+Free loaded models, all of them by default
+
+Usage: wally models unload [OPTIONS] [category]
+
+Arguments:
+  category                    Only free this modality (llm, vlm, stt, tts, vad, embedding,
+                              diffusion)
+
+Options:
+  -h, --help                  Show help

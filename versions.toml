@@ -33,6 +33,8 @@ sdk_ci_ref = "0.20.31"
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
 cmake_minimum = "3.24"
 cxx_standard = "20"
+# The Rust toolchain; rust-toolchain.toml pins the same channel.
+rust = "1.93.1"
 
 [runners]
 # GitHub Actions images. macos_mlx needs Xcode 26 for the Swift host; macos_oss

@@ -1,0 +1,11 @@
+Generate text with a language model
+
+Usage: wally llm [OPTIONS] COMMAND
+
+Options:
+  -h, --help                  Show help
+
+Commands:
+  generate                    Complete a prompt, printed when done
+  stream                      Complete a prompt, printed as it arrives
+  tool-call                   Try tool calling with two demo tools

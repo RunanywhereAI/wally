@@ -1,0 +1,14 @@
+Error: A subcommand is required
+Manage local models
+
+Usage: wally models [OPTIONS] COMMAND
+
+Options:
+  -h, --help                  Show help
+
+Commands:
+  list                        List downloaded models (--all for the catalog)
+  show                        Show a model's details
+  pull                        Download a model
+  rm                          Delete a downloaded model
+  default                     Show or set the default model for coding tools

@@ -1,0 +1,7 @@
+Error: The following arguments were not expected: four three two one
+Show versions, paths, memory and backends
+
+Usage: wally info [OPTIONS]
+
+Options:
+  -h, --help                  Show help

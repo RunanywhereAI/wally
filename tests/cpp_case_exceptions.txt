@@ -1,0 +1,2 @@
+# C++ test cases deliberately not ported as a same-named Rust test, one per line:
+# <C++ file> <case> — <reason>

@@ -1,0 +1,11 @@
+Error: The following argument was not expected: --bogus-flag
+Add a model from a URL or hf.co ref to the registry
+
+Usage: wally models register [OPTIONS] model
+
+Arguments:
+  model                       hf.co/org/repo/file, hf:// or http(s) URL
+
+Options:
+  -h, --help                  Show help
+      --engine TEXT           Pin the inference engine (mlx, llamacpp, onnx, sherpa)

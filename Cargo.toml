@@ -1,0 +1,70 @@
+# The wally CLI. Application code is Rust; the RunAnywhere SDK stays a packaged
+# native kit behind its C ABI (src/sys). CMake (CMakeLists.txt) builds this
+# crate as a static library and links it into the shipped executables with the
+# kit, so `cmake --build build` remains the product build. See AGENTS.md.
+[package]
+name = "wally"
+# Must equal [product] version in versions.toml (scripts/ci/check-versions.py).
+version = "0.6.0"
+edition = "2021"
+rust-version = "1.93"
+license = "Apache-2.0"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "wally"
+path = "src/lib.rs"
+# staticlib: what CMake and the Swift MLX host link. rlib: tests and the dev bin.
+crate-type = ["staticlib", "rlib"]
+
+# Developer entry (`cargo run`, integration tests). The shipped binaries come
+# from CMake: cmake/wally_main.cpp and the Swift host both call wally_run_main.
+[[bin]]
+name = "wally"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+libc = "0.2"
+prost = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["native-tls", "json"] }
+native-tls = "0.2"
+httparse = "1"
+sha2 = "0.10"
+hex = "0.4"
+getrandom = "0.3"
+ctrlc = { version = "3", features = ["termination"] }
+
+[target.'cfg(not(windows))'.dependencies]
+rustyline = { version = "18", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_System_Environment",
+    "Win32_System_SystemInformation",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_Networking_WinSock",
+] }
+
+[build-dependencies]
+prost-build = "0.14"
+protox = "0.9"
+sha2 = "0.10"
+hex = "0.4"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# Symbols stay for crash reports; the product binary is linked by CMake/Xcode.
+debug = "line-tables-only"

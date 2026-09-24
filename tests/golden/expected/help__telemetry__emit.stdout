@@ -1,0 +1,17 @@
+Track N events of one modality, flush to /api/v2/sdk/telemetry/{modality} and report the backend's accounting. Production runs the auth handshake first; development is keyless. Exits non-zero when any POST fails.
+
+Usage: wally telemetry emit [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+      --modality {llm,stt,tts,vlm,rag,imagegen,embeddings,vad,voice,lora,model,system} REQUIRED
+                              Telemetry modality
+      --event-type TEXT       Event type string (default: the modality's terminal event, e.g.
+                              llm.generation.completed)
+      --count POSITIVE        Number of events to emit (default 1)
+      --session-id TEXT       Session id attached to every event (default: fresh UUID)
+      --processing-ms FLOAT   processing_time_ms metric for every event
+      --input-tokens INT      input_tokens metric (llm/vlm modalities)
+      --output-tokens INT     output_tokens metric (llm/vlm modalities)
+      --audio-duration-ms FLOAT
+                              audio_duration_ms metric (stt modality)
