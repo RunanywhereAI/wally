@@ -171,7 +171,9 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         row.downloaded = row.downloaded || is_downloaded;
         let catalog_entry = crate::catalog::find(&model.id);
         row.harness_compatible = row.harness_compatible
-            || catalog_entry.map(|entry| entry.harness_compatible).unwrap_or(false);
+            || catalog_entry
+                .map(|entry| entry.harness_compatible)
+                .unwrap_or(false);
         if is_downloaded && rank < row.path_rank {
             row.path_rank = rank;
             row.local_path = model.local_path.clone();
