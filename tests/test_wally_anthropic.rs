@@ -285,6 +285,28 @@ fn overload_headers_survive_streaming() {
     );
 }
 
+// A local model can spend longer than an editor's idle timeout in prefill.
+// The shim must write harmless SSE comments while it waits for the first
+// upstream token so Claude Code does not report a network failure and retry.
+#[test]
+fn prefill_sends_keepalive_comments() {
+    let _shim_guard = shim_lock::shim_lock();
+    let upstream = FakeUpstream::new();
+    upstream.hold_streams_until(99);
+    let shim = RunningShim::new(&upstream.base_url(), &origin_of(&upstream.base_url()));
+    assert!(shim.started(), "translator did not start");
+    let mut editor = Editor::new(shim.shim());
+    editor.start_streaming();
+    std::thread::sleep(Duration::from_millis(1300));
+    let received = editor.received();
+    editor.leave();
+    editor.join();
+    assert!(
+        String::from_utf8_lossy(&received).contains(": keepalive\n\n"),
+        "no SSE keepalive reached the editor during prefill"
+    );
+}
+
 // Two requests, one after the other, must arrive at the upstream on the same
 // connection. Building a client per request (rather than reusing the pool)
 // would open a new connection each time, so the ports would differ.
@@ -706,8 +728,10 @@ fn a_local_endpoint_is_never_cancelled() {
 // The wrapper exits right after the editor abandoned a stream (app quit):
 // stop() must let the cancel go out before returning -- the fake sits on its
 // answer for 500ms, so an un-joined stop() would return without it -- and
-// must still return within the bound (3s per queued cancel), not after
-// waiting for the engine's first token.
+// must still return within the bounded cancel window, not after waiting for
+// the engine's first token. Windows' socket shutdown reaches the 3s cancel
+// bound plus the 500ms reply delay and one scheduler tick, so keep 1s of
+// timing slack without weakening the behavioral assertions.
 #[test]
 fn stop_sends_the_last_cancel_before_returning() {
     let _shim_guard = shim_lock::shim_lock();
@@ -727,7 +751,7 @@ fn stop_sends_the_last_cancel_before_returning() {
         1,
         "stop() returned without sending the abandoned request's cancel"
     );
-    assert!(took <= Duration::from_millis(3500), "stop() took {took:?}");
+    assert!(took <= Duration::from_millis(4500), "stop() took {took:?}");
 }
 
 // The editor leaves during PREFILL -- the upstream has not sent its headers,

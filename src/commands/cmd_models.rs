@@ -494,7 +494,10 @@ pub fn register_models(app: &mut App) {
     let pull_cmd = ns.add_subcommand("pull", "Download a model");
     pull_cmd.alias("download");
     pull_cmd.footer(&examples_footer(&[
-        Example::new("wally models pull qwen3-0.6b", "From the catalog"),
+        Example::new(
+            "wally models pull qwen3-4b-instruct-2507",
+            "Certified for coding harnesses",
+        ),
         Example::new(
             "wally models pull hf.co/<org>/<repo>/<file>",
             "From Hugging Face",
@@ -504,7 +507,7 @@ pub fn register_models(app: &mut App) {
 
     let delete_cmd = ns.add_subcommand("rm", "Delete a downloaded model");
     delete_cmd.footer(&examples_footer(&[Example::new(
-        "wally models rm qwen3-0.6b",
+        "wally models rm qwen3-4b-instruct-2507",
         "",
     )]));
     delete_cmd.alias("remove");

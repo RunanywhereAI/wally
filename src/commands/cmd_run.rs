@@ -1212,11 +1212,11 @@ pub fn register_llm(app: &mut App) {
         ns.add_subcommand("generate", "Complete a prompt, printed when done")
             .footer(&examples_footer(&[
                 Example::new(
-                    "wally llm generate -m qwen3-0.6b \"explain tunnelling\"",
+                    "wally llm generate -m qwen3-4b-instruct-2507 \"explain tunnelling\"",
                     "",
                 ),
                 Example::new(
-                    "echo \"summarise this\" | wally llm generate -m qwen3-0.6b",
+                    "echo \"summarise this\" | wally llm generate -m qwen3-4b-instruct-2507",
                     "",
                 ),
             ])),
@@ -1226,7 +1226,7 @@ pub fn register_llm(app: &mut App) {
     configure_llm(
         ns.add_subcommand("stream", "Complete a prompt, printed as it arrives")
             .footer(&examples_footer(&[Example::new(
-                "wally llm stream -m qwen3-0.6b \"tell me a short story\"",
+                "wally llm stream -m qwen3-4b-instruct-2507 \"tell me a short story\"",
                 "",
             )])),
         LlmVerb::Stream,
@@ -1248,9 +1248,9 @@ pub fn register_llm_aliases(app: &mut App) {
     configure_llm(
         app.add_subcommand("run", "Run a model")
             .footer(&examples_footer(&[
-                Example::new("wally run qwen3-0.6b", "Chat interactively"),
+                Example::new("wally run qwen3-4b-instruct-2507", "Chat interactively"),
                 Example::new(
-                    "wally run qwen3-0.6b \"write a haiku\"",
+                    "wally run qwen3-4b-instruct-2507 \"write a haiku\"",
                     "Answer one prompt",
                 ),
             ])),

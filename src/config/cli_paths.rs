@@ -49,14 +49,16 @@ pub fn resolve_home(override_dir: &str) -> String {
     String::new()
 }
 
-/// ${XDG_STATE_HOME:-~/.local/state}/runanywhere (not created).
+/// ${XDG_STATE_HOME:-~/.local/state}/runanywhere (not created). On Windows,
+/// with XDG_STATE_HOME unset, %LOCALAPPDATA%/RunAnywhere/state even when HOME
+/// is set (MSYS2 / Git Bash).
 pub fn state_dir() -> String {
     if let Some(env) = getenv("XDG_STATE_HOME") {
         return normalize_dir(&env) + "/runanywhere";
     }
-    if let Some(home) = getenv("HOME") {
-        return normalize_dir(&home) + "/.local/state/runanywhere";
-    }
+    // Checked ahead of HOME: MSYS2 / Git Bash set HOME on Windows, which would
+    // otherwise divert state into %USERPROFILE%/.local/state/runanywhere and
+    // leave the two branches below permanently unreachable.
     #[cfg(windows)]
     {
         if let Some(local) = getenv("LOCALAPPDATA") {
@@ -65,6 +67,9 @@ pub fn state_dir() -> String {
         if let Some(profile) = getenv("USERPROFILE") {
             return normalize_dir(&profile) + "/AppData/Local/RunAnywhere/state";
         }
+    }
+    if let Some(home) = getenv("HOME") {
+        return normalize_dir(&home) + "/.local/state/runanywhere";
     }
     String::new()
 }

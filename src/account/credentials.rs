@@ -3,6 +3,9 @@
 
 use crate::util::getenv;
 
+#[cfg(windows)]
+use crate::config::cli_paths::normalize_dir;
+
 /// The credential is a normal API key with the customer's credit behind it:
 /// `Debug` never prints the tokens.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -799,7 +802,9 @@ pub fn profile_directory() -> String {
     }
     #[cfg(windows)]
     {
-        let home = home_directory();
+        // LOCALAPPDATA is backslash-separated and the suffix is not; fold it the
+        // way paths::normalize_dir does so `wally account login` prints one style.
+        let home = normalize_dir(&home_directory());
         if home.is_empty() {
             String::new()
         } else {

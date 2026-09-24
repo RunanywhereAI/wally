@@ -31,9 +31,8 @@ use crate::sys;
 
 use super::engine_options::resolve_engine_hint;
 
-// Small instruct GGUF that ships in the built-in catalog. Override with
-// --model (e.g. `lfm2-350m-q8_0` to exercise the LFM2 tool-call format path).
-const DEFAULT_TOOL_MODEL: &str = "qwen3-0.6b";
+// The same model certified for coding harness tool calls and long contexts.
+const DEFAULT_TOOL_MODEL: &str = "qwen3-4b-instruct-2507";
 
 #[derive(Debug, Clone, Default)]
 struct ToolCallParams {

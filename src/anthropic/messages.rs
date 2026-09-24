@@ -565,6 +565,16 @@ struct StreamPipeShared {
     error_body: Vec<u8>,
 }
 
+/// A local model can spend longer than an editor's idle timeout in prefill, so
+/// `read` must not block indefinitely on the first transport chunk: it wakes
+/// every second to let the caller send a harmless SSE keepalive comment while
+/// it waits, instead of the editor reporting a network failure and retrying.
+enum StreamReadResult {
+    Chunk(Vec<u8>),
+    KeepAlive,
+    Finished,
+}
+
 struct StreamPipe {
     shared: Mutex<StreamPipeShared>,
     changed: Condvar,
@@ -588,22 +598,26 @@ impl StreamPipe {
         }
     }
 
-    /// Blocks for the next transport chunk; `None` once the stream has ended
-    /// with nothing left to hand over.
-    fn read(&self) -> Option<Vec<u8>> {
-        let mut guard = self.shared.lock().unwrap();
-        loop {
-            if !guard.chunk.is_empty() || guard.finished {
-                break;
-            }
-            guard = self.changed.wait(guard).unwrap();
+    /// Blocks for the next transport chunk, waking every second to report a
+    /// keepalive instead of the stream's first token, and `Finished` once the
+    /// stream has ended with nothing left to hand over.
+    fn read(&self) -> StreamReadResult {
+        let guard = self.shared.lock().unwrap();
+        let (mut guard, _timeout) = self
+            .changed
+            .wait_timeout_while(guard, Duration::from_secs(1), |shared| {
+                shared.chunk.is_empty() && !shared.finished
+            })
+            .unwrap();
+        if guard.chunk.is_empty() && !guard.finished {
+            return StreamReadResult::KeepAlive;
         }
         if guard.chunk.is_empty() {
-            return None;
+            return StreamReadResult::Finished;
         }
         let next = std::mem::take(&mut guard.chunk);
         self.changed.notify_all();
-        Some(next)
+        StreamReadResult::Chunk(next)
     }
 }
 
@@ -852,7 +866,17 @@ fn handle_streaming(
         let mut has_data = false;
         let mut saw_done = false;
 
-        while let Some(bytes) = pipe.read() {
+        loop {
+            let bytes = match pipe.read() {
+                StreamReadResult::Finished => break,
+                StreamReadResult::KeepAlive => {
+                    if writer.write_chunk(b": keepalive\n\n").is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                StreamReadResult::Chunk(bytes) => bytes,
+            };
             if !feed_sse_bytes(
                 &bytes,
                 &mut pending,

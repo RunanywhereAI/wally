@@ -243,6 +243,24 @@ fn credentials_reject_a_document_they_cannot_unlock() {
     );
 }
 
+// A real LOCALAPPDATA is backslash-separated while the suffix appended to it is
+// not. `wally account login` prints this directory, so the join must not mix them.
+#[cfg(windows)]
+#[test]
+fn profile_directory_uses_one_separator_style() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    env.unset("WALLY_PROFILE_DIR")
+        .unset("RCLI_PROFILE_DIR")
+        .set("LOCALAPPDATA", "C:\\wally-local");
+
+    let directory = account::profile_directory();
+    assert_eq!(
+        directory, "C:/wally-local/RunAnywhere/Wally",
+        "the profile directory must not mix separators"
+    );
+}
+
 // A group/world-readable credentials.json is tightened to 0600 silently
 // today; load() must say so rather than leave the reader unaware their
 // bearer token was ever exposed.

@@ -30,7 +30,7 @@ fn backend_rank(framework: v1::InferenceFramework) -> i32 {
 }
 
 struct GroupedRow {
-    id: String, // merge key by default; see the override below
+    id: String, // backend-neutral merge key shown on every platform
     #[allow(dead_code)]
     // id of the variant that set size_bytes; kept for parity with the C++ struct
     size_id: String,
@@ -40,15 +40,10 @@ struct GroupedRow {
     size_bytes: i64,
     name_rank: i32, // rank of the variant that set name/category
     size_rank: i32, // rank of the variant that set a positive size
-    // Rank of the downloaded variant currently backing `id`/`local_path`
-    // (i32::MAX = none downloaded yet). The merge key is always a real, listed
-    // catalog id (today, the llama.cpp variant's own), so it is a fine default
-    // for a row nothing has been downloaded for. But once some other backend
-    // is the one actually on disk, printing the bare merge key left
-    // `models show/rm/pull` silently resolving to that other, undownloaded
-    // variant instead — so a downloaded variant's own id always wins here.
-    id_rank: i32,
+    // Best-ranked downloaded variant supplies a representative local path.
+    path_rank: i32,
     downloaded: bool,
+    harness_compatible: bool,
     // Distinct backends, ordered by (rank, label) so the join is stable.
     backends: std::collections::BTreeSet<(i32, &'static str)>,
 }
@@ -64,8 +59,9 @@ impl Default for GroupedRow {
             size_bytes: 0,
             name_rank: i32::MAX,
             size_rank: i32::MAX,
-            id_rank: i32::MAX,
+            path_rank: i32::MAX,
             downloaded: false,
+            harness_compatible: false,
             backends: std::collections::BTreeSet::new(),
         }
     }
@@ -76,9 +72,9 @@ impl Default for GroupedRow {
 // llama.cpp everywhere; on Apple also MLX. Never printed in --json.
 fn print_pull_examples() {
     out::result_line("Download a model with `wally models pull <id>`:");
-    out::result_line("  wally models pull qwen3-0.6b        # llama.cpp");
+    out::result_line("  wally models pull qwen3-4b-instruct-2507  # llama.cpp");
     #[cfg(target_os = "macos")]
-    out::result_line("  wally models pull mlx-qwen3-0.6b    # MLX (Apple GPU)");
+    out::result_line("  wally models pull mlx-qwen3-4b-instruct-2507  # MLX (Apple GPU)");
     // TEMP(ane-cut): no ANE rows in the catalog, so nothing to point at.
     // out::result_line("  wally models pull ane-lfm2.5-350m   # ANE (Apple Neural Engine)");
     out::result_line("");
@@ -147,7 +143,8 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
 
     // Collapse per-backend variants of the same model into one row, grouped by
     // the catalog merge_key (a non-catalog id groups with itself). `row.id`
-    // starts as that merge key but can be displaced — see `GroupedRow::id_rank`.
+    // is always that merge key. Backend-specific ids remain accepted by
+    // pull/show/rm, but the list stays stable across macOS, Linux, and Windows.
     // Insertion order is kept so the list reads the same as the registry.
     let mut order: Vec<String> = Vec::new();
     let mut groups: HashMap<String, GroupedRow> = HashMap::new();
@@ -172,11 +169,11 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         row.backends
             .insert((rank, model_labels::short_backend(framework)));
         row.downloaded = row.downloaded || is_downloaded;
-        // A downloaded variant's own id/local_path always displaces the merge
-        // key default, best rank first among downloaded variants.
-        if is_downloaded && rank < row.id_rank {
-            row.id_rank = rank;
-            row.id = model.id.clone();
+        let catalog_entry = crate::catalog::find(&model.id);
+        row.harness_compatible = row.harness_compatible
+            || catalog_entry.map(|entry| entry.harness_compatible).unwrap_or(false);
+        if is_downloaded && rank < row.path_rank {
+            row.path_rank = rank;
             row.local_path = model.local_path.clone();
         }
         if rank < row.name_rank {
@@ -205,6 +202,7 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
                 .field_str("backend", &join_backends(row))
                 .field_i64("size_bytes", row.size_bytes)
                 .field_bool("downloaded", row.downloaded)
+                .field_bool("harness_compatible", row.harness_compatible)
                 // Path of the variant `id` refers to; empty when nothing in
                 // the group is downloaded (mirrors the pre-merge shape, which
                 // callers already treat "" as "not downloaded").
@@ -231,6 +229,12 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
                 "-".to_string()
             },
             if row.downloaded { "yes" } else { "no" }.to_string(),
+            if row.harness_compatible {
+                "[harness-compatible]"
+            } else {
+                ""
+            }
+            .to_string(),
         ]);
     }
 
@@ -243,7 +247,7 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         return 0;
     }
     out::table(
-        &["ID", "MODALITY", "BACKEND", "SIZE", "DOWNLOADED"].map(String::from),
+        &["ID", "MODALITY", "BACKEND", "SIZE", "DOWNLOADED", "TAGS"].map(String::from),
         &rows,
     );
     0
