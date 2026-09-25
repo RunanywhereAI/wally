@@ -5,7 +5,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{ConsoleClient, Credentials, IdentityResult};
+use super::{ConsoleClient, Credentials, IdentityResult, RefreshError};
 
 /// A token this close to its expiry is refreshed before it is sent, so a call
 /// is never made with a token that lapses on the way.
@@ -26,6 +26,10 @@ pub fn epoch_seconds() -> i64 {
 pub struct ConsoleSession {
     client: ConsoleClient,
     credentials: Credentials,
+    /// The clock the session was opened on. Expiry is judged and a refreshed
+    /// deadline is stamped on this one reading, so a caller that pins it (a
+    /// test) sees both on the same timeline.
+    now: i64,
 }
 
 impl ConsoleSession {
@@ -47,39 +51,51 @@ impl ConsoleSession {
         let mut session = ConsoleSession {
             client,
             credentials,
+            now,
         };
         if session
             .credentials
             .access_token_expired(now, EXPIRY_SKEW_SECONDS)
         {
-            session.refresh()?;
+            session.refresh().map_err(|e| {
+                if e.unavailable || e.message.contains("wally account login") {
+                    e.message
+                } else {
+                    format!("{}; run `wally account login`", e.message)
+                }
+            })?;
         }
         Ok(session)
     }
 
     /// Trades the refresh token for a new access token and saves the result.
-    fn refresh(&mut self) -> Result<(), String> {
+    /// `unavailable` on the error keeps "the console is busy, try again" apart
+    /// from "this session is gone, log in again": they need different actions.
+    fn refresh(&mut self) -> Result<(), RefreshError> {
         let credentials = &mut self.credentials;
         if credentials.refresh_token.is_empty() {
-            return Err(
-                "the cloud session cannot be refreshed; run `wally account login`".to_string(),
-            );
+            return Err(RefreshError {
+                message: "the cloud session cannot be refreshed".to_string(),
+                unavailable: false,
+            });
         }
         let grant = self
             .client
-            .refresh(&credentials.console_url, &credentials.refresh_token)
-            .map_err(|e| e.message)?;
+            .refresh(&credentials.console_url, &credentials.refresh_token)?;
         credentials.access_token = grant.access_token;
         if !grant.refresh_token.is_empty() {
             credentials.refresh_token = grant.refresh_token;
         }
-        credentials.expires_at = epoch_seconds()
+        credentials.expires_at = self.now
             + if grant.expires_in > 0 {
                 grant.expires_in
             } else {
                 DEFAULT_GRANT_SECONDS
             };
-        super::save(credentials)
+        super::save(credentials).map_err(|message| RefreshError {
+            message,
+            unavailable: false,
+        })
     }
 
     /// Runs one console read. A 401 is answered by refreshing once and asking
@@ -98,10 +114,18 @@ impl ConsoleSession {
             // malformed with the same 401 on purpose, so which of the four this
             // was is not something we know -- and sending someone to re-login
             // over a revoked key wastes the trip.
-            if let Err(refresh_failure) = self.refresh() {
-                return Err(format!(
-                    "the console rejected this session ({refresh_failure}); run `wally account login`"
-                ));
+            match self.refresh() {
+                Ok(()) => {}
+                // A 429 or 5xx on the refresh says nothing about the session,
+                // and logging in again would not get past a console that is
+                // busy. The message already says to try again shortly.
+                Err(e) if e.unavailable => return Err(e.message),
+                Err(e) => {
+                    return Err(format!(
+                        "the console rejected this session ({}); run `wally account login`",
+                        e.message
+                    ))
+                }
             }
             (result, value, failure) = read(
                 &self.client,

@@ -1915,3 +1915,73 @@ fn a_request_timeout_bounds_the_real_transport() {
         "timeout_ms was not honoured: the call took {took:?}"
     );
 }
+
+fn console_refusing_then_refresh(refresh_status: i32) -> ConsoleClient {
+    ConsoleClient::new(Some(Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            let status = if request.url.ends_with("/auth/cli/refresh") {
+                refresh_status
+            } else {
+                401
+            };
+            Ok(HttpResponse {
+                status,
+                ..HttpResponse::default()
+            })
+        },
+    ) as Transport))
+}
+
+// A 401 followed by a refresh the console could not answer (429 or 5xx) says
+// nothing about the session. Sending the person to log in again would not get
+// them past a busy console, so the error tells them to try again instead.
+#[test]
+fn a_busy_console_on_refresh_is_not_a_reason_to_log_in_again() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let mut env = EnvGuard::new();
+    env.set("WALLY_PROFILE_DIR", home.path().to_string_lossy().as_ref());
+    env.unset("WALLY_CONSOLE_URL");
+
+    for status in [429, 503] {
+        let mut session = stale_session(&home, console_refusing_then_refresh(status));
+        let error = account::export_usage_requests(&mut session, requests_window(), false)
+            .expect_err("the retry never happened");
+        assert!(
+            !error.contains("wally account login"),
+            "{status}: a busy console was reported as a dead session: {error}"
+        );
+        assert!(error.contains("try again"), "{status}: {error}");
+    }
+
+    // A refresh the console refuses outright is the session, and the person
+    // does need to sign in again.
+    let mut session = stale_session(&home, console_refusing_then_refresh(401));
+    let error = account::export_usage_requests(&mut session, requests_window(), false)
+        .expect_err("refused");
+    assert!(error.contains("wally account login"), "{error}");
+}
+
+// A refresh stamps the new deadline on the clock the session was opened with,
+// the same one expiry was judged on, not on a second reading of the wall clock.
+#[test]
+fn a_refreshed_session_expires_on_the_clock_it_was_opened_with() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let mut env = EnvGuard::new();
+    env.set("WALLY_PROFILE_DIR", home.path().to_string_lossy().as_ref());
+    env.unset("WALLY_CONSOLE_URL");
+
+    const NOW: i64 = 1_000_000_000; // 2001-09-09, nowhere near the wall clock
+    let (client, _) = refreshing_console(vec![(None, export_page(&["a"], None))], None);
+    let credentials = Credentials {
+        console_url: "https://console.example.test".to_string(),
+        email: "dev@example.test".to_string(),
+        access_token: "stale-token".to_string(),
+        refresh_token: "old-refresh".to_string(),
+        expires_at: NOW - 1,
+    };
+    account::save(&credentials).expect("save");
+    ConsoleSession::resume(client, credentials, NOW).expect("refreshed on open");
+    assert_eq!(account::load().expect("load").expires_at, NOW + 3600);
+}

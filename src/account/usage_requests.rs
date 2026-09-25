@@ -48,14 +48,7 @@ pub fn rfc3339_utc(seconds: i64) -> Result<String, String> {
             "the system clock reads {seconds}s since 1970, which is not a time the console can be asked about"
         ));
     }
-    let (year, month, day) = crate::util::civil_from_days(seconds.div_euclid(SECONDS_PER_DAY));
-    let secs_of_day = seconds.rem_euclid(SECONDS_PER_DAY);
-    Ok(format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        secs_of_day / 3600,
-        (secs_of_day % 3600) / 60,
-        secs_of_day % 60
-    ))
+    Ok(crate::util::format_utc(seconds))
 }
 
 /// One page's query. The window is the caller's to name: the route requires
@@ -615,8 +608,8 @@ mod tests {
         let error = export_usage_requests(&mut session, window(), false).unwrap_err();
         assert_eq!(
             error,
-            "the console rejected this session (the cloud session cannot be refreshed; run \
-             `wally account login`); run `wally account login`"
+            "the console rejected this session (the cloud session cannot be refreshed); run \
+             `wally account login`"
         );
         assert_eq!(urls.lock().unwrap().len(), 1, "no retry without a refresh");
     }
