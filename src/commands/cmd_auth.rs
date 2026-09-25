@@ -20,13 +20,7 @@ fn format_epoch_seconds(seconds: i64) -> String {
     if seconds <= 0 {
         return "-".to_string();
     }
-    let days = seconds.div_euclid(86_400);
-    let secs_of_day = seconds.rem_euclid(86_400);
-    let (year, month, day) = crate::util::civil_from_days(days);
-    let hour = secs_of_day / 3600;
-    let minute = (secs_of_day % 3600) / 60;
-    let sec = secs_of_day % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{sec:02}Z")
+    crate::util::format_utc(seconds)
 }
 
 fn run_auth_login(options: &GlobalOptions) -> i32 {

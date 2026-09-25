@@ -482,33 +482,15 @@ pub fn hermes_argv(model: &str, child_args: &[String]) -> Vec<String> {
 
 /// ISO-8601 UTC "now" (`%Y-%m-%dT%H:%M:%SZ`). OpenClaw treats a non-empty
 /// `wizard.lastRunAt` as "onboarding complete", so this is what lets a first
-/// run skip its wizard. Converts the Unix epoch with the standard
-/// civil-from-days algorithm (Howard Hinnant's `civil_from_days`) rather than
-/// pulling in a date/time crate for one UTC timestamp.
+/// run skip its wizard. Formatted by `util::format_utc`, not a date/time crate.
 fn iso_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
         .unwrap_or(0);
-    let days = epoch.div_euclid(86400);
-    let secs_of_day = epoch.rem_euclid(86400);
-    let hour = secs_of_day / 3600;
-    let minute = (secs_of_day % 3600) / 60;
-    let second = secs_of_day % 60;
-
-    let z = days + 719468;
-    let era = z.div_euclid(146097);
-    let doe = z - era * 146097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    let year = if m <= 2 { y + 1 } else { y };
-
-    format!("{year:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z")
+    crate::util::format_utc(epoch)
 }
 
 /// The OpenClaw config naming `model` at `base_url`, merged onto whatever the

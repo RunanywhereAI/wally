@@ -38,3 +38,17 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let year = if m <= 2 { y + 1 } else { y };
     (year, m, d)
 }
+
+/// `seconds` since the epoch as `%Y-%m-%dT%H:%M:%SZ`. Every UTC timestamp
+/// wally writes goes through here, so there is one calendar conversion to get
+/// right. Callers decide what a non-positive clock means for them.
+pub fn format_utc(seconds: i64) -> String {
+    let (year, month, day) = civil_from_days(seconds.div_euclid(86_400));
+    let secs_of_day = seconds.rem_euclid(86_400);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60
+    )
+}
