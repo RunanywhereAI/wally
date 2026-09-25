@@ -84,14 +84,8 @@ def elf(needed: list[str], versions: dict[str, list[str]]) -> bytes:
 
 
 class LinuxAbiTests(unittest.TestCase):
-    def tree(self, files: dict[str, bytes]) -> pathlib.Path:
-        directory = pathlib.Path(tempfile.mkdtemp())
-        self.addCleanup(lambda: __import__("shutil").rmtree(directory))
-        for name, data in files.items():
-            path = directory / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-        return directory
+    def tree(self, files: dict[str, bytes]) -> dict[str, bytes]:
+        return files
 
     def test_reads_needed_libraries_and_symbol_versions(self) -> None:
         needed, versions = ABI.read_elf(
@@ -117,7 +111,7 @@ class LinuxAbiTests(unittest.TestCase):
                 "wally-linux-x86_64/README.md": b"not an ELF",
             }
         )
-        self.assertEqual(ABI.check_tree(root, POLICY), [])
+        self.assertEqual(ABI.check_files(root, POLICY), [])
 
     def test_a_symbol_version_past_the_floor_fails(self) -> None:
         # v0.6.0: built on Ubuntu 24.04, asked for GLIBC_2.38 and GLIBCXX_3.4.32.
@@ -129,7 +123,7 @@ class LinuxAbiTests(unittest.TestCase):
                 )
             }
         )
-        problems = ABI.check_tree(root, POLICY)
+        problems = ABI.check_files(root, POLICY)
         self.assertEqual(len(problems), 2, problems)
         self.assertTrue(any("GLIBC_2.38" in p for p in problems))
         self.assertTrue(any("GLIBCXX_3.4.32" in p for p in problems))
@@ -137,16 +131,16 @@ class LinuxAbiTests(unittest.TestCase):
     def test_versions_compare_numerically_not_as_text(self) -> None:
         # "2.4" sorts after "2.35" as text; it is the older version.
         root = self.tree({"b/bin/wally": elf(["libc.so.6"], {"libc.so.6": ["GLIBC_2.4"]})})
-        self.assertEqual(ABI.check_tree(root, POLICY), [])
+        self.assertEqual(ABI.check_files(root, POLICY), [])
         cxxabi = self.tree(
             {"b/bin/wally": elf(["libstdc++.so.6"], {"libstdc++.so.6": ["CXXABI_1.3.14"]})}
         )
-        self.assertEqual(len(ABI.check_tree(cxxabi, POLICY)), 1)
+        self.assertEqual(len(ABI.check_files(cxxabi, POLICY)), 1)
 
     def test_an_unshipped_library_off_the_allow_list_fails(self) -> None:
         # v0.6.0 again: libgomp.so.1 was needed and not shipped.
         root = self.tree({"b/bin/wally": elf(["libc.so.6", "libgomp.so.1"], {})})
-        problems = ABI.check_tree(root, POLICY)
+        problems = ABI.check_files(root, POLICY)
         self.assertEqual(len(problems), 1)
         self.assertIn("libgomp.so.1", problems[0])
 
@@ -154,19 +148,39 @@ class LinuxAbiTests(unittest.TestCase):
         root = self.tree(
             {"b/bin/wally": elf(["libc.so.6"], {"libssl.so.3": ["OPENSSL_3.0.0"]})}
         )
-        self.assertEqual(ABI.check_tree(root, POLICY), [])
+        self.assertEqual(ABI.check_files(root, POLICY), [])
 
     def test_an_archive_with_no_elf_is_not_a_bottle(self) -> None:
         root = self.tree({"b/README.md": b"hello"})
-        self.assertEqual(len(ABI.check_tree(root, POLICY)), 1)
+        self.assertEqual(len(ABI.check_files(root, POLICY)), 1)
 
     def test_a_truncated_elf_is_an_error_not_a_pass(self) -> None:
         whole = elf(["libc.so.6"], {"libc.so.6": ["GLIBC_2.34"]})
-        # Cut inside the header, inside the section table, and inside the data
-        # a section points at: each must raise, none may read as "needs nothing".
-        for cut in (40, len(whole) - 10, 70):
+        # Cut inside the header and inside the section table: each must raise,
+        # none may read as "needs nothing".
+        for cut in (40, len(whole) - 10):
             with self.subTest(cut=cut), self.assertRaises(ABI.AbiError):
                 ABI.read_elf(whole[:cut], "wally")
+
+    def test_a_section_running_past_the_end_is_an_error(self) -> None:
+        # The section table is intact; the verneed table it points at is not.
+        # Move the table's offset past the file's end, which a slice would
+        # otherwise read as an empty (and passing) table.
+        data = bytearray(elf(["libc.so.6"], {"libc.so.6": ["GLIBC_2.38"]}))
+        shoff = struct.unpack_from("<Q", data, 0x28)[0]
+        verneed_header = shoff + 3 * 64
+        struct.pack_into("<Q", data, verneed_header + 0x18, len(data) + 100)
+        with self.assertRaises(ABI.AbiError) as raised:
+            ABI.read_elf(bytes(data), "wally")
+        self.assertIn("past the end", str(raised.exception))
+
+    def test_an_elf_without_a_section_table_is_refused(self) -> None:
+        data = bytearray(elf(["libc.so.6"], {}))
+        struct.pack_into("<Q", data, 0x28, 0)  # e_shoff
+        struct.pack_into("<H", data, 0x3C, 0)  # e_shnum
+        with self.assertRaises(ABI.AbiError) as raised:
+            ABI.read_elf(bytes(data), "wally")
+        self.assertIn("no section header table", str(raised.exception))
 
     def test_the_policy_is_read_from_versions_toml(self) -> None:
         policy = ABI.read_linux_abi_policy()
@@ -174,6 +188,24 @@ class LinuxAbiTests(unittest.TestCase):
         self.assertNotIn("libgomp.so.1", policy["system_libraries"])
         for key in ("glibc_max", "glibcxx_max", "cxxabi_max"):
             ABI.version_key(str(policy[key]))
+
+    def test_the_archive_is_read_without_extracting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = pathlib.Path(temporary) / "wally-0.0.1-linux-x86_64.tar.gz"
+            data = elf(["libc.so.6"], {"libc.so.6": ["GLIBC_2.34"]})
+            with tarfile.open(archive, "w:gz") as bundle:
+                member = tarfile.TarInfo("wally-linux-x86_64/bin/wally")
+                member.size = len(data)
+                bundle.addfile(member, io.BytesIO(data))
+                link = tarfile.TarInfo("wally-linux-x86_64/lib/escape")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "/etc/passwd"
+                bundle.addfile(link)
+            files = ABI.archive_files(archive)
+            self.assertEqual(list(files), ["wally-linux-x86_64/bin/wally"])
+            self.assertEqual(ABI.main([str(archive)]), 0)
+            self.assertEqual(sorted(p.name for p in pathlib.Path(temporary).iterdir()),
+                             [archive.name])
 
     def test_the_command_checks_a_real_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

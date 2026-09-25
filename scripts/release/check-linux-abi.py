@@ -26,7 +26,6 @@ import re
 import struct
 import sys
 import tarfile
-import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 VERSIONS = ROOT / "versions.toml"
@@ -35,6 +34,7 @@ ELF_MAGIC = b"\x7fELF"
 ELFCLASS64 = 2
 ELFDATA2LSB = 1
 SHT_DYNAMIC = 6
+SHT_NOBITS = 8
 SHT_GNU_VERNEED = 0x6FFFFFFE
 DT_NULL = 0
 DT_NEEDED = 1
@@ -105,9 +105,20 @@ def _read_elf(data: bytes, name: str) -> tuple[set[str], set[str]]:
         raise AbiError(f"{name}: only 64-bit little-endian ELF is supported")
     shoff = struct.unpack_from("<Q", data, 0x28)[0]
     shentsize, shnum = struct.unpack_from("<HH", data, 0x3A)
+    if shoff == 0 or shnum == 0:
+        # The dynamic and version tables are found through the section table.
+        # Without one this reads nothing, and nothing would pass as "needs
+        # nothing"; refuse instead.
+        raise AbiError(f"{name}: no section header table, so its needs cannot be read")
     sections = [
         struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shentsize) for i in range(shnum)
     ]
+    for index, (_, sh_type, _, _, offset, size, *_rest) in enumerate(sections):
+        # A slice past the end of the file is silently short, not an error, so a
+        # truncated table would be read as a smaller one. Check every section
+        # that occupies file bytes.
+        if sh_type != SHT_NOBITS and offset + size > len(data):
+            raise AbiError(f"{name}: section {index} runs past the end of the file")
 
     def section_bytes(index: int) -> bytes:
         _, _, _, _, offset, size, *_ = sections[index]
@@ -138,20 +149,34 @@ def _read_elf(data: bytes, name: str) -> tuple[set[str], set[str]]:
     return needed, versions
 
 
-def check_tree(root: pathlib.Path, policy: dict[str, object]) -> list[str]:
-    """Every problem found under `root`, one line each; empty when it passes."""
+def archive_files(archive: pathlib.Path) -> dict[str, bytes]:
+    """Every regular file in a .tar.gz, by member name, read without extracting.
+
+    Nothing is written to disk, so there is no path to sanitize and no reliance
+    on tarfile's extraction filters, which not every runner's Python has.
+    """
+    files: dict[str, bytes] = {}
+    with tarfile.open(archive, "r:gz") as bundle:
+        for member in bundle.getmembers():
+            if member.isfile():
+                handle = bundle.extractfile(member)
+                if handle is not None:
+                    files[member.name] = handle.read()
+    return files
+
+
+def check_files(files: dict[str, bytes], policy: dict[str, object]) -> list[str]:
+    """Every problem in a bottle's files, one line each; empty when it passes."""
     ceilings = {family: str(policy[key]) for family, key in FAMILIES.items()}
     system = set(policy["system_libraries"])  # type: ignore[arg-type]
-    files = [p for p in sorted(root.rglob("*")) if p.is_file() and not p.is_symlink()]
-    elves = {p: p.read_bytes() for p in files if p.read_bytes()[:4] == ELF_MAGIC}
+    elves = {name: data for name, data in sorted(files.items()) if data[:4] == ELF_MAGIC}
     if not elves:
         return ["no ELF files found; this is not a Linux bottle"]
-    shipped = {p.name for p in elves}
+    shipped = {pathlib.PurePosixPath(name).name for name in elves}
 
     problems: list[str] = []
-    for path, data in elves.items():
-        relative = path.relative_to(root)
-        needed, versions = read_elf(data, str(relative))
+    for relative, data in elves.items():
+        needed, versions = read_elf(data, relative)
         for tag in sorted(versions):
             match = VERSION_TAG.match(tag)
             if match and version_key(match.group(2)) > version_key(ceilings[match.group(1)]):
@@ -174,10 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         policy = read_linux_abi_policy(args.versions)
-        with tempfile.TemporaryDirectory() as temporary:
-            with tarfile.open(args.archive, "r:gz") as bundle:
-                bundle.extractall(temporary, filter="data")
-            problems = check_tree(pathlib.Path(temporary), policy)
+        problems = check_files(archive_files(args.archive), policy)
     except (AbiError, OSError, tarfile.TarError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
