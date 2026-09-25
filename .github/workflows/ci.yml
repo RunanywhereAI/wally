@@ -149,7 +149,12 @@ jobs:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
         run: |
           set -euo pipefail
-          cargo install bindgen-cli --version 0.73.2 --locked
+          # ~/.cargo/bin comes back from the cache without cargo's install
+          # records beside it, and a plain `cargo install` refuses a binary it
+          # did not record ("already exists in destination").
+          if ! bindgen --version 2>/dev/null | grep -q '0\.73\.2'; then
+            cargo install bindgen-cli --version 0.73.2 --locked --force
+          fi
           bash scripts/build/gen-sys-bindings.sh --check
       - name: Product e2e (MLX host)
         env:
