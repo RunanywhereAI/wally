@@ -133,6 +133,34 @@ probe_binary() {
     printf '%s\n' "$probe_output" | sed -nE 's/^wally ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1
 }
 
+# The install swap renames ${LIB_DIR} aside, then renames the new tree into its
+# place. If this run is leaving with the first rename done and the second not,
+# put the old tree back so the existing `wally` keeps working.
+restore_previous_install() {
+    if [ -n "${retired:-}" ] && [ -d "$retired" ] && [ ! -e "$LIB_DIR" ]; then
+        mv "$retired" "$LIB_DIR" 2>/dev/null || true
+    fi
+}
+
+# A run killed outright between the two renames cannot clean up after itself:
+# it leaves ${LIB_DIR}.previous.<pid> and no ${LIB_DIR}. Put that tree back
+# before anything else, and drop leftovers from earlier runs, so every run
+# starts from one install or none.
+recover_interrupted_install() {
+    for leftover in "${LIB_DIR}".previous.*; do
+        [ -d "$leftover" ] || continue
+        if [ ! -e "$LIB_DIR" ]; then
+            mv "$leftover" "$LIB_DIR" && warn "restored the install an earlier run left half replaced"
+        else
+            rm -rf "$leftover"
+        fi
+    done
+    for leftover in "${LIB_DIR}".incoming.*; do
+        [ -d "$leftover" ] && rm -rf "$leftover"
+    done
+    return 0
+}
+
 main() {
 
 # --- arguments --------------------------------------------------------------
@@ -238,9 +266,16 @@ staged="${tmp}/wally-${PLATFORM}"
 # code-signed Mach-O in place while a copy may still be mapped kills it with
 # SIGKILL (137).
 mkdir -p "$(dirname "$LIB_DIR")" "$BIN_DIR"
+recover_interrupted_install
 incoming="${LIB_DIR}.incoming.$$"
 retired="${LIB_DIR}.previous.$$"
-trap 'rm -rf "$tmp" "$incoming"' EXIT
+# Between the two renames below there is no ${LIB_DIR}. An interrupted or
+# failing run puts the previous tree back on the way out; a run killed outright
+# (SIGKILL, power loss) is repaired by recover_interrupted_install next time.
+trap 'restore_previous_install; rm -rf "$tmp" "$incoming"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 rm -rf "$incoming"
 cp -R "$staged" "$incoming"
 staged_version="$(probe_binary "${incoming}/bin/wally")"
@@ -250,10 +285,8 @@ fi
 if [ -e "$LIB_DIR" ]; then
     mv "$LIB_DIR" "$retired"
 fi
-if ! mv "$incoming" "$LIB_DIR"; then
-    [ -e "$retired" ] && mv "$retired" "$LIB_DIR"
-    fail "Could not move the new build into ${LIB_DIR}; the previous install is unchanged."
-fi
+mv "$incoming" "$LIB_DIR" \
+    || fail "Could not move the new build into ${LIB_DIR}; the previous install is unchanged."
 rm -rf "$retired"
 ln -sfn "${LIB_DIR}/bin/wally" "${BIN_DIR}/wally"
 
