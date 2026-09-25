@@ -81,10 +81,10 @@ std::string state_dir() {
     if (std::string env = getenv_utf8("XDG_STATE_HOME"); !env.empty()) {
         return normalize_dir(std::move(env)) + "/runanywhere";
     }
-    if (std::string home = getenv_utf8("HOME"); !home.empty()) {
-        return normalize_dir(std::move(home)) + "/.local/state/runanywhere";
-    }
 #if defined(_WIN32)
+    // Checked ahead of HOME: MSYS2 / Git Bash set HOME on Windows, which would
+    // otherwise divert state into %USERPROFILE%/.local/state/runanywhere and
+    // leave the two branches below permanently unreachable.
     if (std::string local = getenv_utf8("LOCALAPPDATA"); !local.empty()) {
         return normalize_dir(std::move(local)) + "/RunAnywhere/state";
     }
@@ -92,6 +92,9 @@ std::string state_dir() {
         return normalize_dir(std::move(profile)) + "/AppData/Local/RunAnywhere/state";
     }
 #endif
+    if (std::string home = getenv_utf8("HOME"); !home.empty()) {
+        return normalize_dir(std::move(home)) + "/.local/state/runanywhere";
+    }
     return {};
 }
 

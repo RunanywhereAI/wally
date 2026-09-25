@@ -437,6 +437,33 @@ TestResult test_upstream_dying_mid_stream_is_not_retried() {
     return result;
 }
 
+// A local model can spend longer than an editor's idle timeout in prefill.
+// The shim must write harmless SSE comments while it waits for the first
+// upstream token so Claude Code does not report a network failure and retry.
+TestResult test_prefill_sends_keepalive_comments() {
+    TestResult result;
+    result.test_name = "prefill_sends_keepalive_comments";
+    FakeUpstream upstream;
+    upstream.hold_streams_until(99);
+    RunningShim shim(upstream.base_url());
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    Editor editor(shim.shim());
+    editor.StartStreaming();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1300));
+    const std::string received = editor.received();
+    editor.Leave();
+    editor.Join();
+    if (received.find(": keepalive\n\n") == std::string::npos) {
+        result.details = "no SSE keepalive reached the editor during prefill";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 // #81. The editor leaves while the upstream is still producing the body (the
 // engine is decoding; the id is already in hand). Within a second the fake's
 // cancel route sees that id with this session's bearer, the upstream socket
@@ -601,8 +628,10 @@ TestResult test_a_local_endpoint_is_never_cancelled() {
 // #81. The wrapper exits right after the editor abandoned a stream (app quit):
 // Stop() must let the cancel go out before returning -- the fake sits on its
 // answer for 500 ms, so an un-joined Stop() would return without it -- and
-// must still return within the bound (3 s per queued cancel), not after
-// waiting for the engine's first token.
+// must still return within the bounded cancel window, not after waiting for
+// the engine's first token. Windows' socket shutdown reaches the 3 s cancel
+// bound plus the 500 ms reply delay and one scheduler tick, so keep 1 s of
+// timing slack without weakening the behavioral assertions.
 TestResult test_stop_sends_the_last_cancel_before_returning() {
     TestResult result;
     result.test_name = "stop_sends_the_last_cancel_before_returning";
@@ -624,7 +653,7 @@ TestResult test_stop_sends_the_last_cancel_before_returning() {
         result.details = "Stop() returned without sending the abandoned request's cancel";
         return result;
     }
-    if (took > std::chrono::milliseconds(3500)) {
+    if (took > std::chrono::milliseconds(4500)) {
         result.details = "Stop() took " + std::to_string(took.count()) + " ms";
         return result;
     }
@@ -708,6 +737,7 @@ TestResult test_stopping_during_prefill_does_not_wait_for_the_first_token() {
 int main(int argc, char** argv) {
     TestSuite suite("wally_anthropic");
     suite.add("overload_headers_survive_streaming", test_overload_headers_survive_streaming);
+    suite.add("prefill_sends_keepalive_comments", test_prefill_sends_keepalive_comments);
     suite.add("sequential_requests_reuse_the_upstream_connection",
               test_sequential_requests_reuse_the_upstream_connection);
     suite.add("concurrent_requests_use_separate_connections",

@@ -1,12 +1,14 @@
 #ifndef WALLY_HARNESS_HARNESS_H
 #define WALLY_HARNESS_HARNESS_H
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "account/console.h"
 #include "account/credentials.h"
+#include "bootstrap.h"
 
 /// Launching a coding tool against a model, whether that model runs here or
 /// upstream.
@@ -30,6 +32,9 @@ struct Endpoint {
     std::string console_url;
     /// True when `Resolve` started a server that `Release` has to stop.
     bool serving = false;
+    /// The limits of the running local server (zero for a hosted endpoint).
+    std::int64_t context_window = 0;
+    std::int64_t max_output = 0;
 };
 
 /// Whether `id` is safe to carry into a live editor/agent session: forwarded
@@ -67,7 +72,9 @@ bool VerifyCloudSession(const account::ConsoleClient& console, account::Credenti
 /// from launching anything — and callers that go on to do something
 /// destructive (quitting a running editor) must not do it until this returns
 /// true.
-bool Resolve(const std::string& model, Endpoint* endpoint);
+bool Resolve(const std::string& model, Endpoint* endpoint,
+             const GlobalOptions& options = {},
+             const std::string& harness_command = {});
 
 /// Stops whatever `Resolve` started. Safe on an endpoint it did not serve.
 void Release(const Endpoint& endpoint);
@@ -119,7 +126,7 @@ bool RefreshAndRecheckModel(const account::Credentials& credentials, const std::
 /// An empty `model` uses whatever the tool is already configured for, which
 /// makes `wally opencode` a plain passthrough.
 int Launch(const std::string& tool, const std::string& model,
-           const std::vector<std::string>& args);
+           const std::vector<std::string>& args, const GlobalOptions& options = {});
 
 }  // namespace wally::harness
 

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -44,6 +45,8 @@ using wally_socklen_t = socklen_t;
 #include "harness/catalog_models.h"
 #include "catalog/catalog.h"
 #include "harness/local_models.h"
+#include "harness/opencode.h"
+#include "util/term.h"
 
 namespace wally::harness {
 
@@ -136,6 +139,7 @@ bool BuildBatchCommandLine(const std::string& script, const std::vector<std::str
 
 namespace {
 
+constexpr int32_t kMinimumCodingHarnessContext = 16384;
 
 /// A port nothing is listening on, found by letting the OS pick one and giving
 /// it straight back. There is a race between closing and the server binding,
@@ -184,51 +188,17 @@ int FreePort() {
     return port;
 }
 
-/// JSON string escaping, for the handful of characters that can appear in a
-/// model id, a path or a key. Not a general encoder: it exists so a Windows
-/// path with backslashes does not silently produce invalid config.
-std::string Quote(const std::string& text) {
-    std::string out = "\"";
-    for (const char c : text) {
-        switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default: out += c;
-        }
-    }
-    return out + "\"";
-}
-
-/// The provider block opencode reads out of OPENCODE_CONFIG_CONTENT.
-///
-/// Inline rather than a file on purpose: writing to the user's project or to
-/// ~/.config/opencode would outlive the session and change how opencode behaves
-/// when they run it themselves.
-std::string OpencodeConfig(const std::string& primary, const std::string& base_url,
-                           const std::string& api_key, const std::vector<CatalogModel>& models) {
-    // A key is always present because opencode's OpenAI client sends an
-    // Authorization header regardless; a local server ignores what is in it.
-    const std::string key = api_key.empty() ? std::string("local") : api_key;
-    // Every catalog model is a selectable entry so opencode's picker lists them
-    // all; `primary` stays the default selection.
-    std::string entries;
-    for (const CatalogModel& entry : models) {
-        if (!entries.empty()) {
-            entries += ",";
-        }
-        entries += Quote(entry.id) + ":{\"name\":" + Quote(entry.id) + "}";
-    }
-    return std::string("{\"provider\":{\"runanywhere\":{") +
-           "\"npm\":\"@ai-sdk/openai-compatible\"," + "\"name\":\"RunAnywhere\"," +
-           "\"options\":{\"baseURL\":" + Quote(base_url) + ",\"apiKey\":" + Quote(key) + "}," +
-           "\"models\":{" + entries + "}}}," +
-           "\"model\":" + Quote("runanywhere/" + primary) + "}";
-}
-
 constexpr const char* kConfigVariable = "OPENCODE_CONFIG_CONTENT";
+
+bool ConfirmModelPull(const std::string& model) {
+    std::fprintf(stderr, "%s is not installed. Download it now? [y/N] ",
+                 model.c_str());
+    std::fflush(stderr);
+    std::string answer;
+    return std::getline(std::cin, answer) &&
+           !answer.empty() &&
+           (answer.front() == 'y' || answer.front() == 'Y');
+}
 
 void SetConfigVariable(const std::string& value) {
 #if defined(_WIN32)
@@ -659,7 +629,8 @@ bool VerifyCloudSession(const account::ConsoleClient& console, account::Credenti
     return true;
 }
 
-bool Resolve(const std::string& model, Endpoint* endpoint) {
+bool Resolve(const std::string& model, Endpoint* endpoint, const GlobalOptions& options,
+             const std::string& harness_command) {
     if (endpoint == nullptr || model.empty()) {
         return false;
     }
@@ -671,7 +642,7 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
     // CLI's own lazy Start(), and bootstrap is also what resolves the storage
     // home the model walk below needs.
     Bootstrapped env;
-    if (bootstrap(GlobalOptions{}, &env) != RAC_SUCCESS) {
+    if (bootstrap(options, &env) != RAC_SUCCESS) {
         return false;
     }
 
@@ -679,12 +650,14 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
     std::string api_key;
     std::string console_url;
     bool serving = false;
+    std::int64_t context_window = 0;
 
-    // The names a person types (`bonsai-27b`, `mlx-qwen3-0.6b`, `qwen3`) are
+    // The names a person types (`qwen3-4b-instruct-2507`,
+    // `mlx-qwen3-4b-instruct-2507`, `qwen3-4b-instruct`) are
     // catalog ids, aliases and `models list` merge keys; the directory on disk
-    // is the registry id (`mlx-qwen3-0.6b-4bit`). Accept every spelling the
-    // catalog does, the same way `run` and `models pull` do, and prefer a
-    // downloaded variant of a merged row over one that is not here.
+    // is the registry id (`mlx-qwen3-4b-instruct-2507-4bit`). Accept every
+    // spelling the catalog does, the same way `run` and `models pull` do, and
+    // prefer a downloaded variant of a merged row over one that is not here.
     std::vector<std::string> wanted{model};
     if (const catalog::CatalogEntry* entry = catalog::find(model)) {
         wanted.push_back(entry->id);
@@ -715,6 +688,17 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
     }
 
     if (local != nullptr) {
+        const catalog::CatalogEntry* local_entry = catalog::find(local->id);
+        if (local_entry == nullptr || !local_entry->harness_compatible) {
+            out::error_line(
+                "This model is not certified for coding harnesses. Tool calls or long-context "
+                "operation may fail.");
+            const std::string command =
+                harness_command.empty() ? "opencode" : harness_command;
+            out::status_line("Try: wally " + command +
+                             " -m qwen3-4b-instruct-2507");
+            return false;
+        }
         // A directory with the manifest but no weights is a pull that did not
         // finish. Serving it fails inside llama.cpp with "No .gguf file found",
         // which reads as a bug; say what it is instead.
@@ -723,14 +707,6 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
             out::status_line("run `wally models pull " + model + "` to finish it");
             return false;
         }
-        // Coding tools are cloud-only this release. A local model is refused
-        // outright rather than gated: the kit's local server re-reads the whole
-        // conversation every turn and leaks a reasoning model's thinking into
-        // the reply, so an agent degrades from the second turn on. `wally run`
-        // still takes any local model; the harnesses take a hosted one.
-        out::error_line(model + " is on this machine, but coding tools run on hosted models only");
-        out::status_line("sign in and use one: `wally account login`, then `wally opencode --cloud -m glm-5.3-flash`");
-        return false;
         // Any backend the kit registered. The server's rac_llm_create(path)
         // looks the path up in the registry and routes on the framework it
         // finds ("Found model by path ... framework=7 ... Routed to plugin:
@@ -770,16 +746,68 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
         // request is a 15k-token system prompt, and the fixed 8k this used to
         // pass rejected it. See LocalContextSize.
         config.context_size = static_cast<int32_t>(LocalContextSize(local->id));
-        out::status_line("serving " + model + " on 127.0.0.1:" + std::to_string(port) + " (" +
-                         std::to_string(config.context_size) + " token context)");
-        if (rac_server_start(&config) != RAC_SUCCESS) {
-            out::error_line("the local server would not start for " + model);
+        config.threads = 0;  // Let the backend choose for this machine.
+        config.enable_cors = RAC_FALSE;
+        config.verbose = options.verbose ? RAC_TRUE : RAC_FALSE;
+        out::status_line("loading " + model + " on 127.0.0.1:" + std::to_string(port) +
+                         " (requesting " + std::to_string(config.context_size) +
+                         " token context)");
+        const rac_result_t started = rac_server_start(&config);
+        if (started != RAC_SUCCESS) {
+            out::error_line("the local server would not start for " + model + ": " +
+                            out::describe_result(started));
+            out::status_line("check `wally models show " + model + "` and finish its download "
+                             "with `wally models pull " + model + "` (using the same --home)");
             return false;
+        }
+        int32_t loaded_context = 0;
+        const rac_result_t context_result = rac_server_get_context_length(&loaded_context);
+        if (context_result == RAC_SUCCESS) {
+            if (loaded_context < kMinimumCodingHarnessContext) {
+                rac_server_stop();
+                out::error_line("This model can use a " + std::to_string(loaded_context) +
+                                "-token context on this machine, but coding harnesses require at "
+                                "least " +
+                                std::to_string(kMinimumCodingHarnessContext) + " tokens.");
+                out::status_line(
+                    "Use a machine with more available memory, or run it directly with "
+                    "`wally run " + model + "`.");
+                return false;
+            }
+            if (loaded_context != config.context_size) {
+                out::status_line("this machine allocated " + std::to_string(loaded_context) +
+                                 " tokens from the requested " +
+                                 std::to_string(config.context_size));
+            }
+            context_window = loaded_context;
+        } else {
+            out::status_line(
+                "Wally could not determine the loaded context; using the requested limit");
+            context_window = config.context_size;
         }
         serving = true;
         base_url = "http://127.0.0.1:" + std::to_string(port) + "/v1";
 #endif  // WALLY_HAS_SERVER
     } else {
+        const catalog::CatalogEntry* requested = catalog::find(model);
+        if (requested != nullptr && requested->harness_compatible) {
+            if (!term::stdin_is_tty()) {
+                out::error_line(model + " is not downloaded on this machine");
+                out::status_line("run `wally models pull " + model +
+                                 "` first (using the same --home)");
+                return false;
+            }
+            if (!ConfirmModelPull(model)) {
+                out::status_line("download cancelled; run `wally models pull " +
+                                 model + "` when ready");
+                return false;
+            }
+            if (commands::pull_model_flow(options, requested->id) != 0) {
+                return false;
+            }
+            return Resolve(model, endpoint, options, harness_command);
+        }
+
         account::Credentials credentials;
         std::string load_error;
         if (!account::Load(&credentials, &load_error)) {
@@ -787,7 +815,16 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
             return false;
         }
         if (!credentials.signed_in()) {
-            ReportNotSignedIn();
+            // A known local model that has not been pulled should not send a
+            // keyless user into the cloud login flow. Signed-in users still
+            // get the normal catalog refresh for a hosted id of this spelling.
+            if (catalog::find(model) != nullptr || wanted.size() > 1) {
+                out::error_line(model + " is not downloaded on this machine");
+                out::status_line("run `wally models pull " + model +
+                                 "` first (using the same --home)");
+            } else {
+                ReportNotSignedIn();
+            }
             return false;
         }
         // Keep the catalog fresh for next time without blocking this launch, and
@@ -836,6 +873,8 @@ bool Resolve(const std::string& model, Endpoint* endpoint) {
     endpoint->api_key = api_key;
     endpoint->console_url = console_url;
     endpoint->serving = serving;
+    endpoint->context_window = context_window;
+    endpoint->max_output = LocalOutputSize(context_window);
     return true;
 }
 
@@ -910,7 +949,7 @@ bool RefreshAndRecheckModel(const account::Credentials& credentials, const std::
 }
 
 int Launch(const std::string& tool, const std::string& model,
-           const std::vector<std::string>& args) {
+           const std::vector<std::string>& args, const GlobalOptions& options) {
     if (model.empty()) {
         // Nothing to wire, so do not pretend to: run the tool as the user has
         // it configured.
@@ -918,12 +957,12 @@ int Launch(const std::string& tool, const std::string& model,
     }
 
     Endpoint endpoint;
-    if (!Resolve(model, &endpoint)) {
+    if (!Resolve(model, &endpoint, options, tool)) {
         return 1;
     }
 
     const std::string config =
-        OpencodeConfig(model, endpoint.base_url, endpoint.api_key, CatalogModels(endpoint, model));
+        BuildOpenCodeConfig(model, endpoint.base_url, endpoint.api_key, CatalogModels(endpoint, model));
     const char* previous = std::getenv(kConfigVariable);
     const std::string restored = previous != nullptr ? previous : std::string();
     const bool had_previous = previous != nullptr;

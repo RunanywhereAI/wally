@@ -31,10 +31,14 @@ std::vector<LocalModel> LocalModels(const std::string& home);
 /// tokens. Sized from this machine's memory in tiers (8k / 16k / 32k / 64k),
 /// because a coding agent's first request is a 15k-token system prompt and a
 /// fixed 8k window rejected it outright. Capped at the model's own window when
-/// the catalog knows it, never below 8192, which is what every launch used
-/// before. One function, so the server, the picker's declared limits, and the
+/// the catalog knows it (even when that is below the 8k memory tier).
+/// One function, so the server, the picker's declared limits, and the
 /// shim all quote the same number.
 std::int64_t LocalContextSize(const std::string& model_id);
+
+/// Leave most of a local context for the coding prompt and conversation.
+/// Zero means no local context was configured (a hosted endpoint).
+std::int64_t LocalOutputSize(std::int64_t context_window);
 
 }  // namespace wally::harness
 

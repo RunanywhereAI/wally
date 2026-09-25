@@ -37,6 +37,12 @@ int32_t ra_mlx_metal_resource_anchor(void) {
     if (directory == nil) {
         return 0;
     }
+    // MLX tries this physical-executable-relative path before SwiftPM bundles.
+    // Unlike NSBundle.mainBundle, it also works through an install symlink.
+    NSURL *colocated = [directory URLByAppendingPathComponent:@"mlx.metallib"];
+    if ([NSFileManager.defaultManager fileExistsAtPath:colocated.path]) {
+        return 1;
+    }
     if ([NSBundle.mainBundle URLForResource:@"default" withExtension:@"metallib"] != nil) {
         return 1;
     }

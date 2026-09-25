@@ -223,6 +223,12 @@ std::filesystem::path OpenClawStateDirectory() {
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != 0) {
         return std::filesystem::path(home) / ".openclaw";
     }
+#if defined(_WIN32)
+    // PowerShell and cmd.exe leave HOME unset; openclaw falls back to the profile.
+    if (const char* profile = std::getenv("USERPROFILE"); profile != nullptr && *profile != 0) {
+        return std::filesystem::path(profile) / ".openclaw";
+    }
+#endif
     return {};
 }
 
@@ -241,7 +247,9 @@ ModelLimits LookupLimits(const Endpoint& endpoint, const std::string& model) {
     ModelLimits limits;
     if (endpoint.api_key.empty()) {
         // The size `harness::Resolve` started the local server with.
-        limits.context_window = LocalContextSize(model);
+        const CatalogModel local = CatalogModels(endpoint, model).front();
+        limits.context_window = local.context_window;
+        limits.max_output = local.max_output;
         return limits;
     }
 
@@ -518,7 +526,7 @@ std::string BuildDeepSeekPatch(const std::string& settings_path, const std::stri
 }
 
 int LaunchAgent(const Agent& agent, const std::string& model,
-                const std::vector<std::string>& args) {
+                const std::vector<std::string>& args, const GlobalOptions& options) {
     if (model.empty()) {
         // Nothing to wire, so do not pretend to. Same contract as
         // `wally opencode` with no model.
@@ -526,7 +534,7 @@ int LaunchAgent(const Agent& agent, const std::string& model,
     }
 
     Endpoint endpoint;
-    if (!Resolve(model, &endpoint)) {
+    if (!Resolve(model, &endpoint, options, agent.id)) {
         return 1;
     }
     const std::vector<std::string> child_args = EffectiveArgs(agent, args);

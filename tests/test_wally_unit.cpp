@@ -306,6 +306,18 @@ TestResult test_state_dir() {
       return result;
     }
   }
+  {
+    // MSYS2 / Git Bash set HOME on Windows. It must not win over LOCALAPPDATA,
+    // or state lands in a POSIX-shaped directory under the user profile.
+    EnvVar xdg("XDG_STATE_HOME", nullptr);
+    EnvVar home("HOME", "C:/msys-home");
+    EnvVar local("LOCALAPPDATA", "C:/wally-local");
+    const std::string state = wally::paths::state_dir();
+    if (state != "C:/wally-local/RunAnywhere/state") {
+      result.details = "HOME should not win over LOCALAPPDATA, got " + state;
+      return result;
+    }
+  }
 #endif
   result.passed = true;
   return result;
@@ -374,6 +386,18 @@ TestResult test_catalog_lookup() {
     return result;
   }
 
+#if defined(WALLY_HAS_LLAMACPP)
+  const wally::catalog::CatalogEntry *qwen_harness =
+      wally::catalog::find("qwen3-4b-instruct");
+  if (!qwen_harness || !qwen_harness->harness_compatible ||
+      qwen_harness->context_length != 262144 ||
+      wally::catalog::find("qwen3-1.7b") != nullptr) {
+    result.details =
+        "only the certified Qwen3 4B GGUF row should remain harness-compatible";
+    return result;
+  }
+#endif
+
   // Multi-file entries (VLM pairs, embeddings) must carry ≥2 required files.
   // smolvlm2 is a VLM, out of scope for the LLM-only cut (src/app.cpp,
   // src/catalog/catalog.cpp) -- commented out, not deleted, so it comes back
@@ -395,6 +419,16 @@ TestResult test_catalog_lookup() {
       mlx_llm->files == nullptr || mlx_llm->file_count != 9 ||
       !mlx_llm->supports_thinking) {
     result.details = "mlx-qwen3 should be a complete MLX language bundle";
+    return result;
+  }
+  const wally::catalog::CatalogEntry *mlx_qwen_harness =
+      wally::catalog::find("mlx-qwen3-4b-instruct");
+  if (!mlx_qwen_harness || !mlx_qwen_harness->harness_compatible ||
+      mlx_qwen_harness->file_count != 11 ||
+      mlx_qwen_harness->context_length != 262144 ||
+      wally::catalog::find("mlx-qwen3-1.7b") != nullptr) {
+    result.details =
+        "only the certified Qwen3 4B MLX row should remain harness-compatible";
     return result;
   }
 #else
@@ -2857,6 +2891,13 @@ TestResult test_passthrough_argv_split() {
       // Only wally flags: nothing to forward, no -- added.
       {{"wally", "claude-code", "-m", "glm-5.3-flash"},
        {"wally", "claude-code", "-m", "glm-5.3-flash"}},
+      // Help before tool arguments belongs to wally, even without a model or
+      // an installed harness. An explicit -- still requests the tool's help.
+      {{"wally", "opencode", "--help"}, {"wally", "opencode", "--help"}},
+      {{"wally", "claude-code", "-m", "qwen3-0.6b", "-h"},
+       {"wally", "claude-code", "-m", "qwen3-0.6b", "-h"}},
+      {{"wally", "opencode", "--", "--help"}, {"wally", "opencode", "--", "--help"}},
+      {{"wally", "opencode", "run", "--help"}, {"wally", "opencode", "--", "run", "--help"}},
       // Not a passthrough command: untouched.
       {{"wally", "run", "qwen3-0.6b", "hi"}, {"wally", "run", "qwen3-0.6b", "hi"}},
   };

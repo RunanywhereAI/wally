@@ -7,27 +7,28 @@
 
 [product]
 # wally's own release version; git tag is v<version> (auto-tag.yml reads it here).
-version = "0.6.0"
+version = "0.6.1"
 
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.
-kit_version = "0.20.37"
-kit_release_tag = "cpp-desktop-v0.20.37"
-idl_version = "1.2.0"
-idl_schema_sha256 = "571199c430eead0638472fc55355513831aeb2139e6fee5d5cd841f1b01d5a43"
+kit_version = "0.20.38"
+kit_release_tag = "cpp-desktop-v0.20.38"
+idl_version = "1.3.0"
+idl_schema_sha256 = "9dcf42f472090813edc5b76c8d4711b9e32813f29808a657baf317f5ad07d473"
 idl_protoc_version = "35.1"
-kit_sha256_macos_arm64 = "d0cdcee4217d251742bc9bc0790d3377123b7dda644e5671ae79de42c852b56b"
-kit_sha256_windows_x64 = "017a2ff1814d8261444338399d6984d5eb17442bae0da0c7525f942bdd58cca9"
-kit_sha256_windows_arm64 = "36372f8e6e404a2cb25f22aae5b372eef64e9f05ca58b985a1c872610c2b3e65"
-kit_sha256_linux_x64 = "4fa3c045df3747e72696738200736bacba471f3ee9c2ed641abb514d761fde11"
+kit_sha256_macos_arm64 = "8e45a36b7d5dc12d76c29659b158d95d72cf171649d0ad961637cdfee09219a5"
+kit_sha256_windows_x64 = "250d974c08f791ce6dd066e4115124b4b88955a959d68b80b89ff6d531998acb"
+kit_sha256_windows_arm64 = "d0a6a2a241052278b2689a960ec7fcb9c066e29b9d9e5a8206d87e7946dce956"
+kit_sha256_linux_x64 = "bfa4a2bfde01c6ea352ec6b04d1b18832eb9ff03015c34b040216651e7fabf32"
 
 [swift]
 # The Apple MLX host's Swift SDK: sdk_package_version pins swift/Package.swift,
-# sdk_ci_ref is the runanywhere-sdks tag ci.yml/release.yml check out. Both move
+# sdk_ci_ref is the complete runanywhere-sdks checkout ref (tag or commit SHA)
+# used by ci.yml/release.yml. Keep the leading v on tags. Both move
 # on their own cadence, distinct from the C++ kit above.
-sdk_package_version = "0.20.25"
+sdk_package_version = "0.20.37"
 tools_version = "6.0"
-sdk_ci_ref = "0.20.31"
+sdk_ci_ref = "b3a2b0147d8c66190c14a53bc04286efd6a4d64a"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
@@ -42,3 +43,6 @@ macos_oss = "macos-14"
 windows_x64 = "windows-2022"
 windows_arm64 = "windows-11-arm"
 linux = "ubuntu-24.04"
+# Published Linux artifacts target this older ABI baseline; test-only jobs may
+# use the newer image above.
+linux_compat = "ubuntu-22.04"

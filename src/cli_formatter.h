@@ -3,8 +3,8 @@
  * @brief `--help` layout for wally: a `Usage:` line, sentence-case section
  * headings, one `-m, --model TEXT` column for options, commands grouped by
  * intent with namespaces shown as full paths (`models pull`), and a verbatim
- * `Examples:` footer. On a terminal, headings are bold and anything typeable
- * is cyan; anywhere else the text is plain and byte-identical.
+ * `Examples:` footer with copyable commands. On a terminal, headings are bold
+ * and anything typeable is cyan; anywhere else the text is plain and byte-identical.
  */
 
 #ifndef WALLY_CLI_FORMATTER_H
@@ -18,7 +18,7 @@
 namespace wally {
 
 // True when ANSI color is safe to emit on stdout: not forced off by
-// --no-color or NO_COLOR, and stdout is actually a terminal. Piped or
+// --no-color, NO_COLOR, or TERM=dumb, and stdout is actually a terminal. Piped or
 // redirected output (CI logs, `| cat`, a file) always gets plain text.
 bool color_output_enabled(bool no_color_flag);
 
@@ -42,17 +42,17 @@ Palette make_palette(bool enabled);
 
 }  // namespace cli_color
 
-// One line of an `Examples:` block: the command, and an optional note that
+// One entry in an `Examples:` block: the command, and an optional note that
 // says what it does.
 struct Example {
     std::string command;
     std::string note;
 };
 
-// The `Examples:` footer a command's help ends with. Commands sit at a
-// two-space indent and every note starts at the same column, so the block
-// reads as a table whichever command it is under. No trailing newline.
-std::string examples_footer(const std::vector<Example>& rows);
+// The footer a command's help ends with. Notes are wrapped shell comments
+// above their commands, which stay intact for copying. No trailing newline.
+std::string examples_footer(const std::vector<Example>& rows,
+                            const std::string& heading = "Examples");
 
 // Overrides CLI::Formatter to lay help out the way every wally command shows
 // it: description, `Usage: wally ...`, Arguments, Options, Commands (with one
@@ -77,6 +77,10 @@ class CliFormatter : public CLI::Formatter {
     std::string make_option_opts(const CLI::Option* opt) const override;
 
   private:
+    // Apply the same heading/command palette to the preformatted footer while
+    // preserving its whitespace and copyable examples.
+    std::string style_footer(const std::string& footer) const;
+
     // Renders one command row at a chosen left indent, so a parent prints at
     // "  " and its subcommands print nested beneath at a deeper indent. The
     // description column is the same for every row regardless of indent, which

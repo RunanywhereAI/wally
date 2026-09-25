@@ -52,6 +52,8 @@ struct CatalogEntry {
   // nullptr → the row stands alone under its own id. `models list` groups by this
   // and joins the backends into one row (e.g. "mlx/llama.cpp").
   const char *merge_key = nullptr;
+  // Proven by the local coding-harness compatibility matrix for this exact artifact.
+  bool harness_compatible = false;
 };
 
 /** All built-in entries. */

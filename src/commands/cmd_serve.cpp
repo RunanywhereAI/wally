@@ -29,7 +29,7 @@ namespace wally::commands {
 
 namespace {
 
-constexpr const char* kDefaultServeModel = "qwen3-0.6b";
+constexpr const char* kDefaultServeModel = "qwen3-4b-instruct-2507";
 
 #if defined(WALLY_HAS_SERVER)
 
@@ -107,7 +107,7 @@ void register_serve(CLI::App& app, GlobalOptions& options) {
     CLI::App* cmd = app.add_subcommand("serve", "Serve a model over an OpenAI-compatible API");
 #if defined(WALLY_HAS_SERVER)
     cmd->footer(examples_footer({
-        {"wally serve qwen3-0.6b", ""},
+        {"wally serve qwen3-4b-instruct-2507", ""},
         {"wally serve granite-4.2-8b --port 8000", ""},
     }));
     auto ref = std::make_shared<std::string>();

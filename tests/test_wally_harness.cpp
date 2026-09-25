@@ -12,6 +12,8 @@
 #include "harness/agents.h"
 #include "harness/harness.h"
 #include "harness/local_models.h"
+#include "harness/opencode.h"
+#include "rac/core/rac_platform_adapter.h"
 
 namespace {
 
@@ -808,30 +810,72 @@ TestResult test_deepseek_prompt_picks_headless() {
 }
 
 
-// The context a local server is started with never drops below the 8192 every
-// launch used before, and never exceeds what the catalog says the model was
-// trained on. The RAM tier in between depends on the machine, so only the two
-// bounds and the unknown-model path are pinned here.
+// A memory budget never overrides a model's own supported window.
 TestResult test_local_context_size_respects_floor_and_model_window() {
     TestResult result;
     result.test_name = "local_context_size_respects_floor_and_model_window";
+    const std::int64_t tier = wally::harness::LocalContextSize("unknown-test-model");
+    if (tier < 8192) {
+        result.details = "unknown models must retain the minimum memory tier";
+        return result;
+    }
+    // A public Windows ARM64 kit ships no llama.cpp. The same catalog filter
+    // used by `models list` then makes these GGUF ids unknown, so their honest
+    // fallback is the memory tier rather than an unsupported backend's limits.
+#if defined(WALLY_HAS_LLAMACPP)
+    const auto qwen_expected = std::min<std::int64_t>(tier, 32768);
+    constexpr std::int64_t bonsai_expected = 4096;
+#else
+    const auto qwen_expected = tier;
+    const auto bonsai_expected = tier;
+#endif
+    if (wally::harness::LocalContextSize("qwen3-0.6b") != qwen_expected ||
+        wally::harness::LocalContextSize("bonsai-27b") != bonsai_expected) {
+        result.details = "enabled catalog models must cap the memory tier; unavailable models use the tier";
+        return result;
+    }
+#if defined(WALLY_HAS_MLX)
+    if (wally::harness::LocalContextSize("mlx-qwen3-0.6b-4bit") !=
+            std::min<std::int64_t>(tier, 32768) ||
+        wally::harness::LocalContextSize("mlx-bonsai-27b-1bit") != 4096) {
+        result.details = "MLX context caps must match the enabled catalog";
+        return result;
+    }
+#endif
+    result.passed = true;
+    return result;
+}
 
-    // qwen3-0.6b's catalog window is 4096, below the floor: the floor wins.
-    if (wally::harness::LocalContextSize("qwen3-0.6b") != 8192) {
-        result.details = "a model window under 8192 must not pull the server below the floor";
+TestResult test_local_endpoint_limits_reach_every_harness() {
+    TestResult result;
+    result.test_name = "local_endpoint_limits_reach_every_harness";
+    wally::harness::Endpoint endpoint;
+    endpoint.serving = true;
+    endpoint.base_url = "http://127.0.0.1:43210/v1";
+    endpoint.context_window = 32768;
+    endpoint.max_output = 4096;
+    const auto catalog = wally::harness::CatalogModels(endpoint, "qwen3");
+    const auto open = Json::parse(wally::harness::BuildOpenCodeConfig(
+        "qwen3", endpoint.base_url, "", catalog));
+    const auto& provider = open["provider"]["runanywhere"];
+    const auto claw = Json::parse(wally::harness::BuildOpenClawConfig(
+        "", "qwen3", endpoint.base_url, "", catalog));
+    const auto deepseek = Json::parse(wally::harness::BuildDeepSeekSettings(
+        endpoint.base_url, "TEST_KEY", catalog));
+    if (catalog.size() != 1 || catalog.front().context_window != 32768 ||
+        provider["options"]["apiKey"] != "local" ||
+        provider["models"]["qwen3"]["limit"] != Json({{"context", 32768}, {"output", 4096}}) ||
+        claw["models"]["providers"]["runanywhere"]["models"][0]["maxTokens"] != 4096 ||
+        deepseek["llm-pi-ai"]["providers"]["runanywhere"]["models"][0]["maxTokens"] != 4096) {
+        result.details = "all harnesses must use the server's actual limits even for aliases";
         return result;
     }
-    // A model the catalog has never heard of gets the machine's tier, which is
-    // at least the floor and a power of two the server accepts.
-    const std::int64_t unknown = wally::harness::LocalContextSize("hf.co/someone/some-model");
-    if (unknown < 8192 || (unknown & (unknown - 1)) != 0) {
-        result.details = "an unknown model must get the RAM tier, >= 8192 and a power of two";
-        return result;
-    }
-    // A catalog model is never given more than the tier an unknown one gets.
-    if (wally::harness::LocalContextSize("bonsai-27b") > unknown) {
-        result.details = "a catalog model must not exceed the machine's tier";
-        return result;
+    for (const auto context : {4096LL, 8192LL, 32768LL, 65536LL}) {
+        const auto output = wally::harness::LocalOutputSize(context);
+        if (output <= 0 || output > 4096 || output >= context) {
+            result.details = "output must leave room for the coding prompt and history";
+            return result;
+        }
     }
     result.passed = true;
     return result;
@@ -915,6 +959,7 @@ TestResult test_windows_args_survive_the_spawn_command_line() {
 
 int main(int argc, char** argv) {
     TestSuite suite("wally_harness");
+    suite.add("local_endpoint_limits_reach_every_harness", test_local_endpoint_limits_reach_every_harness);
     suite.add("local_context_size_respects_floor_and_model_window",
               test_local_context_size_respects_floor_and_model_window);
     suite.add("model_id_rejects_empty_and_control_characters",

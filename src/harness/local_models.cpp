@@ -144,7 +144,11 @@ std::int64_t LocalContextSize(const std::string& model_id) {
             window = std::min(tier, static_cast<std::int64_t>(entry->context_length));
         }
     }
-    return std::max(kFloor, window);
+    return window;
+}
+
+std::int64_t LocalOutputSize(std::int64_t context_window) {
+    return context_window > 1 ? std::min<std::int64_t>(4096, context_window / 4) : 0;
 }
 
 }  // namespace wally::harness

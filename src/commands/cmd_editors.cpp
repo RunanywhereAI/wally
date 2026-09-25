@@ -200,8 +200,16 @@ std::string PrepareClaudeConfigDir() {
     std::error_code ec;
 
     const char* home = std::getenv("HOME");
-    const fs::path og_dir = home != nullptr ? fs::path(home) / ".claude" : fs::path();
-    const fs::path og_json = home != nullptr ? fs::path(home) / ".claude.json" : fs::path();
+#if defined(_WIN32)
+    // PowerShell and cmd.exe leave HOME unset; Claude Code's home there is the profile.
+    if (home == nullptr || *home == 0) {
+        home = std::getenv("USERPROFILE");
+    }
+#endif
+    // An empty value would resolve against the working directory, so treat it as unset.
+    const bool has_home = home != nullptr && *home != 0;
+    const fs::path og_dir = has_home ? fs::path(home) / ".claude" : fs::path();
+    const fs::path og_json = has_home ? fs::path(home) / ".claude.json" : fs::path();
 
     const bool first_run = !fs::exists(ours, ec);
     fs::create_directories(ours, ec);
@@ -301,13 +309,14 @@ std::int64_t CloudContextWindow(const std::string& model) {
 /// Worth having beyond debugging: it is how anything that speaks the Anthropic
 /// API but is not on the list above gets wired up, without wally needing to know
 /// that tool exists.
-int Serve(const std::string& model, bool verbose) {
+int Serve(const Editor& editor, const std::string& model,
+          const GlobalOptions& options) {
     harness::Endpoint endpoint;
-    if (!harness::Resolve(model, &endpoint)) {
+    if (!harness::Resolve(model, &endpoint, options, editor.id)) {
         return 1;
     }
     anthropic::Shim shim;
-    if (!anthropic::Start(endpoint, model, &shim, verbose)) {
+    if (!anthropic::Start(endpoint, model, &shim, options.verbose)) {
         harness::Release(endpoint);
         return 1;
     }
@@ -335,7 +344,7 @@ int Restore(const Editor& editor) {
 }
 
 int Run(const Editor& editor, const std::string& model,
-        const std::vector<std::string>& args, bool verbose) {
+        const std::vector<std::string>& args, const GlobalOptions& options) {
     const bool is_bundle = editor.bundle[0] != '\0';
     std::string bundle;
     if (is_bundle) {
@@ -359,7 +368,7 @@ int Run(const Editor& editor, const std::string& model,
     }
 
     harness::Endpoint endpoint;
-    if (!harness::Resolve(model, &endpoint)) {
+    if (!harness::Resolve(model, &endpoint, options, editor.id)) {
         return 1;
     }
 
@@ -385,7 +394,7 @@ int Run(const Editor& editor, const std::string& model,
     }
 
     anthropic::Shim shim;
-    if (!anthropic::Start(endpoint, model, &shim, verbose, advertised, desktop_aliases)) {
+    if (!anthropic::Start(endpoint, model, &shim, options.verbose, advertised, desktop_aliases)) {
         harness::Release(endpoint);
         return 1;
     }
@@ -436,13 +445,12 @@ int Run(const Editor& editor, const std::string& model,
         // so there is no claude.ai session to collide with (no warning) but their
         // settings and memory still apply. See PrepareClaudeConfigDir.
         const ScopedEnv config_dir("CLAUDE_CONFIG_DIR", PrepareClaudeConfigDir());
-        // The real context window, for an upstream model, so Claude Code's
-        // auto-compaction fires at the model's limit rather than its own guess.
-        // Only for a hosted model (a local one is not in `/v1/models`), and only
-        // when the catalog actually answered — a miss just launches as before.
+        // Claude Code budgets against the local server's configured window,
+        // or the hosted catalog when available.
         std::optional<ScopedEnv> context_window;
-        if (!endpoint.serving) {
-            const std::int64_t context = CloudContextWindow(model);
+        {
+            const std::int64_t context = endpoint.serving ? endpoint.context_window
+                                                         : CloudContextWindow(model);
             if (context > 0) {
                 context_window.emplace("CLAUDE_CODE_MAX_CONTEXT_TOKENS", std::to_string(context));
                 out::status_line("context window: " + std::to_string(context) + " tokens");
@@ -550,7 +558,8 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
         auto* command = app.add_subcommand(editor.id, editor.summary);
         const std::string invocation = "wally " + std::string(editor.id);
         command->footer(examples_footer({
-            {invocation + " -m qwen3-0.6b", "A model on this machine"},
+            {invocation + " -m qwen3-4b-instruct-2507",
+             "The certified local coding model"},
             {invocation + " -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
         }));
         command->add_option("-m,--model", *model,
@@ -596,8 +605,8 @@ void register_editors(CLI::App& app, GlobalOptions& options) {
                 return;
             }
             const std::string effective = ResolveDefaultModel(*model, options.no_color);
-            fail(*serve ? Serve(effective, options.verbose)
-                        : Run(editor, effective, *rest, options.verbose));
+            fail(*serve ? Serve(editor, effective, options)
+                        : Run(editor, effective, *rest, options));
         });
     }
 }

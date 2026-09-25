@@ -68,7 +68,15 @@ std::vector<CatalogModel> CatalogModels(const std::string& console_url,
 
 std::vector<CatalogModel> CatalogModels(const Endpoint& endpoint, const std::string& primary) {
     if (endpoint.api_key.empty()) {
-        return {CatalogModel{primary, LocalContextSize(primary), 0, 0, 0}};
+        // Use the exact selected backend's limits, including when `primary`
+        // is an alias or merged model id. Recomputing from that spelling can
+        // produce a different window from the server we already started.
+        const std::int64_t context = endpoint.context_window > 0
+                                         ? endpoint.context_window
+                                         : LocalContextSize(primary);
+        const std::int64_t output = endpoint.max_output > 0
+                                        ? endpoint.max_output : LocalOutputSize(context);
+        return {CatalogModel{primary, context, output, 0, 0}};
     }
     return CatalogModels(endpoint.console_url, endpoint.api_key, primary);
 }

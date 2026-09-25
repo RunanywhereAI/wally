@@ -1,4 +1,4 @@
-# Editors, coding agents and hosted models
+# Editors, coding agents and local or hosted models
 
 How `wally` wires each tool, and where a signed-in session lives.
 
@@ -8,10 +8,10 @@ One command points a tool at a model and starts it. There is nothing to
 configure by hand:
 
 ```bash
-wally claude-code -m qwen3-0.6b
-wally hermes -m qwen3-0.6b
-wally deepseek -m glm-5.3-flash
-wally openclaw -m gemma-4-31b-it
+wally claude-code -m qwen3-4b-instruct-2507
+wally hermes -m qwen3-4b-instruct-2507
+wally deepseek -m qwen3-4b-instruct-2507
+wally openclaw -m qwen3-4b-instruct-2507
 ```
 
 The model can be one on this machine or one the console serves. Without `-m` the
@@ -19,7 +19,8 @@ tool starts the way you already have it configured, and wally wires nothing.
 
 | Tool | How it is wired |
 | --- | --- |
-| `claude-code`, `opencode` | `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in the process |
+| `claude-code` | `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in the process |
+| `opencode` | a temporary provider in `OPENCODE_CONFIG_CONTENT`, with the local or hosted endpoint and context limits |
 | `claude-desktop` | a gateway profile in Claude Desktop's third party mode, covering the chat and Cowork tabs |
 | `hermes` | `CUSTOM_BASE_URL`, `HERMES_INFERENCE_PROVIDER=custom`, the model in `HERMES_INFERENCE_MODEL`, and the key under the name its host gates on |
 | `openclaw` | your own `openclaw.json` plus one provider, written for the run and named by `OPENCLAW_CONFIG_PATH` |
@@ -85,9 +86,45 @@ with its first token, so a request abandoned while the model is still reading
 the prompt is stopped the moment that first token arrives, and nothing after it
 is passed on. When the tool quits, `wally` sends any cancel still queued before
 it returns. Each cancel is a line in `shim.log` under the state directory
-(`~/.local/state/runanywhere/`, or `$XDG_STATE_HOME/runanywhere/`) — never the
-tool's terminal. A local model needs none of this: the dropped connection is
-enough.
+(`~/.local/state/runanywhere/`, or `$XDG_STATE_HOME/runanywhere/`; on Windows
+`%LOCALAPPDATA%\RunAnywhere\state\`) — never the tool's terminal. A local
+model needs none of this: the dropped connection is enough.
+
+## Local models
+
+Download a model once, then pass its ID to a harness. No account login is needed:
+
+```bash
+wally models pull qwen3-4b-instruct-2507 --engine llamacpp
+wally opencode -m qwen3-4b-instruct-2507
+wally deepseek -m qwen3-4b-instruct-2507 "explain this project"
+
+# Apple Silicon: the same certified model through MLX
+wally models pull mlx-qwen3-4b-instruct-2507
+wally opencode -m mlx-qwen3-4b-instruct-2507
+```
+
+Wally starts the SDK's OpenAI-compatible server on a free `127.0.0.1` port,
+loads the selected local model, and hands that endpoint to the tool. The server
+stops when the tool exits. Each session serves one model; its configured context
+and bounded output budget are included in the tool configuration. Local coding
+harnesses are intentionally gated to this certified Qwen3 4B artifact. Other
+local models are rejected because their tool calls and long-context behavior
+have not been certified.
+
+When the certified model is missing, an interactive harness command asks
+whether to download it and continues launching after the pull completes. The
+default is No. Non-interactive commands never wait for input; they print the
+equivalent `wally models pull <id>` command and exit.
+
+If you use a separate model directory, pass the same `--home` for downloading
+and launching, for example
+`wally --home /path/to/storage opencode -m qwen3-4b-instruct-2507`.
+An incomplete download reports how to finish the pull. To force a hosted model
+in OpenCode even when a local copy exists, use `wally opencode --cloud -m <id>`.
+
+`wally opencode --help` shows Wally's launch options. Use
+`wally opencode -- --help` to ask OpenCode itself for help.
 
 ## Hosted models
 

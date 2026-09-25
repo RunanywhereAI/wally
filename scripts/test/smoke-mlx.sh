@@ -74,6 +74,10 @@ llm_out="$(wally run "$LLM_MODEL" "Say OK in one short sentence." --max-tokens 1
 require_text "LLM" "$llm_out"
 printf '%s\n' "$llm_out"
 
+# Availability and direct-path inference alone missed the install-symlink
+# regression: MLX's actual library loader follows a different resource path.
+RUNANYWHERE_HOME="$HOME_DIR" bash "$ROOT/scripts/test/smoke-mlx-symlink.sh" "$BIN" "$LLM_MODEL"
+
 # TEMP(llm-only cut): TTS, STT, and VLM are commented out of src/app.cpp for
 # this release, and their catalog ids (mlx-soprano-*, mlx-qwen3-asr-*,
 # mlx-fastvlm-*) are filtered out of the language-only catalog, so both

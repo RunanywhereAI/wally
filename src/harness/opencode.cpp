@@ -154,7 +154,7 @@ int Spawn(const std::string& executable, const std::vector<std::string>& argumen
 
 }  // namespace
 
-std::string BuildOpenCodeCloudConfig(const std::string& primary, const std::string& base_url,
+std::string BuildOpenCodeConfig(const std::string& primary, const std::string& base_url,
                                      const std::string& access_token,
                                      const std::vector<CatalogModel>& models) {
     using Json = nlohmann::json;
@@ -184,11 +184,17 @@ std::string BuildOpenCodeCloudConfig(const std::string& primary, const std::stri
     const Json provider = {
         {"npm", "@ai-sdk/openai-compatible"},
         {"name", "RunAnywhere"},
-        {"options", {{"baseURL", base_url}, {"apiKey", access_token}}},
+        {"options", {{"baseURL", base_url}, {"apiKey", access_token.empty() ? "local" : access_token}}},
         {"models", std::move(entries)},
     };
     return Json{{"provider", {{"runanywhere", provider}}}, {"model", "runanywhere/" + primary}}
         .dump();
+}
+
+std::string BuildOpenCodeCloudConfig(const std::string& primary, const std::string& base_url,
+                                     const std::string& access_token,
+                                     const std::vector<CatalogModel>& models) {
+    return BuildOpenCodeConfig(primary, base_url, access_token, models);
 }
 
 int LaunchOpenCodeCloud(const std::string& model, const std::vector<std::string>& arguments,

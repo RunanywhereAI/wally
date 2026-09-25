@@ -28,10 +28,14 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
     auto model = std::make_shared<std::string>();
     auto rest = std::make_shared<std::vector<std::string>>();
     auto cloud = std::make_shared<bool>(false);
-    auto* opencode = app.add_subcommand("opencode", "Open opencode with a model");
+    auto* opencode = app.add_subcommand("opencode", "Open OpenCode with a local or cloud model");
     opencode->footer(examples_footer({
-        {"wally opencode -m qwen3-0.6b", "A model on this machine"},
-        {"wally opencode --cloud -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
+        {"wally models pull qwen3-4b-instruct-2507", "Download the certified local model once"},
+        {"wally opencode -m qwen3-4b-instruct-2507",
+         "Start OpenCode with the certified local model"},
+        {"wally opencode --cloud -m glm-5.3-flash", "Use a cloud model after wally account login"},
+        {"wally opencode -m qwen3-4b-instruct-2507 -- run \"explain this project\"",
+         "Pass arguments through to OpenCode after --"},
     }));
     // A named option rather than a positional: with two positionals there is no
     // way to tell `wally opencode run` asking for passthrough from someone
@@ -60,7 +64,7 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
             fail(harness::LaunchOpenCodeCloud(effective, *rest));
             return;
         }
-        fail(harness::Launch("opencode", effective, *rest));
+        fail(harness::Launch("opencode", effective, *rest, options));
     });
 
     // The OpenAI-shaped agents, one subcommand per row of the table. They need
@@ -73,8 +77,11 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
         auto* command = app.add_subcommand(agent.id, agent.summary);
         const std::string invocation = "wally " + std::string(agent.id);
         command->footer(examples_footer({
-            {invocation + " -m qwen3-0.6b", "A model on this machine"},
-            {invocation + " -m glm-5.3-flash", "A hosted model (needs `wally account login`)"},
+            {"wally models pull qwen3-4b-instruct-2507",
+             "Download the certified local model once"},
+            {invocation + " -m qwen3-4b-instruct-2507",
+             "Start the tool with the certified local model"},
+            {invocation + " -m glm-5.3-flash", "Use a cloud model after wally account login"},
         }));
         command->add_option("-m,--model", *agent_model,
                             "A model on this machine, or a hosted one from your account");
@@ -89,7 +96,7 @@ void register_harness(CLI::App& app, GlobalOptions& options) {
                 return;
             }
             fail(harness::LaunchAgent(agent, ResolveDefaultModel(*agent_model, options.no_color),
-                                      *agent_rest));
+                                      *agent_rest, options));
         });
     }
 }
