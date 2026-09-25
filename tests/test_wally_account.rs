@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use common::{env_lock, EnvGuard, TempHome};
 use wally::account::{
     self as account, Authorization, CancelOutcome, ConsoleClient, Credentials, HttpRequest,
-    HttpResponse, IdentityResult, PollResult, Transport, UsageQuery,
+    HttpResponse, IdentityResult, PollResult, Transport, UsageQuery, UsageRequestsQuery,
 };
 
 fn json(value: serde_json::Value) -> String {
@@ -936,6 +936,354 @@ fn usage_counters_survive_beyond_thirty_two_bits() {
         "a window counter above 2^31 was truncated"
     );
     assert_eq!(usage.windows[0].totals.cost_micros, COST);
+}
+
+// The per-request export: the URL the client builds carries the whole query
+// (both window ends, the filters that were asked for, none that were not) and a
+// contract-shaped body maps onto the domain page with the nullable fields
+// reading as absent.
+#[test]
+fn usage_requests_page_speaks_the_route() {
+    let asked_url = Arc::new(Mutex::new(String::new()));
+    let seen = Arc::clone(&asked_url);
+    let console = ConsoleClient::new(Some(Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            *seen.lock().unwrap() = request.url.clone();
+            Ok(HttpResponse {
+                status: 200,
+                body: json(serde_json::json!({
+                    "as_of": "2026-09-25T08:34:18Z",
+                    "totals": {
+                        "requests": 2, "prompt_tokens": 1000, "cached_tokens": 900,
+                        "noncached_prompt_tokens": 100, "completion_tokens": 50,
+                        "reasoning_tokens": 20, "cost_micros": 12345
+                    },
+                    "requests": [{
+                        "request_id": "ledger-1", "response_request_id": "resp-1",
+                        "model": "glm-5.3-flash", "provider": "self_hosted_sglang",
+                        "status_code": 200, "stream": true,
+                        "ts_start": "2026-09-25T08:00:00Z",
+                        "recorded_at": "2026-09-25T08:00:02Z",
+                        "prompt_tokens": 800, "cached_tokens": 700,
+                        "noncached_prompt_tokens": 100, "completion_tokens": 40,
+                        "reasoning_tokens": 20, "cost_micros": 12345,
+                        "pricing_version": "v1"
+                    }],
+                    "next_cursor": "cursor-2",
+                })),
+                headers: BTreeMap::new(),
+            })
+        },
+    ) as Transport));
+
+    let query = UsageRequestsQuery {
+        since: "2026-09-24T08:00:00Z".to_string(),
+        until: "2026-09-25T08:00:00Z".to_string(),
+        model: "glm-5.3-flash".to_string(),
+        status_code: 500,
+        response_request_id: "resp-9".to_string(),
+        limit: 25,
+        ..UsageRequestsQuery::default()
+    };
+    let (status, page, error) =
+        console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+    assert_eq!(status, IdentityResult::Ok, "the export failed: {error}");
+
+    // The URL is the contract's shape: both required ends, every set filter,
+    // and the limit. An unset cursor must not appear.
+    let url = asked_url.lock().unwrap().clone();
+    for fragment in [
+        "/v1/cli/usage/requests?",
+        "since=2026-09-24T08%3A00%3A00Z",
+        "until=2026-09-25T08%3A00%3A00Z",
+        "model=glm-5.3-flash",
+        "status_code=500",
+        "response_request_id=resp-9",
+        "limit=25",
+    ] {
+        assert!(url.contains(fragment), "{fragment} missing from {url}");
+    }
+    assert!(!url.contains("cursor="), "an empty cursor was sent: {url}");
+
+    assert_eq!(page.total_requests, 2);
+    assert_eq!(page.cost_micros, 12345);
+    assert_eq!(page.next_cursor, "cursor-2");
+    assert_eq!(page.as_of, "2026-09-25T08:34:18Z");
+    assert_eq!(page.requests.len(), 1);
+    let row = &page.requests[0];
+    assert_eq!(row.request_id, "ledger-1");
+    assert_eq!(row.response_request_id, "resp-1");
+    assert_eq!(row.model, "glm-5.3-flash");
+    assert_eq!(row.status_code, 200);
+    assert_eq!(row.cost_micros, 12345);
+    assert_eq!(row.pricing_version, "v1");
+    // A nullable the body omitted reads as absent, never as 0: a 0 would claim
+    // the engine answered instantly.
+    assert!(row.error_code.is_empty() && row.ts_end.is_empty());
+    assert_eq!((row.ttft_ms, row.max_tokens_granted), (None, None));
+}
+
+// The request is refused before it is sent when the caller left out a window
+// end or asked for a page the route would reject, so nothing reaches the
+// network for an input the client can already prove wrong.
+#[test]
+fn usage_requests_rejects_a_bad_query_before_sending() {
+    let sent = Arc::new(Mutex::new(0));
+    let counter = Arc::clone(&sent);
+    let console = ConsoleClient::new(Some(Arc::new(
+        move |_: &HttpRequest| -> Result<HttpResponse, String> {
+            *counter.lock().unwrap() += 1;
+            Err("must not be called".to_string())
+        },
+    ) as Transport));
+    let good = UsageRequestsQuery {
+        since: "2026-09-24T08:00:00Z".to_string(),
+        until: "2026-09-25T08:00:00Z".to_string(),
+        ..UsageRequestsQuery::default()
+    };
+    for query in [
+        UsageRequestsQuery {
+            since: String::new(),
+            ..good.clone()
+        },
+        UsageRequestsQuery {
+            until: String::new(),
+            ..good.clone()
+        },
+        UsageRequestsQuery {
+            limit: 0,
+            ..good.clone()
+        },
+        UsageRequestsQuery {
+            limit: 201,
+            ..good.clone()
+        },
+    ] {
+        let (status, _, error) =
+            console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+        assert_eq!(status, IdentityResult::Failed, "{query:?} was not refused");
+        assert!(!error.is_empty());
+    }
+    assert_eq!(
+        *sent.lock().unwrap(),
+        0,
+        "a refused query reached the transport"
+    );
+}
+
+// A 401 on the export is the session, not the route: the command's own refresh
+// path is what turns it around, so the client's only job is to report the
+// status faithfully.
+#[test]
+fn usage_requests_unauthorized_is_reported() {
+    let console = ConsoleClient::new(Some(Arc::new(
+        |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 401,
+                ..HttpResponse::default()
+            })
+        },
+    ) as Transport));
+    let query = UsageRequestsQuery {
+        since: "2026-09-24T08:00:00Z".to_string(),
+        until: "2026-09-25T08:00:00Z".to_string(),
+        ..UsageRequestsQuery::default()
+    };
+    let (status, _, _) =
+        console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+    assert_eq!(status, IdentityResult::Unauthorized);
+}
+
+fn requests_console(status: i32, body: serde_json::Value) -> ConsoleClient {
+    ConsoleClient::new(Some(
+        Arc::new(move |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status,
+                body: json(body.clone()),
+                headers: BTreeMap::new(),
+            })
+        }) as Transport,
+    ))
+}
+
+fn requests_window() -> UsageRequestsQuery {
+    UsageRequestsQuery {
+        since: "2026-09-24T08:00:00Z".to_string(),
+        until: "2026-09-25T08:00:00Z".to_string(),
+        ..UsageRequestsQuery::default()
+    }
+}
+
+// The export's text lands in the person's terminal, so what the console chose
+// is sanitized: an escape sequence in a string is dropped, never printed.
+#[test]
+fn usage_requests_drops_terminal_control_text() {
+    let console = requests_console(
+        200,
+        serde_json::json!({
+            "as_of": "2026-09-25T08:34:18Z",
+            "totals": {},
+            "requests": [{
+                "request_id": "ledger-1", "model": "glm\u{1b}[31m-5.3",
+                "provider": "vertex_ai", "status_code": 200, "stream": false,
+                "ts_start": "2026-09-25T08:00:00Z", "recorded_at": "2026-09-25T08:00:01Z",
+                "prompt_tokens": 1, "cached_tokens": 0, "noncached_prompt_tokens": 1,
+                "completion_tokens": 1, "reasoning_tokens": 0, "cost_micros": 1,
+                "pricing_version": "v1"
+            }],
+            "next_cursor": null,
+        }),
+    );
+    let (status, page, error) = console.fetch_usage_requests(
+        "https://console.example.test",
+        "a-token",
+        &requests_window(),
+    );
+    assert_eq!(status, IdentityResult::Ok, "{error}");
+    assert_eq!(page.requests[0].request_id, "ledger-1");
+    assert_eq!(
+        page.requests[0].model, "",
+        "an escape sequence reached the domain row"
+    );
+    assert_eq!(page.next_cursor, "", "a null cursor is the last page");
+}
+
+// A cursor the client cannot carry must fail the page. Sanitized to empty it
+// would read as "no more pages" and an export would end early and look whole.
+#[test]
+fn usage_requests_refuses_a_cursor_it_cannot_carry() {
+    for cursor in ["a".repeat(2049), "bad\u{1b}cursor".to_string()] {
+        let console = requests_console(
+            200,
+            serde_json::json!({
+                "as_of": "2026-09-25T08:34:18Z", "totals": {}, "requests": [],
+                "next_cursor": cursor,
+            }),
+        );
+        let (status, page, error) = console.fetch_usage_requests(
+            "https://console.example.test",
+            "a-token",
+            &requests_window(),
+        );
+        assert_eq!(
+            status,
+            IdentityResult::Failed,
+            "a {}-byte cursor passed",
+            cursor.len()
+        );
+        assert!(error.contains("cursor"), "{error}");
+        assert_eq!(page.next_cursor, "");
+    }
+}
+
+// Server failures and contract violations are reported as failures, phrased for
+// a person, and never echo the body (an upstream error can carry a token).
+#[test]
+fn usage_requests_reports_failures_without_echoing_the_body() {
+    let (status, _, error) =
+        requests_console(500, serde_json::json!({"detail": "sk-secret-token"}))
+            .fetch_usage_requests(
+                "https://console.example.test",
+                "a-token",
+                &requests_window(),
+            );
+    assert_eq!(status, IdentityResult::Failed);
+    assert!(error.contains("temporarily unavailable"), "{error}");
+    assert!(
+        !error.contains("sk-secret-token"),
+        "the body was echoed: {error}"
+    );
+
+    let (status, _, error) = requests_console(400, serde_json::json!({"detail": "bad window"}))
+        .fetch_usage_requests(
+            "https://console.example.test",
+            "a-token",
+            &requests_window(),
+        );
+    assert_eq!(status, IdentityResult::Failed);
+    assert!(error.contains("usage export"), "{error}");
+
+    // A 200 whose members have the wrong type is a contract violation.
+    let (status, _, error) = requests_console(
+        200,
+        serde_json::json!({"as_of": 7, "totals": {}, "requests": []}),
+    )
+    .fetch_usage_requests(
+        "https://console.example.test",
+        "a-token",
+        &requests_window(),
+    );
+    assert_eq!(status, IdentityResult::Failed);
+    assert!(error.contains("did not match the contract"), "{error}");
+
+    // Not an object at all.
+    let (status, _, _) = requests_console(200, serde_json::json!([])).fetch_usage_requests(
+        "https://console.example.test",
+        "a-token",
+        &requests_window(),
+    );
+    assert_eq!(status, IdentityResult::Failed);
+}
+
+// An unset or out-of-range status filter is left off the URL rather than sent
+// as a value the route would refuse, and a token that is not a safe session
+// token never leaves the process.
+#[test]
+fn usage_requests_sends_only_filters_the_route_accepts() {
+    let asked_url = Arc::new(Mutex::new(String::new()));
+    let seen = Arc::clone(&asked_url);
+    let console = ConsoleClient::new(Some(Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            *seen.lock().unwrap() = request.url.clone();
+            Ok(HttpResponse {
+                status: 200,
+                body: json(serde_json::json!({
+                    "as_of": "2026-09-25T08:34:18Z", "totals": {}, "requests": [],
+                })),
+                headers: BTreeMap::new(),
+            })
+        },
+    ) as Transport));
+    for status_code in [0, 42, 600, -5] {
+        let query = UsageRequestsQuery {
+            status_code,
+            ..requests_window()
+        };
+        let (status, _, error) =
+            console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+        assert_eq!(status, IdentityResult::Ok, "{error}");
+        assert!(
+            !asked_url.lock().unwrap().contains("status_code"),
+            "status_code={status_code} was sent"
+        );
+    }
+
+    // A model id is user input: it is escaped, not spliced into the query.
+    let query = UsageRequestsQuery {
+        model: "a&limit=1 b".to_string(),
+        ..requests_window()
+    };
+    console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+    let url = asked_url.lock().unwrap().clone();
+    assert!(url.contains("model=a%26limit%3D1%20b"), "{url}");
+    assert_eq!(
+        url.matches("limit=").count(),
+        1,
+        "the id forged a parameter: {url}"
+    );
+
+    // Header injection through the bearer.
+    asked_url.lock().unwrap().clear();
+    let (status, _, _) = console.fetch_usage_requests(
+        "https://console.example.test",
+        "tok\r\nX-Evil: 1",
+        &requests_window(),
+    );
+    assert_eq!(status, IdentityResult::Failed);
+    assert!(
+        asked_url.lock().unwrap().is_empty(),
+        "an unsafe token reached the transport"
+    );
 }
 
 // A 429 mid-poll must not kill the login. `wally login` printed its code and

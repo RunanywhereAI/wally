@@ -155,6 +155,88 @@ impl Default for UsageQuery {
     }
 }
 
+/// One page of `/v1/cli/usage/requests`, the per-request export behind
+/// `wally account usage --requests`.
+///
+/// The window is the caller's to name: the route requires `since` and `until`
+/// and refuses a span past 31 days, so nothing here picks a default a reader
+/// could mistake for the server's own idea of "recent". `cursor` carries the
+/// previous page's `next_cursor` unchanged; every other filter must repeat
+/// across pages or the console refuses the page rather than reinterpret it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageRequestsQuery {
+    /// ISO-8601 with a timezone, both ends required.
+    pub since: String,
+    pub until: String,
+    pub model: String,
+    /// 0 is no filter; the route accepts 100..=599.
+    pub status_code: i32,
+    /// The `x-request-id` a response carried, the id a client logs.
+    pub response_request_id: String,
+    /// The route accepts 1..=200.
+    pub limit: i32,
+    pub cursor: String,
+}
+
+impl Default for UsageRequestsQuery {
+    fn default() -> Self {
+        UsageRequestsQuery {
+            since: String::new(),
+            until: String::new(),
+            model: String::new(),
+            status_code: 0,
+            response_request_id: String::new(),
+            limit: 100,
+            cursor: String::new(),
+        }
+    }
+}
+
+/// One settled request as the ledger recorded it. `response_request_id` is the
+/// id the response's `x-request-id` header carried; `request_id` is the
+/// ledger's own, unique id. No prompt or completion text is ever carried: the
+/// route does not ship it and the CLI does not print it. The nullable fields
+/// stay `Option` so an absent latency never reads as an instant answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UsageRequestRow {
+    pub request_id: String,
+    pub response_request_id: String,
+    pub model: String,
+    pub status_code: i64,
+    pub error_code: String,
+    pub finish_reason: String,
+    pub stream: bool,
+    pub ts_start: String,
+    pub ts_end: String,
+    pub prompt_tokens: i64,
+    pub cached_tokens: i64,
+    pub noncached_prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub max_tokens_requested: Option<i64>,
+    pub max_tokens_granted: Option<i64>,
+    pub ttft_ms: Option<i64>,
+    pub cost_micros: i64,
+    pub pricing_version: String,
+}
+
+/// The per-request page: rows, what they total, and how to read the next one.
+/// `as_of` is the snapshot the first page took; `next_cursor` is empty on the
+/// last page.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UsageRequestsPage {
+    pub as_of: String,
+    pub requests: Vec<UsageRequestRow>,
+    pub total_requests: i64,
+    pub prompt_tokens: i64,
+    pub cached_tokens: i64,
+    pub noncached_prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub cost_micros: i64,
+    pub next_cursor: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Authorization {
     pub request_code: String,
@@ -1193,6 +1275,155 @@ impl ConsoleClient {
             });
         }
         (IdentityResult::Ok, usage, String::new())
+    }
+
+    /// One page of settled requests (`GET /v1/cli/usage/requests`,
+    /// InferenceInfra #809). `since`/`until` are sent as given: the caller
+    /// formats the window, and the console refuses one without a timezone or
+    /// past 31 days.
+    pub fn fetch_usage_requests(
+        &self,
+        console_url: &str,
+        access_token: &str,
+        query: &UsageRequestsQuery,
+    ) -> (IdentityResult, UsageRequestsPage, String) {
+        let mut page = UsageRequestsPage::default();
+        if !super::session_token_is_safe(access_token) {
+            return (
+                IdentityResult::Failed,
+                page,
+                "no access token is available".to_string(),
+            );
+        }
+        if query.since.is_empty() || query.until.is_empty() {
+            return (
+                IdentityResult::Failed,
+                page,
+                "a since and an until are both required".to_string(),
+            );
+        }
+        if !(1..=200).contains(&query.limit) {
+            return (
+                IdentityResult::Failed,
+                page,
+                "the page size is bounded at 200".to_string(),
+            );
+        }
+        let origin = match console_origin(console_url) {
+            Ok(origin) => origin,
+            Err(error) => return (IdentityResult::Failed, page, error),
+        };
+        // Both ends carry a timezone as given, so the window a person named is
+        // the window the server reads: no default is invented here, and a
+        // malformed one is the console's 400 to explain.
+        let mut url = format!(
+            "{origin}/v1/cli/usage/requests?since={}&until={}&limit={}",
+            query_escape(&query.since),
+            query_escape(&query.until),
+            query.limit
+        );
+        if !query.model.is_empty() {
+            url.push_str(&format!("&model={}", query_escape(&query.model)));
+        }
+        if (100..=599).contains(&query.status_code) {
+            url.push_str(&format!("&status_code={}", query.status_code));
+        }
+        if !query.response_request_id.is_empty() {
+            url.push_str(&format!(
+                "&response_request_id={}",
+                query_escape(&query.response_request_id)
+            ));
+        }
+        if !query.cursor.is_empty() {
+            url.push_str(&format!("&cursor={}", query_escape(&query.cursor)));
+        }
+        let request = HttpRequest {
+            method: "GET".to_string(),
+            url,
+            body: String::new(),
+            bearer_token: access_token.to_string(),
+            timeout_ms: 0,
+        };
+        let response = match self.send(request) {
+            Ok(response) => response,
+            Err(error) => return (IdentityResult::Failed, page, error),
+        };
+        if response.status == 401 {
+            return (
+                IdentityResult::Unauthorized,
+                page,
+                "console session expired".to_string(),
+            );
+        }
+        if response.status != 200 {
+            return (
+                IdentityResult::Failed,
+                page,
+                http_error("usage export", &origin, &response),
+            );
+        }
+        let object = match parse_object(&response) {
+            Ok(object) => object,
+            Err(error) => return (IdentityResult::Failed, page, error),
+        };
+        let parsed = match contract::UsageRequestPage::from_json(&object) {
+            Ok(parsed) => parsed,
+            Err(_) => return (IdentityResult::Failed, page, CONTRACT_MISMATCH.to_string()),
+        };
+
+        // Map the typed page onto the domain struct, sanitizing every string
+        // the server chose: this text lands in the user's terminal.
+        page.as_of = display_safe(&parsed.as_of, 64);
+        page.next_cursor = display_safe(parsed.next_cursor.as_deref().unwrap_or(""), 2048);
+        // A cursor the sanitizer rejects would come out empty, which every
+        // caller reads as "this was the last page": the export would end early
+        // and look complete. A cursor that cannot be carried is an error.
+        if parsed.next_cursor.as_deref().is_some_and(|c| !c.is_empty())
+            && page.next_cursor.is_empty()
+        {
+            return (
+                IdentityResult::Failed,
+                UsageRequestsPage::default(),
+                "console returned a page cursor this client cannot carry".to_string(),
+            );
+        }
+        page.total_requests = parsed.totals.requests;
+        page.prompt_tokens = parsed.totals.prompt_tokens;
+        page.cached_tokens = parsed.totals.cached_tokens;
+        page.noncached_prompt_tokens = parsed.totals.noncached_prompt_tokens;
+        page.completion_tokens = parsed.totals.completion_tokens;
+        page.reasoning_tokens = parsed.totals.reasoning_tokens;
+        page.cost_micros = parsed.totals.cost_micros;
+
+        page.requests = parsed
+            .requests
+            .iter()
+            .map(|record| UsageRequestRow {
+                request_id: display_safe(&record.request_id, 128),
+                response_request_id: display_safe(
+                    record.response_request_id.as_deref().unwrap_or(""),
+                    128,
+                ),
+                model: display_safe(&record.model, 128),
+                status_code: record.status_code,
+                error_code: display_safe(record.error_code.as_deref().unwrap_or(""), 80),
+                finish_reason: display_safe(record.finish_reason.as_deref().unwrap_or(""), 40),
+                stream: record.stream,
+                ts_start: display_safe(&record.ts_start, 64),
+                ts_end: display_safe(record.ts_end.as_deref().unwrap_or(""), 64),
+                prompt_tokens: record.prompt_tokens,
+                cached_tokens: record.cached_tokens,
+                noncached_prompt_tokens: record.noncached_prompt_tokens,
+                completion_tokens: record.completion_tokens,
+                reasoning_tokens: record.reasoning_tokens,
+                max_tokens_requested: record.max_tokens_requested,
+                max_tokens_granted: record.max_tokens_granted,
+                ttft_ms: record.ttft_ms,
+                cost_micros: record.cost_micros,
+                pricing_version: display_safe(&record.pricing_version, 64),
+            })
+            .collect();
+        (IdentityResult::Ok, page, String::new())
     }
 
     pub fn fetch_models(
