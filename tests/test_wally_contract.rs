@@ -87,8 +87,9 @@ fn request_and_response_round_trip() {
     assert_eq!(parsed.windows[0].window, contract::CliUsageWindowLabel::K1h);
 }
 
-// A settled-request page parses end to end: every field the contract names,
-// the nullable shapes (present and null) and the required ones.
+// A settled-request page parses end to end and survives a serialize-and-reparse:
+// every field the contract names, the nullable shapes (present and null) and the
+// required ones.
 #[test]
 fn usage_request_page_round_trip() {
     let page = serde_json::json!({
@@ -143,18 +144,65 @@ fn usage_request_page_round_trip() {
         first.provider,
         Some(contract::UsageProvider::KSelfHostedSglang)
     );
+    assert_eq!(first.request_id, "ledger-1");
+    assert_eq!(first.api_key_id, None);
+    assert_eq!(first.model, "glm-5.3-flash");
+    assert_eq!(first.status_code, 200);
+    assert_eq!(first.error_code, None);
+    assert_eq!(first.finish_reason.as_deref(), Some("stop"));
+    assert!(first.stream);
+    assert_eq!(first.ts_start, "2026-09-25T08:00:00Z");
+    assert_eq!(first.ts_end.as_deref(), Some("2026-09-25T08:00:01Z"));
+    assert_eq!(first.recorded_at, "2026-09-25T08:00:02Z");
+    assert_eq!(
+        (
+            first.prompt_tokens,
+            first.cached_tokens,
+            first.noncached_prompt_tokens,
+            first.completion_tokens,
+            first.reasoning_tokens,
+        ),
+        (800, 700, 100, 40, 20)
+    );
+    assert_eq!(first.max_tokens_requested, Some(4096));
     assert_eq!(first.max_tokens_granted, Some(2048));
     assert_eq!(first.ttft_ms, Some(310));
+    assert_eq!(first.tpot_ms, None);
+    assert_eq!(first.cost_micros, 12345);
+    assert_eq!(first.pricing_version, "2026-09-23.1");
 
     let second = &parsed.requests[1];
     assert!(
         second.response_request_id.is_none()
             && second.ts_end.is_none()
             && second.ttft_ms.is_none()
-            && second.max_tokens_granted.is_none(),
+            && second.max_tokens_granted.is_none()
+            && second.max_tokens_requested.is_none()
+            && second.finish_reason.is_none()
+            && second.tpot_ms.is_none(),
         "a null must read as absent, not as a default value"
     );
     assert_eq!(second.provider, Some(contract::UsageProvider::KVertexAi));
+    assert_eq!(second.status_code, 500);
+    assert_eq!(second.error_code.as_deref(), Some("upstream_error"));
+    assert!(!second.stream);
+
+    let totals = &parsed.totals;
+    assert_eq!(
+        (
+            totals.prompt_tokens,
+            totals.cached_tokens,
+            totals.noncached_prompt_tokens,
+            totals.completion_tokens,
+            totals.reasoning_tokens,
+        ),
+        (1000, 900, 100, 50, 20)
+    );
+
+    // Serialized and read back, the page is the same page.
+    let reparsed = contract::UsageRequestPage::from_json(&parsed.to_json())
+        .expect("the binding reads what it writes");
+    assert_eq!(reparsed, parsed);
 
     // A body that omits members still parses, so the CLI survives a server that
     // lags the contract. A body that is not an object at all does not.

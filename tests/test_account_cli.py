@@ -238,7 +238,7 @@ def run(binary, arguments, environment):
 
 
 def run_failing(binary, arguments, environment, fragment):
-    """The command must exit non-zero and say why, without touching the network."""
+    """The command must exit non-zero and say why."""
     result = subprocess.run(
         [binary, *arguments], env=environment, capture_output=True, text=True,
         timeout=15, check=False,
