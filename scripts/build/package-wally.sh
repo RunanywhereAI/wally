@@ -106,6 +106,29 @@ if [[ -n "${KIT}" && -d "${KIT}/third_party" ]]; then
         copy_kit_runtime "${so}"
       done
       shopt -u nullglob
+      # A kit whose llama.cpp is built with OpenMP makes wally need the GCC
+      # runtime's libgomp.so.1, which a default Ubuntu or Debian install does
+      # not have (it comes with the compiler): v0.6.0 failed on a clean 22.04
+      # with `libgomp.so.1: cannot open shared object file`. Ship the build
+      # machine's copy beside the kit's libraries, under the same $ORIGIN
+      # runpath, together with its licence (GPLv3 with the GCC Runtime Library
+      # Exception, which permits this). Keyed on what the binary actually needs,
+      # so a kit built without OpenMP ships no libgomp at all.
+      if readelf -d "${BUILD}/wally" | grep -q 'NEEDED.*\[libgomp\.so\.1\]'; then
+        gomp="$(ldd "${BUILD}/wally" | awk '$1 == "libgomp.so.1" { print $3 }')"
+        [[ -f "${gomp}" ]] || {
+          echo "error: wally needs libgomp.so.1 and this build machine has none to bundle" >&2
+          exit 1
+        }
+        copy_kit_runtime "${gomp}"
+        gomp_licence=/usr/share/doc/libgomp1/copyright
+        [[ -f "${gomp_licence}" ]] || {
+          echo "error: bundling libgomp.so.1 needs its licence at ${gomp_licence}" >&2
+          exit 1
+        }
+        mkdir -p "${STAGE}/licenses"
+        cp "${gomp_licence}" "${STAGE}/licenses/libgomp1.copyright"
+      fi
       ;;
   esac
 fi

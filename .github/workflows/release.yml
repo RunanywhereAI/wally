@@ -297,6 +297,19 @@ jobs:
           python3 scripts/release/verify-release-assets.py \
             "dist/wally-${VERSION}-linux-x86_64.tar.gz" \
             "dist/wally-${VERSION}-linux-x86_64.tar.gz.sha256"
+      - name: Linux ABI floor
+        # v0.6.0 shipped needing GLIBC_2.38 and libgomp.so.1 and failed to start
+        # on Ubuntu 22.04. Nothing above can see that; this reads every ELF in
+        # the archive against versions.toml [linux_abi].
+        run: |
+          VERSION="${WALLY_VERSION#v}"
+          python3 scripts/release/check-linux-abi.py "dist/wally-${VERSION}-linux-x86_64.tar.gz"
+      - name: Clean-distro install
+        # install.sh against the archive on clean Ubuntu 22.04/24.04 and Debian
+        # 12, and the refusals on Ubuntu 20.04 and Alpine.
+        run: |
+          VERSION="${WALLY_VERSION#v}"
+          bash scripts/test/linux-install-matrix.sh dist "${VERSION}"
       - uses: actions/upload-artifact@v4
         with:
           name: wally-linux-x86_64-${{ matrix.variant }}
