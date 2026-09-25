@@ -259,6 +259,10 @@ def json_document(combined):
     return json.loads(line)
 
 
+# The --requests table's header row, column by column.
+TABLE_HEADER = ["started", "model", "code", "in", "out", "ttft", "spend", "request"]
+
+
 def check_requests_export(binary, environment):
     # First page: two of three rows, the errored one explained, and a hint that
     # there is more. Nothing here may claim to have read the whole window.
@@ -283,7 +287,10 @@ def check_requests_export(binary, environment):
             raise AssertionError(f"--follow did not report {fragment!r}:\n{followed}")
     if "more rows exist" in followed:
         raise AssertionError(f"--follow left a next-page hint:\n{followed}")
-    if followed.count("window ") != 1 or followed.count("started") != 1:
+    lines = followed.splitlines()
+    summaries = [l for l in lines if l.startswith("window ")]
+    headers = [l for l in lines if l.split() == TABLE_HEADER]
+    if len(summaries) != 1 or len(headers) != 1:
         raise AssertionError(f"--follow repeated its summary or header per page:\n{followed}")
 
     # JSON is one document. Without --follow it is the first page and says so;
