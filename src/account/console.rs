@@ -699,6 +699,23 @@ fn display_safe(value: &str, maximum: usize) -> String {
     }
 }
 
+/// A label the console chose, made printable rather than dropped: every
+/// character outside printable ASCII becomes `?`, and a label past `maximum`
+/// keeps its first `maximum - 3` characters and ends in `...`. For text that is
+/// only ever shown (an unknown provider), where some of the label is worth more
+/// than none of it. Empty in, empty out.
+fn display_lossy(value: &str, maximum: usize) -> String {
+    let printable: String = value
+        .chars()
+        .map(|c| if (' '..='~').contains(&c) { c } else { '?' })
+        .collect();
+    if printable.len() <= maximum {
+        return printable;
+    }
+    let keep = maximum.saturating_sub(3);
+    format!("{}...", &printable[..keep])
+}
+
 fn request_code_is_safe(value: &str) -> bool {
     // The control plane mints these with Python's `token_urlsafe`, whose
     // alphabet is base64url: letters, digits, `-` and `_`. Omitting `_`
@@ -1368,7 +1385,12 @@ impl ConsoleClient {
                 model: display_safe(&record.model, 128),
                 provider: match record.provider {
                     Some(provider) => Some(provider.as_str().to_string()),
-                    None => optional(&providers.get(index).cloned().flatten(), 64),
+                    None => providers
+                        .get(index)
+                        .cloned()
+                        .flatten()
+                        .map(|raw| display_lossy(&raw, 64))
+                        .filter(|label| !label.is_empty()),
                 },
                 status_code: record.status_code,
                 error_code: optional(&record.error_code, 80),

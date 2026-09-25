@@ -1209,7 +1209,31 @@ fn usage_requests_reads_a_provider_it_does_not_know() {
         .iter()
         .map(|r| r.provider.as_deref())
         .collect();
-    assert_eq!(providers, [Some("bedrock"), Some("vertex_ai"), None]);
+    // A label with control characters is made printable, not dropped: the
+    // row still says a provider was named.
+    assert_eq!(
+        providers,
+        [Some("bedrock"), Some("vertex_ai"), Some("evil?[2J")]
+    );
+
+    // Past 64 characters it is cut to 61 and marked, never lost.
+    let long = "p".repeat(80);
+    let (status, page, error) = requests_console(
+        200,
+        serde_json::json!({
+            "as_of": "2026-09-25T08:34:18Z", "totals": {},
+            "requests": [export_record(&long)], "next_cursor": null,
+        }),
+    )
+    .fetch_usage_requests(
+        "https://console.example.test",
+        "a-token",
+        &requests_window(),
+    );
+    assert_eq!(status, IdentityResult::Ok, "{error}");
+    let shown = page.requests[0].provider.as_deref().unwrap();
+    assert_eq!(shown, format!("{}...", "p".repeat(61)));
+    assert_eq!(shown.len(), 64);
 
     let mut wrong_type = export_record("vertex_ai");
     wrong_type["provider"] = serde_json::json!(7);
