@@ -90,6 +90,9 @@ type or unknown enum value still fails) so the CLI survives a server that lags
 the contract. One field is exempt: the usage export's `provider` is a label the
 CLI only reports, so `console.rs` lifts a value the binding does not know out
 of the body before parsing and carries it as text instead of failing the page.
+One field goes the other way: the export's `next_cursor` is required, and a
+defaulted one would read as the last page, so `console.rs` fails a page that
+omits it rather than end the export early.
 `test_wally_contract` and `python3 contracts/sync_from_inferenceinfra.py
 --check` fail the build if the header, the pin, and the artifact drift.
 

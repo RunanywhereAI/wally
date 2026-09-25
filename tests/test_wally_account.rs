@@ -1239,7 +1239,9 @@ fn usage_requests_reads_a_provider_it_does_not_know() {
     wrong_type["provider"] = serde_json::json!(7);
     let (status, _, error) = requests_console(
         200,
-        serde_json::json!({"as_of": "x", "totals": {}, "requests": [wrong_type]}),
+        serde_json::json!({
+            "as_of": "x", "totals": {}, "requests": [wrong_type], "next_cursor": null,
+        }),
     )
     .fetch_usage_requests(
         "https://console.example.test",
@@ -1248,6 +1250,37 @@ fn usage_requests_reads_a_provider_it_does_not_know() {
     );
     assert_eq!(status, IdentityResult::Failed);
     assert!(error.contains("did not match the contract"), "{error}");
+}
+
+// `next_cursor` is required: `null` is the last page, and a page that leaves
+// the field out broke the contract. Read as the last page, an omission would
+// end a --follow export early and look complete.
+#[test]
+fn usage_requests_refuses_a_page_that_omits_its_cursor() {
+    let page = |extra: serde_json::Value| {
+        let mut body = serde_json::json!({
+            "as_of": "2026-09-25T08:34:18Z", "totals": {},
+            "requests": [export_record("vertex_ai")],
+        });
+        if let (Some(body), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+            body.extend(extra.clone());
+        }
+        requests_console(200, body).fetch_usage_requests(
+            "https://console.example.test",
+            "a-token",
+            &requests_window(),
+        )
+    };
+
+    let (status, page_read, error) = page(serde_json::json!({}));
+    assert_eq!(status, IdentityResult::Failed);
+    assert!(error.contains("did not match the contract"), "{error}");
+    assert!(page_read.requests.is_empty());
+
+    let (status, page_read, error) = page(serde_json::json!({"next_cursor": null}));
+    assert_eq!(status, IdentityResult::Ok, "{error}");
+    assert_eq!(page_read.requests.len(), 1);
+    assert_eq!(page_read.next_cursor, None);
 }
 
 // A cursor the client cannot carry must fail the page. Sanitized to empty it
@@ -1404,6 +1437,7 @@ fn usage_requests_escapes_what_it_sends() {
                 status: 200,
                 body: json(serde_json::json!({
                     "as_of": "2026-09-25T08:34:18Z", "totals": {}, "requests": [],
+                    "next_cursor": null,
                 })),
                 headers: BTreeMap::new(),
             })

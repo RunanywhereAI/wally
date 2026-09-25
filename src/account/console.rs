@@ -1344,6 +1344,13 @@ impl ConsoleClient {
             Ok(object) => object,
             Err(error) => return failed(error),
         };
+        // The contract requires `next_cursor` and makes `null` the last page.
+        // The generated reader defaults a missing field to `None`, which would
+        // end the export early and look complete, so absence is checked on
+        // the raw object: a page that omits it broke the contract.
+        if object.get("next_cursor").is_none() {
+            return failed(CONTRACT_MISMATCH.to_string());
+        }
         let providers = take_unknown_providers(&mut object);
         let parsed = match contract::UsageRequestPage::from_json(&object) {
             Ok(parsed) => parsed,
