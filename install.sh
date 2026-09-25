@@ -142,6 +142,26 @@ restore_previous_install() {
     fi
 }
 
+# One install at a time per ${LIB_DIR}. The recovery below renames and deletes
+# ${LIB_DIR}.previous.* and ${LIB_DIR}.incoming.*, which a second run working at
+# the same moment would own; the lock makes every leftover it finds dead. mkdir
+# is atomic, and the owner's pid decides whether a lock left behind is stale.
+acquire_install_lock() {
+    lock="${LIB_DIR}.lock"
+    if ! mkdir "$lock" 2>/dev/null; then
+        owner="$(cat "${lock}/pid" 2>/dev/null || true)"
+        if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+            fail "another Wally install (pid ${owner}) is running; let it finish, then run this again."
+        fi
+        # Stale: its owner is gone. If two runs both find it stale, only one
+        # mkdir below succeeds and the other stops here rather than race.
+        rm -rf "$lock"
+        mkdir "$lock" 2>/dev/null || fail "another Wally install took ${lock} just now; run this again once it finishes."
+    fi
+    printf '%s\n' "$$" > "${lock}/pid"
+    held_lock="$lock"
+}
+
 # A run killed outright between the two renames cannot clean up after itself:
 # it leaves ${LIB_DIR}.previous.<pid> and no ${LIB_DIR}. Put that tree back
 # before anything else, and drop leftovers from earlier runs, so every run
@@ -266,16 +286,18 @@ staged="${tmp}/wally-${PLATFORM}"
 # code-signed Mach-O in place while a copy may still be mapped kills it with
 # SIGKILL (137).
 mkdir -p "$(dirname "$LIB_DIR")" "$BIN_DIR"
-recover_interrupted_install
 incoming="${LIB_DIR}.incoming.$$"
 retired="${LIB_DIR}.previous.$$"
+held_lock=""
 # Between the two renames below there is no ${LIB_DIR}. An interrupted or
 # failing run puts the previous tree back on the way out; a run killed outright
 # (SIGKILL, power loss) is repaired by recover_interrupted_install next time.
-trap 'restore_previous_install; rm -rf "$tmp" "$incoming"' EXIT
+trap 'restore_previous_install; rm -rf "$tmp" "$incoming"; [ -z "$held_lock" ] || rm -rf "$held_lock"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+acquire_install_lock
+recover_interrupted_install
 rm -rf "$incoming"
 cp -R "$staged" "$incoming"
 staged_version="$(probe_binary "${incoming}/bin/wally")"
