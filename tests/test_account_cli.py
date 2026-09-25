@@ -4,8 +4,10 @@
 import json
 import os
 import pathlib
+import re
 import stat
 import subprocess
+import urllib.parse
 import sys
 import tempfile
 import threading
@@ -71,12 +73,46 @@ USAGE_BODY = {
 }
 
 
+EXPORT_FIRST = "/v1/cli/usage/requests?since=*&until=*&limit=100"
+EXPORT_SECOND = EXPORT_FIRST + "&cursor=p2"
+
+
+def export_record(request_id, status=200, error=None, ttft=310):
+    return {
+        "request_id": request_id, "response_request_id": "resp-" + request_id,
+        "model": "glm-5.3-flash", "provider": "self_hosted_sglang",
+        "status_code": status, "error_code": error, "finish_reason": "stop",
+        "stream": True, "ts_start": "2026-09-25T08:00:00.123456+00:00",
+        "ts_end": None, "recorded_at": "2026-09-25T08:00:02+00:00",
+        "prompt_tokens": 1_200, "cached_tokens": 1_000, "noncached_prompt_tokens": 200,
+        "completion_tokens": 40, "reasoning_tokens": 0, "ttft_ms": ttft,
+        "cost_micros": 1_500, "pricing_version": "v1",
+    }
+
+
+EXPORT_TOTALS = {
+    "requests": 3, "prompt_tokens": 3_600, "cached_tokens": 3_000,
+    "noncached_prompt_tokens": 600, "completion_tokens": 120, "reasoning_tokens": 0,
+    "cost_micros": 4_500,
+}
+
+# Keyed by the cursor that asks for the page; None is the first.
+EXPORT_PAGES = {
+    None: {"as_of": "2026-09-25T08:34:18Z", "totals": EXPORT_TOTALS,
+           "requests": [export_record("a"), export_record("b", 500, "upstream_error", None)],
+           "next_cursor": "p2"},
+    "p2": {"as_of": "2026-09-25T08:34:18Z", "totals": EXPORT_TOTALS,
+           "requests": [export_record("c")], "next_cursor": None},
+}
+
+
 class ConsoleHandler(BaseHTTPRequestHandler):
     requests = []
     console_origin = ""
     # False stands in for every console deployed before windowed totals, which
     # is all of them until /v1/cli/usage ships.
     serves_windows = True
+    export_window = None
 
     def log_message(self, _format, *_args):
         return
@@ -92,6 +128,28 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
+
+    def reply_requests_page(self):
+        query = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
+        missing = [k for k in ("since", "until", "limit") if k not in query]
+        if missing:
+            self.reply(400, {"detail": f"missing {missing}"})
+            return
+        window = (query["since"], query["until"])
+        cursor = query.get("cursor")
+        # The real console refuses a cursor from a different window rather than
+        # reinterpret it; so does this one, which is what makes the CLI's
+        # window handling observable.
+        if cursor is not None and window != ConsoleHandler.export_window:
+            self.reply(400, {"detail": "cursor does not belong to this window"})
+            return
+        if cursor is None:
+            ConsoleHandler.export_window = window
+        page = EXPORT_PAGES.get(cursor)
+        if page is None:
+            self.reply(400, {"detail": "unknown cursor"})
+            return
+        self.reply(200, page)
 
     def do_POST(self):
         body = self.read_json()
@@ -130,6 +188,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         elif self.path == "/v1/models":
             # Login primes the model cache from here; a minimal catalog is enough.
             self.reply(200, {"data": [{"id": "glm-5.3-flash"}]})
+        elif self.path.startswith("/v1/cli/usage/requests"):
+            self.reply_requests_page()
         elif self.path.startswith("/v1/cli/usage"):
             body = dict(USAGE_BODY)
             if not self.serves_windows:
@@ -156,6 +216,86 @@ def run(binary, arguments, environment):
     if ACCESS_TOKEN in combined or REFRESH_TOKEN in combined:
         raise AssertionError(f"{' '.join(arguments)} exposed a cloud token")
     return combined
+
+
+def run_failing(binary, arguments, environment, fragment):
+    """The command must exit non-zero and say why, without touching the network."""
+    result = subprocess.run(
+        [binary, *arguments], env=environment, capture_output=True, text=True,
+        timeout=15, check=False,
+    )
+    combined = result.stdout + result.stderr
+    if result.returncode == 0:
+        raise AssertionError(f"{' '.join(arguments)} should have failed:\n{combined}")
+    if fragment not in combined:
+        raise AssertionError(f"{' '.join(arguments)} did not say {fragment!r}:\n{combined}")
+    if ACCESS_TOKEN in combined or REFRESH_TOKEN in combined:
+        raise AssertionError(f"{' '.join(arguments)} exposed a cloud token")
+
+
+def json_document(combined):
+    line = next((l for l in combined.splitlines() if l.startswith("{")), "")
+    if not line:
+        raise AssertionError(f"no JSON document:\n{combined}")
+    return json.loads(line)
+
+
+def check_requests_export(binary, environment):
+    # First page: two of three rows, the errored one explained, and a hint that
+    # there is more. Nothing here may claim to have read the whole window.
+    first = run(binary, ["account", "usage", "--requests"], environment)
+    for fragment in ("2 of 3 settled", "resp-a", "resp-b", "error: upstream_error (stop)",
+                     "more rows exist", "window "):
+        if fragment not in first:
+            raise AssertionError(f"--requests did not report {fragment!r}:\n{first}")
+    if "resp-c" in first:
+        raise AssertionError(f"--requests read past its first page:\n{first}")
+    if "$0.0045" not in first:
+        raise AssertionError(f"the window spend is missing:\n{first}")
+    # An absent latency is a dash, never an instant answer.
+    row_b = next(l for l in first.splitlines() if l.rstrip().endswith("resp-b"))
+    if "310ms" in row_b or " - " not in row_b:
+        raise AssertionError(f"a missing latency was not a dash: {row_b!r}")
+
+    # --follow: every page, one summary, one table, no leftover hint.
+    followed = run(binary, ["account", "usage", "--requests", "--follow"], environment)
+    for fragment in ("3 of 3 settled", "resp-a", "resp-b", "resp-c"):
+        if fragment not in followed:
+            raise AssertionError(f"--follow did not report {fragment!r}:\n{followed}")
+    if "more rows exist" in followed:
+        raise AssertionError(f"--follow left a next-page hint:\n{followed}")
+    if followed.count("window ") != 1 or followed.count("started") != 1:
+        raise AssertionError(f"--follow repeated its summary or header per page:\n{followed}")
+
+    # JSON is one page, echoes its window, and hands back the cursor. Replaying
+    # that window with the cursor reads the rest; a window recomputed from now
+    # would be refused by the console.
+    document = json_document(run(binary, ["--json", "account", "usage", "--requests"], environment))
+    if (len(document["rows"]), document["next_cursor"]) != (2, "p2"):
+        raise AssertionError(f"unexpected first JSON page: {document}")
+    if document["rows"][1]["ttft_ms"] != -1 or document["rows"][0]["ttft_ms"] != 310:
+        raise AssertionError(f"ttft did not round-trip as 310 / -1: {document['rows']}")
+    rest = json_document(run(binary, [
+        "--json", "account", "usage", "--requests",
+        "--since", document["since"], "--until", document["until"], "--cursor", "p2",
+    ], environment))
+    if [r["request_id"] for r in rest["rows"]] != ["c"] or "next_cursor" in rest:
+        raise AssertionError(f"the replayed cursor did not read the last page: {rest}")
+
+    # Refused before anything is sent.
+    tail = ["--requests"]
+    run_failing(binary, ["account", "usage", "--follow"], environment, "only applies with --requests")
+    run_failing(binary, ["account", "usage", "--days", "3"], environment, "only applies with --requests")
+    run_failing(binary, ["--json", "account", "usage", *tail, "--follow"], environment, "cannot be combined with --json")
+    run_failing(binary, ["account", "usage", *tail, "--cursor", "p2"], environment, "--cursor needs --since and --until")
+    run_failing(binary, ["account", "usage", *tail, "--until", "2026-09-25T00:00:00Z"], environment, "--until needs --since")
+    run_failing(binary, ["account", "usage", *tail, "--since", "2026-09-25T00:00:00"], environment, "timezone")
+    run_failing(binary, ["account", "usage", *tail, "--days", "3", "--since", "2026-09-25T00:00:00Z"], environment, "cannot be combined")
+    run_failing(binary, ["account", "usage", *tail, "--since", "2026-06-01T00:00:00Z", "--until", "2026-09-01T00:00:00Z"], environment, "longer than 31 days")
+    run_failing(binary, ["account", "usage", *tail, "--days", "0"], environment, "0")
+    run_failing(binary, ["account", "usage", *tail, "--days", "32"], environment, "32")
+    run_failing(binary, ["account", "usage", *tail, "--status", "99"], environment, "99")
+    run_failing(binary, ["account", "usage", *tail, "--limit", "201"], environment, "201")
 
 
 def main():
@@ -256,6 +396,8 @@ def main():
             if "$18.42" not in stale:
                 raise AssertionError(f"the balance is known and must still print:\n{stale}")
 
+            check_requests_export(binary, environment)
+
             run(binary, ["account", "logout"], environment)
             if list(pathlib.Path(profile).iterdir()):
                 raise AssertionError("logout did not remove the local session")
@@ -272,9 +414,21 @@ def main():
             ("GET", "/v1/cli/usage?days=1&limit=1", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/cli/usage?days=1&limit=1", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/cli/usage?days=1&limit=1", f"Bearer {ACCESS_TOKEN}"),
+            # The per-request export. The window is "now" and moves between runs,
+            # so it is compared as a shape. Nothing the CLI refuses up front
+            # (a bad flag, a window past 31 days) may appear here at all.
+            ("GET", EXPORT_FIRST, f"Bearer {ACCESS_TOKEN}"),  # --requests
+            ("GET", EXPORT_FIRST, f"Bearer {ACCESS_TOKEN}"),  # --follow, page 1
+            ("GET", EXPORT_SECOND, f"Bearer {ACCESS_TOKEN}"),  # --follow, page 2
+            ("GET", EXPORT_FIRST, f"Bearer {ACCESS_TOKEN}"),  # --json
+            ("GET", EXPORT_SECOND, f"Bearer {ACCESS_TOKEN}"),  # replayed window + cursor
             ("POST", "/auth/cli/revoke", f"Bearer {ACCESS_TOKEN}"),
         ]
-        actual = [(method, path, authorization) for method, path, authorization, _ in ConsoleHandler.requests]
+        window = re.compile(r"since=[^&]+&until=[^&]+")
+        actual = [
+            (method, window.sub("since=*&until=*", path), authorization)
+            for method, path, authorization, _ in ConsoleHandler.requests
+        ]
         if actual != expected:
             raise AssertionError(f"unexpected console request sequence: {actual!r}")
         # Looked up by path, not by index: a new call anywhere in the flow

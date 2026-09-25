@@ -6,8 +6,39 @@ Usage: wally account usage [OPTIONS]
 Options:
   -h, --help                  Show help
       --json                  Print as JSON
+      --requests              List settled requests instead of the summary (one
+                              page; --follow reads them all)
+      --days INT              Window length in days (1-31)
+      --since TEXT            Window start, with a timezone (e.g.
+                              2026-09-25T00:00:00Z)
+      --until TEXT            Window end, with a timezone (default: now; needs
+                              --since)
+      --model TEXT            Only this model id
+      --status INT            Only this HTTP status (100-599)
+      --response-request-id TEXT
+                              Only the rows for this x-request-id (what a
+                              response logged)
+      --cursor TEXT           Continue from a previous page's next_cursor (needs
+                              --since and --until)
+      --limit INT             Rows per page (1-200)
+      --follow                Read every page until the window is done
 
 Examples:
   wally account usage
 
   wally --json account usage
+
+  # every settled request of the last day, first page
+  wally account usage --requests
+
+  # a full week, every page
+  wally account usage --requests --days 7 --follow
+
+  # the requests our side failed
+  wally account usage --requests --status 500
+
+  # the rows behind one x-request-id
+  wally account usage --requests --response-request-id <id>
+
+  # one page as JSON, over a pinned window
+  wally --json account usage --requests --since 2026-09-24T00:00:00Z --until 2026-09-25T00:00:00Z

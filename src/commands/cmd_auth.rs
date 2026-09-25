@@ -34,7 +34,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (year, m, d)
 }
 
-fn format_epoch_seconds(seconds: i64) -> String {
+pub(crate) fn format_epoch_seconds(seconds: i64) -> String {
     if seconds <= 0 {
         return "-".to_string();
     }
