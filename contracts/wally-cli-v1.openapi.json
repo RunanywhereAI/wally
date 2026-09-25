@@ -248,7 +248,8 @@
           "gateway_protocol_error",
           "gateway_operation_pending",
           "reconciliation_unverified",
-          "retention_managed_by_runanywhere"
+          "retention_managed_by_runanywhere",
+          "card_required"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -1646,8 +1647,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "development",
-    "commit": "1f68d21d1ebb6f0e34eae43d8cf315a9763320f3",
+    "branch": "feat/card-required-billing-and-auto-recharge",
+    "commit": "df7a8bc74f6282790d07a20d9401fb8bdaf348f6",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
