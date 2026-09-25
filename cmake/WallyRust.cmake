@@ -120,11 +120,23 @@ else()
     set(WALLY_CARGO_BIN "${WALLY_CARGO_OUT_DIR}/wally")
 endif()
 
+# The environment of every cargo run CMake starts (this build and the CTest
+# runs in CMakeLists.txt). With MSVC it names the linker CMake found: rustc
+# otherwise runs whichever `link.exe` is first on PATH, and in a Git Bash step
+# (CI's shell) that is coreutils' /usr/bin/link, not MSVC's.
+set(WALLY_CARGO_ENV
+    "WALLY_BUILD_ENV=${WALLY_BUILD_ENV_FILE}"
+    "CARGO_TARGET_DIR=${WALLY_CARGO_TARGET_DIR}")
+if(MSVC AND CMAKE_LINKER)
+    list(APPEND WALLY_CARGO_ENV
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=${CMAKE_LINKER}"
+        "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=${CMAKE_LINKER}")
+endif()
+
 # cargo decides what is stale; this target always asks it.
 add_custom_target(wally_cargo ALL
     COMMAND "${CMAKE_COMMAND}" -E env
-        "WALLY_BUILD_ENV=${WALLY_BUILD_ENV_FILE}"
-        "CARGO_TARGET_DIR=${WALLY_CARGO_TARGET_DIR}"
+        ${WALLY_CARGO_ENV}
         "WALLY_NATIVE_LINK_ARGS_OUT=${CMAKE_BINARY_DIR}/wally-native-link-args.txt"
         "${WALLY_CARGO}" build ${_wally_cargo_profile_flag} --locked
             --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml" --lib --bin wally

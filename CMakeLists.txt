@@ -128,10 +128,19 @@ if(APPLE)
 endif()
 set(WALLY_PRODUCT_BINARY "${_wally_runtime_dir}/${_wally_product_name}")
 
+# On Linux the product lands at build/wally, the same path Ninja gives this
+# target's own phony rule; declaring it as a byproduct there is "multiple rules
+# generate wally". Nothing in the build graph consumes the file, so it is only
+# declared where the names differ.
+set(_wally_product_byproducts "")
+if(NOT WALLY_PRODUCT_BINARY STREQUAL "${CMAKE_BINARY_DIR}/wally")
+    set(_wally_product_byproducts BYPRODUCTS "${WALLY_PRODUCT_BINARY}")
+endif()
+
 add_custom_target(wally ALL
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_wally_runtime_dir}"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${WALLY_CARGO_BIN}" "${WALLY_PRODUCT_BINARY}"
-    BYPRODUCTS "${WALLY_PRODUCT_BINARY}"
+    ${_wally_product_byproducts}
     DEPENDS wally_cargo
     COMMENT "wally → ${WALLY_PRODUCT_BINARY}"
     VERBATIM)
@@ -174,9 +183,7 @@ if(BUILD_TESTING)
         set(_wally_test_path "${_wally_test_path}:$ENV{PATH}")
     endif()
     add_test(NAME wally_rust_tests
-        COMMAND "${CMAKE_COMMAND}" -E env
-            "WALLY_BUILD_ENV=${WALLY_BUILD_ENV_FILE}"
-            "CARGO_TARGET_DIR=${WALLY_CARGO_TARGET_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E env ${WALLY_CARGO_ENV}
             "${WALLY_CARGO}" test ${_wally_cargo_profile_flag} --locked
                 --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml" --no-fail-fast
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
@@ -212,9 +219,7 @@ if(BUILD_TESTING)
     # the coding tool replaced by the fixtures in tests/local_harness/.
     if(RunAnywhere_HAS_SERVER AND RunAnywhere_HAS_LLAMACPP)
         add_test(NAME wally_local_harness_bins
-            COMMAND "${CMAKE_COMMAND}" -E env
-                "WALLY_BUILD_ENV=${WALLY_BUILD_ENV_FILE}"
-                "CARGO_TARGET_DIR=${WALLY_CARGO_TARGET_DIR}"
+            COMMAND "${CMAKE_COMMAND}" -E env ${WALLY_CARGO_ENV}
                 "${WALLY_CARGO}" build ${_wally_cargo_profile_flag} --locked
                     --manifest-path "${CMAKE_SOURCE_DIR}/Cargo.toml"
                     --bin fake_llm --bin harness_child
