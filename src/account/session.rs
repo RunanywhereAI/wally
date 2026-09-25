@@ -133,10 +133,15 @@ impl ConsoleSession {
                 &self.credentials.access_token,
             );
         }
-        if result == IdentityResult::Ok {
-            Ok(value)
-        } else {
-            Err(failure)
+        match result {
+            IdentityResult::Ok => Ok(value),
+            // Refused again with a token the console itself just issued: the
+            // session is no good, and only signing in again gets a new one.
+            IdentityResult::Unauthorized => Err(
+                "the console still rejected this session after a refresh; run `wally account login`"
+                    .to_string(),
+            ),
+            _ => Err(failure),
         }
     }
 }

@@ -2066,6 +2066,53 @@ fn a_busy_console_on_refresh_is_not_a_reason_to_log_in_again() {
     assert!(error.contains("wally account login"), "{error}");
 }
 
+// A 401 that outlasts the one refresh is the session itself: the console
+// refused a token it had just issued. Only signing in again gets past that,
+// so the error says to, and nothing is asked a third time.
+#[test]
+fn a_session_still_refused_after_a_refresh_says_to_log_in() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let mut env = EnvGuard::new();
+    env.set("WALLY_PROFILE_DIR", home.path().to_string_lossy().as_ref());
+    env.unset("WALLY_CONSOLE_URL");
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&calls);
+    let client = ConsoleClient::new(Some(Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            seen.lock().unwrap().push(request.url.clone());
+            if request.url.ends_with("/auth/cli/refresh") {
+                return Ok(HttpResponse {
+                    status: 200,
+                    body: json(serde_json::json!({
+                        "access_token": "fresh-token",
+                        "refresh_token": "fresh-refresh",
+                        "expires_in": 3600,
+                    })),
+                    headers: BTreeMap::new(),
+                });
+            }
+            Ok(HttpResponse {
+                status: 401,
+                ..HttpResponse::default()
+            })
+        },
+    ) as Transport));
+    let mut session = stale_session(&home, client);
+    let error = account::export_usage_requests(&mut session, requests_window(), false)
+        .expect_err("refused twice");
+    assert_eq!(
+        error,
+        "the console still rejected this session after a refresh; run `wally account login`"
+    );
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        3,
+        "page, refresh, page, then stop"
+    );
+}
+
 fn console_refusing_then_unreachable() -> ConsoleClient {
     ConsoleClient::new(Some(Arc::new(
         move |request: &HttpRequest| -> Result<HttpResponse, String> {
