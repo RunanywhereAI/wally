@@ -2066,6 +2066,61 @@ fn a_busy_console_on_refresh_is_not_a_reason_to_log_in_again() {
     assert!(error.contains("wally account login"), "{error}");
 }
 
+fn console_refusing_then_unreachable() -> ConsoleClient {
+    ConsoleClient::new(Some(Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            if request.url.ends_with("/auth/cli/refresh") {
+                // What `send` reports for a transport that got no answer.
+                return Err(String::new());
+            }
+            Ok(HttpResponse {
+                status: 401,
+                ..HttpResponse::default()
+            })
+        },
+    ) as Transport))
+}
+
+// A refresh that never reached the console (DNS, a refused connection, a
+// timeout) says nothing about the session either. The error is the network's,
+// as sent, with no login hint: logging in cannot fix a network that is down.
+#[test]
+fn an_unreachable_console_on_refresh_is_not_a_reason_to_log_in_again() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let mut env = EnvGuard::new();
+    env.set("WALLY_PROFILE_DIR", home.path().to_string_lossy().as_ref());
+    env.unset("WALLY_CONSOLE_URL");
+    let unreachable = "could not reach Wally Cloud - check your internet connection";
+
+    let refused = console_refusing_then_unreachable()
+        .refresh("https://console.example.test", "old-refresh")
+        .expect_err("no answer");
+    assert_eq!(
+        (refused.message.as_str(), refused.unavailable),
+        (unreachable, true)
+    );
+
+    // A 401 answered by a refresh that could not be sent.
+    let mut session = stale_session(&home, console_refusing_then_unreachable());
+    let error = account::export_usage_requests(&mut session, requests_window(), false)
+        .expect_err("the retry never happened");
+    assert_eq!(error, unreachable);
+
+    // An expired token refreshed on open, with the network down.
+    let credentials = Credentials {
+        console_url: "https://console.example.test".to_string(),
+        email: "dev@example.test".to_string(),
+        access_token: "stale-token".to_string(),
+        refresh_token: "old-refresh".to_string(),
+        expires_at: 1,
+    };
+    let error = ConsoleSession::resume(console_refusing_then_unreachable(), credentials, 1_000)
+        .err()
+        .expect("no refresh on open");
+    assert_eq!(error, unreachable);
+}
+
 // A refresh stamps the new deadline on the clock the session was opened with,
 // the same one expiry was judged on, not on a second reading of the wall clock.
 #[test]

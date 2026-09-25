@@ -936,3 +936,27 @@ fn windows_args_survive_the_spawn_command_line() {
         assert_eq!(got, want, "QuoteWindowsArg({input}) = {got}, want {want}");
     }
 }
+
+// A refresh that never reached the console is the same "could not ask" as a
+// rate-limited one: the network being down is no disproof of the stored
+// session, so the launch goes on it rather than sending the person to log in.
+#[test]
+fn verify_cloud_session_unreachable_refresh_is_unverified_not_bad() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    let temporary = tempfile::tempdir().expect("temp dir");
+    env.set("WALLY_PROFILE_DIR", temporary.path());
+    seed("expired-access-token", "refresh-token", now_seconds() - 1).expect("seed credentials");
+
+    let console = ConsoleClient::new(Some(Arc::new(|_request: &HttpRequest| {
+        Err("could not reach Wally Cloud - check your internet connection".to_string())
+    })));
+
+    let mut credentials = account::load().expect("load credentials");
+    let error = harness::verify_cloud_session(&console, &mut credentials).unwrap_err();
+    assert!(
+        error.unverified,
+        "an unreachable console must report the session as UNVERIFIED, not as bad: {}",
+        error.message
+    );
+}

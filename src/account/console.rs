@@ -1011,9 +1011,12 @@ impl ConsoleClient {
             bearer_token: String::new(),
             timeout_ms: 0,
         };
+        // No answer at all (DNS, a refused connection, a timeout) is the
+        // console not being reached, which says nothing about the session:
+        // logging in again cannot fix a network that is down.
         let response = self
             .send(request)
-            .map_err(|message| unavailable_err(message, false))?;
+            .map_err(|message| unavailable_err(message, true))?;
         if response.status != 200 {
             let message = http_error("refresh", &origin, &response);
             // Same distinction as WhoAmI: a busy console has not told us this
