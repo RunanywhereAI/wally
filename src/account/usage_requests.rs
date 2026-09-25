@@ -39,13 +39,15 @@ pub fn model_id_is_valid(value: &str) -> bool {
 }
 
 /// `seconds` since the epoch as RFC 3339 UTC (`2026-09-21T14:13:20Z`), the form
-/// the route reads `since` and `until` in. A clock at or before the epoch is an
+/// the route reads `since` and `until` in. A time at or before the epoch is an
 /// error: there is no window to ask about, and a placeholder sent in its place
-/// would be the console's 422 to explain.
+/// would be the console's 422 to explain. The value may be a window bound
+/// rather than the clock itself, so the message names the value.
 pub fn rfc3339_utc(seconds: i64) -> Result<String, String> {
     if seconds <= 0 {
         return Err(format!(
-            "the system clock reads {seconds}s since 1970, which is not a time the console can be asked about"
+            "{seconds}s since 1970 is at or before the epoch, which is not a time the console can \
+             be asked about"
         ));
     }
     Ok(crate::util::format_utc(seconds))
@@ -291,6 +293,12 @@ mod tests {
         for bad in [0, -1, i64::MIN] {
             assert!(rfc3339_utc(bad).is_err(), "{bad} became a timestamp");
         }
+        // A window bound, not the clock: the clock here is fine.
+        assert_eq!(
+            UsageRequestsQuery::last_days(31, 60).unwrap_err(),
+            "-2678340s since 1970 is at or before the epoch, which is not a time the console can \
+             be asked about"
+        );
     }
 
     #[test]
