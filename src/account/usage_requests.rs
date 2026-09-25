@@ -53,6 +53,87 @@ pub fn rfc3339_utc(seconds: i64) -> Result<String, String> {
     Ok(crate::util::format_utc(seconds))
 }
 
+/// An RFC 3339 `date-time` with a timezone, as the instant it names: seconds
+/// since the epoch and the nanoseconds past them, so two can be ordered and
+/// subtracted. `None` for anything else, including a time with no offset and a
+/// leap second, both of which the route refuses.
+fn parse_rfc3339(value: &str) -> Option<(i64, u32)> {
+    let b = value.as_bytes();
+    let number = |part: &[u8]| -> Option<u32> {
+        if part.is_empty() || part.len() > 9 || !part.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        Some(part.iter().fold(0, |n, d| n * 10 + u32::from(d - b'0')))
+    };
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !matches!(b[10], b'T' | b't')
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let year = number(&b[0..4])?;
+    let month = number(&b[5..7])?;
+    let day = number(&b[8..10])?;
+    let hour = number(&b[11..13])?;
+    let minute = number(&b[14..16])?;
+    let second = number(&b[17..19])?;
+
+    let mut rest = &b[19..];
+    let mut nanos = 0;
+    if let Some((b'.', tail)) = rest.split_first() {
+        let width = tail.iter().take_while(|d| d.is_ascii_digit()).count();
+        nanos = number(&tail[..width])? * 10u32.pow(9 - width as u32);
+        rest = &tail[width..];
+    }
+    let offset: i64 = match rest {
+        [b'Z' | b'z'] => 0,
+        [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2] => {
+            let hours = number(&[*h1, *h2])?;
+            let minutes = number(&[*m1, *m2])?;
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            let magnitude = i64::from(hours * 3600 + minutes * 60);
+            if *sign == b'-' {
+                -magnitude
+            } else {
+                magnitude
+            }
+        }
+        _ => return None,
+    };
+
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 31,
+    };
+    if year == 0
+        || !(1..=12).contains(&month)
+        || !(1..=month_days).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    let days = crate::util::days_from_civil(year as i32, month, day);
+    let local = days * SECONDS_PER_DAY + i64::from(hour * 3600 + minute * 60 + second);
+    Some((local - offset, nanos))
+}
+
+/// How far `until` runs past `since`, in nanoseconds.
+fn span_nanos(since: (i64, u32), until: (i64, u32)) -> i128 {
+    let nanos =
+        |(seconds, nanos): (i64, u32)| i128::from(seconds) * 1_000_000_000 + i128::from(nanos);
+    nanos(until) - nanos(since)
+}
+
 /// One page's query. The window is the caller's to name: the route requires
 /// `since` and `until` and refuses a span past 31 days, so nothing here picks a
 /// default a reader could mistake for the server's own idea of "recent".
@@ -106,6 +187,25 @@ impl UsageRequestsQuery {
     pub fn validate(&self) -> Result<(), String> {
         if self.since.is_empty() || self.until.is_empty() {
             return Err("a since and an until are both required".to_string());
+        }
+        let bound = |name: &str, value: &str| {
+            parse_rfc3339(value).ok_or_else(|| {
+                format!(
+                    "{name} must be an RFC 3339 time with a timezone, for example \
+                     2026-09-23T19:35:45Z"
+                )
+            })
+        };
+        let since = bound("since", &self.since)?;
+        let until = bound("until", &self.until)?;
+        let span = span_nanos(since, until);
+        if span <= 0 {
+            return Err("since must be earlier than until".to_string());
+        }
+        if span > i128::from(USAGE_REQUESTS_MAX_WINDOW_DAYS * SECONDS_PER_DAY) * 1_000_000_000 {
+            return Err(format!(
+                "the window may span at most {USAGE_REQUESTS_MAX_WINDOW_DAYS} days"
+            ));
         }
         if !(1..=USAGE_REQUESTS_MAX_LIMIT).contains(&self.limit) {
             return Err(format!(
@@ -424,6 +524,93 @@ mod tests {
             ..window()
         };
         assert_eq!(accepted.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_timestamp_is_read_as_the_instant_it_names() {
+        assert_eq!(parse_rfc3339("1970-01-01T00:00:00Z"), Some((0, 0)));
+        assert_eq!(parse_rfc3339("2026-09-21T14:13:20Z"), Some((NOW, 0)));
+        assert_eq!(parse_rfc3339("2026-09-21t14:13:20z"), Some((NOW, 0)));
+        assert_eq!(parse_rfc3339("2026-09-21T19:43:20+05:30"), Some((NOW, 0)));
+        assert_eq!(parse_rfc3339("2026-09-21T10:13:20-04:00"), Some((NOW, 0)));
+        assert_eq!(
+            parse_rfc3339("2026-09-21T14:13:20.5Z"),
+            Some((NOW, 500_000_000))
+        );
+        assert_eq!(
+            parse_rfc3339("2026-09-21T14:13:20.123456789Z"),
+            Some((NOW, 123_456_789))
+        );
+        assert!(parse_rfc3339("2024-02-29T00:00:00Z").is_some());
+        for bad in [
+            "",
+            "2026-09-21T14:13:20",
+            "2026-09-21 14:13:20Z",
+            "2026-09-21T14:13Z",
+            "2026-9-21T14:13:20Z",
+            "2026-09-21T14:13:20+0530",
+            "2026-09-21T14:13:20+24:00",
+            "2026-09-21T14:13:20.Z",
+            "2026-09-21T14:13:20.1234567890Z",
+            "2026-09-21T24:00:00Z",
+            "2026-09-21T14:60:00Z",
+            "2016-12-31T23:59:60Z",
+            "2026-02-29T00:00:00Z",
+            "2026-13-01T00:00:00Z",
+            "2026-00-01T00:00:00Z",
+            "0000-01-01T00:00:00Z",
+            "2026-09-21T14:13:20Z ",
+            "+026-09-21T14:13:20Z",
+            "２026-09-21T14:13:20Z",
+        ] {
+            assert_eq!(parse_rfc3339(bad), None, "{bad:?} was read as a time");
+        }
+    }
+
+    #[test]
+    fn a_window_the_route_would_refuse_is_refused_here() {
+        let between = |since: &str, until: &str| UsageRequestsQuery {
+            since: since.to_string(),
+            until: until.to_string(),
+            ..UsageRequestsQuery::default()
+        };
+        let cases = [
+            (
+                between("2026-09-20T14:13:20", "2026-09-21T14:13:20Z"),
+                "since must be an RFC 3339 time with a timezone, for example 2026-09-23T19:35:45Z",
+            ),
+            (
+                between("2026-09-20T14:13:20Z", "yesterday"),
+                "until must be an RFC 3339 time with a timezone, for example 2026-09-23T19:35:45Z",
+            ),
+            (
+                between("2026-09-21T14:13:20Z", "2026-09-20T14:13:20Z"),
+                "since must be earlier than until",
+            ),
+            (
+                between("2026-09-21T14:13:20Z", "2026-09-21T19:43:20+05:30"),
+                "since must be earlier than until",
+            ),
+            (
+                between("2026-08-21T14:13:20Z", "2026-09-21T14:13:20.000000001Z"),
+                "the window may span at most 31 days",
+            ),
+            (
+                between("2026-08-21T14:13:20Z", "2026-09-21T14:13:21Z"),
+                "the window may span at most 31 days",
+            ),
+        ];
+        for (query, expected) in cases {
+            assert_eq!(query.validate().unwrap_err(), expected, "{query:?}");
+        }
+
+        for (since, until) in [
+            ("2026-08-21T14:13:20Z", "2026-09-21T14:13:20Z"),
+            ("2026-09-21T14:13:20Z", "2026-09-21T14:13:20.000001Z"),
+            ("2026-08-21T19:43:20+05:30", "2026-09-21T14:13:20Z"),
+        ] {
+            assert_eq!(between(since, until).validate(), Ok(()), "{since} {until}");
+        }
     }
 
     // ---- paging, against a transport that serves pages by cursor ----

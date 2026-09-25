@@ -43,6 +43,19 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (year as i64, m, d)
 }
 
+/// The inverse of `civil_from_days`: days since 1970-01-01 for a proleptic
+/// Gregorian date. The caller supplies a real date (month 1-12, a day the
+/// month has); `year` is limited to what a timestamp can carry.
+pub fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400); // [0, 399]
+    let mp = i64::from((month + 9) % 12); // March is 0
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe - 719_468
+}
+
 /// `seconds` since the epoch as `%Y-%m-%dT%H:%M:%SZ`. Every UTC timestamp
 /// wally writes goes through here, so there is one calendar conversion to get
 /// right. Callers decide what a non-positive clock means for them.
@@ -83,6 +96,18 @@ mod tests {
         let (year, month, day) = civil_from_days(i64::MIN);
         assert!(year < -25_000_000_000_000_000, "{year}");
         assert!((1..=12).contains(&month) && (1..=31).contains(&day));
+    }
+
+    #[test]
+    fn days_from_civil_inverts_civil_from_days() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        assert_eq!(days_from_civil(2000, 2, 29), 11016);
+        assert_eq!(days_from_civil(9999, 12, 31), 2_932_896);
+        for days in (-800_000..800_000).step_by(997) {
+            let (year, month, day) = civil_from_days(days);
+            assert_eq!(days_from_civil(year as i32, month, day), days);
+        }
     }
 
     #[test]
