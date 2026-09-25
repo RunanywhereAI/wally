@@ -32,6 +32,11 @@ CARGO_TOML = ROOT / "Cargo.toml"
 RUST_TOOLCHAIN = ROOT / "rust-toolchain.toml"
 WORKFLOWS = ROOT / ".github" / "workflows"
 INSTALLER = ROOT / "install.sh"
+# Part of glibc itself, so present on any system that passes install.sh's
+# MIN_GLIBC check and not worth probing one by one.
+GLIBC_LIBRARIES = {
+    "ld-linux-x86-64.so.2", "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
+}
 
 # The release ABI checker owns reading versions.toml [linux_abi]; reuse it rather
 # than parse the same section a second way here.
@@ -206,12 +211,22 @@ def main() -> None:
     if not checked:
         failures.append(f"{INSTALLER}: no LINUX_SYSTEM_LIBRARIES line found")
     else:
-        for library in checked.group(1).split():
-            if library not in abi["system_libraries"]:
-                failures.append(
-                    f"{INSTALLER}: checks {library}, which versions.toml [linux_abi] "
-                    "system_libraries does not list"
-                )
+        installer_checks = set(checked.group(1).split())
+        allowed = set(abi["system_libraries"])
+        for library in sorted(installer_checks - allowed):
+            failures.append(
+                f"{INSTALLER}: checks {library}, which versions.toml [linux_abi] "
+                "system_libraries does not list"
+            )
+        # The other direction matters more: a library the bottle takes from the
+        # system but the installer does not look for is only discovered after
+        # the download, as a loader error. glibc's own libraries are covered by
+        # the MIN_GLIBC check instead.
+        for library in sorted(allowed - installer_checks - GLIBC_LIBRARIES):
+            failures.append(
+                f"{INSTALLER}: LINUX_SYSTEM_LIBRARIES does not check {library}, which the "
+                "bottle takes from the system (versions.toml [linux_abi] system_libraries)"
+            )
 
     # The Swift package's exact SDK pin.
     package = PACKAGE.read_text(encoding="utf-8")
