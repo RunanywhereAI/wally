@@ -74,13 +74,23 @@ USAGE_BODY = {
 
 
 EXPORT_FIRST = "/v1/cli/usage/requests?since=*&until=*&limit=100"
-EXPORT_SECOND = EXPORT_FIRST + "&cursor=p2"
+# --follow asks for the route's maximum page so the walk is as few pages as it can be.
+EXPORT_FOLLOW_FIRST = "/v1/cli/usage/requests?since=*&until=*&limit=200"
+EXPORT_FOLLOW_SECOND = EXPORT_FOLLOW_FIRST + "&cursor=p2"
+# Every page of a filtered walk repeats the filters; the fake refuses one that does not.
+EXPORT_FILTERS = "&model=glm-5.3-flash&status_code=200&response_request_id=resp-a"
+EXPORT_FILTERED_FIRST = EXPORT_FOLLOW_FIRST + EXPORT_FILTERS
+EXPORT_FILTERED_SECOND = EXPORT_FILTERED_FIRST + "&cursor=p2"
+# A model the fake console refuses with the contract's ApiError, as the real one
+# refuses a query it cannot serve.
+REFUSED_MODEL = "refused-model"
+REFUSAL = "cursor does not belong to this window or filter set"
 
 
-def export_record(request_id, status=200, error=None, ttft=310):
+def export_record(request_id, status=200, error=None, ttft=310, provider="self_hosted_sglang"):
     return {
         "request_id": request_id, "response_request_id": "resp-" + request_id,
-        "model": "glm-5.3-flash", "provider": "self_hosted_sglang",
+        "model": "glm-5.3-flash", "provider": provider,
         "status_code": status, "error_code": error, "finish_reason": "stop",
         "stream": True, "ts_start": "2026-09-25T08:00:00.123456+00:00",
         "ts_end": None, "recorded_at": "2026-09-25T08:00:02+00:00",
@@ -102,7 +112,8 @@ EXPORT_PAGES = {
            "requests": [export_record("a"), export_record("b", 500, "upstream_error", None)],
            "next_cursor": "p2"},
     "p2": {"as_of": "2026-09-25T08:34:18Z", "totals": EXPORT_TOTALS,
-           "requests": [export_record("c")], "next_cursor": None},
+           # A provider this build has never heard of must not cost the page.
+           "requests": [export_record("c", provider="bedrock")], "next_cursor": None},
 }
 
 
@@ -112,7 +123,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     # False stands in for every console deployed before windowed totals, which
     # is all of them until /v1/cli/usage ships.
     serves_windows = True
-    export_window = None
+    # Everything but the cursor that the first page of the current walk was
+    # asked with. A later page must repeat all of it.
+    export_query = None
 
     def log_message(self, _format, *_args):
         return
@@ -129,25 +142,31 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def refuse(self, message):
+        # The contract's ApiError, the one error shape the control plane sends.
+        self.reply(400, {"code": "invalid_request", "message": message})
+
     def reply_requests_page(self):
         query = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).items()}
         missing = [k for k in ("since", "until", "limit") if k not in query]
         if missing:
-            self.reply(400, {"detail": f"missing {missing}"})
+            self.refuse(f"missing {missing}")
             return
-        window = (query["since"], query["until"])
-        cursor = query.get("cursor")
-        # The real console refuses a cursor from a different window rather than
-        # reinterpret it; so does this one, which is what makes the CLI's
-        # window handling observable.
-        if cursor is not None and window != ConsoleHandler.export_window:
-            self.reply(400, {"detail": "cursor does not belong to this window"})
+        if query.get("model") == REFUSED_MODEL:
+            self.refuse(REFUSAL)
+            return
+        cursor = query.pop("cursor", None)
+        # The real console refuses a cursor sent with a different window or
+        # filter set rather than reinterpret it; so does this one, which is what
+        # makes the CLI's paging observable.
+        if cursor is not None and query != ConsoleHandler.export_query:
+            self.refuse(REFUSAL)
             return
         if cursor is None:
-            ConsoleHandler.export_window = window
+            ConsoleHandler.export_query = query
         page = EXPORT_PAGES.get(cursor)
         if page is None:
-            self.reply(400, {"detail": "unknown cursor"})
+            self.refuse("unknown cursor")
             return
         self.reply(200, page)
 
@@ -245,7 +264,7 @@ def check_requests_export(binary, environment):
     # there is more. Nothing here may claim to have read the whole window.
     first = run(binary, ["account", "usage", "--requests"], environment)
     for fragment in ("2 of 3 settled", "resp-a", "resp-b", "error: upstream_error (stop)",
-                     "more rows exist", "window "):
+                     "more rows exist", "window ", "09-25 08:00:00 "):
         if fragment not in first:
             raise AssertionError(f"--requests did not report {fragment!r}:\n{first}")
     if "resp-c" in first:
@@ -267,35 +286,66 @@ def check_requests_export(binary, environment):
     if followed.count("window ") != 1 or followed.count("started") != 1:
         raise AssertionError(f"--follow repeated its summary or header per page:\n{followed}")
 
-    # JSON is one page, echoes its window, and hands back the cursor. Replaying
-    # that window with the cursor reads the rest; a window recomputed from now
-    # would be refused by the console.
-    document = json_document(run(binary, ["--json", "account", "usage", "--requests"], environment))
-    if (len(document["rows"]), document["next_cursor"]) != (2, "p2"):
-        raise AssertionError(f"unexpected first JSON page: {document}")
-    if document["rows"][1]["ttft_ms"] != -1 or document["rows"][0]["ttft_ms"] != 310:
-        raise AssertionError(f"ttft did not round-trip as 310 / -1: {document['rows']}")
-    rest = json_document(run(binary, [
-        "--json", "account", "usage", "--requests",
-        "--since", document["since"], "--until", document["until"], "--cursor", "p2",
-    ], environment))
-    if [r["request_id"] for r in rest["rows"]] != ["c"] or "next_cursor" in rest:
-        raise AssertionError(f"the replayed cursor did not read the last page: {rest}")
+    # JSON is one document. Without --follow it is the first page and says so;
+    # with --follow it is every row and says there is nothing left.
+    page = json_document(run(binary, ["--json", "account", "usage", "--requests"], environment))
+    if (len(page["rows"]), page["has_more"], "next_cursor" in page) != (2, True, False):
+        raise AssertionError(f"unexpected first JSON page: {page}")
+    # An absent value is JSON null, never a sentinel such as -1 or "".
+    if page["rows"][1]["ttft_ms"] is not None or page["rows"][0]["ttft_ms"] != 310:
+        raise AssertionError(f"ttft did not round-trip as 310 / null: {page['rows']}")
+    first_row = page["rows"][0]
+    expected_row = {
+        "ts_end": None, "recorded_at": "2026-09-25T08:00:02+00:00",
+        "noncached_prompt_tokens": 200, "max_tokens_requested": None,
+        "max_tokens_granted": None, "provider": "self_hosted_sglang", "tpot_ms": None,
+        "error_code": None, "finish_reason": "stop",
+    }
+    for key, value in expected_row.items():
+        if key not in first_row or first_row[key] != value:
+            raise AssertionError(f"row {key} is {first_row.get(key, '<missing>')!r}, not {value!r}")
+    whole = json_document(run(binary, ["--json", "account", "usage", "--requests", "--follow"], environment))
+    if [r["request_id"] for r in whole["rows"]] != ["a", "b", "c"] or whole["has_more"]:
+        raise AssertionError(f"--json --follow did not return every row: {whole}")
+    if whole["row_count"] != 3 or whole["total_requests"] != 3 or "requests" in whole:
+        raise AssertionError(f"--json --follow miscounted: {whole}")
+    if whole["rows"][2]["provider"] != "bedrock":
+        raise AssertionError(f"an unknown provider was not carried: {whole['rows'][2]}")
+
+    # A filtered walk repeats every filter on every page; the fake console
+    # refuses page two otherwise.
+    filtered = run(binary, ["account", "usage", "--requests", "--follow", "--model", "glm-5.3-flash",
+                            "--status", "200", "--response-request-id", "resp-a"], environment)
+    if "3 of 3 settled" not in filtered:
+        raise AssertionError(f"a filtered --follow did not reach the last page:\n{filtered}")
+
+    # The console's own refusal is what the person reads, not a bare status.
+    run_failing(binary, ["account", "usage", "--requests", "--model", REFUSED_MODEL], environment,
+                f"Wally Cloud refused the usage export: {REFUSAL}")
 
     # Refused before anything is sent.
     tail = ["--requests"]
     run_failing(binary, ["account", "usage", "--follow"], environment, "only applies with --requests")
     run_failing(binary, ["account", "usage", "--days", "3"], environment, "only applies with --requests")
-    run_failing(binary, ["--json", "account", "usage", *tail, "--follow"], environment, "cannot be combined with --json")
-    run_failing(binary, ["account", "usage", *tail, "--cursor", "p2"], environment, "--cursor needs --since and --until")
-    run_failing(binary, ["account", "usage", *tail, "--until", "2026-09-25T00:00:00Z"], environment, "--until needs --since")
-    run_failing(binary, ["account", "usage", *tail, "--since", "2026-09-25T00:00:00"], environment, "timezone")
-    run_failing(binary, ["account", "usage", *tail, "--days", "3", "--since", "2026-09-25T00:00:00Z"], environment, "cannot be combined")
-    run_failing(binary, ["account", "usage", *tail, "--since", "2026-06-01T00:00:00Z", "--until", "2026-09-01T00:00:00Z"], environment, "longer than 31 days")
-    run_failing(binary, ["account", "usage", *tail, "--days", "0"], environment, "0")
-    run_failing(binary, ["account", "usage", *tail, "--days", "32"], environment, "32")
-    run_failing(binary, ["account", "usage", *tail, "--status", "99"], environment, "99")
-    run_failing(binary, ["account", "usage", *tail, "--limit", "201"], environment, "201")
+    run_failing(binary, ["account", "usage", *tail, "--follow", "--limit", "5"], environment, "--limit sets the size")
+    # The parser refuses an out-of-range number by naming the flag, the value
+    # and the range.
+    for flag, value, bounds in (("--days", "0", "1 - 31"), ("--days", "32", "1 - 31"),
+                                ("--status", "99", "100 - 599"), ("--limit", "0", "1 - 200"),
+                                ("--limit", "201", "1 - 200")):
+        run_failing(binary, ["account", "usage", *tail, flag, value], environment,
+                    f"{flag}: Value {value} not in range [{bounds}]")
+    # A filter the contract refuses is refused here, never dropped from the query.
+    run_failing(binary, ["account", "usage", *tail, "--model", ""], environment,
+                "the model filter must be a model id")
+    run_failing(binary, ["account", "usage", *tail, "--model", "glm 5.3"], environment,
+                "the model filter must be a model id")
+    run_failing(binary, ["account", "usage", *tail, "--response-request-id", ""], environment,
+                "the response request id filter must be 1-128 characters")
+    run_failing(binary, ["account", "usage", *tail, "--response-request-id", "r" * 129], environment,
+                "the response request id filter must be 1-128 characters")
+    for gone in ("--since", "--until", "--cursor"):
+        run_failing(binary, ["account", "usage", *tail, gone, "x"], environment, "not expected")
 
 
 def main():
@@ -418,10 +468,14 @@ def main():
             # so it is compared as a shape. Nothing the CLI refuses up front
             # (a bad flag, a window past 31 days) may appear here at all.
             ("GET", EXPORT_FIRST, f"Bearer {ACCESS_TOKEN}"),  # --requests
-            ("GET", EXPORT_FIRST, f"Bearer {ACCESS_TOKEN}"),  # --follow, page 1
-            ("GET", EXPORT_SECOND, f"Bearer {ACCESS_TOKEN}"),  # --follow, page 2
+            ("GET", EXPORT_FOLLOW_FIRST, f"Bearer {ACCESS_TOKEN}"),  # --follow, page 1
+            ("GET", EXPORT_FOLLOW_SECOND, f"Bearer {ACCESS_TOKEN}"),  # --follow, page 2
             ("GET", EXPORT_FIRST, f"Bearer {ACCESS_TOKEN}"),  # --json
-            ("GET", EXPORT_SECOND, f"Bearer {ACCESS_TOKEN}"),  # replayed window + cursor
+            ("GET", EXPORT_FOLLOW_FIRST, f"Bearer {ACCESS_TOKEN}"),  # --json --follow, page 1
+            ("GET", EXPORT_FOLLOW_SECOND, f"Bearer {ACCESS_TOKEN}"),  # --json --follow, page 2
+            ("GET", EXPORT_FILTERED_FIRST, f"Bearer {ACCESS_TOKEN}"),  # filtered --follow, page 1
+            ("GET", EXPORT_FILTERED_SECOND, f"Bearer {ACCESS_TOKEN}"),  # filtered --follow, page 2
+            ("GET", EXPORT_FIRST + "&model=" + REFUSED_MODEL, f"Bearer {ACCESS_TOKEN}"),  # refused
             ("POST", "/auth/cli/revoke", f"Bearer {ACCESS_TOKEN}"),
         ]
         window = re.compile(r"since=[^&]+&until=[^&]+")

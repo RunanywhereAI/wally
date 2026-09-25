@@ -17,7 +17,11 @@ here updates, uninstalls, serves, downloads or launches a tool.
 Three cases were re-captured from the Rust binary when `wally account usage`
 gained `--requests` (`help__account__usage`, `leaf__account__usage__bogus_flag`,
 `leaf__account__usage__extra_positional`). Their help text is the only thing
-that differs from the C++ capture; nothing else about them changed.
+that differs from the C++ capture; nothing else about them changed. The same
+change reworded the command's one-line description, so every case that prints
+the command list (the root and `account` help, `version__bare`, and the
+`unknown__*` and `parse__*` errors) was re-captured too, and that line is the
+only difference in each.
 
 Re-capture from a binary (only when behaviour changes on purpose):
 

@@ -25,7 +25,7 @@ Account:
   account login               Sign in through the browser
   account logout              Sign out and revoke the session
   account whoami              Show the signed-in account
-  account usage               Show remaining credit and the last day's spend
+  account usage               Credit and the last day's spend, or --requests
 
 Wally:
   about                       Versions, backends, paths and account

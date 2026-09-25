@@ -1203,7 +1203,7 @@ mod tests {
                         ("login", "Sign in through the browser"),
                         ("logout", "Sign out and revoke the session"),
                         ("whoami", "Show the signed-in account"),
-                        ("usage", "Show remaining credit and the last day's spend"),
+                        ("usage", "Credit and the last day's spend, or --requests"),
                     ],
                 ),
                 leaf("about", "Versions, backends, paths and account", "Wally"),

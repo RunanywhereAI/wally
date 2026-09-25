@@ -87,9 +87,11 @@ turns it into `src/account/console_contract.rs` (typed requests and responses,
 DO NOT EDIT), which `console.rs` uses instead of hand-built JSON. Requests
 serialize strictly; responses read tolerantly (a missing field defaults, a wrong
 type or unknown enum value still fails) so the CLI survives a server that lags
-the contract. `test_wally_contract` and
-`python3 contracts/sync_from_inferenceinfra.py --check` fail the build if the
-header, the pin, and the artifact drift.
+the contract. One field is exempt: the usage export's `provider` is a label the
+CLI only reports, so `console.rs` lifts a value the binding does not know out
+of the body before parsing and carries it as text instead of failing the page.
+`test_wally_contract` and `python3 contracts/sync_from_inferenceinfra.py
+--check` fail the build if the header, the pin, and the artifact drift.
 
 To re-vendor from an InferenceInfra checkout (records the source commit on the
 extract):

@@ -164,3 +164,63 @@ fn usage_request_page_round_trip() {
     assert!(quiet.requests.is_empty() && quiet.next_cursor.is_none());
     assert!(contract::UsageRequestPage::from_json(&serde_json::json!([])).is_err());
 }
+
+// The export's query bounds are checked by hand in `usage_requests.rs`, before
+// anything is sent. This pins every one of them to the artifact, so a contract
+// that moves a bound fails here instead of the CLI refusing (or sending) the
+// wrong thing.
+#[test]
+fn usage_request_query_bounds_match_the_contract() {
+    use wally::account;
+
+    let artifact: serde_json::Value =
+        serde_json::from_slice(CONTRACT_BYTES).expect("the contract is JSON");
+    let schemas = &artifact["components"]["schemas"];
+    let parameter = |name: &str| {
+        let value = &schemas[format!("ListCliUsageRequestsQuery{name}Value")];
+        // Optional filters are `anyOf: [{...}, {"type": "null"}]`.
+        value["anyOf"]
+            .as_array()
+            .and_then(|options| options.iter().find(|o| o["type"] != "null"))
+            .unwrap_or(value)
+            .clone()
+    };
+
+    let model = parameter("Model");
+    assert_eq!(model["pattern"], account::MODEL_ID_PATTERN);
+    assert_eq!(model["minLength"], 1);
+    assert_eq!(model["maxLength"], account::USAGE_REQUESTS_ID_MAX_CHARS);
+
+    let response_request_id = parameter("ResponseRequestId");
+    assert_eq!(response_request_id["minLength"], 1);
+    assert_eq!(
+        response_request_id["maxLength"],
+        account::USAGE_REQUESTS_ID_MAX_CHARS
+    );
+
+    let status = parameter("StatusCode");
+    assert_eq!(status["minimum"], account::HTTP_STATUS_MIN);
+    assert_eq!(status["maximum"], account::HTTP_STATUS_MAX);
+
+    let limit = parameter("Limit");
+    assert_eq!(limit["minimum"], 1);
+    assert_eq!(limit["maximum"], account::USAGE_REQUESTS_MAX_LIMIT);
+    assert_eq!(limit["default"], account::USAGE_REQUESTS_DEFAULT_LIMIT);
+
+    let cursor = parameter("Cursor");
+    assert_eq!(cursor["minLength"], 1);
+    assert_eq!(
+        cursor["maxLength"],
+        account::USAGE_REQUESTS_CURSOR_MAX_CHARS
+    );
+
+    // The hand-written check agrees with the pattern it stands in for.
+    for accepted in ["glm-5.3", "org/glm-5.3:fp8_v1", "A", "9b"] {
+        assert!(account::model_id_is_valid(accepted), "{accepted}");
+    }
+    for refused in ["", "-glm", ".x", "/x", "glm 5", "glm&x", "glm\u{e9}", "a?b"] {
+        assert!(!account::model_id_is_valid(refused), "{refused:?}");
+    }
+    assert!(account::model_id_is_valid(&"m".repeat(128)));
+    assert!(!account::model_id_is_valid(&"m".repeat(129)));
+}

@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use common::{env_lock, EnvGuard, TempHome};
 use wally::account::{
-    self as account, Authorization, CancelOutcome, ConsoleClient, Credentials, HttpRequest,
-    HttpResponse, IdentityResult, PollResult, Transport, UsageQuery, UsageRequestsQuery,
+    self as account, Authorization, CancelOutcome, ConsoleClient, ConsoleSession, Credentials,
+    HttpRequest, HttpResponse, IdentityResult, PollResult, Transport, UsageQuery,
+    UsageRequestsQuery,
 };
 
 fn json(value: serde_json::Value) -> String {
@@ -967,7 +968,7 @@ fn usage_requests_page_speaks_the_route() {
                         "prompt_tokens": 800, "cached_tokens": 700,
                         "noncached_prompt_tokens": 100, "completion_tokens": 40,
                         "reasoning_tokens": 20, "cost_micros": 12345,
-                        "pricing_version": "v1"
+                        "tpot_ms": 9, "pricing_version": "v1"
                     }],
                     "next_cursor": "cursor-2",
                 })),
@@ -977,13 +978,11 @@ fn usage_requests_page_speaks_the_route() {
     ) as Transport));
 
     let query = UsageRequestsQuery {
-        since: "2026-09-24T08:00:00Z".to_string(),
-        until: "2026-09-25T08:00:00Z".to_string(),
-        model: "glm-5.3-flash".to_string(),
-        status_code: 500,
-        response_request_id: "resp-9".to_string(),
+        model: Some("glm-5.3-flash".to_string()),
+        status_code: Some(500),
+        response_request_id: Some("resp-9".to_string()),
         limit: 25,
-        ..UsageRequestsQuery::default()
+        ..requests_window()
     };
     let (status, page, error) =
         console.fetch_usage_requests("https://console.example.test", "a-token", &query);
@@ -1005,27 +1004,31 @@ fn usage_requests_page_speaks_the_route() {
     }
     assert!(!url.contains("cursor="), "an empty cursor was sent: {url}");
 
-    assert_eq!(page.total_requests, 2);
-    assert_eq!(page.cost_micros, 12345);
-    assert_eq!(page.next_cursor, "cursor-2");
+    assert_eq!(page.totals.requests, 2);
+    assert_eq!(page.totals.cost_micros, 12345);
+    assert_eq!(page.next_cursor.as_deref(), Some("cursor-2"));
     assert_eq!(page.as_of, "2026-09-25T08:34:18Z");
     assert_eq!(page.requests.len(), 1);
     let row = &page.requests[0];
     assert_eq!(row.request_id, "ledger-1");
-    assert_eq!(row.response_request_id, "resp-1");
+    assert_eq!(row.response_request_id.as_deref(), Some("resp-1"));
     assert_eq!(row.model, "glm-5.3-flash");
+    assert_eq!(row.provider.as_deref(), Some("self_hosted_sglang"));
     assert_eq!(row.status_code, 200);
+    assert_eq!(row.recorded_at, "2026-09-25T08:00:02Z");
+    assert_eq!(row.tpot_ms, Some(9));
     assert_eq!(row.cost_micros, 12345);
     assert_eq!(row.pricing_version, "v1");
-    // A nullable the body omitted reads as absent, never as 0: a 0 would claim
-    // the engine answered instantly.
-    assert!(row.error_code.is_empty() && row.ts_end.is_empty());
+    // A nullable the body omitted reads as absent, never as 0 or "": a 0 would
+    // claim the engine answered instantly.
+    assert_eq!((row.error_code.clone(), row.ts_end.clone()), (None, None));
     assert_eq!((row.ttft_ms, row.max_tokens_granted), (None, None));
 }
 
 // The request is refused before it is sent when the caller left out a window
-// end or asked for a page the route would reject, so nothing reaches the
-// network for an input the client can already prove wrong.
+// end or asked for anything the contract would reject, so nothing reaches the
+// network for an input the client can already prove wrong, and no filter is
+// quietly left off.
 #[test]
 fn usage_requests_rejects_a_bad_query_before_sending() {
     let sent = Arc::new(Mutex::new(0));
@@ -1036,33 +1039,70 @@ fn usage_requests_rejects_a_bad_query_before_sending() {
             Err("must not be called".to_string())
         },
     ) as Transport));
-    let good = UsageRequestsQuery {
-        since: "2026-09-24T08:00:00Z".to_string(),
-        until: "2026-09-25T08:00:00Z".to_string(),
-        ..UsageRequestsQuery::default()
-    };
-    for query in [
-        UsageRequestsQuery {
-            since: String::new(),
-            ..good.clone()
-        },
-        UsageRequestsQuery {
-            until: String::new(),
-            ..good.clone()
-        },
-        UsageRequestsQuery {
-            limit: 0,
-            ..good.clone()
-        },
-        UsageRequestsQuery {
-            limit: 201,
-            ..good.clone()
-        },
-    ] {
+    let good = requests_window();
+    let cases = [
+        (
+            UsageRequestsQuery {
+                since: String::new(),
+                ..good.clone()
+            },
+            "a since and an until are both required",
+        ),
+        (
+            UsageRequestsQuery {
+                until: String::new(),
+                ..good.clone()
+            },
+            "a since and an until are both required",
+        ),
+        (
+            UsageRequestsQuery {
+                limit: 0,
+                ..good.clone()
+            },
+            "the page size must be 1-200, not 0",
+        ),
+        (
+            UsageRequestsQuery {
+                limit: 201,
+                ..good.clone()
+            },
+            "the page size must be 1-200, not 201",
+        ),
+        (
+            UsageRequestsQuery {
+                status_code: Some(42),
+                ..good.clone()
+            },
+            "the status filter must be an HTTP status (100-599), not 42",
+        ),
+        (
+            UsageRequestsQuery {
+                model: Some("a&limit=1 b".to_string()),
+                ..good.clone()
+            },
+            "the model filter must be a model id",
+        ),
+        (
+            UsageRequestsQuery {
+                response_request_id: Some(String::new()),
+                ..good.clone()
+            },
+            "the response request id filter must be 1-128 characters",
+        ),
+        (
+            UsageRequestsQuery {
+                cursor: Some(String::new()),
+                ..good.clone()
+            },
+            "the page cursor must be 1-2048 characters",
+        ),
+    ];
+    for (query, expected) in cases {
         let (status, _, error) =
             console.fetch_usage_requests("https://console.example.test", "a-token", &query);
         assert_eq!(status, IdentityResult::Failed, "{query:?} was not refused");
-        assert!(!error.is_empty());
+        assert!(error.starts_with(expected), "{query:?}: {error}");
     }
     assert_eq!(
         *sent.lock().unwrap(),
@@ -1071,26 +1111,16 @@ fn usage_requests_rejects_a_bad_query_before_sending() {
     );
 }
 
-// A 401 on the export is the session, not the route: the command's own refresh
+// A 401 on the export is the session, not the route: the session's refresh
 // path is what turns it around, so the client's only job is to report the
 // status faithfully.
 #[test]
 fn usage_requests_unauthorized_is_reported() {
-    let console = ConsoleClient::new(Some(Arc::new(
-        |_: &HttpRequest| -> Result<HttpResponse, String> {
-            Ok(HttpResponse {
-                status: 401,
-                ..HttpResponse::default()
-            })
-        },
-    ) as Transport));
-    let query = UsageRequestsQuery {
-        since: "2026-09-24T08:00:00Z".to_string(),
-        until: "2026-09-25T08:00:00Z".to_string(),
-        ..UsageRequestsQuery::default()
-    };
-    let (status, _, _) =
-        console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+    let (status, _, _) = requests_console(401, serde_json::json!({})).fetch_usage_requests(
+        "https://console.example.test",
+        "a-token",
+        &requests_window(),
+    );
     assert_eq!(status, IdentityResult::Unauthorized);
 }
 
@@ -1114,23 +1144,28 @@ fn requests_window() -> UsageRequestsQuery {
     }
 }
 
+fn export_record(provider: &str) -> serde_json::Value {
+    serde_json::json!({
+        "request_id": "ledger-1", "model": "glm-5.3", "provider": provider,
+        "status_code": 200, "stream": false,
+        "ts_start": "2026-09-25T08:00:00Z", "recorded_at": "2026-09-25T08:00:01Z",
+        "prompt_tokens": 1, "cached_tokens": 0, "noncached_prompt_tokens": 1,
+        "completion_tokens": 1, "reasoning_tokens": 0, "cost_micros": 1,
+        "pricing_version": "v1"
+    })
+}
+
 // The export's text lands in the person's terminal, so what the console chose
 // is sanitized: an escape sequence in a string is dropped, never printed.
 #[test]
 fn usage_requests_drops_terminal_control_text() {
+    let mut record = export_record("vertex_ai");
+    record["model"] = serde_json::json!("glm\u{1b}[31m-5.3");
+    record["error_code"] = serde_json::json!("bad\u{1b}code");
     let console = requests_console(
         200,
         serde_json::json!({
-            "as_of": "2026-09-25T08:34:18Z",
-            "totals": {},
-            "requests": [{
-                "request_id": "ledger-1", "model": "glm\u{1b}[31m-5.3",
-                "provider": "vertex_ai", "status_code": 200, "stream": false,
-                "ts_start": "2026-09-25T08:00:00Z", "recorded_at": "2026-09-25T08:00:01Z",
-                "prompt_tokens": 1, "cached_tokens": 0, "noncached_prompt_tokens": 1,
-                "completion_tokens": 1, "reasoning_tokens": 0, "cost_micros": 1,
-                "pricing_version": "v1"
-            }],
+            "as_of": "2026-09-25T08:34:18Z", "totals": {}, "requests": [record],
             "next_cursor": null,
         }),
     );
@@ -1145,14 +1180,65 @@ fn usage_requests_drops_terminal_control_text() {
         page.requests[0].model, "",
         "an escape sequence reached the domain row"
     );
-    assert_eq!(page.next_cursor, "", "a null cursor is the last page");
+    assert_eq!(page.requests[0].error_code, None);
+    assert_eq!(page.next_cursor, None, "a null cursor is the last page");
+}
+
+// `provider` is a label the export reports, not a value the CLI acts on, so a
+// console that starts naming a provider this build does not know must not make
+// the page unreadable. Every other closed value still fails the page.
+#[test]
+fn usage_requests_reads_a_provider_it_does_not_know() {
+    let console = requests_console(
+        200,
+        serde_json::json!({
+            "as_of": "2026-09-25T08:34:18Z", "totals": {},
+            "requests": [export_record("bedrock"), export_record("vertex_ai"),
+                         export_record("evil\u{1b}[2J")],
+            "next_cursor": null,
+        }),
+    );
+    let (status, page, error) = console.fetch_usage_requests(
+        "https://console.example.test",
+        "a-token",
+        &requests_window(),
+    );
+    assert_eq!(status, IdentityResult::Ok, "{error}");
+    let providers: Vec<_> = page
+        .requests
+        .iter()
+        .map(|r| r.provider.as_deref())
+        .collect();
+    assert_eq!(providers, [Some("bedrock"), Some("vertex_ai"), None]);
+
+    let mut wrong_type = export_record("vertex_ai");
+    wrong_type["provider"] = serde_json::json!(7);
+    let (status, _, error) = requests_console(
+        200,
+        serde_json::json!({"as_of": "x", "totals": {}, "requests": [wrong_type]}),
+    )
+    .fetch_usage_requests(
+        "https://console.example.test",
+        "a-token",
+        &requests_window(),
+    );
+    assert_eq!(status, IdentityResult::Failed);
+    assert!(error.contains("did not match the contract"), "{error}");
 }
 
 // A cursor the client cannot carry must fail the page. Sanitized to empty it
 // would read as "no more pages" and an export would end early and look whole.
+// An empty one breaks the contract (1..=2048) and is refused the same way.
 #[test]
 fn usage_requests_refuses_a_cursor_it_cannot_carry() {
-    for cursor in ["a".repeat(2049), "bad\u{1b}cursor".to_string()] {
+    for (cursor, expected) in [
+        ("a".repeat(2049), "cursor this client cannot carry"),
+        (
+            "bad\u{1b}cursor".to_string(),
+            "cursor this client cannot carry",
+        ),
+        (String::new(), "did not match the contract"),
+    ] {
         let console = requests_console(
             200,
             serde_json::json!({
@@ -1171,13 +1257,14 @@ fn usage_requests_refuses_a_cursor_it_cannot_carry() {
             "a {}-byte cursor passed",
             cursor.len()
         );
-        assert!(error.contains("cursor"), "{error}");
-        assert_eq!(page.next_cursor, "");
+        assert!(error.contains(expected), "{error}");
+        assert_eq!(page.next_cursor, None);
     }
 }
 
 // Server failures and contract violations are reported as failures, phrased for
-// a person, and never echo the body (an upstream error can carry a token).
+// a person, and never echo a body that is not the contract's refusal (an
+// upstream error can carry a token).
 #[test]
 fn usage_requests_reports_failures_without_echoing_the_body() {
     let (status, _, error) =
@@ -1188,12 +1275,12 @@ fn usage_requests_reports_failures_without_echoing_the_body() {
                 &requests_window(),
             );
     assert_eq!(status, IdentityResult::Failed);
-    assert!(error.contains("temporarily unavailable"), "{error}");
-    assert!(
-        !error.contains("sk-secret-token"),
-        "the body was echoed: {error}"
+    assert_eq!(
+        error,
+        "Wally Cloud is temporarily unavailable - try again shortly (HTTP 500)"
     );
 
+    // A 400 that is not the contract's ApiError says only what failed.
     let (status, _, error) = requests_console(400, serde_json::json!({"detail": "bad window"}))
         .fetch_usage_requests(
             "https://console.example.test",
@@ -1201,7 +1288,10 @@ fn usage_requests_reports_failures_without_echoing_the_body() {
             &requests_window(),
         );
     assert_eq!(status, IdentityResult::Failed);
-    assert!(error.contains("usage export"), "{error}");
+    assert_eq!(
+        error,
+        "Wally Cloud could not complete the usage export (HTTP 400)"
+    );
 
     // A 200 whose members have the wrong type is a contract violation.
     let (status, _, error) = requests_console(
@@ -1214,7 +1304,10 @@ fn usage_requests_reports_failures_without_echoing_the_body() {
         &requests_window(),
     );
     assert_eq!(status, IdentityResult::Failed);
-    assert!(error.contains("did not match the contract"), "{error}");
+    assert_eq!(
+        error,
+        "console returned a response that did not match the contract"
+    );
 
     // Not an object at all.
     let (status, _, _) = requests_console(200, serde_json::json!([])).fetch_usage_requests(
@@ -1225,11 +1318,59 @@ fn usage_requests_reports_failures_without_echoing_the_body() {
     assert_eq!(status, IdentityResult::Failed);
 }
 
-// An unset or out-of-range status filter is left off the URL rather than sent
-// as a value the route would refuse, and a token that is not a safe session
-// token never leaves the process.
+// A 400 or 422 is the console refusing the query, and its ApiError message is
+// the one thing that says what to change. It is shown, sanitized and cut to a
+// line, and never when it carries the session token.
 #[test]
-fn usage_requests_sends_only_filters_the_route_accepts() {
+fn usage_requests_shows_why_the_console_refused_the_query() {
+    let refused = |status: i32, message: &str| {
+        requests_console(
+            status,
+            serde_json::json!({"code": "invalid_request", "message": message}),
+        )
+        .fetch_usage_requests(
+            "https://console.example.test",
+            "a-token",
+            &requests_window(),
+        )
+        .2
+    };
+    assert_eq!(
+        refused(
+            400,
+            "the window may span at most 31 days; export it in parts"
+        ),
+        "Wally Cloud refused the usage export: the window may span at most 31 days; export it \
+         in parts"
+    );
+    assert_eq!(
+        refused(422, "Request validation failed."),
+        "Wally Cloud refused the usage export: Request validation failed."
+    );
+    let long = refused(400, &"x".repeat(2000));
+    assert_eq!(
+        long,
+        format!(
+            "Wally Cloud refused the usage export: {}...",
+            "x".repeat(240)
+        )
+    );
+    assert_eq!(
+        refused(400, "token a-token is not yours"),
+        "Wally Cloud could not complete the usage export (HTTP 400)",
+        "a message carrying the token is not echoed"
+    );
+    assert_eq!(
+        refused(422, "bad\u{1b}[2J"),
+        "Wally Cloud could not complete the usage export (HTTP 422)",
+        "terminal control text is not echoed"
+    );
+}
+
+// A model id is user input: it is escaped, not spliced into the query, and a
+// token that is not a safe session token never leaves the process.
+#[test]
+fn usage_requests_escapes_what_it_sends() {
     let asked_url = Arc::new(Mutex::new(String::new()));
     let seen = Arc::clone(&asked_url);
     let console = ConsoleClient::new(Some(Arc::new(
@@ -1244,33 +1385,26 @@ fn usage_requests_sends_only_filters_the_route_accepts() {
             })
         },
     ) as Transport));
-    for status_code in [0, 42, 600, -5] {
-        let query = UsageRequestsQuery {
-            status_code,
-            ..requests_window()
-        };
-        let (status, _, error) =
-            console.fetch_usage_requests("https://console.example.test", "a-token", &query);
-        assert_eq!(status, IdentityResult::Ok, "{error}");
-        assert!(
-            !asked_url.lock().unwrap().contains("status_code"),
-            "status_code={status_code} was sent"
-        );
-    }
-
-    // A model id is user input: it is escaped, not spliced into the query.
     let query = UsageRequestsQuery {
-        model: "a&limit=1 b".to_string(),
+        model: Some("org/glm-5.3:fp8".to_string()),
+        response_request_id: Some("a&limit=1 b".to_string()),
         ..requests_window()
     };
-    console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+    let (status, _, error) =
+        console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+    assert_eq!(status, IdentityResult::Ok, "{error}");
     let url = asked_url.lock().unwrap().clone();
-    assert!(url.contains("model=a%26limit%3D1%20b"), "{url}");
+    assert!(url.contains("model=org%2Fglm-5.3%3Afp8"), "{url}");
+    assert!(
+        url.contains("response_request_id=a%26limit%3D1%20b"),
+        "{url}"
+    );
     assert_eq!(
         url.matches("limit=").count(),
         1,
         "the id forged a parameter: {url}"
     );
+    assert!(!url.contains("status_code"), "an unset status was sent");
 
     // Header injection through the bearer.
     asked_url.lock().unwrap().clear();
@@ -1284,6 +1418,181 @@ fn usage_requests_sends_only_filters_the_route_accepts() {
         asked_url.lock().unwrap().is_empty(),
         "an unsafe token reached the transport"
     );
+}
+
+/// Every (url, bearer) a fake console saw, in order.
+type SeenCalls = Arc<Mutex<Vec<(String, String)>>>;
+
+/// A console that answers the export with 401 until the session is refreshed,
+/// and serves `pages` (keyed by cursor, `None` first) once it is. Every URL and
+/// bearer it saw is recorded in order.
+fn refreshing_console(
+    pages: Vec<(Option<&'static str>, serde_json::Value)>,
+    reject_first_with: Option<&'static str>,
+) -> (ConsoleClient, SeenCalls) {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&calls);
+    let transport: Transport = Arc::new(move |request: &HttpRequest| {
+        seen.lock()
+            .unwrap()
+            .push((request.url.clone(), request.bearer_token.clone()));
+        if request.url.ends_with("/auth/cli/refresh") {
+            return Ok(HttpResponse {
+                status: 200,
+                body: json(serde_json::json!({
+                    "access_token": "fresh-token",
+                    "refresh_token": "fresh-refresh",
+                    "expires_in": 3600,
+                })),
+                headers: BTreeMap::new(),
+            });
+        }
+        let cursor = request
+            .url
+            .split("cursor=")
+            .nth(1)
+            .map(|c| c.split('&').next().unwrap_or(c).to_string());
+        // The stale token is refused on the page named by `reject_first_with`
+        // (the first page when that is None).
+        let rejects_here = cursor.as_deref() == reject_first_with;
+        if request.bearer_token != "fresh-token" && rejects_here {
+            return Ok(HttpResponse {
+                status: 401,
+                ..HttpResponse::default()
+            });
+        }
+        let body = pages
+            .iter()
+            .find(|(key, _)| key.map(str::to_string) == cursor)
+            .map(|(_, body)| body.clone())
+            .ok_or_else(|| format!("no page for {cursor:?}"))?;
+        Ok(HttpResponse {
+            status: 200,
+            body: json(body),
+            headers: BTreeMap::new(),
+        })
+    });
+    (ConsoleClient::new(Some(transport)), calls)
+}
+
+fn export_page(ids: &[&str], next: Option<&str>) -> serde_json::Value {
+    let rows: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            let mut record = export_record("self_hosted_sglang");
+            record["request_id"] = serde_json::json!(id);
+            record
+        })
+        .collect();
+    serde_json::json!({
+        "as_of": "2026-09-25T08:34:18Z", "totals": {"requests": 3},
+        "requests": rows, "next_cursor": next,
+    })
+}
+
+fn stale_session(home: &TempHome, client: ConsoleClient) -> ConsoleSession {
+    let credentials = Credentials {
+        console_url: "https://console.example.test".to_string(),
+        email: "dev@example.test".to_string(),
+        access_token: "stale-token".to_string(),
+        refresh_token: "old-refresh".to_string(),
+        expires_at: 0,
+    };
+    account::save(&credentials).expect("save");
+    assert!(home.path().exists());
+    ConsoleSession::resume(client, credentials, 1_790_000_000).expect("signed in")
+}
+
+// A 401 on the first page is answered by one refresh and one retry of that
+// page with the new token, and the refreshed session is what is saved.
+#[test]
+fn usage_requests_refreshes_once_after_a_401_and_retries() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let mut env = EnvGuard::new();
+    env.set("WALLY_PROFILE_DIR", home.path().to_string_lossy().as_ref());
+    env.unset("WALLY_CONSOLE_URL");
+
+    let (client, calls) = refreshing_console(vec![(None, export_page(&["a", "b"], None))], None);
+    let mut session = stale_session(&home, client);
+    let report = account::export_usage_requests(&mut session, requests_window(), false)
+        .expect("the retry after refresh succeeds");
+    assert_eq!(report.rows.len(), 2);
+    assert!(!report.has_more);
+
+    let calls = calls.lock().unwrap();
+    let asked: Vec<_> = calls
+        .iter()
+        .map(|(url, token)| {
+            let path = url.trim_start_matches("https://console.example.test");
+            (path.split('?').next().unwrap().to_string(), token.clone())
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            (
+                "/v1/cli/usage/requests".to_string(),
+                "stale-token".to_string()
+            ),
+            ("/auth/cli/refresh".to_string(), String::new()),
+            (
+                "/v1/cli/usage/requests".to_string(),
+                "fresh-token".to_string()
+            ),
+        ]
+    );
+    let saved = account::load().expect("load");
+    assert_eq!(saved.access_token, "fresh-token");
+    assert_eq!(saved.refresh_token, "fresh-refresh");
+}
+
+// A session that lapses mid-walk is refreshed on the page that saw the 401,
+// that page is asked again with the same cursor, and the walk carries on to the
+// end with every row once.
+#[test]
+fn usage_requests_refreshes_mid_follow_and_carries_on() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let mut env = EnvGuard::new();
+    env.set("WALLY_PROFILE_DIR", home.path().to_string_lossy().as_ref());
+    env.unset("WALLY_CONSOLE_URL");
+
+    let (client, calls) = refreshing_console(
+        vec![
+            (None, export_page(&["a", "b"], Some("p2"))),
+            (Some("p2"), export_page(&["c"], None)),
+        ],
+        Some("p2"),
+    );
+    let mut session = stale_session(&home, client);
+    let report = account::export_usage_requests(&mut session, requests_window(), true)
+        .expect("the walk survives a refresh");
+    let ids: Vec<_> = report.rows.iter().map(|r| r.request_id.as_str()).collect();
+    assert_eq!(ids, ["a", "b", "c"]);
+    assert!(!report.has_more);
+
+    let calls = calls.lock().unwrap();
+    let asked: Vec<_> = calls
+        .iter()
+        .map(|(url, token)| {
+            (
+                url.contains("cursor=p2"),
+                url.ends_with("/auth/cli/refresh"),
+                token.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            (false, false, "stale-token"),
+            (true, false, "stale-token"),
+            (false, true, ""),
+            (true, false, "fresh-token"),
+        ]
+    );
+    assert_eq!(account::load().expect("load").access_token, "fresh-token");
 }
 
 // A 429 mid-poll must not kill the login. `wally login` printed its code and

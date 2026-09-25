@@ -11,6 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::console_contract as contract;
+use super::{
+    UsageRequestRow, UsageRequestsPage, UsageRequestsQuery, UsageRequestsTotals,
+    USAGE_REQUESTS_CURSOR_MAX_CHARS,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HttpRequest {
@@ -153,88 +157,6 @@ impl Default for UsageQuery {
             limit: 20,
         }
     }
-}
-
-/// One page of `/v1/cli/usage/requests`, the per-request export behind
-/// `wally account usage --requests`.
-///
-/// The window is the caller's to name: the route requires `since` and `until`
-/// and refuses a span past 31 days, so nothing here picks a default a reader
-/// could mistake for the server's own idea of "recent". `cursor` carries the
-/// previous page's `next_cursor` unchanged; every other filter must repeat
-/// across pages or the console refuses the page rather than reinterpret it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UsageRequestsQuery {
-    /// ISO-8601 with a timezone, both ends required.
-    pub since: String,
-    pub until: String,
-    pub model: String,
-    /// 0 is no filter; the route accepts 100..=599.
-    pub status_code: i32,
-    /// The `x-request-id` a response carried, the id a client logs.
-    pub response_request_id: String,
-    /// The route accepts 1..=200.
-    pub limit: i32,
-    pub cursor: String,
-}
-
-impl Default for UsageRequestsQuery {
-    fn default() -> Self {
-        UsageRequestsQuery {
-            since: String::new(),
-            until: String::new(),
-            model: String::new(),
-            status_code: 0,
-            response_request_id: String::new(),
-            limit: 100,
-            cursor: String::new(),
-        }
-    }
-}
-
-/// One settled request as the ledger recorded it. `response_request_id` is the
-/// id the response's `x-request-id` header carried; `request_id` is the
-/// ledger's own, unique id. No prompt or completion text is ever carried: the
-/// route does not ship it and the CLI does not print it. The nullable fields
-/// stay `Option` so an absent latency never reads as an instant answer.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct UsageRequestRow {
-    pub request_id: String,
-    pub response_request_id: String,
-    pub model: String,
-    pub status_code: i64,
-    pub error_code: String,
-    pub finish_reason: String,
-    pub stream: bool,
-    pub ts_start: String,
-    pub ts_end: String,
-    pub prompt_tokens: i64,
-    pub cached_tokens: i64,
-    pub noncached_prompt_tokens: i64,
-    pub completion_tokens: i64,
-    pub reasoning_tokens: i64,
-    pub max_tokens_requested: Option<i64>,
-    pub max_tokens_granted: Option<i64>,
-    pub ttft_ms: Option<i64>,
-    pub cost_micros: i64,
-    pub pricing_version: String,
-}
-
-/// The per-request page: rows, what they total, and how to read the next one.
-/// `as_of` is the snapshot the first page took; `next_cursor` is empty on the
-/// last page.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct UsageRequestsPage {
-    pub as_of: String,
-    pub requests: Vec<UsageRequestRow>,
-    pub total_requests: i64,
-    pub prompt_tokens: i64,
-    pub cached_tokens: i64,
-    pub noncached_prompt_tokens: i64,
-    pub completion_tokens: i64,
-    pub reasoning_tokens: i64,
-    pub cost_micros: i64,
-    pub next_cursor: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -692,6 +614,63 @@ fn http_error(operation: &str, origin: &str, response: &HttpResponse) -> String 
         message.push_str(&format!(" ({origin})"));
     }
     message
+}
+
+/// How much of a console's refusal is shown. The contract allows 2048
+/// characters; a terminal line needs the sentence, not the essay.
+const REFUSAL_MAX_CHARS: usize = 240;
+
+/// A 400 or 422 is the console refusing what was asked, and its `ApiError`
+/// message says what to change ("the window may span at most 31 days"). That
+/// sentence is shown, cut to a line, when it is printable text that does not
+/// carry the session token; anything else falls back to `http_error`, which
+/// never echoes a body.
+fn refusal_error(
+    operation: &str,
+    origin: &str,
+    response: &HttpResponse,
+    access_token: &str,
+) -> String {
+    let message = parse_object(response)
+        .ok()
+        .and_then(|object| contract::ApiError::from_json(&object).ok())
+        .map(|error| error.message)
+        .filter(|message| display_text_is_safe(message, 2048))
+        .filter(|message| access_token.is_empty() || !message.contains(access_token));
+    match message {
+        Some(message) if message.len() > REFUSAL_MAX_CHARS => format!(
+            "Wally Cloud refused the {operation}: {}...",
+            &message[..REFUSAL_MAX_CHARS]
+        ),
+        Some(message) => format!("Wally Cloud refused the {operation}: {message}"),
+        None => http_error(operation, origin, response),
+    }
+}
+
+/// Lifts every `provider` the generated `UsageProvider` does not know out of a
+/// usage-export body, leaving `null` in its place, and returns them by row.
+///
+/// The generated reader fails a whole page on an unknown enum value, which is
+/// right for a value the CLI acts on and wrong for this one: `provider` is a
+/// label the export only reports, and a console that starts routing to a new
+/// provider must not make every page of history unreadable. Only this field is
+/// relaxed, and only here; every other closed value still fails the page.
+fn take_unknown_providers(body: &mut serde_json::Value) -> Vec<Option<String>> {
+    let Some(rows) = body.get_mut("requests").and_then(|r| r.as_array_mut()) else {
+        return Vec::new();
+    };
+    rows.iter_mut()
+        .map(|row| {
+            let provider = row.get_mut("provider")?;
+            let raw = provider.as_str()?;
+            if contract::UsageProvider::parse(raw).is_ok() {
+                return None;
+            }
+            let raw = raw.to_string();
+            *provider = serde_json::Value::Null;
+            Some(raw)
+        })
+        .collect()
 }
 
 fn parse_object(response: &HttpResponse) -> Result<serde_json::Value, String> {
@@ -1278,64 +1257,42 @@ impl ConsoleClient {
     }
 
     /// One page of settled requests (`GET /v1/cli/usage/requests`,
-    /// InferenceInfra #809). `since`/`until` are sent as given: the caller
-    /// formats the window, and the console refuses one without a timezone or
-    /// past 31 days.
+    /// InferenceInfra #809). The query is checked against the contract before
+    /// anything is sent; `since`/`until` go out as given.
     pub fn fetch_usage_requests(
         &self,
         console_url: &str,
         access_token: &str,
         query: &UsageRequestsQuery,
     ) -> (IdentityResult, UsageRequestsPage, String) {
-        let mut page = UsageRequestsPage::default();
+        let failed = |error: String| (IdentityResult::Failed, UsageRequestsPage::default(), error);
         if !super::session_token_is_safe(access_token) {
-            return (
-                IdentityResult::Failed,
-                page,
-                "no access token is available".to_string(),
-            );
+            return failed("no access token is available".to_string());
         }
-        if query.since.is_empty() || query.until.is_empty() {
-            return (
-                IdentityResult::Failed,
-                page,
-                "a since and an until are both required".to_string(),
-            );
-        }
-        if !(1..=200).contains(&query.limit) {
-            return (
-                IdentityResult::Failed,
-                page,
-                "the page size is bounded at 200".to_string(),
-            );
+        if let Err(error) = query.validate() {
+            return failed(error);
         }
         let origin = match console_origin(console_url) {
             Ok(origin) => origin,
-            Err(error) => return (IdentityResult::Failed, page, error),
+            Err(error) => return failed(error),
         };
-        // Both ends carry a timezone as given, so the window a person named is
-        // the window the server reads: no default is invented here, and a
-        // malformed one is the console's 400 to explain.
         let mut url = format!(
             "{origin}/v1/cli/usage/requests?since={}&until={}&limit={}",
             query_escape(&query.since),
             query_escape(&query.until),
             query.limit
         );
-        if !query.model.is_empty() {
-            url.push_str(&format!("&model={}", query_escape(&query.model)));
+        if let Some(model) = &query.model {
+            url.push_str(&format!("&model={}", query_escape(model)));
         }
-        if (100..=599).contains(&query.status_code) {
-            url.push_str(&format!("&status_code={}", query.status_code));
+        if let Some(status_code) = query.status_code {
+            url.push_str(&format!("&status_code={status_code}"));
         }
-        if !query.response_request_id.is_empty() {
-            url.push_str(&format!(
-                "&response_request_id={}",
-                query_escape(&query.response_request_id)
-            ));
+        if let Some(id) = &query.response_request_id {
+            url.push_str(&format!("&response_request_id={}", query_escape(id)));
         }
-        if !query.cursor.is_empty() {
-            url.push_str(&format!("&cursor={}", query_escape(&query.cursor)));
+        if let Some(cursor) = &query.cursor {
+            url.push_str(&format!("&cursor={}", query_escape(cursor)));
         }
         let request = HttpRequest {
             method: "GET".to_string(),
@@ -1346,71 +1303,80 @@ impl ConsoleClient {
         };
         let response = match self.send(request) {
             Ok(response) => response,
-            Err(error) => return (IdentityResult::Failed, page, error),
+            Err(error) => return failed(error),
         };
         if response.status == 401 {
             return (
                 IdentityResult::Unauthorized,
-                page,
+                UsageRequestsPage::default(),
                 "console session expired".to_string(),
             );
         }
-        if response.status != 200 {
-            return (
-                IdentityResult::Failed,
-                page,
-                http_error("usage export", &origin, &response),
-            );
+        if response.status == 400 || response.status == 422 {
+            return failed(refusal_error(
+                "usage export",
+                &origin,
+                &response,
+                access_token,
+            ));
         }
-        let object = match parse_object(&response) {
+        if response.status != 200 {
+            return failed(http_error("usage export", &origin, &response));
+        }
+        let mut object = match parse_object(&response) {
             Ok(object) => object,
-            Err(error) => return (IdentityResult::Failed, page, error),
+            Err(error) => return failed(error),
         };
+        let providers = take_unknown_providers(&mut object);
         let parsed = match contract::UsageRequestPage::from_json(&object) {
             Ok(parsed) => parsed,
-            Err(_) => return (IdentityResult::Failed, page, CONTRACT_MISMATCH.to_string()),
+            Err(_) => return failed(CONTRACT_MISMATCH.to_string()),
+        };
+
+        // A cursor is 1..=2048 characters in the contract, so an empty one is
+        // a console that broke it. Read as "no more pages" it would end the
+        // export early and look complete, and so would a cursor the sanitizer
+        // rejects: both are errors, never the last page.
+        let next_cursor = match parsed.next_cursor.as_deref() {
+            None => None,
+            Some("") => return failed(CONTRACT_MISMATCH.to_string()),
+            Some(cursor) => match display_safe(cursor, USAGE_REQUESTS_CURSOR_MAX_CHARS) {
+                safe if safe.is_empty() => {
+                    return failed(
+                        "console returned a page cursor this client cannot carry".to_string(),
+                    )
+                }
+                safe => Some(safe),
+            },
         };
 
         // Map the typed page onto the domain struct, sanitizing every string
         // the server chose: this text lands in the user's terminal.
-        page.as_of = display_safe(&parsed.as_of, 64);
-        page.next_cursor = display_safe(parsed.next_cursor.as_deref().unwrap_or(""), 2048);
-        // A cursor the sanitizer rejects would come out empty, which every
-        // caller reads as "this was the last page": the export would end early
-        // and look complete. A cursor that cannot be carried is an error.
-        if parsed.next_cursor.as_deref().is_some_and(|c| !c.is_empty())
-            && page.next_cursor.is_empty()
-        {
-            return (
-                IdentityResult::Failed,
-                UsageRequestsPage::default(),
-                "console returned a page cursor this client cannot carry".to_string(),
-            );
-        }
-        page.total_requests = parsed.totals.requests;
-        page.prompt_tokens = parsed.totals.prompt_tokens;
-        page.cached_tokens = parsed.totals.cached_tokens;
-        page.noncached_prompt_tokens = parsed.totals.noncached_prompt_tokens;
-        page.completion_tokens = parsed.totals.completion_tokens;
-        page.reasoning_tokens = parsed.totals.reasoning_tokens;
-        page.cost_micros = parsed.totals.cost_micros;
-
-        page.requests = parsed
+        let optional = |value: &Option<String>, maximum: usize| {
+            value
+                .as_deref()
+                .map(|v| display_safe(v, maximum))
+                .filter(|v| !v.is_empty())
+        };
+        let requests = parsed
             .requests
             .iter()
-            .map(|record| UsageRequestRow {
+            .enumerate()
+            .map(|(index, record)| UsageRequestRow {
                 request_id: display_safe(&record.request_id, 128),
-                response_request_id: display_safe(
-                    record.response_request_id.as_deref().unwrap_or(""),
-                    128,
-                ),
+                response_request_id: optional(&record.response_request_id, 128),
                 model: display_safe(&record.model, 128),
+                provider: match record.provider {
+                    Some(provider) => Some(provider.as_str().to_string()),
+                    None => optional(&providers.get(index).cloned().flatten(), 64),
+                },
                 status_code: record.status_code,
-                error_code: display_safe(record.error_code.as_deref().unwrap_or(""), 80),
-                finish_reason: display_safe(record.finish_reason.as_deref().unwrap_or(""), 40),
+                error_code: optional(&record.error_code, 80),
+                finish_reason: optional(&record.finish_reason, 40),
                 stream: record.stream,
                 ts_start: display_safe(&record.ts_start, 64),
-                ts_end: display_safe(record.ts_end.as_deref().unwrap_or(""), 64),
+                ts_end: optional(&record.ts_end, 64),
+                recorded_at: display_safe(&record.recorded_at, 64),
                 prompt_tokens: record.prompt_tokens,
                 cached_tokens: record.cached_tokens,
                 noncached_prompt_tokens: record.noncached_prompt_tokens,
@@ -1419,10 +1385,26 @@ impl ConsoleClient {
                 max_tokens_requested: record.max_tokens_requested,
                 max_tokens_granted: record.max_tokens_granted,
                 ttft_ms: record.ttft_ms,
+                tpot_ms: record.tpot_ms,
                 cost_micros: record.cost_micros,
                 pricing_version: display_safe(&record.pricing_version, 64),
             })
             .collect();
+        let totals = &parsed.totals;
+        let page = UsageRequestsPage {
+            as_of: display_safe(&parsed.as_of, 64),
+            totals: UsageRequestsTotals {
+                requests: totals.requests,
+                prompt_tokens: totals.prompt_tokens,
+                cached_tokens: totals.cached_tokens,
+                noncached_prompt_tokens: totals.noncached_prompt_tokens,
+                completion_tokens: totals.completion_tokens,
+                reasoning_tokens: totals.reasoning_tokens,
+                cost_micros: totals.cost_micros,
+            },
+            requests,
+            next_cursor,
+        };
         (IdentityResult::Ok, page, String::new())
     }
 
