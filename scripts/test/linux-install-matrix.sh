@@ -53,25 +53,35 @@ run_case() {
       echo "::install-exit=${status}"
       [ "${status}" -eq 0 ] || exit 0
       "${HOME}/.local/bin/wally" --version 2>&1
+      echo "::version-exit=$?"
       "${HOME}/.local/bin/wally" backends 2>&1
+      echo "::backends-exit=$?"
     '
 }
+
+# The exit status one step inside the container reported, from its marker line.
+marker() { printf '%s\n' "${output}" | sed -n "s/^::$1-exit=//p" | tail -1; }
 
 failures=0
 for entry in "${CASES[@]}"; do
   IFS='|' read -r image expectation needle <<<"${entry}"
-  output="$(run_case "${image}" 2>&1)" || true
-  status="$(printf '%s\n' "${output}" | sed -n 's/^::install-exit=//p' | tail -1)"
+  container_status=0
+  output="$(run_case "${image}" 2>&1)" || container_status=$?
+  status="$(marker install)"
   verdict="ok"
   case "${expectation}" in
     installs)
-      if [[ "${status}" != 0 ]] || ! grep -qF "${needle}" <<<"${output}" ||
+      # Every exit status is asserted, not just the text: a wally that printed
+      # its version and then crashed must not pass.
+      if [[ "${container_status}" != 0 || "${status}" != 0 || "$(marker version)" != 0 ||
+        "$(marker backends)" != 0 ]] || ! grep -qF "${needle}" <<<"${output}" ||
         ! grep -qE '^llamacpp ' <<<"${output}"; then
-        verdict="FAIL (expected a working install)"
+        verdict="FAIL (expected a working install; container ${container_status}, install ${status:-none}, version $(marker version), backends $(marker backends))"
       fi
       ;;
     refused)
-      if [[ "${status}" == 0 || -z "${status}" ]] || ! grep -qF "${needle}" <<<"${output}" ||
+      if [[ "${container_status}" != 0 || "${status}" == 0 || -z "${status}" ]] ||
+        ! grep -qF "${needle}" <<<"${output}" ||
         grep -q 'Downloading' <<<"${output}"; then
         verdict="FAIL (expected a refusal before download naming: ${needle})"
       fi
