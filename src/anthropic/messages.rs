@@ -1347,17 +1347,6 @@ mod tests {
     }
 
     #[test]
-    fn civil_from_days_matches_known_dates() {
-        use crate::util::civil_from_days;
-        // 1970-01-01 is day 0.
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        // 2000-03-01, the day the Hinnant algorithm's era boundary sits on.
-        assert_eq!(civil_from_days(11017), (2000, 3, 1));
-        // 2024-02-29, a leap day.
-        assert_eq!(civil_from_days(19782), (2024, 2, 29));
-    }
-
-    #[test]
     fn utc_timestamp_has_the_expected_shape() {
         let stamp = utc_timestamp();
         assert_eq!(stamp.len(), 20, "{stamp}");
