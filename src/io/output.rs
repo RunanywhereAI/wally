@@ -179,6 +179,15 @@ impl JsonWriter {
         self
     }
 
+    /// A member the source did not have. A sentinel such as -1 or "" would be
+    /// a value a reader has to know to distrust; `null` says it outright.
+    pub fn field_null(&mut self, key: &str) -> &mut Self {
+        self.comma();
+        self.key(key);
+        self.buffer.push_str("null");
+        self
+    }
+
     pub fn value_str(&mut self, value: &str) -> &mut Self {
         self.comma();
         self.buffer.push('"');
