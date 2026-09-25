@@ -17,6 +17,7 @@ Run from anywhere in the repo. Exits non-zero on the first mismatch.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sys
@@ -30,6 +31,16 @@ CMAKELISTS = ROOT / "CMakeLists.txt"
 CARGO_TOML = ROOT / "Cargo.toml"
 RUST_TOOLCHAIN = ROOT / "rust-toolchain.toml"
 WORKFLOWS = ROOT / ".github" / "workflows"
+INSTALLER = ROOT / "install.sh"
+
+# The release ABI checker owns reading versions.toml [linux_abi]; reuse it rather
+# than parse the same section a second way here.
+_ABI_SPEC = importlib.util.spec_from_file_location(
+    "check_linux_abi", ROOT / "scripts" / "release" / "check-linux-abi.py"
+)
+assert _ABI_SPEC is not None and _ABI_SPEC.loader is not None
+LINUX_ABI = importlib.util.module_from_spec(_ABI_SPEC)
+_ABI_SPEC.loader.exec_module(LINUX_ABI)
 
 
 def read_toml_value(key: str, path: Path = VERSIONS) -> str:
@@ -176,6 +187,31 @@ def main() -> None:
         found = re.search(r"/v(\d+\.\d+\.\d+)/wally-(\d+\.\d+\.\d+)-", url)
         if found and (found.group(1) != product or found.group(2) != product):
             failures.append(f"{FORMULA}: url names {found.group(1)}/{found.group(2)}, not {product}")
+
+    # install.sh refuses a Linux system before downloading, from its own copy of
+    # the floor the release checker enforces. The two must name the same glibc,
+    # and every non-libc library the installer checks must be one the bottle is
+    # allowed to take from the system.
+    installer = INSTALLER.read_text(encoding="utf-8")
+    abi = LINUX_ABI.read_linux_abi_policy(VERSIONS)
+    min_glibc = re.search(r'^MIN_GLIBC="([^"]*)"', installer, re.M)
+    if not min_glibc:
+        failures.append(f"{INSTALLER}: no MIN_GLIBC line found")
+    elif min_glibc.group(1) != abi["glibc_max"]:
+        failures.append(
+            f"{INSTALLER}: MIN_GLIBC \"{min_glibc.group(1)}\" != versions.toml "
+            f"[linux_abi] glibc_max \"{abi['glibc_max']}\""
+        )
+    checked = re.search(r'^LINUX_SYSTEM_LIBRARIES="([^"]*)"', installer, re.M)
+    if not checked:
+        failures.append(f"{INSTALLER}: no LINUX_SYSTEM_LIBRARIES line found")
+    else:
+        for library in checked.group(1).split():
+            if library not in abi["system_libraries"]:
+                failures.append(
+                    f"{INSTALLER}: checks {library}, which versions.toml [linux_abi] "
+                    "system_libraries does not list"
+                )
 
     # The Swift package's exact SDK pin.
     package = PACKAGE.read_text(encoding="utf-8")

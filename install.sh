@@ -12,9 +12,29 @@ set -eu
 #
 # Usage:
 #   curl -fsSL <install.sh> | sh
+#
+# Two overrides, for release tests and mirrors rather than everyday use:
+#   WALLY_INSTALL_VERSION=X.Y.Z   install that release instead of the latest
+#   WALLY_INSTALL_BASE_URL=<url>  fetch the archive and its .sha256 from <url>/
+#                                 instead of the GitHub release (http, https or
+#                                 file); needs WALLY_INSTALL_VERSION
+#
+# Everything runs inside main(), called on the last line. A download cut off
+# part way is then a function that was never called, not half an installer run.
 REPO="RunanywhereAI/wally"
 LIB_DIR="${HOME}/.local/lib/wally"
 BIN_DIR="${HOME}/.local/bin"
+
+# The oldest glibc the Linux bottle runs on, and the shared libraries it takes
+# from the system rather than shipping. Both mirror versions.toml [linux_abi]
+# (glibc_max, system_libraries); scripts/ci/check-versions.py fails when they
+# drift. libc's own family is left out: glibc is checked by version above.
+MIN_GLIBC="2.35"
+LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 libcurl.so.4"
+
+# Retries cover a dropped connection or a 5xx from the CDN, which a first-time
+# install on a poor network otherwise reports as "check your internet".
+CURL_RETRY="--retry 3 --retry-delay 2"
 
 # --- output helpers ---------------------------------------------------------
 if [ -t 1 ]; then B=$(printf '\033[1m'); DIM=$(printf '\033[2m'); R=$(printf '\033[0m')
@@ -52,6 +72,69 @@ skill_target_dirs() {
     printf '%s' "${targets}"
 }
 
+# Refuses a Linux system the bottle cannot run on, before anything is
+# downloaded: musl, a glibc older than MIN_GLIBC, or a missing system library.
+# Each reason names what would fix it, which the dynamic loader's own message
+# never does.
+check_linux_system() {
+    # One path at a time: a single `ls` over both globs fails when either one
+    # matches nothing, which hid Alpine's /lib/ld-musl-x86_64.so.1.
+    musl=0
+    for loader in /lib/ld-musl-* /usr/lib/ld-musl-*; do
+        [ -e "$loader" ] && musl=1
+    done
+    if [ "$musl" -eq 1 ] && ! getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+        fail "Wally's Linux build needs glibc, and this system uses musl (Alpine and similar). Use a glibc distribution such as Ubuntu 22.04+ or Debian 12+."
+    fi
+    glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{ print $2 }')"
+    if [ -z "$glibc" ]; then
+        warn "could not read the glibc version; continuing"
+    elif [ "$(printf '%s\n%s\n' "$MIN_GLIBC" "$glibc" | sort -V | head -n1)" != "$MIN_GLIBC" ]; then
+        fail "Wally needs glibc ${MIN_GLIBC} or newer; this system has ${glibc}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+    fi
+    ldconfig_bin="$(command -v ldconfig 2>/dev/null || true)"
+    [ -n "$ldconfig_bin" ] || { [ -x /sbin/ldconfig ] && ldconfig_bin=/sbin/ldconfig; }
+    if [ -z "$ldconfig_bin" ]; then
+        warn "could not list system libraries (no ldconfig); continuing"
+        return 0
+    fi
+    known="$("$ldconfig_bin" -p 2>/dev/null || true)"
+    missing=""
+    for library in $LINUX_SYSTEM_LIBRARIES; do
+        printf '%s\n' "$known" | grep -q "^[[:space:]]*${library} " || missing="${missing} ${library}"
+    done
+    if [ -n "$missing" ]; then
+        fail "Wally needs these system libraries, which are not installed:${missing}. On Ubuntu or Debian: sudo apt install libstdc++6 libssl3 libcurl4"
+    fi
+    ok "glibc ${glibc:-unknown}, system libraries present"
+}
+
+# Runs a binary once and keeps what it printed. A binary that cannot start
+# (a missing shared library, a glibc older than it was built against) prints
+# the loader's reason here, and that reason is the only useful thing to show:
+# discarding it left "Installed Wally vunknown", which says nothing.
+probe_binary() {
+    binary="$1"
+    probe_status=0
+    probe_output="$("$binary" --version 2>&1)" || probe_status=$?
+    if [ "$probe_status" -ne 0 ]; then
+        printf '%s\n' "$probe_output" | head -5 >&2
+        case "$probe_output" in
+            *"cannot open shared object file"*)
+                missing_lib="$(printf '%s\n' "$probe_output" \
+                    | sed -nE 's/.*: ([^:]+): cannot open shared object file.*/\1/p' | head -1)"
+                fail "wally cannot start: ${missing_lib:-a shared library} is not on this system and not in the download." ;;
+            *"GLIBC"*"not found"*)
+                fail "wally cannot start: it needs a newer glibc/libstdc++ than this system has ($(ldd --version 2>/dev/null | head -1))." ;;
+            *)
+                fail "wally cannot start (output above)." ;;
+        esac
+    fi
+    printf '%s\n' "$probe_output" | sed -nE 's/^wally ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1
+}
+
+main() {
+
 # --- arguments --------------------------------------------------------------
 # The version the caller already has, passed by `wally update` so the script can
 # tell it apart from a fresh install and skip the download when nothing is newer.
@@ -72,11 +155,20 @@ banner
 printf '   %sInstalling the %s%s%s build%s\n\n' "$DIM" "$R$B" "$CHANNEL" "$R$DIM" "$R"
 
 step "Resolving the latest release"
-latest=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest") \
-    || fail "Could not determine latest release version. Check your internet connection."
-VERSION=$(printf '%s\n' "$latest" \
-    | grep '"tag_name"' \
-    | sed 's/.*"v\([^"]*\)".*/\1/')
+if [ -n "${WALLY_INSTALL_VERSION:-}" ]; then
+    VERSION="${WALLY_INSTALL_VERSION#v}"
+    printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        || fail "WALLY_INSTALL_VERSION must look like 1.2.3, not '${WALLY_INSTALL_VERSION}'"
+else
+    [ -z "${WALLY_INSTALL_BASE_URL:-}" ] \
+        || fail "WALLY_INSTALL_BASE_URL needs WALLY_INSTALL_VERSION: a mirror has no latest-release lookup"
+    # shellcheck disable=SC2086 # CURL_RETRY is two options, split on purpose
+    latest=$(curl -fsSL $CURL_RETRY "https://api.github.com/repos/${REPO}/releases/latest") \
+        || fail "Could not determine latest release version. Check your internet connection."
+    VERSION=$(printf '%s\n' "$latest" \
+        | grep '"tag_name"' \
+        | sed 's/.*"v\([^"]*\)".*/\1/')
+fi
 [ -n "$VERSION" ] || fail "Could not determine latest release version. Check your internet connection."
 ok "v${VERSION}"
 
@@ -100,14 +192,14 @@ case "${os}/${arch}" in
     # MLX is Metal and NeuRT is the Apple Neural Engine, so an Intel Mac gets
     # neither and there is no build for it.
     Darwin/*)                  fail "Wally needs an Apple Silicon Mac. Detected: ${arch}" ;;
-    Linux/x86_64 | Linux/amd64) PLATFORM="linux-x86_64" ;;
+    Linux/x86_64 | Linux/amd64) PLATFORM="linux-x86_64"; check_linux_system ;;
     Linux/*)                   fail "Wally has no Linux ${arch} build yet — x86_64 only. Build from source: https://github.com/${REPO}#build-from-source" ;;
     *)                         fail "Wally has no build for ${os}. On Windows, use install.ps1." ;;
 esac
 ok "${PLATFORM}"
 
 ASSET="wally-${VERSION}-${PLATFORM}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
+URL="${WALLY_INSTALL_BASE_URL:-https://github.com/${REPO}/releases/download/v${VERSION}}/${ASSET}"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -116,8 +208,10 @@ step "Downloading ${ASSET}"
 # A clean progress bar on a real terminal; silent (errors only) when the output
 # is captured or piped, so a log does not fill with redraw frames.
 if [ -t 1 ]; then dl="-#"; else dl="-sS"; fi
-curl -fSL "$dl" "$URL" -o "${tmp}/${ASSET}" || fail "Download failed: ${URL}"
-curl -fsSL "${URL}.sha256" -o "${tmp}/${ASSET}.sha256" || fail "Could not download the checksum for ${ASSET}"
+# shellcheck disable=SC2086 # CURL_RETRY is two options, split on purpose
+curl -fSL $CURL_RETRY "$dl" "$URL" -o "${tmp}/${ASSET}" || fail "Download failed: ${URL}"
+# shellcheck disable=SC2086
+curl -fsSL $CURL_RETRY "${URL}.sha256" -o "${tmp}/${ASSET}.sha256" || fail "Could not download the checksum for ${ASSET}"
 # The sidecar is `<sha>  <filename>`; verify from inside tmp so the name resolves.
 expected_sha="$(awk 'NF == 2 { print $1 }' "${tmp}/${ASSET}.sha256" | head -1)"
 ( cd "$tmp" && {
@@ -135,12 +229,32 @@ step "Installing to ${LIB_DIR}"
 tar -xzf "${tmp}/${ASSET}" -C "$tmp"
 staged="${tmp}/wally-${PLATFORM}"
 [ -x "${staged}/bin/wally" ] || fail "Archive did not contain bin/wally as expected."
-# Replace the install tree wholesale. rm before copy is deliberate: overwriting a
+
+# The new tree is copied beside the old one, started once, and only then
+# renamed into place. A build that cannot run on this machine therefore fails
+# here with the loader's reason and leaves a working install untouched, and a
+# run killed part way leaves either the old tree or the new one, never half of
+# each. The copy is a fresh directory rather than an overwrite: replacing a
 # code-signed Mach-O in place while a copy may still be mapped kills it with
-# SIGKILL (137). A fresh dir sidesteps that.
-rm -rf "$LIB_DIR"
+# SIGKILL (137).
 mkdir -p "$(dirname "$LIB_DIR")" "$BIN_DIR"
-cp -R "$staged" "$LIB_DIR"
+incoming="${LIB_DIR}.incoming.$$"
+retired="${LIB_DIR}.previous.$$"
+trap 'rm -rf "$tmp" "$incoming"' EXIT
+rm -rf "$incoming"
+cp -R "$staged" "$incoming"
+staged_version="$(probe_binary "${incoming}/bin/wally")"
+if [ "${staged_version}" != "${VERSION}" ]; then
+    fail "The downloaded build reports v${staged_version:-unknown}, but the release is v${VERSION}."
+fi
+if [ -e "$LIB_DIR" ]; then
+    mv "$LIB_DIR" "$retired"
+fi
+if ! mv "$incoming" "$LIB_DIR"; then
+    [ -e "$retired" ] && mv "$retired" "$LIB_DIR"
+    fail "Could not move the new build into ${LIB_DIR}; the previous install is unchanged."
+fi
+rm -rf "$retired"
 ln -sfn "${LIB_DIR}/bin/wally" "${BIN_DIR}/wally"
 
 # Whether a future shell will find wally is decided by the PATH the user already
@@ -157,11 +271,10 @@ export PATH="${BIN_DIR}:${PATH}"
 if ! command -v wally >/dev/null 2>&1; then
     fail "Installation failed. wally not found after install."
 fi
-installed_version="$(wally --version 2>/dev/null \
-    | sed -nE 's/^wally ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' \
-    | head -1)"
+# What PATH resolves to may still be another copy of wally earlier on it.
+installed_version="$(probe_binary "$(command -v wally)")"
 if [ "${installed_version}" != "${VERSION}" ]; then
-    fail "Installed Wally v${installed_version:-unknown}, but the latest release is v${VERSION}."
+    fail "wally on PATH is v${installed_version:-unknown} ($(command -v wally)), not the v${VERSION} just installed in ${BIN_DIR}. Remove the other copy or put ${BIN_DIR} first on PATH."
 fi
 ok "wally v${VERSION} on PATH"
 
@@ -211,7 +324,8 @@ IFS='
 '
 for skill_dir in $(skill_target_dirs); do
     IFS="$old_ifs"
-    if mkdir -p "$skill_dir" 2>/dev/null && curl -fsSL "$SKILL_URL" -o "${skill_dir}/SKILL.md"; then
+    # shellcheck disable=SC2086 # CURL_RETRY is two options, split on purpose
+    if mkdir -p "$skill_dir" 2>/dev/null && curl -fsSL $CURL_RETRY "$SKILL_URL" -o "${skill_dir}/SKILL.md"; then
         ok "${skill_dir}/SKILL.md"
         skill_installed=1
     else
@@ -251,3 +365,6 @@ printf '     wally opencode --cloud -m glm-5.3-flash   code against a hosted mod
 printf '     wally account usage                       credit left and what you spent\n'
 printf '     wally models pull qwen3-0.6b              download a model to this machine\n'
 printf '   In Claude Code, ask: %s"get me started with RunAnywhere Wally"%s\n\n' "$DIM" "$R"
+}
+
+main "$@"
