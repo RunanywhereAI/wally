@@ -12,7 +12,8 @@ own credit.
 
 ## Install
 
-macOS (Apple Silicon) and Linux (x86-64):
+macOS (Apple Silicon) and Linux (x86-64 with glibc 2.35 or newer: Ubuntu 22.04+,
+Debian 12+):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.sh | sh

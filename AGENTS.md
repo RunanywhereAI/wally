@@ -238,6 +238,15 @@ symlink to `AGENTS.md`, or when `.claude/skills` and `.agents/skills` differ.
 
 Linux bottles are not a v1 merge blocker. Windows x64 and macOS arm64 are.
 
+The Linux bottle is packaged on every PR and checked twice. `scripts/release/check-linux-abi.py`
+fails it when any ELF in it needs a glibc/libstdc++ symbol version above
+versions.toml `[linux_abi]`, or a shared library it neither ships nor is
+allowed to take from the system. `scripts/test/linux-install-matrix.sh` runs
+`install.sh` against it on clean Ubuntu 22.04/24.04 and Debian 12, and expects
+Ubuntu 20.04 and Alpine to be refused before download. `install.sh` keeps its
+own `MIN_GLIBC` and library list; `check-versions.py` holds them to
+`[linux_abi]`.
+
 ## Build
 
 ```bash
