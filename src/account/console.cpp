@@ -668,6 +668,19 @@ int NextPollDelaySeconds(int interval, int retry_after) {
     return std::max(floor, asked);
 }
 
+std::string IsoTimestamp(std::int64_t epoch_seconds) {
+    const std::time_t when = static_cast<std::time_t>(epoch_seconds);
+    std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &when);
+#else
+    gmtime_r(&when, &utc);
+#endif
+    char buffer[32];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &utc);
+    return buffer;
+}
+
 ConsoleClient::ConsoleClient(Transport transport)
     : transport_(transport ? std::move(transport) : Transport(DefaultTransport)) {}
 
@@ -1129,6 +1142,118 @@ IdentityResult ConsoleClient::FetchUsage(const std::string& console_url,
         event.ttft_ms = entry.ttft_ms.value_or(0);
         event.status_code = static_cast<int>(entry.status_code);
         usage->events.push_back(event);
+    }
+    return IdentityResult::Ok;
+}
+
+IdentityResult ConsoleClient::FetchUsageRequests(const std::string& console_url,
+                                                 const std::string& access_token,
+                                                 const UsageRequestsQuery& query,
+                                                 UsageRequestsPage* page, std::string* error) const {
+    if (page == nullptr || !SessionTokenIsSafe(access_token)) {
+        if (error != nullptr) {
+            *error = "no access token is available";
+        }
+        return IdentityResult::Failed;
+    }
+    if (query.since.empty() || query.until.empty()) {
+        if (error != nullptr) {
+            *error = "a since and an until are both required";
+        }
+        return IdentityResult::Failed;
+    }
+    if (query.limit < 1 || query.limit > 200) {
+        if (error != nullptr) {
+            *error = "the page size is bounded at 200";
+        }
+        return IdentityResult::Failed;
+    }
+    std::string origin;
+    if (!ConsoleOrigin(console_url, &origin, error)) {
+        return IdentityResult::Failed;
+    }
+    // Both ends carry a timezone as given, so the window a person named is the
+    // window the server reads: no default is invented here, and a malformed
+    // one is the console's 400 to explain.
+    std::string url = origin + "/v1/cli/usage/requests?since=" + QueryEscape(query.since) +
+                      "&until=" + QueryEscape(query.until) +
+                      "&limit=" + std::to_string(query.limit);
+    if (!query.model.empty()) {
+        url += "&model=" + QueryEscape(query.model);
+    }
+    if (query.status_code >= 100 && query.status_code <= 599) {
+        url += "&status_code=" + std::to_string(query.status_code);
+    }
+    if (!query.response_request_id.empty()) {
+        url += "&response_request_id=" + QueryEscape(query.response_request_id);
+    }
+    if (!query.cursor.empty()) {
+        url += "&cursor=" + QueryEscape(query.cursor);
+    }
+
+    HttpResponse response;
+    if (!Send(transport_, {"GET", url, {}, access_token}, &response, error)) {
+        return IdentityResult::Failed;
+    }
+    if (response.status == 401) {
+        if (error != nullptr) {
+            *error = "console session expired";
+        }
+        return IdentityResult::Unauthorized;
+    }
+    if (response.status != 200) {
+        HttpError("usage export", origin, response, error);
+        return IdentityResult::Failed;
+    }
+
+    contract::UsageRequestPage parsed;
+    if (!ParseContract(response, &parsed, error)) {
+        return IdentityResult::Failed;
+    }
+
+    // Map the typed page onto the domain struct, sanitizing every string the
+    // server chose: this text lands in the user's terminal.
+    page->as_of = DisplaySafe(parsed.as_of, 64);
+    page->next_cursor = parsed.next_cursor.has_value() ? DisplaySafe(*parsed.next_cursor, 2048)
+                                                       : std::string();
+    const auto totals = parsed.totals;
+    page->total_requests = totals.requests;
+    page->prompt_tokens = totals.prompt_tokens;
+    page->cached_tokens = totals.cached_tokens;
+    page->noncached_prompt_tokens = totals.noncached_prompt_tokens;
+    page->completion_tokens = totals.completion_tokens;
+    page->reasoning_tokens = totals.reasoning_tokens;
+    page->cost_micros = totals.cost_micros;
+
+    for (const contract::UsageRequestRecord& record : parsed.requests) {
+        UsageRequestRow row;
+        row.request_id = DisplaySafe(record.request_id, 128);
+        row.response_request_id = record.response_request_id.has_value()
+                                      ? DisplaySafe(*record.response_request_id, 128)
+                                      : std::string();
+        row.model = DisplaySafe(record.model, 128);
+        row.status_code = record.status_code;
+        row.error_code = record.error_code.has_value() ? DisplaySafe(*record.error_code, 80)
+                                                       : std::string();
+        row.finish_reason = record.finish_reason.has_value() ? DisplaySafe(*record.finish_reason, 40)
+                                                             : std::string();
+        row.stream = record.stream;
+        row.ts_start = DisplaySafe(record.ts_start, 64);
+        row.ts_end =
+            record.ts_end.has_value() ? DisplaySafe(*record.ts_end, 64) : std::string();
+        row.prompt_tokens = record.prompt_tokens;
+        row.cached_tokens = record.cached_tokens;
+        row.noncached_prompt_tokens = record.noncached_prompt_tokens;
+        row.completion_tokens = record.completion_tokens;
+        row.reasoning_tokens = record.reasoning_tokens;
+        row.max_tokens_requested =
+            record.max_tokens_requested.has_value() ? *record.max_tokens_requested : -1;
+        row.max_tokens_granted =
+            record.max_tokens_granted.has_value() ? *record.max_tokens_granted : -1;
+        row.ttft_ms = record.ttft_ms.has_value() ? *record.ttft_ms : -1;
+        row.cost_micros = record.cost_micros;
+        row.pricing_version = DisplaySafe(record.pricing_version, 64);
+        page->requests.push_back(std::move(row));
     }
     return IdentityResult::Ok;
 }

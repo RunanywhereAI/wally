@@ -2,7 +2,7 @@
 #define WALLY_ACCOUNT_CONSOLE_H
 
 #include <cstdint>
-
+#include <ctime>
 #include <functional>
 #include <map>
 #include <string>
@@ -132,6 +132,69 @@ struct UsageQuery {
     int limit = 20;
 };
 
+/// One page of settled requests from `/v1/cli/usage/requests`, the per-request
+/// export behind `wally account usage --requests`.
+///
+/// The window is the caller's to name: the route requires `since` and `until`
+/// and refuses a span past 31 days, so nothing here picks a default a reader
+/// could mistake for the server's own idea of "recent". `cursor` carries the
+/// previous page's `next_cursor` unchanged; every other filter must repeat
+/// across pages or the console refuses the page rather than reinterpret it.
+struct UsageRequestsQuery {
+    /// ISO-8601 with a timezone, both ends required.
+    std::string since;
+    std::string until;
+    std::string model;
+    int status_code = 0;  // 0 = no filter; the route accepts 100..599
+    /// The `x-request-id` a response carried — the id a client logs.
+    std::string response_request_id;
+    int limit = 100;  // route: 1..200
+    std::string cursor;
+};
+
+/// One settled request as the ledger recorded it. `response_request_id` is the
+/// id the response's `x-request-id` header carried, which is what a client
+/// logs; `request_id` is the ledger's own, unique id. No prompt or completion
+/// text is ever carried here — the route does not ship it and neither does the
+/// CLI print it.
+struct UsageRequestRow {
+    std::string request_id;
+    std::string response_request_id;
+    std::string model;
+    std::int64_t status_code = 0;
+    std::string error_code;
+    std::string finish_reason;
+    bool stream = false;
+    std::string ts_start;
+    std::string ts_end;
+    std::int64_t prompt_tokens = 0;
+    std::int64_t cached_tokens = 0;
+    std::int64_t noncached_prompt_tokens = 0;
+    std::int64_t completion_tokens = 0;
+    std::int64_t reasoning_tokens = 0;
+    std::int64_t max_tokens_requested = 0;
+    std::int64_t max_tokens_granted = 0;
+    std::int64_t ttft_ms = 0;
+    std::int64_t cost_micros = 0;
+    std::string pricing_version;
+};
+
+/// The per-request page: rows plus what they total, and how to read the next
+/// one. `as_of` is the snapshot the first page took (a minute behind the
+/// ledger's clock); `next_cursor` is empty on the last page.
+struct UsageRequestsPage {
+    std::string as_of;
+    std::vector<UsageRequestRow> requests;
+    std::int64_t total_requests = 0;
+    std::int64_t prompt_tokens = 0;
+    std::int64_t cached_tokens = 0;
+    std::int64_t noncached_prompt_tokens = 0;
+    std::int64_t completion_tokens = 0;
+    std::int64_t reasoning_tokens = 0;
+    std::int64_t cost_micros = 0;
+    std::string next_cursor;
+};
+
 struct Authorization {
     std::string request_code;
     std::string poll_secret;
@@ -147,6 +210,11 @@ struct Grant {
     std::string plan;
     long expires_in = 0;
 };
+
+/// ISO-8601 UTC "now", one second resolution (`2026-09-25T12:00:00Z`). The
+/// window formatter behind `usage --requests`, exposed here so the command and
+/// its tests agree on the same clock.
+std::string IsoTimestamp(std::int64_t epoch_seconds);
 
 enum class PollResult { Pending, Approved, Denied, Expired, Failed };
 /// `Unavailable` means the console could not be ASKED (it is rate limiting or
@@ -221,6 +289,13 @@ class ConsoleClient {
                 const std::string& refresh_token, std::string* error) const;
     IdentityResult FetchUsage(const std::string& console_url, const std::string& access_token,
                               const UsageQuery& query, Usage* usage, std::string* error) const;
+    /// One page of settled requests (`GET /v1/cli/usage/requests`, InferenceInfra
+    /// #809). `since`/`until` are sent as given — the caller formats the window;
+    /// the console refuses a window without a timezone and one past 31 days.
+    IdentityResult FetchUsageRequests(const std::string& console_url,
+                                      const std::string& access_token,
+                                      const UsageRequestsQuery& query, UsageRequestsPage* page,
+                                      std::string* error) const;
     /// The served model catalog from `/v1/models`, used to feed a harness the
     /// real context window (so its auto-compaction fires at the right point).
     IdentityResult FetchModels(const std::string& console_url, const std::string& access_token,

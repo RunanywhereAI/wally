@@ -191,11 +191,160 @@ std::string Sha256Hex(const std::string& message) {
     return out;
 }
 
+// A settled-request page parses end to end: every field the contract names,
+// both the nullable shapes (absent, null, present) and the required ones.
+TestResult test_usage_request_page_round_trip() {
+    TestResult result;
+    result.test_name = "usage_request_page_round_trip";
+
+    const Json page = Json{
+        {"as_of", "2026-09-25T08:34:18.548805Z"},
+        {"totals",
+         {{"requests", 2},
+          {"prompt_tokens", 1000},
+          {"cached_tokens", 900},
+          {"noncached_prompt_tokens", 100},
+          {"completion_tokens", 50},
+          {"reasoning_tokens", 20},
+          {"cost_micros", 12345}}},
+        {"requests",
+         Json::array({
+             Json{{"request_id", "ledger-1"},
+                  {"response_request_id", "resp-1"},
+                  {"api_key_id", nullptr},
+                  {"model", "glm-5.3-flash"},
+                  {"provider", "self_hosted_sglang"},
+                  {"status_code", 200},
+                  {"error_code", nullptr},
+                  {"finish_reason", "stop"},
+                  {"stream", true},
+                  {"ts_start", "2026-09-25T08:00:00Z"},
+                  {"ts_end", "2026-09-25T08:00:01Z"},
+                  {"recorded_at", "2026-09-25T08:00:02Z"},
+                  {"prompt_tokens", 800},
+                  {"cached_tokens", 700},
+                  {"noncached_prompt_tokens", 100},
+                  {"completion_tokens", 40},
+                  {"reasoning_tokens", 20},
+                  {"max_tokens_requested", 4096},
+                  {"max_tokens_granted", 2048},
+                  {"ttft_ms", 310},
+                  {"tpot_ms", nullptr},
+                  {"cost_micros", 12345},
+                  {"pricing_version", "2026-09-23.1"}},
+             // Every nullable at null: the tolerant read must default them.
+             Json{{"request_id", "ledger-2"},
+                  {"response_request_id", nullptr},
+                  {"api_key_id", nullptr},
+                  {"model", "gemma-4"},
+                  {"provider", "vertex_ai"},
+                  {"status_code", 500},
+                  {"error_code", "upstream_error"},
+                  {"finish_reason", nullptr},
+                  {"stream", false},
+                  {"ts_start", "2026-09-25T07:00:00Z"},
+                  {"ts_end", nullptr},
+                  {"recorded_at", "2026-09-25T07:00:01Z"},
+                  {"prompt_tokens", 200},
+                  {"cached_tokens", 200},
+                  {"noncached_prompt_tokens", 0},
+                  {"completion_tokens", 10},
+                  {"reasoning_tokens", 0},
+                  {"max_tokens_requested", nullptr},
+                  {"max_tokens_granted", nullptr},
+                  {"ttft_ms", nullptr},
+                  {"tpot_ms", nullptr},
+                  {"cost_micros", 0},
+                  {"pricing_version", "2026-09-23.1"}},
+         })},
+        {"next_cursor", "eyJuZXh0IjoxfQ"},
+    };
+    contract::UsageRequestPage parsed;
+    try {
+        parsed = page.get<contract::UsageRequestPage>();
+    } catch (const Json::exception& e) {
+        result.details = std::string("a contract-shaped page did not parse: ") + e.what();
+        return result;
+    }
+    if (parsed.as_of != "2026-09-25T08:34:18.548805Z" || parsed.totals.requests != 2 ||
+        parsed.totals.cost_micros != 12345 || parsed.next_cursor.value_or("") != "eyJuZXh0IjoxfQ") {
+        result.details = "the page's own fields mis-parsed";
+        return result;
+    }
+    if (parsed.requests.size() != 2 ||
+        parsed.requests[0].response_request_id.value_or("") != "resp-1" ||
+        parsed.requests[0].provider.value_or(contract::UsageProvider::kUnknown) !=
+            contract::UsageProvider::kSelfHostedSglang ||
+        parsed.requests[0].max_tokens_granted.value_or(0) != 2048 ||
+        parsed.requests[0].ttft_ms.value_or(0) != 310) {
+        result.details = "the first record mis-parsed";
+        return result;
+    }
+    if (parsed.requests[1].response_request_id.has_value() ||
+        parsed.requests[1].ts_end.has_value() || parsed.requests[1].ttft_ms.has_value() ||
+        parsed.requests[1].max_tokens_granted.has_value() ||
+        parsed.requests[1].provider.value_or(contract::UsageProvider::kUnknown) !=
+            contract::UsageProvider::kVertexAi) {
+        result.details = "nulls must read as nullopt, not as a default value";
+        return result;
+    }
+
+    // A body that omits a nullable parses too: the CLI survives a server that
+    // lags the contract. Required fields still refuse to be missing.
+    const Json minimal = Json{
+        {"as_of", "2026-09-25T08:00:00Z"},
+        {"totals",
+         {{"requests", 0},
+          {"prompt_tokens", 0},
+          {"cached_tokens", 0},
+          {"noncached_prompt_tokens", 0},
+          {"completion_tokens", 0},
+          {"reasoning_tokens", 0},
+          {"cost_micros", 0}}},
+        {"requests", Json::array()},
+        {"next_cursor", nullptr},
+    };
+    const auto empty = minimal.get<contract::UsageRequestPage>();
+    if (!empty.next_cursor.has_value() && empty.next_cursor != std::nullopt) {
+        result.details = "a null next_cursor must stay null";
+        return result;
+    }
+
+    // A page whose totals are empty parses: the generated binding reads a
+    // missing member as its default, so the CLI survives a server that lags
+    // the contract. What the CLI never accepts is a body that is not an
+    // object at all.
+    const Json sparse = Json{
+        {"as_of", "2026-09-25T08:00:00Z"},
+        {"totals", Json::object()},
+        {"requests", Json::array()},
+        {"next_cursor", nullptr},
+    };
+    const auto quiet = sparse.get<contract::UsageRequestPage>();
+    if (quiet.totals.requests != 0 || quiet.requests.size() != 0) {
+        result.details = "an empty totals must read as zeros";
+        return result;
+    }
+
+    // The generated binding guards every member with contains(), so an array
+    // body parses as an all-defaults page rather than throwing: tolerance is
+    // the header's contract, tested here so it stays deliberate.
+    const auto nonsense = Json::array().get<contract::UsageRequestPage>();
+    if (nonsense.totals.requests != 0 || !nonsense.as_of.empty() ||
+        nonsense.next_cursor.has_value()) {
+        result.details = "an array body must read as an all-defaults page";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     TestSuite suite("wally_contract");
     suite.add("binding_matches_the_pinned_contract", test_binding_matches_the_pinned_contract);
     suite.add("request_and_response_round_trip", test_request_and_response_round_trip);
+    suite.add("usage_request_page_round_trip", test_usage_request_page_round_trip);
     return suite.run(argc, argv);
 }

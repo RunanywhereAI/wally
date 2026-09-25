@@ -915,6 +915,134 @@ TestResult test_usage_counters_survive_beyond_thirty_two_bits() {
     return result;
 }
 
+// The per-request export: the URL the client builds carries the whole query —
+// both window ends, the filters that were asked for, none that were not — and
+// a contract-shaped body maps onto the domain page with the nullable fields
+// reading as absent.
+TestResult test_usage_requests_page_speaks_the_route() {
+    TestResult result;
+    result.test_name = "usage_requests_page_speaks_the_route";
+
+    std::string asked_url;
+    wally::account::ConsoleClient console(
+        [&](const wally::account::HttpRequest& request, wally::account::HttpResponse* response,
+            std::string*) {
+            asked_url = request.url;
+            response->status = 200;
+            response->body =
+                Json{{"as_of", "2026-09-25T08:34:18Z"},
+                     {"totals",
+                      {{"requests", 2},
+                       {"prompt_tokens", 1000},
+                       {"cached_tokens", 900},
+                       {"noncached_prompt_tokens", 100},
+                       {"completion_tokens", 50},
+                       {"reasoning_tokens", 20},
+                       {"cost_micros", 12345}}},
+                     {"requests",
+                      Json::array({Json{{"request_id", "ledger-1"},
+                                        {"response_request_id", "resp-1"},
+                                        {"model", "glm-5.3-flash"},
+                                        {"provider", "self_hosted_sglang"},
+                                        {"status_code", 200},
+                                        {"stream", true},
+                                        {"ts_start", "2026-09-25T08:00:00Z"},
+                                        {"recorded_at", "2026-09-25T08:00:02Z"},
+                                        {"prompt_tokens", 800},
+                                        {"cached_tokens", 700},
+                                        {"noncached_prompt_tokens", 100},
+                                        {"completion_tokens", 40},
+                                        {"reasoning_tokens", 20},
+                                        {"cost_micros", 12345},
+                                        {"pricing_version", "v1"}}})},
+                     {"next_cursor", "cursor-2"}}
+                    .dump();
+            return true;
+        });
+
+    wally::account::UsageRequestsQuery query;
+    query.since = "2026-09-24T08:00:00Z";
+    query.until = "2026-09-25T08:00:00Z";
+    query.model = "glm-5.3-flash";
+    query.status_code = 500;
+    query.response_request_id = "resp-9";
+    query.limit = 25;
+    wally::account::UsageRequestsPage page;
+    std::string error;
+    const wally::account::IdentityResult status =
+        console.FetchUsageRequests("https://console.example.test", "a-token", query, &page, &error);
+    if (status != wally::account::IdentityResult::Ok) {
+        result.details = error.empty() ? "the export failed" : error;
+        return result;
+    }
+
+    // The URL is the contract's shape: both required ends, every set filter,
+    // and the limit. An unset filter (status_code=0 here is "no filter") must
+    // not appear.
+    if (asked_url.find("/v1/cli/usage/requests?") == std::string::npos ||
+        asked_url.find("since=2026-09-24T08%3A00%3A00Z") == std::string::npos ||
+        asked_url.find("until=2026-09-25T08%3A00%3A00Z") == std::string::npos ||
+        asked_url.find("model=glm-5.3-flash") == std::string::npos ||
+        asked_url.find("status_code=500") == std::string::npos ||
+        asked_url.find("response_request_id=resp-9") == std::string::npos ||
+        asked_url.find("limit=25") == std::string::npos) {
+        result.details = "the query string did not carry the window and filters: " + asked_url;
+        return result;
+    }
+    if (asked_url.find("cursor=") != std::string::npos) {
+        result.details = "an empty cursor must not be sent: " + asked_url;
+        return result;
+    }
+
+    if (page.total_requests != 2 || page.cost_micros != 12345 || page.requests.size() != 1 ||
+        page.next_cursor != "cursor-2" || page.as_of != "2026-09-25T08:34:18Z") {
+        result.details = "the page's totals and cursor mis-mapped";
+        return result;
+    }
+    const wally::account::UsageRequestRow& row = page.requests[0];
+    if (row.request_id != "ledger-1" || row.response_request_id != "resp-1" ||
+        row.model != "glm-5.3-flash" || row.status_code != 200 || row.cost_micros != 12345 ||
+        row.pricing_version != "v1") {
+        result.details = "the record mis-mapped";
+        return result;
+    }
+    // Every nullable the body omitted reads as absent (the -1 sentinel the
+    // row carries), never as 0 — a 0 would claim the engine answered instantly.
+    if (row.error_code.empty() && row.ts_end.empty() && row.ttft_ms == -1 &&
+        row.max_tokens_granted == -1) {
+        result.passed = true;
+        return result;
+    }
+    result.details = "an omitted nullable must read as absent, not zero";
+    return result;
+}
+
+// A 401 on the export is the session, not the route: the command's own refresh
+// path is what turns it around, so the client's only job is to report the
+// status faithfully.
+TestResult test_usage_requests_unauthorized_is_reported() {
+    TestResult result;
+    result.test_name = "usage_requests_unauthorized_is_reported";
+    wally::account::ConsoleClient console(
+        [&](const wally::account::HttpRequest& request, wally::account::HttpResponse* response,
+            std::string*) {
+            response->status = 401;
+            return true;
+        });
+    wally::account::UsageRequestsQuery query;
+    query.since = "2026-09-24T08:00:00Z";
+    query.until = "2026-09-25T08:00:00Z";
+    wally::account::UsageRequestsPage page;
+    std::string error;
+    if (console.FetchUsageRequests("https://console.example.test", "a-token", query, &page,
+                                   &error) != wally::account::IdentityResult::Unauthorized) {
+        result.details = "a 401 export must read as Unauthorized";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
 // A 429 mid-poll must not kill the login. `wally login` printed its code and
 // URL, then died on the first rate-limited poll while the person was still
 // approving in the browser (InferenceInfra#444).
@@ -1208,6 +1336,9 @@ int main(int argc, char** argv) {
               test_the_trusted_browser_origin_is_never_empty);
     suite.add("usage_counters_survive_beyond_thirty_two_bits",
               test_usage_counters_survive_beyond_thirty_two_bits);
+    suite.add("usage_requests_page_speaks_the_route", test_usage_requests_page_speaks_the_route);
+    suite.add("usage_requests_unauthorized_is_reported",
+              test_usage_requests_unauthorized_is_reported);
     suite.add("cancel_request_speaks_the_contract", test_cancel_request_speaks_the_contract);
     suite.add("the_cancel_worker_sends_in_order_with_the_current_bearer",
               test_the_cancel_worker_sends_in_order_with_the_current_bearer);

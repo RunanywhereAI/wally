@@ -17,7 +17,7 @@
 namespace wally::account::contract {
 
 // SHA-256 of contracts/wally-cli-v1.openapi.json this header was built from.
-inline constexpr char kContractSha256[] = "b865dc4dc6f389bf89674a1cc73115cd7db10b82e4d9f6d415e969cd1a2c5bd6";
+inline constexpr char kContractSha256[] = "5070bc5c28a894460de8b6b1bcc9359cbd3f23d6846e76af2e599cb4ed49289f";
 
 enum class ApiErrorCode {
     kInvalidRequest,
@@ -423,6 +423,28 @@ inline void to_json(nlohmann::json& j, const PollStatus& value) {
         case PollStatus::kApproved: j = "approved"; return;
         case PollStatus::kDenied: j = "denied"; return;
         case PollStatus::kExpired: j = "expired"; return;
+    }
+}
+
+enum class UsageProvider {
+    kSelfHostedSglang,
+    kVertexAi,
+    kUnknown,
+};
+
+inline void from_json(const nlohmann::json& j, UsageProvider& value) {
+    const std::string raw = j.get<std::string>();
+    if (raw == "self_hosted_sglang") { value = UsageProvider::kSelfHostedSglang; return; }
+    if (raw == "vertex_ai") { value = UsageProvider::kVertexAi; return; }
+    if (raw == "unknown") { value = UsageProvider::kUnknown; return; }
+    throw nlohmann::json::type_error::create(302, "unknown UsageProvider: " + raw, &j);
+}
+
+inline void to_json(nlohmann::json& j, const UsageProvider& value) {
+    switch (value) {
+        case UsageProvider::kSelfHostedSglang: j = "self_hosted_sglang"; return;
+        case UsageProvider::kVertexAi: j = "vertex_ai"; return;
+        case UsageProvider::kUnknown: j = "unknown"; return;
     }
 }
 
@@ -1302,6 +1324,296 @@ inline void to_json(nlohmann::json& j, const PollResponse& value) {
         j["refresh_token"] = *value.refresh_token;
     }
     j["status"] = value.status;
+}
+
+struct UsageRequestRecord {
+    std::optional<std::string> api_key_id;
+    std::int64_t cached_tokens;
+    std::int64_t completion_tokens;
+    std::int64_t cost_micros;
+    std::optional<std::string> error_code;
+    std::optional<std::string> finish_reason;
+    std::optional<std::int64_t> max_tokens_granted;
+    std::optional<std::int64_t> max_tokens_requested;
+    std::string model;
+    std::int64_t noncached_prompt_tokens;
+    std::string pricing_version;
+    std::int64_t prompt_tokens;
+    std::optional<UsageProvider> provider;
+    std::int64_t reasoning_tokens;
+    std::string recorded_at;
+    std::string request_id;
+    std::optional<std::string> response_request_id;
+    std::int64_t status_code;
+    bool stream;
+    std::optional<std::int64_t> tpot_ms;
+    std::optional<std::string> ts_end;
+    std::string ts_start;
+    std::optional<std::int64_t> ttft_ms;
+};
+
+inline void from_json(const nlohmann::json& j, UsageRequestRecord& value) {
+    if (j.contains("api_key_id") && !j.at("api_key_id").is_null()) {
+        value.api_key_id = j.at("api_key_id").get<std::string>();
+    } else {
+        value.api_key_id = std::nullopt;
+    }
+    if (j.contains("cached_tokens") && !j.at("cached_tokens").is_null()) {
+        value.cached_tokens = j.at("cached_tokens").get<std::int64_t>();
+    } else {
+        value.cached_tokens = std::int64_t{};
+    }
+    if (j.contains("completion_tokens") && !j.at("completion_tokens").is_null()) {
+        value.completion_tokens = j.at("completion_tokens").get<std::int64_t>();
+    } else {
+        value.completion_tokens = std::int64_t{};
+    }
+    if (j.contains("cost_micros") && !j.at("cost_micros").is_null()) {
+        value.cost_micros = j.at("cost_micros").get<std::int64_t>();
+    } else {
+        value.cost_micros = std::int64_t{};
+    }
+    if (j.contains("error_code") && !j.at("error_code").is_null()) {
+        value.error_code = j.at("error_code").get<std::string>();
+    } else {
+        value.error_code = std::nullopt;
+    }
+    if (j.contains("finish_reason") && !j.at("finish_reason").is_null()) {
+        value.finish_reason = j.at("finish_reason").get<std::string>();
+    } else {
+        value.finish_reason = std::nullopt;
+    }
+    if (j.contains("max_tokens_granted") && !j.at("max_tokens_granted").is_null()) {
+        value.max_tokens_granted = j.at("max_tokens_granted").get<std::int64_t>();
+    } else {
+        value.max_tokens_granted = std::nullopt;
+    }
+    if (j.contains("max_tokens_requested") && !j.at("max_tokens_requested").is_null()) {
+        value.max_tokens_requested = j.at("max_tokens_requested").get<std::int64_t>();
+    } else {
+        value.max_tokens_requested = std::nullopt;
+    }
+    if (j.contains("model") && !j.at("model").is_null()) {
+        value.model = j.at("model").get<std::string>();
+    } else {
+        value.model = std::string{};
+    }
+    if (j.contains("noncached_prompt_tokens") && !j.at("noncached_prompt_tokens").is_null()) {
+        value.noncached_prompt_tokens = j.at("noncached_prompt_tokens").get<std::int64_t>();
+    } else {
+        value.noncached_prompt_tokens = std::int64_t{};
+    }
+    if (j.contains("pricing_version") && !j.at("pricing_version").is_null()) {
+        value.pricing_version = j.at("pricing_version").get<std::string>();
+    } else {
+        value.pricing_version = std::string{};
+    }
+    if (j.contains("prompt_tokens") && !j.at("prompt_tokens").is_null()) {
+        value.prompt_tokens = j.at("prompt_tokens").get<std::int64_t>();
+    } else {
+        value.prompt_tokens = std::int64_t{};
+    }
+    if (j.contains("provider") && !j.at("provider").is_null()) {
+        value.provider = j.at("provider").get<UsageProvider>();
+    } else {
+        value.provider = std::nullopt;
+    }
+    if (j.contains("reasoning_tokens") && !j.at("reasoning_tokens").is_null()) {
+        value.reasoning_tokens = j.at("reasoning_tokens").get<std::int64_t>();
+    } else {
+        value.reasoning_tokens = std::int64_t{};
+    }
+    if (j.contains("recorded_at") && !j.at("recorded_at").is_null()) {
+        value.recorded_at = j.at("recorded_at").get<std::string>();
+    } else {
+        value.recorded_at = std::string{};
+    }
+    if (j.contains("request_id") && !j.at("request_id").is_null()) {
+        value.request_id = j.at("request_id").get<std::string>();
+    } else {
+        value.request_id = std::string{};
+    }
+    if (j.contains("response_request_id") && !j.at("response_request_id").is_null()) {
+        value.response_request_id = j.at("response_request_id").get<std::string>();
+    } else {
+        value.response_request_id = std::nullopt;
+    }
+    if (j.contains("status_code") && !j.at("status_code").is_null()) {
+        value.status_code = j.at("status_code").get<std::int64_t>();
+    } else {
+        value.status_code = std::int64_t{};
+    }
+    if (j.contains("stream") && !j.at("stream").is_null()) {
+        value.stream = j.at("stream").get<bool>();
+    } else {
+        value.stream = bool{};
+    }
+    if (j.contains("tpot_ms") && !j.at("tpot_ms").is_null()) {
+        value.tpot_ms = j.at("tpot_ms").get<std::int64_t>();
+    } else {
+        value.tpot_ms = std::nullopt;
+    }
+    if (j.contains("ts_end") && !j.at("ts_end").is_null()) {
+        value.ts_end = j.at("ts_end").get<std::string>();
+    } else {
+        value.ts_end = std::nullopt;
+    }
+    if (j.contains("ts_start") && !j.at("ts_start").is_null()) {
+        value.ts_start = j.at("ts_start").get<std::string>();
+    } else {
+        value.ts_start = std::string{};
+    }
+    if (j.contains("ttft_ms") && !j.at("ttft_ms").is_null()) {
+        value.ttft_ms = j.at("ttft_ms").get<std::int64_t>();
+    } else {
+        value.ttft_ms = std::nullopt;
+    }
+}
+
+inline void to_json(nlohmann::json& j, const UsageRequestRecord& value) {
+    j = nlohmann::json::object();
+    if (value.api_key_id.has_value()) {
+        j["api_key_id"] = *value.api_key_id;
+    }
+    j["cached_tokens"] = value.cached_tokens;
+    j["completion_tokens"] = value.completion_tokens;
+    j["cost_micros"] = value.cost_micros;
+    if (value.error_code.has_value()) {
+        j["error_code"] = *value.error_code;
+    }
+    if (value.finish_reason.has_value()) {
+        j["finish_reason"] = *value.finish_reason;
+    }
+    if (value.max_tokens_granted.has_value()) {
+        j["max_tokens_granted"] = *value.max_tokens_granted;
+    }
+    if (value.max_tokens_requested.has_value()) {
+        j["max_tokens_requested"] = *value.max_tokens_requested;
+    }
+    j["model"] = value.model;
+    j["noncached_prompt_tokens"] = value.noncached_prompt_tokens;
+    j["pricing_version"] = value.pricing_version;
+    j["prompt_tokens"] = value.prompt_tokens;
+    if (value.provider.has_value()) {
+        j["provider"] = *value.provider;
+    }
+    j["reasoning_tokens"] = value.reasoning_tokens;
+    j["recorded_at"] = value.recorded_at;
+    j["request_id"] = value.request_id;
+    if (value.response_request_id.has_value()) {
+        j["response_request_id"] = *value.response_request_id;
+    }
+    j["status_code"] = value.status_code;
+    j["stream"] = value.stream;
+    if (value.tpot_ms.has_value()) {
+        j["tpot_ms"] = *value.tpot_ms;
+    }
+    if (value.ts_end.has_value()) {
+        j["ts_end"] = *value.ts_end;
+    }
+    j["ts_start"] = value.ts_start;
+    if (value.ttft_ms.has_value()) {
+        j["ttft_ms"] = *value.ttft_ms;
+    }
+}
+
+struct UsageRequestTotals {
+    std::int64_t cached_tokens;
+    std::int64_t completion_tokens;
+    std::int64_t cost_micros;
+    std::int64_t noncached_prompt_tokens;
+    std::int64_t prompt_tokens;
+    std::int64_t reasoning_tokens;
+    std::int64_t requests;
+};
+
+inline void from_json(const nlohmann::json& j, UsageRequestTotals& value) {
+    if (j.contains("cached_tokens") && !j.at("cached_tokens").is_null()) {
+        value.cached_tokens = j.at("cached_tokens").get<std::int64_t>();
+    } else {
+        value.cached_tokens = std::int64_t{};
+    }
+    if (j.contains("completion_tokens") && !j.at("completion_tokens").is_null()) {
+        value.completion_tokens = j.at("completion_tokens").get<std::int64_t>();
+    } else {
+        value.completion_tokens = std::int64_t{};
+    }
+    if (j.contains("cost_micros") && !j.at("cost_micros").is_null()) {
+        value.cost_micros = j.at("cost_micros").get<std::int64_t>();
+    } else {
+        value.cost_micros = std::int64_t{};
+    }
+    if (j.contains("noncached_prompt_tokens") && !j.at("noncached_prompt_tokens").is_null()) {
+        value.noncached_prompt_tokens = j.at("noncached_prompt_tokens").get<std::int64_t>();
+    } else {
+        value.noncached_prompt_tokens = std::int64_t{};
+    }
+    if (j.contains("prompt_tokens") && !j.at("prompt_tokens").is_null()) {
+        value.prompt_tokens = j.at("prompt_tokens").get<std::int64_t>();
+    } else {
+        value.prompt_tokens = std::int64_t{};
+    }
+    if (j.contains("reasoning_tokens") && !j.at("reasoning_tokens").is_null()) {
+        value.reasoning_tokens = j.at("reasoning_tokens").get<std::int64_t>();
+    } else {
+        value.reasoning_tokens = std::int64_t{};
+    }
+    if (j.contains("requests") && !j.at("requests").is_null()) {
+        value.requests = j.at("requests").get<std::int64_t>();
+    } else {
+        value.requests = std::int64_t{};
+    }
+}
+
+inline void to_json(nlohmann::json& j, const UsageRequestTotals& value) {
+    j = nlohmann::json::object();
+    j["cached_tokens"] = value.cached_tokens;
+    j["completion_tokens"] = value.completion_tokens;
+    j["cost_micros"] = value.cost_micros;
+    j["noncached_prompt_tokens"] = value.noncached_prompt_tokens;
+    j["prompt_tokens"] = value.prompt_tokens;
+    j["reasoning_tokens"] = value.reasoning_tokens;
+    j["requests"] = value.requests;
+}
+
+struct UsageRequestPage {
+    std::string as_of;
+    std::optional<std::string> next_cursor;
+    std::vector<UsageRequestRecord> requests;
+    UsageRequestTotals totals;
+};
+
+inline void from_json(const nlohmann::json& j, UsageRequestPage& value) {
+    if (j.contains("as_of") && !j.at("as_of").is_null()) {
+        value.as_of = j.at("as_of").get<std::string>();
+    } else {
+        value.as_of = std::string{};
+    }
+    if (j.contains("next_cursor") && !j.at("next_cursor").is_null()) {
+        value.next_cursor = j.at("next_cursor").get<std::string>();
+    } else {
+        value.next_cursor = std::nullopt;
+    }
+    if (j.contains("requests") && !j.at("requests").is_null()) {
+        value.requests = j.at("requests").get<std::vector<UsageRequestRecord>>();
+    } else {
+        value.requests = std::vector<UsageRequestRecord>{};
+    }
+    if (j.contains("totals") && !j.at("totals").is_null()) {
+        value.totals = j.at("totals").get<UsageRequestTotals>();
+    } else {
+        value.totals = UsageRequestTotals{};
+    }
+}
+
+inline void to_json(nlohmann::json& j, const UsageRequestPage& value) {
+    j = nlohmann::json::object();
+    j["as_of"] = value.as_of;
+    if (value.next_cursor.has_value()) {
+        j["next_cursor"] = *value.next_cursor;
+    }
+    j["requests"] = value.requests;
+    j["totals"] = value.totals;
 }
 
 }  // namespace wally::account::contract
