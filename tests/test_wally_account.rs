@@ -1283,19 +1283,12 @@ fn usage_requests_refuses_a_page_that_omits_its_cursor() {
     assert_eq!(page_read.next_cursor, None);
 }
 
-// A cursor the client cannot carry must fail the page. Sanitized to empty it
-// would read as "no more pages" and an export would end early and look whole.
-// An empty one breaks the contract (1..=2048) and is refused the same way.
+// A cursor outside the contract's 1..=2048 characters must fail the page.
+// Dropped instead, it would read as "no more pages" and an export would end
+// early and look whole.
 #[test]
-fn usage_requests_refuses_a_cursor_it_cannot_carry() {
-    for (cursor, expected) in [
-        ("a".repeat(2049), "cursor this client cannot carry"),
-        (
-            "bad\u{1b}cursor".to_string(),
-            "cursor this client cannot carry",
-        ),
-        (String::new(), "did not match the contract"),
-    ] {
+fn usage_requests_refuses_a_cursor_outside_the_contract() {
+    for cursor in [String::new(), "a".repeat(2049), "\u{e9}".repeat(2049)] {
         let console = requests_console(
             200,
             serde_json::json!({
@@ -1311,12 +1304,65 @@ fn usage_requests_refuses_a_cursor_it_cannot_carry() {
         assert_eq!(
             status,
             IdentityResult::Failed,
-            "a {}-byte cursor passed",
-            cursor.len()
+            "a {}-character cursor passed",
+            cursor.chars().count()
         );
-        assert!(error.contains(expected), "{error}");
+        assert!(error.contains("did not match the contract"), "{error}");
         assert_eq!(page.next_cursor, None);
     }
+}
+
+// Inside those bounds a cursor is any string the console chose, counted in
+// characters, not bytes. It is only sent back, escaped, so it is carried
+// exactly as given rather than filtered as if it were going to be printed.
+#[test]
+fn usage_requests_carries_any_cursor_the_contract_allows() {
+    for cursor in [
+        "\u{e9}".repeat(2048),
+        "a".repeat(2048),
+        "caf\u{e9}/\u{1b}[2J?&=+ \u{1f600}".to_string(),
+    ] {
+        let console = requests_console(
+            200,
+            serde_json::json!({
+                "as_of": "2026-09-25T08:34:18Z", "totals": {}, "requests": [],
+                "next_cursor": cursor,
+            }),
+        );
+        let (status, page, error) = console.fetch_usage_requests(
+            "https://console.example.test",
+            "a-token",
+            &requests_window(),
+        );
+        assert_eq!(status, IdentityResult::Ok, "{error}");
+        assert_eq!(page.next_cursor.as_deref(), Some(cursor.as_str()));
+    }
+
+    // Sent back, it is percent-encoded byte for byte.
+    let asked_url = Arc::new(Mutex::new(String::new()));
+    let seen = Arc::clone(&asked_url);
+    let console = ConsoleClient::new(Some(Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            *seen.lock().unwrap() = request.url.clone();
+            Ok(HttpResponse {
+                status: 200,
+                body: json(serde_json::json!({
+                    "as_of": "2026-09-25T08:34:18Z", "totals": {}, "requests": [],
+                    "next_cursor": null,
+                })),
+                headers: BTreeMap::new(),
+            })
+        },
+    ) as Transport));
+    let query = UsageRequestsQuery {
+        cursor: Some("caf\u{e9}&x=1".to_string()),
+        ..requests_window()
+    };
+    let (status, _, error) =
+        console.fetch_usage_requests("https://console.example.test", "a-token", &query);
+    assert_eq!(status, IdentityResult::Ok, "{error}");
+    let url = asked_url.lock().unwrap().clone();
+    assert!(url.ends_with("&cursor=caf%C3%A9%26x%3D1"), "{url}");
 }
 
 // Server failures and contract violations are reported as failures, phrased for

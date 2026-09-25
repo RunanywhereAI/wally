@@ -1357,21 +1357,19 @@ impl ConsoleClient {
             Err(_) => return failed(CONTRACT_MISMATCH.to_string()),
         };
 
-        // A cursor is 1..=2048 characters in the contract, so an empty one is
-        // a console that broke it. Read as "no more pages" it would end the
-        // export early and look complete, and so would a cursor the sanitizer
-        // rejects: both are errors, never the last page.
-        let next_cursor = match parsed.next_cursor.as_deref() {
+        // A cursor is 1..=2048 characters in the contract and otherwise any
+        // string. It is only ever sent back, through `query_escape`, and never
+        // printed, so it is carried as given. One outside those bounds broke
+        // the contract; read as "no more pages" it would end the export early
+        // and look complete, so it fails the page.
+        let next_cursor = match parsed.next_cursor {
             None => None,
-            Some("") => return failed(CONTRACT_MISMATCH.to_string()),
-            Some(cursor) => match display_safe(cursor, USAGE_REQUESTS_CURSOR_MAX_CHARS) {
-                safe if safe.is_empty() => {
-                    return failed(
-                        "console returned a page cursor this client cannot carry".to_string(),
-                    )
-                }
-                safe => Some(safe),
-            },
+            Some(cursor)
+                if (1..=USAGE_REQUESTS_CURSOR_MAX_CHARS).contains(&cursor.chars().count()) =>
+            {
+                Some(cursor)
+            }
+            Some(_) => return failed(CONTRACT_MISMATCH.to_string()),
         };
 
         // Map the typed page onto the domain struct, sanitizing every string
