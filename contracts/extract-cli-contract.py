@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Carve the CLI-facing slice out of the full control-plane contract.
 
-The CLI uses nine of the control plane's operations. Rather than vendor the whole
+The CLI uses ten of the control plane's operations. Rather than vendor the whole
 8000-line `control-plane-v1.openapi.json`, this extracts those operations and the
 transitive closure of the schemas they reference into a self-contained, valid
 OpenAPI document, `wally-cli-v1.openapi.json`, which is what gets pinned and fed

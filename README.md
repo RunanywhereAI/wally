@@ -64,7 +64,7 @@ Other local models are not certified for coding harnesses and are rejected.
 | `wally models list` | models on this machine |
 | `wally serve` | OpenAI-compatible API |
 | `wally account login` / `wally account usage` | sign in, check credit |
-| `wally account usage --requests` | every settled request in a window (`--follow` for all pages) |
+| `wally account usage --requests` | settled requests in a window (`--follow` walks up to 100 pages) |
 | `wally opencode` / `wally claude-code` | start a coding agent on a model |
 | `wally update` | update wally to the latest release |
 

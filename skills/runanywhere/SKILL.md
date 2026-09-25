@@ -77,7 +77,7 @@ Models land in `~/.local/share/runanywhere`. Nothing is downloaded until asked.
 ```bash
 wally account usage               # credit left, then input/output/cache tokens and spend
 wally account usage --json
-wally account usage --requests      # one page of settled requests, last day; --follow reads every page
+wally account usage --requests      # one page of settled requests, last day; --follow walks up to 100 pages
 ```
 
 Read-only, and scoped to the signed-in account.
