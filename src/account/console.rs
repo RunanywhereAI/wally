@@ -11,6 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::console_contract as contract;
+use super::{
+    UsageRequestRow, UsageRequestsPage, UsageRequestsQuery, UsageRequestsTotals,
+    USAGE_REQUESTS_CURSOR_MAX_CHARS,
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HttpRequest {
@@ -612,6 +616,63 @@ fn http_error(operation: &str, origin: &str, response: &HttpResponse) -> String 
     message
 }
 
+/// How much of a console's refusal is shown. The contract allows 2048
+/// characters; a terminal line needs the sentence, not the essay.
+const REFUSAL_MAX_CHARS: usize = 240;
+
+/// A 400 or 422 is the console refusing what was asked, and its `ApiError`
+/// message says what to change ("the window may span at most 31 days"). That
+/// sentence is shown, cut to a line, when it is printable text that does not
+/// carry the session token; anything else falls back to `http_error`, which
+/// never echoes a body.
+fn refusal_error(
+    operation: &str,
+    origin: &str,
+    response: &HttpResponse,
+    access_token: &str,
+) -> String {
+    let message = parse_object(response)
+        .ok()
+        .and_then(|object| contract::ApiError::from_json(&object).ok())
+        .map(|error| error.message)
+        .filter(|message| display_text_is_safe(message, 2048))
+        .filter(|message| access_token.is_empty() || !message.contains(access_token));
+    match message {
+        Some(message) if message.len() > REFUSAL_MAX_CHARS => format!(
+            "Wally Cloud refused the {operation}: {}...",
+            &message[..REFUSAL_MAX_CHARS]
+        ),
+        Some(message) => format!("Wally Cloud refused the {operation}: {message}"),
+        None => http_error(operation, origin, response),
+    }
+}
+
+/// Lifts every `provider` the generated `UsageProvider` does not know out of a
+/// usage-export body, leaving `null` in its place, and returns them by row.
+///
+/// The generated reader fails a whole page on an unknown enum value, which is
+/// right for a value the CLI acts on and wrong for this one: `provider` is a
+/// label the export only reports, and a console that starts routing to a new
+/// provider must not make every page of history unreadable. Only this field is
+/// relaxed, and only here; every other closed value still fails the page.
+fn take_unknown_providers(body: &mut serde_json::Value) -> Vec<Option<String>> {
+    let Some(rows) = body.get_mut("requests").and_then(|r| r.as_array_mut()) else {
+        return Vec::new();
+    };
+    rows.iter_mut()
+        .map(|row| {
+            let provider = row.get_mut("provider")?;
+            let raw = provider.as_str()?;
+            if contract::UsageProvider::parse(raw).is_ok() {
+                return None;
+            }
+            let raw = raw.to_string();
+            *provider = serde_json::Value::Null;
+            Some(raw)
+        })
+        .collect()
+}
+
 fn parse_object(response: &HttpResponse) -> Result<serde_json::Value, String> {
     let parsed: serde_json::Value = serde_json::from_str(&response.body)
         // Do not include the response body: an upstream error can echo a token.
@@ -636,6 +697,23 @@ fn display_safe(value: &str, maximum: usize) -> String {
     } else {
         String::new()
     }
+}
+
+/// A label the console chose, made printable rather than dropped: every
+/// character outside printable ASCII becomes `?`, and a label past `maximum`
+/// keeps its first `maximum - 3` characters and ends in `...`. For text that is
+/// only ever shown (an unknown provider), where some of the label is worth more
+/// than none of it. Empty in, empty out.
+fn display_lossy(value: &str, maximum: usize) -> String {
+    let printable: String = value
+        .chars()
+        .map(|c| if (' '..='~').contains(&c) { c } else { '?' })
+        .collect();
+    if printable.len() <= maximum {
+        return printable;
+    }
+    let keep = maximum.saturating_sub(3);
+    format!("{}...", &printable[..keep])
 }
 
 fn request_code_is_safe(value: &str) -> bool {
@@ -933,9 +1011,12 @@ impl ConsoleClient {
             bearer_token: String::new(),
             timeout_ms: 0,
         };
+        // No answer at all (DNS, a refused connection, a timeout) is the
+        // console not being reached, which says nothing about the session:
+        // logging in again cannot fix a network that is down.
         let response = self
             .send(request)
-            .map_err(|message| unavailable_err(message, false))?;
+            .map_err(|message| unavailable_err(message, true))?;
         if response.status != 200 {
             let message = http_error("refresh", &origin, &response);
             // Same distinction as WhoAmI: a busy console has not told us this
@@ -1193,6 +1274,168 @@ impl ConsoleClient {
             });
         }
         (IdentityResult::Ok, usage, String::new())
+    }
+
+    /// One page of settled requests (`GET /v1/cli/usage/requests`,
+    /// InferenceInfra #809). The query is checked against the contract before
+    /// anything is sent; `since`/`until` go out as given.
+    pub fn fetch_usage_requests(
+        &self,
+        console_url: &str,
+        access_token: &str,
+        query: &UsageRequestsQuery,
+    ) -> (IdentityResult, UsageRequestsPage, String) {
+        let failed = |error: String| (IdentityResult::Failed, UsageRequestsPage::default(), error);
+        if !super::session_token_is_safe(access_token) {
+            return failed("no access token is available".to_string());
+        }
+        if let Err(error) = query.validate() {
+            return failed(error);
+        }
+        let origin = match console_origin(console_url) {
+            Ok(origin) => origin,
+            Err(error) => return failed(error),
+        };
+        let mut url = format!(
+            "{origin}/v1/cli/usage/requests?since={}&until={}&limit={}",
+            query_escape(&query.since),
+            query_escape(&query.until),
+            query.limit
+        );
+        if let Some(model) = &query.model {
+            url.push_str(&format!("&model={}", query_escape(model)));
+        }
+        if let Some(status_code) = query.status_code {
+            url.push_str(&format!("&status_code={status_code}"));
+        }
+        if let Some(id) = &query.response_request_id {
+            url.push_str(&format!("&response_request_id={}", query_escape(id)));
+        }
+        if let Some(cursor) = &query.cursor {
+            url.push_str(&format!("&cursor={}", query_escape(cursor)));
+        }
+        let request = HttpRequest {
+            method: "GET".to_string(),
+            url,
+            body: String::new(),
+            bearer_token: access_token.to_string(),
+            timeout_ms: 0,
+        };
+        let response = match self.send(request) {
+            Ok(response) => response,
+            Err(error) => return failed(error),
+        };
+        if response.status == 401 {
+            return (
+                IdentityResult::Unauthorized,
+                UsageRequestsPage::default(),
+                "console session expired".to_string(),
+            );
+        }
+        if response.status == 400 || response.status == 422 {
+            return failed(refusal_error(
+                "usage export",
+                &origin,
+                &response,
+                access_token,
+            ));
+        }
+        if response.status != 200 {
+            return failed(http_error("usage export", &origin, &response));
+        }
+        let mut object = match parse_object(&response) {
+            Ok(object) => object,
+            Err(error) => return failed(error),
+        };
+        // The contract requires `next_cursor` and makes `null` the last page.
+        // The generated reader defaults a missing field to `None`, which would
+        // end the export early and look complete, so absence is checked on
+        // the raw object: a page that omits it broke the contract.
+        if object.get("next_cursor").is_none() {
+            return failed(CONTRACT_MISMATCH.to_string());
+        }
+        let providers = take_unknown_providers(&mut object);
+        let parsed = match contract::UsageRequestPage::from_json(&object) {
+            Ok(parsed) => parsed,
+            Err(_) => return failed(CONTRACT_MISMATCH.to_string()),
+        };
+
+        // A cursor is 1..=2048 characters in the contract and otherwise any
+        // string. It is only ever sent back, through `query_escape`, and never
+        // printed, so it is carried as given. One outside those bounds broke
+        // the contract; read as "no more pages" it would end the export early
+        // and look complete, so it fails the page.
+        let next_cursor = match parsed.next_cursor {
+            None => None,
+            Some(cursor)
+                if (1..=USAGE_REQUESTS_CURSOR_MAX_CHARS).contains(&cursor.chars().count()) =>
+            {
+                Some(cursor)
+            }
+            Some(_) => return failed(CONTRACT_MISMATCH.to_string()),
+        };
+
+        // Map the typed page onto the domain struct, sanitizing every string
+        // the server chose: this text lands in the user's terminal.
+        let optional = |value: &Option<String>, maximum: usize| {
+            value
+                .as_deref()
+                .map(|v| display_safe(v, maximum))
+                .filter(|v| !v.is_empty())
+        };
+        let requests = parsed
+            .requests
+            .iter()
+            .enumerate()
+            .map(|(index, record)| UsageRequestRow {
+                request_id: display_safe(&record.request_id, 128),
+                response_request_id: optional(&record.response_request_id, 128),
+                model: display_safe(&record.model, 128),
+                provider: match record.provider {
+                    Some(provider) => Some(provider.as_str().to_string()),
+                    None => providers
+                        .get(index)
+                        .cloned()
+                        .flatten()
+                        .map(|raw| display_lossy(&raw, 64))
+                        .filter(|label| !label.is_empty()),
+                },
+                status_code: record.status_code,
+                error_code: optional(&record.error_code, 80),
+                finish_reason: optional(&record.finish_reason, 40),
+                stream: record.stream,
+                ts_start: display_safe(&record.ts_start, 64),
+                ts_end: optional(&record.ts_end, 64),
+                recorded_at: display_safe(&record.recorded_at, 64),
+                prompt_tokens: record.prompt_tokens,
+                cached_tokens: record.cached_tokens,
+                noncached_prompt_tokens: record.noncached_prompt_tokens,
+                completion_tokens: record.completion_tokens,
+                reasoning_tokens: record.reasoning_tokens,
+                max_tokens_requested: record.max_tokens_requested,
+                max_tokens_granted: record.max_tokens_granted,
+                ttft_ms: record.ttft_ms,
+                tpot_ms: record.tpot_ms,
+                cost_micros: record.cost_micros,
+                pricing_version: display_safe(&record.pricing_version, 64),
+            })
+            .collect();
+        let totals = &parsed.totals;
+        let page = UsageRequestsPage {
+            as_of: display_safe(&parsed.as_of, 64),
+            totals: UsageRequestsTotals {
+                requests: totals.requests,
+                prompt_tokens: totals.prompt_tokens,
+                cached_tokens: totals.cached_tokens,
+                noncached_prompt_tokens: totals.noncached_prompt_tokens,
+                completion_tokens: totals.completion_tokens,
+                reasoning_tokens: totals.reasoning_tokens,
+                cost_micros: totals.cost_micros,
+            },
+            requests,
+            next_cursor,
+        };
+        (IdentityResult::Ok, page, String::new())
     }
 
     pub fn fetch_models(

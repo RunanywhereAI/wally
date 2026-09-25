@@ -43,37 +43,12 @@ impl std::fmt::Debug for Shim {
 // shim.log
 // ---------------------------------------------------------------------
 
-/// Howard Hinnant's days-since-epoch -> proleptic Gregorian (y, m, d).
-/// <http://howardhinnant.github.io/date_algorithms.html#civil_from_days>
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
-
-/// `%Y-%m-%dT%H:%M:%SZ`, hand-rolled: no `chrono`/`time` dependency exists in
-/// this project, and adding one for a single log timestamp is not worth its
-/// own separate crate commit.
+/// Now, as `%Y-%m-%dT%H:%M:%SZ` (`util::format_utc`).
 fn utc_timestamp() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO);
-    let secs = now.as_secs() as i64;
-    let days = secs.div_euclid(86400);
-    let time_of_day = secs.rem_euclid(86400);
-    let (y, m, d) = civil_from_days(days);
-    let hh = time_of_day / 3600;
-    let mm = (time_of_day % 3600) / 60;
-    let ss = time_of_day % 60;
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+    crate::util::format_utc(i64::try_from(now.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// One timestamped line into shim.log; the error logger below and the
@@ -1369,16 +1344,6 @@ mod tests {
         );
         assert_eq!(split_base_url("not-a-url"), None);
         assert_eq!(split_base_url(""), None);
-    }
-
-    #[test]
-    fn civil_from_days_matches_known_dates() {
-        // 1970-01-01 is day 0.
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        // 2000-03-01, the day the Hinnant algorithm's era boundary sits on.
-        assert_eq!(civil_from_days(11017), (2000, 3, 1));
-        // 2024-02-29, a leap day.
-        assert_eq!(civil_from_days(19782), (2024, 2, 29));
     }
 
     #[test]

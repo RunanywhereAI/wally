@@ -77,8 +77,8 @@ Do not wrap protobuf in OpenAPI merely to change protocol names. When Wally only
 transports SDK-owned bytes, protobuf generation and `SCHEMA_LOCK` satisfy this
 rule. When Wally directly owns an HTTP call, the OpenAPI requirement applies.
 
-The console's nine CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
-`/v1/cli/usage`, `/v1/models`, `/v1/models/catalog`,
+The console's ten CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
+`/v1/cli/usage`, `/v1/cli/usage/requests`, `/v1/models`, `/v1/models/catalog`,
 `/v1/requests/{request_id}/cancel`) follow this.
 `contracts/wally-cli-v1.openapi.json` is the pinned artifact, extracted from
 InferenceInfra's `control-plane-v1.openapi.json` by
@@ -87,9 +87,14 @@ turns it into `src/account/console_contract.rs` (typed requests and responses,
 DO NOT EDIT), which `console.rs` uses instead of hand-built JSON. Requests
 serialize strictly; responses read tolerantly (a missing field defaults, a wrong
 type or unknown enum value still fails) so the CLI survives a server that lags
-the contract. `test_wally_contract` and
-`python3 contracts/sync_from_inferenceinfra.py --check` fail the build if the
-header, the pin, and the artifact drift.
+the contract. One field is exempt: the usage export's `provider` is a label the
+CLI only reports, so `console.rs` lifts a value the binding does not know out
+of the body before parsing and carries it as text instead of failing the page.
+One field goes the other way: the export's `next_cursor` is required, and a
+defaulted one would read as the last page, so `console.rs` fails a page that
+omits it rather than end the export early.
+`test_wally_contract` and `python3 contracts/sync_from_inferenceinfra.py
+--check` fail the build if the header, the pin, and the artifact drift.
 
 To re-vendor from an InferenceInfra checkout (records the source commit on the
 extract):

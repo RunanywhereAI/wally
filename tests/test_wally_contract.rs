@@ -86,3 +86,189 @@ fn request_and_response_round_trip() {
     assert_eq!(parsed.windows.len(), 1);
     assert_eq!(parsed.windows[0].window, contract::CliUsageWindowLabel::K1h);
 }
+
+// A settled-request page parses end to end and survives a serialize-and-reparse:
+// every field the contract names, the nullable shapes (present and null) and the
+// required ones.
+#[test]
+fn usage_request_page_round_trip() {
+    let page = serde_json::json!({
+        "as_of": "2026-09-25T08:34:18.548805Z",
+        "totals": {
+            "requests": 2, "prompt_tokens": 1000, "cached_tokens": 900,
+            "noncached_prompt_tokens": 100, "completion_tokens": 50,
+            "reasoning_tokens": 20, "cost_micros": 12345
+        },
+        "requests": [
+            {
+                "request_id": "ledger-1", "response_request_id": "resp-1",
+                "api_key_id": null, "model": "glm-5.3-flash",
+                "provider": "self_hosted_sglang", "status_code": 200,
+                "error_code": null, "finish_reason": "stop", "stream": true,
+                "ts_start": "2026-09-25T08:00:00Z", "ts_end": "2026-09-25T08:00:01Z",
+                "recorded_at": "2026-09-25T08:00:02Z", "prompt_tokens": 800,
+                "cached_tokens": 700, "noncached_prompt_tokens": 100,
+                "completion_tokens": 40, "reasoning_tokens": 20,
+                "max_tokens_requested": 4096, "max_tokens_granted": 2048,
+                "ttft_ms": 310, "tpot_ms": null, "cost_micros": 12345,
+                "pricing_version": "2026-09-23.1"
+            },
+            // Every nullable at null: the read must leave them absent.
+            {
+                "request_id": "ledger-2", "response_request_id": null,
+                "api_key_id": null, "model": "gemma-4", "provider": "vertex_ai",
+                "status_code": 500, "error_code": "upstream_error",
+                "finish_reason": null, "stream": false,
+                "ts_start": "2026-09-25T07:00:00Z", "ts_end": null,
+                "recorded_at": "2026-09-25T07:00:01Z", "prompt_tokens": 200,
+                "cached_tokens": 200, "noncached_prompt_tokens": 0,
+                "completion_tokens": 10, "reasoning_tokens": 0,
+                "max_tokens_requested": null, "max_tokens_granted": null,
+                "ttft_ms": null, "tpot_ms": null, "cost_micros": 0,
+                "pricing_version": "2026-09-23.1"
+            }
+        ],
+        "next_cursor": "eyJuZXh0IjoxfQ",
+    });
+    let parsed =
+        contract::UsageRequestPage::from_json(&page).expect("a contract-shaped page parses");
+    assert_eq!(parsed.as_of, "2026-09-25T08:34:18.548805Z");
+    assert_eq!(parsed.totals.requests, 2);
+    assert_eq!(parsed.totals.cost_micros, 12345);
+    assert_eq!(parsed.next_cursor.as_deref(), Some("eyJuZXh0IjoxfQ"));
+
+    assert_eq!(parsed.requests.len(), 2);
+    let first = &parsed.requests[0];
+    assert_eq!(first.response_request_id.as_deref(), Some("resp-1"));
+    assert_eq!(
+        first.provider,
+        Some(contract::UsageProvider::KSelfHostedSglang)
+    );
+    assert_eq!(first.request_id, "ledger-1");
+    assert_eq!(first.api_key_id, None);
+    assert_eq!(first.model, "glm-5.3-flash");
+    assert_eq!(first.status_code, 200);
+    assert_eq!(first.error_code, None);
+    assert_eq!(first.finish_reason.as_deref(), Some("stop"));
+    assert!(first.stream);
+    assert_eq!(first.ts_start, "2026-09-25T08:00:00Z");
+    assert_eq!(first.ts_end.as_deref(), Some("2026-09-25T08:00:01Z"));
+    assert_eq!(first.recorded_at, "2026-09-25T08:00:02Z");
+    assert_eq!(
+        (
+            first.prompt_tokens,
+            first.cached_tokens,
+            first.noncached_prompt_tokens,
+            first.completion_tokens,
+            first.reasoning_tokens,
+        ),
+        (800, 700, 100, 40, 20)
+    );
+    assert_eq!(first.max_tokens_requested, Some(4096));
+    assert_eq!(first.max_tokens_granted, Some(2048));
+    assert_eq!(first.ttft_ms, Some(310));
+    assert_eq!(first.tpot_ms, None);
+    assert_eq!(first.cost_micros, 12345);
+    assert_eq!(first.pricing_version, "2026-09-23.1");
+
+    let second = &parsed.requests[1];
+    assert!(
+        second.response_request_id.is_none()
+            && second.ts_end.is_none()
+            && second.ttft_ms.is_none()
+            && second.max_tokens_granted.is_none()
+            && second.max_tokens_requested.is_none()
+            && second.finish_reason.is_none()
+            && second.tpot_ms.is_none(),
+        "a null must read as absent, not as a default value"
+    );
+    assert_eq!(second.provider, Some(contract::UsageProvider::KVertexAi));
+    assert_eq!(second.status_code, 500);
+    assert_eq!(second.error_code.as_deref(), Some("upstream_error"));
+    assert!(!second.stream);
+
+    let totals = &parsed.totals;
+    assert_eq!(
+        (
+            totals.prompt_tokens,
+            totals.cached_tokens,
+            totals.noncached_prompt_tokens,
+            totals.completion_tokens,
+            totals.reasoning_tokens,
+        ),
+        (1000, 900, 100, 50, 20)
+    );
+
+    // Serialized and read back, the page is the same page.
+    let reparsed = contract::UsageRequestPage::from_json(&parsed.to_json())
+        .expect("the binding reads what it writes");
+    assert_eq!(reparsed, parsed);
+
+    // A body that omits members still parses, so the CLI survives a server that
+    // lags the contract. A body that is not an object at all does not.
+    let sparse = serde_json::json!({"as_of": "2026-09-25T08:00:00Z", "totals": {}, "requests": [], "next_cursor": null});
+    let quiet = contract::UsageRequestPage::from_json(&sparse).expect("a sparse page parses");
+    assert_eq!(quiet.totals.requests, 0);
+    assert!(quiet.requests.is_empty() && quiet.next_cursor.is_none());
+    assert!(contract::UsageRequestPage::from_json(&serde_json::json!([])).is_err());
+}
+
+// The export's query bounds are checked by hand in `usage_requests.rs`, before
+// anything is sent. This pins every one of them to the artifact, so a contract
+// that moves a bound fails here instead of the CLI refusing (or sending) the
+// wrong thing.
+#[test]
+fn usage_request_query_bounds_match_the_contract() {
+    use wally::account;
+
+    let artifact: serde_json::Value =
+        serde_json::from_slice(CONTRACT_BYTES).expect("the contract is JSON");
+    let schemas = &artifact["components"]["schemas"];
+    let parameter = |name: &str| {
+        let value = &schemas[format!("ListCliUsageRequestsQuery{name}Value")];
+        // Optional filters are `anyOf: [{...}, {"type": "null"}]`.
+        value["anyOf"]
+            .as_array()
+            .and_then(|options| options.iter().find(|o| o["type"] != "null"))
+            .unwrap_or(value)
+            .clone()
+    };
+
+    let model = parameter("Model");
+    assert_eq!(model["pattern"], account::MODEL_ID_PATTERN);
+    assert_eq!(model["minLength"], 1);
+    assert_eq!(model["maxLength"], account::USAGE_REQUESTS_ID_MAX_CHARS);
+
+    let response_request_id = parameter("ResponseRequestId");
+    assert_eq!(response_request_id["minLength"], 1);
+    assert_eq!(
+        response_request_id["maxLength"],
+        account::USAGE_REQUESTS_ID_MAX_CHARS
+    );
+
+    let status = parameter("StatusCode");
+    assert_eq!(status["minimum"], account::HTTP_STATUS_MIN);
+    assert_eq!(status["maximum"], account::HTTP_STATUS_MAX);
+
+    let limit = parameter("Limit");
+    assert_eq!(limit["minimum"], 1);
+    assert_eq!(limit["maximum"], account::USAGE_REQUESTS_MAX_LIMIT);
+    assert_eq!(limit["default"], account::USAGE_REQUESTS_DEFAULT_LIMIT);
+
+    let cursor = parameter("Cursor");
+    assert_eq!(cursor["minLength"], 1);
+    assert_eq!(
+        cursor["maxLength"],
+        account::USAGE_REQUESTS_CURSOR_MAX_CHARS
+    );
+
+    // The hand-written check agrees with the pattern it stands in for.
+    for accepted in ["glm-5.3", "org/glm-5.3:fp8_v1", "A", "9b"] {
+        assert!(account::model_id_is_valid(accepted), "{accepted}");
+    }
+    for refused in ["", "-glm", ".x", "/x", "glm 5", "glm&x", "glm\u{e9}", "a?b"] {
+        assert!(!account::model_id_is_valid(refused), "{refused:?}");
+    }
+    assert!(account::model_id_is_valid(&"m".repeat(128)));
+    assert!(!account::model_id_is_valid(&"m".repeat(129)));
+}
