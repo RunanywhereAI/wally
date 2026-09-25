@@ -32,7 +32,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/test_release_assets.py
-          python3 -m py_compile scripts/release/verify-release-assets.py scripts/release/stamp-formula.py
+          python3 tests/test_linux_abi.py
+          python3 -m py_compile scripts/release/verify-release-assets.py scripts/release/stamp-formula.py scripts/release/check-linux-abi.py
           bash -n scripts/build/package-wally.sh scripts/release/update-tap.sh
           ruby -c Formula/wally.rb
       - name: install.sh runs under POSIX sh (dash)
@@ -200,10 +201,19 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/build/fetch-kit.sh linux-x64 "${GITHUB_WORKSPACE}/kit"
+      - name: Product version
+        # The bottle is packaged on every PR so the checks below see exactly
+        # what a release would publish; the version comes from versions.toml.
+        run: echo "WALLY_VERSION=$(sed -nE 's/^version = "([^"]+)"/\1/p' versions.toml | head -1)" >> "$GITHUB_ENV"
       - uses: ./.github/actions/build-wally
         with:
           platform: linux-x64
           kit-dir: ${{ github.workspace }}/kit
+          package: 'true'
+      - name: Linux ABI floor
+        run: python3 scripts/release/check-linux-abi.py "dist/wally-${WALLY_VERSION}-linux-x86_64.tar.gz"
+      - name: Clean-distro install
+        run: bash scripts/test/linux-install-matrix.sh dist "${WALLY_VERSION}"
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure
       - name: cargo clippy
