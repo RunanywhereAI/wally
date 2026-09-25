@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "b865dc4dc6f389bf89674a1cc73115cd7db10b82e4d9f6d415e969cd1a2c5bd6";
+    "5070bc5c28a894460de8b6b1bcc9359cbd3f23d6846e76af2e599cb4ed49289f";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -455,6 +455,33 @@ impl PollStatus {
             "denied" => Ok(PollStatus::KDenied),
             "expired" => Ok(PollStatus::KExpired),
             other => Err(format!("unknown PollStatus: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UsageProvider {
+    #[default]
+    KSelfHostedSglang,
+    KVertexAi,
+    KUnknown,
+}
+
+impl UsageProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UsageProvider::KSelfHostedSglang => "self_hosted_sglang",
+            UsageProvider::KVertexAi => "vertex_ai",
+            UsageProvider::KUnknown => "unknown",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "self_hosted_sglang" => Ok(UsageProvider::KSelfHostedSglang),
+            "vertex_ai" => Ok(UsageProvider::KVertexAi),
+            "unknown" => Ok(UsageProvider::KUnknown),
+            other => Err(format!("unknown UsageProvider: {other}")),
         }
     }
 }
@@ -2025,6 +2052,500 @@ impl PollResponse {
             "status".to_string(),
             Value::String(self.status.as_str().to_string()),
         );
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UsageRequestRecord {
+    pub api_key_id: Option<String>,
+    pub cached_tokens: i64,
+    pub completion_tokens: i64,
+    pub cost_micros: i64,
+    pub error_code: Option<String>,
+    pub finish_reason: Option<String>,
+    pub max_tokens_granted: Option<i64>,
+    pub max_tokens_requested: Option<i64>,
+    pub model: String,
+    pub noncached_prompt_tokens: i64,
+    pub pricing_version: String,
+    pub prompt_tokens: i64,
+    pub provider: Option<UsageProvider>,
+    pub reasoning_tokens: i64,
+    pub recorded_at: String,
+    pub request_id: String,
+    pub response_request_id: Option<String>,
+    pub status_code: i64,
+    pub stream: bool,
+    pub tpot_ms: Option<i64>,
+    pub ts_end: Option<String>,
+    pub ts_start: String,
+    pub ttft_ms: Option<i64>,
+}
+
+impl UsageRequestRecord {
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "expected a JSON object".to_string())?;
+        let mut result = Self::default();
+        match object.get("api_key_id") {
+            Some(field) if !field.is_null() => {
+                result.api_key_id = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        match object.get("cached_tokens") {
+            Some(field) if !field.is_null() => {
+                result.cached_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("completion_tokens") {
+            Some(field) if !field.is_null() => {
+                result.completion_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("cost_micros") {
+            Some(field) if !field.is_null() => {
+                result.cost_micros = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("error_code") {
+            Some(field) if !field.is_null() => {
+                result.error_code = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        match object.get("finish_reason") {
+            Some(field) if !field.is_null() => {
+                result.finish_reason = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        match object.get("max_tokens_granted") {
+            Some(field) if !field.is_null() => {
+                result.max_tokens_granted = Some(
+                    field
+                        .as_i64()
+                        .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
+        match object.get("max_tokens_requested") {
+            Some(field) if !field.is_null() => {
+                result.max_tokens_requested = Some(
+                    field
+                        .as_i64()
+                        .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
+        match object.get("model") {
+            Some(field) if !field.is_null() => {
+                result.model = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        match object.get("noncached_prompt_tokens") {
+            Some(field) if !field.is_null() => {
+                result.noncached_prompt_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("pricing_version") {
+            Some(field) if !field.is_null() => {
+                result.pricing_version = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        match object.get("prompt_tokens") {
+            Some(field) if !field.is_null() => {
+                result.prompt_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("provider") {
+            Some(field) if !field.is_null() => {
+                result.provider = Some(UsageProvider::parse(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?,
+                )?);
+            }
+            _ => {}
+        }
+        match object.get("reasoning_tokens") {
+            Some(field) if !field.is_null() => {
+                result.reasoning_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("recorded_at") {
+            Some(field) if !field.is_null() => {
+                result.recorded_at = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        match object.get("request_id") {
+            Some(field) if !field.is_null() => {
+                result.request_id = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        match object.get("response_request_id") {
+            Some(field) if !field.is_null() => {
+                result.response_request_id = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        match object.get("status_code") {
+            Some(field) if !field.is_null() => {
+                result.status_code = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("stream") {
+            Some(field) if !field.is_null() => {
+                result.stream = field
+                    .as_bool()
+                    .ok_or_else(|| "expected a boolean".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("tpot_ms") {
+            Some(field) if !field.is_null() => {
+                result.tpot_ms = Some(
+                    field
+                        .as_i64()
+                        .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
+        match object.get("ts_end") {
+            Some(field) if !field.is_null() => {
+                result.ts_end = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        match object.get("ts_start") {
+            Some(field) if !field.is_null() => {
+                result.ts_start = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        match object.get("ttft_ms") {
+            Some(field) if !field.is_null() => {
+                result.ttft_ms = Some(
+                    field
+                        .as_i64()
+                        .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
+        Ok(result)
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        if let Some(item) = &self.api_key_id {
+            map.insert("api_key_id".to_string(), Value::String(item.clone()));
+        }
+        map.insert("cached_tokens".to_string(), Value::from(self.cached_tokens));
+        map.insert(
+            "completion_tokens".to_string(),
+            Value::from(self.completion_tokens),
+        );
+        map.insert("cost_micros".to_string(), Value::from(self.cost_micros));
+        if let Some(item) = &self.error_code {
+            map.insert("error_code".to_string(), Value::String(item.clone()));
+        }
+        if let Some(item) = &self.finish_reason {
+            map.insert("finish_reason".to_string(), Value::String(item.clone()));
+        }
+        if let Some(item) = &self.max_tokens_granted {
+            map.insert("max_tokens_granted".to_string(), Value::from(*item));
+        }
+        if let Some(item) = &self.max_tokens_requested {
+            map.insert("max_tokens_requested".to_string(), Value::from(*item));
+        }
+        map.insert("model".to_string(), Value::String(self.model.clone()));
+        map.insert(
+            "noncached_prompt_tokens".to_string(),
+            Value::from(self.noncached_prompt_tokens),
+        );
+        map.insert(
+            "pricing_version".to_string(),
+            Value::String(self.pricing_version.clone()),
+        );
+        map.insert("prompt_tokens".to_string(), Value::from(self.prompt_tokens));
+        if let Some(item) = &self.provider {
+            map.insert(
+                "provider".to_string(),
+                Value::String(item.as_str().to_string()),
+            );
+        }
+        map.insert(
+            "reasoning_tokens".to_string(),
+            Value::from(self.reasoning_tokens),
+        );
+        map.insert(
+            "recorded_at".to_string(),
+            Value::String(self.recorded_at.clone()),
+        );
+        map.insert(
+            "request_id".to_string(),
+            Value::String(self.request_id.clone()),
+        );
+        if let Some(item) = &self.response_request_id {
+            map.insert(
+                "response_request_id".to_string(),
+                Value::String(item.clone()),
+            );
+        }
+        map.insert("status_code".to_string(), Value::from(self.status_code));
+        map.insert("stream".to_string(), Value::Bool(self.stream));
+        if let Some(item) = &self.tpot_ms {
+            map.insert("tpot_ms".to_string(), Value::from(*item));
+        }
+        if let Some(item) = &self.ts_end {
+            map.insert("ts_end".to_string(), Value::String(item.clone()));
+        }
+        map.insert("ts_start".to_string(), Value::String(self.ts_start.clone()));
+        if let Some(item) = &self.ttft_ms {
+            map.insert("ttft_ms".to_string(), Value::from(*item));
+        }
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UsageRequestTotals {
+    pub cached_tokens: i64,
+    pub completion_tokens: i64,
+    pub cost_micros: i64,
+    pub noncached_prompt_tokens: i64,
+    pub prompt_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub requests: i64,
+}
+
+impl UsageRequestTotals {
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "expected a JSON object".to_string())?;
+        let mut result = Self::default();
+        match object.get("cached_tokens") {
+            Some(field) if !field.is_null() => {
+                result.cached_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("completion_tokens") {
+            Some(field) if !field.is_null() => {
+                result.completion_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("cost_micros") {
+            Some(field) if !field.is_null() => {
+                result.cost_micros = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("noncached_prompt_tokens") {
+            Some(field) if !field.is_null() => {
+                result.noncached_prompt_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("prompt_tokens") {
+            Some(field) if !field.is_null() => {
+                result.prompt_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("reasoning_tokens") {
+            Some(field) if !field.is_null() => {
+                result.reasoning_tokens = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        match object.get("requests") {
+            Some(field) if !field.is_null() => {
+                result.requests = field
+                    .as_i64()
+                    .ok_or_else(|| "expected an integer".to_string())?;
+            }
+            _ => {}
+        }
+        Ok(result)
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        map.insert("cached_tokens".to_string(), Value::from(self.cached_tokens));
+        map.insert(
+            "completion_tokens".to_string(),
+            Value::from(self.completion_tokens),
+        );
+        map.insert("cost_micros".to_string(), Value::from(self.cost_micros));
+        map.insert(
+            "noncached_prompt_tokens".to_string(),
+            Value::from(self.noncached_prompt_tokens),
+        );
+        map.insert("prompt_tokens".to_string(), Value::from(self.prompt_tokens));
+        map.insert(
+            "reasoning_tokens".to_string(),
+            Value::from(self.reasoning_tokens),
+        );
+        map.insert("requests".to_string(), Value::from(self.requests));
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UsageRequestPage {
+    pub as_of: String,
+    pub next_cursor: Option<String>,
+    pub requests: Vec<UsageRequestRecord>,
+    pub totals: UsageRequestTotals,
+}
+
+impl UsageRequestPage {
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "expected a JSON object".to_string())?;
+        let mut result = Self::default();
+        match object.get("as_of") {
+            Some(field) if !field.is_null() => {
+                result.as_of = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        match object.get("next_cursor") {
+            Some(field) if !field.is_null() => {
+                result.next_cursor = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        match object.get("requests") {
+            Some(field) if !field.is_null() => {
+                result.requests = {
+                    let array = field
+                        .as_array()
+                        .ok_or_else(|| "expected an array".to_string())?;
+                    let mut items = Vec::with_capacity(array.len());
+                    for item in array {
+                        items.push(UsageRequestRecord::from_json(item)?);
+                    }
+                    items
+                };
+            }
+            _ => {}
+        }
+        match object.get("totals") {
+            Some(field) if !field.is_null() => {
+                result.totals = UsageRequestTotals::from_json(field)?;
+            }
+            _ => {}
+        }
+        Ok(result)
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        map.insert("as_of".to_string(), Value::String(self.as_of.clone()));
+        if let Some(item) = &self.next_cursor {
+            map.insert("next_cursor".to_string(), Value::String(item.clone()));
+        }
+        map.insert(
+            "requests".to_string(),
+            Value::Array(self.requests.iter().map(|item| item.to_json()).collect()),
+        );
+        map.insert("totals".to_string(), self.totals.to_json());
         Value::Object(map)
     }
 }

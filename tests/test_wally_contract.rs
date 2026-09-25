@@ -86,3 +86,81 @@ fn request_and_response_round_trip() {
     assert_eq!(parsed.windows.len(), 1);
     assert_eq!(parsed.windows[0].window, contract::CliUsageWindowLabel::K1h);
 }
+
+// A settled-request page parses end to end: every field the contract names,
+// the nullable shapes (present and null) and the required ones.
+#[test]
+fn usage_request_page_round_trip() {
+    let page = serde_json::json!({
+        "as_of": "2026-09-25T08:34:18.548805Z",
+        "totals": {
+            "requests": 2, "prompt_tokens": 1000, "cached_tokens": 900,
+            "noncached_prompt_tokens": 100, "completion_tokens": 50,
+            "reasoning_tokens": 20, "cost_micros": 12345
+        },
+        "requests": [
+            {
+                "request_id": "ledger-1", "response_request_id": "resp-1",
+                "api_key_id": null, "model": "glm-5.3-flash",
+                "provider": "self_hosted_sglang", "status_code": 200,
+                "error_code": null, "finish_reason": "stop", "stream": true,
+                "ts_start": "2026-09-25T08:00:00Z", "ts_end": "2026-09-25T08:00:01Z",
+                "recorded_at": "2026-09-25T08:00:02Z", "prompt_tokens": 800,
+                "cached_tokens": 700, "noncached_prompt_tokens": 100,
+                "completion_tokens": 40, "reasoning_tokens": 20,
+                "max_tokens_requested": 4096, "max_tokens_granted": 2048,
+                "ttft_ms": 310, "tpot_ms": null, "cost_micros": 12345,
+                "pricing_version": "2026-09-23.1"
+            },
+            // Every nullable at null: the read must leave them absent.
+            {
+                "request_id": "ledger-2", "response_request_id": null,
+                "api_key_id": null, "model": "gemma-4", "provider": "vertex_ai",
+                "status_code": 500, "error_code": "upstream_error",
+                "finish_reason": null, "stream": false,
+                "ts_start": "2026-09-25T07:00:00Z", "ts_end": null,
+                "recorded_at": "2026-09-25T07:00:01Z", "prompt_tokens": 200,
+                "cached_tokens": 200, "noncached_prompt_tokens": 0,
+                "completion_tokens": 10, "reasoning_tokens": 0,
+                "max_tokens_requested": null, "max_tokens_granted": null,
+                "ttft_ms": null, "tpot_ms": null, "cost_micros": 0,
+                "pricing_version": "2026-09-23.1"
+            }
+        ],
+        "next_cursor": "eyJuZXh0IjoxfQ",
+    });
+    let parsed =
+        contract::UsageRequestPage::from_json(&page).expect("a contract-shaped page parses");
+    assert_eq!(parsed.as_of, "2026-09-25T08:34:18.548805Z");
+    assert_eq!(parsed.totals.requests, 2);
+    assert_eq!(parsed.totals.cost_micros, 12345);
+    assert_eq!(parsed.next_cursor.as_deref(), Some("eyJuZXh0IjoxfQ"));
+
+    assert_eq!(parsed.requests.len(), 2);
+    let first = &parsed.requests[0];
+    assert_eq!(first.response_request_id.as_deref(), Some("resp-1"));
+    assert_eq!(
+        first.provider,
+        Some(contract::UsageProvider::KSelfHostedSglang)
+    );
+    assert_eq!(first.max_tokens_granted, Some(2048));
+    assert_eq!(first.ttft_ms, Some(310));
+
+    let second = &parsed.requests[1];
+    assert!(
+        second.response_request_id.is_none()
+            && second.ts_end.is_none()
+            && second.ttft_ms.is_none()
+            && second.max_tokens_granted.is_none(),
+        "a null must read as absent, not as a default value"
+    );
+    assert_eq!(second.provider, Some(contract::UsageProvider::KVertexAi));
+
+    // A body that omits members still parses, so the CLI survives a server that
+    // lags the contract. A body that is not an object at all does not.
+    let sparse = serde_json::json!({"as_of": "2026-09-25T08:00:00Z", "totals": {}, "requests": [], "next_cursor": null});
+    let quiet = contract::UsageRequestPage::from_json(&sparse).expect("a sparse page parses");
+    assert_eq!(quiet.totals.requests, 0);
+    assert!(quiet.requests.is_empty() && quiet.next_cursor.is_none());
+    assert!(contract::UsageRequestPage::from_json(&serde_json::json!([])).is_err());
+}
