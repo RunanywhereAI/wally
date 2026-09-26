@@ -685,9 +685,9 @@ mod tests {
                     true
                 });
                 decoder.push(fixture, &mut *sink).unwrap();
-                decoder.finish(&mut *sink).unwrap_or_else(|e| {
-                    panic!("finish() on a complete {label} body failed: {e}")
-                });
+                decoder
+                    .finish(&mut *sink)
+                    .unwrap_or_else(|e| panic!("finish() on a complete {label} body failed: {e}"));
             }
             assert_eq!(out, PLAINTEXT, "{label} payload mismatch");
         }
