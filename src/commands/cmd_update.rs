@@ -34,6 +34,8 @@ fn is_homebrew_managed(exe: &str) -> bool {
     if exe.is_empty() {
         return false;
     }
+    // Whole path components, so /opt/homebrew-old is not /opt/homebrew.
+    let exe = std::path::Path::new(exe);
     if let Some(prefix) = getenv("HOMEBREW_PREFIX") {
         if !prefix.is_empty() && exe.starts_with(&prefix) {
             return true;
@@ -157,6 +159,17 @@ mod tests {
         unsafe { std::env::remove_var("HOMEBREW_PREFIX") };
         assert!(!is_homebrew_managed(
             "/home/user/.local/lib/wally/bin/wally"
+        ));
+    }
+
+    #[test]
+    fn is_homebrew_managed_rejects_a_sibling_of_a_homebrew_prefix() {
+        let _lock = env_lock();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::remove_var("HOMEBREW_PREFIX") };
+        assert!(!is_homebrew_managed("/opt/homebrew-old/bin/wally"));
+        assert!(!is_homebrew_managed(
+            "/usr/local/Cellar-backup/wally/bin/wally"
         ));
     }
 
