@@ -54,7 +54,8 @@ linux_compat = "ubuntu-22.04"
 # 22.04 (glibc 2.35, libstdc++ from GCC 12); Debian 12 and newer Ubuntu clear
 # it. scripts/release/check-linux-abi.py fails a release whose ELF files need a
 # newer symbol version, or a shared library that is neither shipped in the
-# bottle nor listed here. install.sh checks the same glibc before it downloads.
+# bottle nor listed here. install.sh checks the same glibc, glibcxx_max and
+# cxxabi_max before it downloads (MIN_GLIBC, MIN_GLIBCXX, MIN_CXXABI).
 glibc_max = "2.35"
 glibcxx_max = "3.4.30"
 cxxabi_max = "1.3.13"

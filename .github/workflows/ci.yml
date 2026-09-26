@@ -48,6 +48,8 @@ jobs:
           dash -n install.sh
           shellcheck -s sh install.sh
           WALLY_INSTALL_SH=dash bash scripts/test/test-install-skill-dirs.sh
+          WALLY_INSTALL_SH=dash bash scripts/test/test-install-lock.sh
+          WALLY_INSTALL_SH=dash bash scripts/test/test-install-libstdcxx-preflight.sh
       - name: install.sh output is byte-identical under bash, dash and sh
         # Runs the real install.sh under all three with a stubbed curl/uname
         # and a fixture release -- no network -- across the happy path, an
@@ -289,6 +291,9 @@ jobs:
       - name: Clean-room zip smoke
         shell: pwsh
         run: scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-${env:WALLY_VERSION}-windows-arm64.zip"
+      - name: install.ps1 supports WALLY_INSTALL_VERSION / WALLY_INSTALL_BASE_URL
+        shell: pwsh
+        run: scripts/test/test-install-ps1-overrides.ps1
 
   windows:
     runs-on: windows-2022
@@ -348,3 +353,6 @@ jobs:
       - name: Clean-room zip smoke
         shell: pwsh
         run: scripts/test/smoke-zip-windows.ps1 -Zip "dist/wally-${env:WALLY_VERSION}-windows-x86_64.zip"
+      - name: install.ps1 supports WALLY_INSTALL_VERSION / WALLY_INSTALL_BASE_URL
+        shell: pwsh
+        run: scripts/test/test-install-ps1-overrides.ps1

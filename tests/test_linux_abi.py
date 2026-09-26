@@ -150,6 +150,45 @@ class LinuxAbiTests(unittest.TestCase):
         )
         self.assertEqual(ABI.check_files(root, POLICY), [])
 
+    def test_glibc_abi_dt_relr_is_rejected_below_its_glibc_floor(self) -> None:
+        # GLIBC_ABI_DT_RELR carries no version number for VERSION_TAG to
+        # parse, so a bottle needing it silently passed against a 2.35 floor
+        # (2.36 added the loader support DT_RELR needs) until this was fixed.
+        root = self.tree(
+            {"b/bin/wally": elf(["libc.so.6"], {"libc.so.6": ["GLIBC_ABI_DT_RELR"]})}
+        )
+        problems = ABI.check_files(root, POLICY)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("GLIBC_ABI_DT_RELR", problems[0])
+
+    def test_glibc_abi_dt_relr_passes_once_the_floor_covers_it(self) -> None:
+        policy = dict(POLICY, glibc_max="2.36")
+        root = self.tree(
+            {"b/bin/wally": elf(["libc.so.6"], {"libc.so.6": ["GLIBC_ABI_DT_RELR"]})}
+        )
+        self.assertEqual(ABI.check_files(root, policy), [])
+
+    def test_numeric_glibc_tags_still_pass_alongside_the_marker_check(self) -> None:
+        root = self.tree(
+            {
+                "b/bin/wally": elf(
+                    ["libc.so.6"], {"libc.so.6": ["GLIBC_2.34", "GLIBC_ABI_DT_RELR"]}
+                )
+            }
+        )
+        problems = ABI.check_files(root, POLICY)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("GLIBC_ABI_DT_RELR", problems[0])
+
+    def test_an_unrecognised_non_numeric_tag_in_a_checked_family_is_not_a_ceiling(self) -> None:
+        # Only known markers are treated as a floor; an arbitrary non-numeric
+        # tag in a checked family (none exist today, but the parser must not
+        # invent a requirement for one) is silently ignored, same as before.
+        root = self.tree(
+            {"b/bin/wally": elf(["libc.so.6"], {"libc.so.6": ["GLIBC_SOMETHING_ELSE"]})}
+        )
+        self.assertEqual(ABI.check_files(root, POLICY), [])
+
     def test_an_archive_with_no_elf_is_not_a_bottle(self) -> None:
         root = self.tree({"b/README.md": b"hello"})
         self.assertEqual(len(ABI.check_files(root, POLICY)), 1)

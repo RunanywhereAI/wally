@@ -31,38 +31,83 @@ function Fail([string]$Message) {
     throw "Error: $Message"
 }
 
-Write-Info 'Checking latest Wally release...'
-try {
-    $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-} catch {
-    Fail 'Could not determine latest release version. Check your internet connection.'
+# Two overrides, for release tests and mirrors rather than everyday use --
+# the same shape and names as install.sh's:
+#   WALLY_INSTALL_VERSION      install that release instead of the latest
+#   WALLY_INSTALL_BASE_URL     fetch the zip and its .sha256 from <url>/
+#                              instead of the GitHub release (http, https or
+#                              file); needs WALLY_INSTALL_VERSION
+#
+# $Release stays $null on this path: there is no releases-API lookup to ask
+# "does this asset exist" of, so an asset that is not actually at the given
+# version/URL is discovered the same way it would be anyway -- the download
+# below fails.
+if ($env:WALLY_INSTALL_VERSION) {
+    $Version = $env:WALLY_INSTALL_VERSION -replace '^v', ''
+    if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+        Fail "WALLY_INSTALL_VERSION must look like 1.2.3, not '$($env:WALLY_INSTALL_VERSION)'"
+    }
+    $Release = $null
+    Write-Info "Installing v$Version"
+} else {
+    if ($env:WALLY_INSTALL_BASE_URL) {
+        Fail 'WALLY_INSTALL_BASE_URL needs WALLY_INSTALL_VERSION: a mirror has no latest-release lookup'
+    }
+    Write-Info 'Checking latest Wally release...'
+    try {
+        $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
+    } catch {
+        Fail 'Could not determine latest release version. Check your internet connection.'
+    }
+    $Version = "$($Release.tag_name)" -replace '^v', ''
+    if (-not $Version) { Fail 'Could not determine latest release version. Check your internet connection.' }
+    Write-Info "Latest version: v$Version"
 }
-$Version = "$($Release.tag_name)" -replace '^v', ''
-if (-not $Version) { Fail 'Could not determine latest release version. Check your internet connection.' }
-Write-Info "Latest version: v$Version"
 
 # PROCESSOR_ARCHITECTURE reports the process, not the machine, so a 32-bit host
 # under WOW64 says x86 while ARCHITEW6432 names what is really underneath.
 $Arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
-# Prism on Windows ARM64 runs the x64 zip. Native arm64 zips are preferred when present.
+# Prism on Windows ARM64 runs the x64 zip. Native arm64 zips are preferred when
+# $Release can say one exists; an explicit version/mirror is trusted to have
+# what it says, the same as install.sh trusts WALLY_INSTALL_VERSION's platform.
 $AssetName = "wally-$Version-windows-x86_64.zip"
 if ($Arch -eq 'ARM64') {
-    $ArmAsset = $Release.assets | Where-Object { $_.name -eq "wally-$Version-windows-arm64.zip" } | Select-Object -First 1
-    if ($ArmAsset) {
-        $AssetName = "wally-$Version-windows-arm64.zip"
+    $ArmAssetName = "wally-$Version-windows-arm64.zip"
+    $ArmAvailable = if ($Release) {
+        [bool]($Release.assets | Where-Object { $_.name -eq $ArmAssetName } | Select-Object -First 1)
+    } else {
+        $true
+    }
+    if ($ArmAvailable) {
+        $AssetName = $ArmAssetName
     } else {
         Write-Warn "No native ARM64 zip; installing the x64 build (Windows on ARM can run it)."
     }
 } elseif ($Arch -ne 'AMD64') {
     Fail "Wally requires 64-bit Windows. Detected: $Arch"
 }
-$Asset = $Release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
-if (-not $Asset) {
+
+# Where the asset and its checksum come from: the release's own asset list
+# when $Release was looked up, or WALLY_INSTALL_BASE_URL (falling back to the
+# normal GitHub release URL for the given version) when it was not.
+function Resolve-AssetUrl([string]$Name) {
+    if ($Release) {
+        $Found = $Release.assets | Where-Object { $_.name -eq $Name } | Select-Object -First 1
+        if (-not $Found) { return $null }
+        return $Found.browser_download_url
+    }
+    $Base = if ($env:WALLY_INSTALL_BASE_URL) { $env:WALLY_INSTALL_BASE_URL.TrimEnd('/') } else { "https://github.com/$Repo/releases/download/v$Version" }
+    return "$Base/$Name"
+}
+
+$AssetUrl = Resolve-AssetUrl $AssetName
+if (-not $AssetUrl) {
     Fail "v$Version does not publish $AssetName. Open an issue at https://github.com/$Repo/issues"
 }
-$ShaAsset = $Release.assets | Where-Object { $_.name -eq "$AssetName.sha256" } | Select-Object -First 1
-if (-not $ShaAsset) {
-    Fail "v$Version does not publish $AssetName.sha256. Refusing an unverified download."
+$ShaAssetName = "$AssetName.sha256"
+$ShaUrl = Resolve-AssetUrl $ShaAssetName
+if (-not $ShaUrl) {
+    Fail "v$Version does not publish $ShaAssetName. Refusing an unverified download."
 }
 
 $Temp = Join-Path ([IO.Path]::GetTempPath()) ('wally-' + [Guid]::NewGuid().ToString('N'))
@@ -71,23 +116,23 @@ try {
     $Zip = Join-Path $Temp $AssetName
     Write-Info "Downloading $AssetName..."
     try {
-        Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $Zip
+        Invoke-WebRequest -Uri $AssetUrl -OutFile $Zip
     } catch {
-        Fail "Could not download $($Asset.browser_download_url)"
+        Fail "Could not download $AssetUrl"
     }
 
     # Through a file rather than straight into a variable: the asset is served
     # as octet-stream and the web cmdlets hand back bytes rather than text.
-    $ShaFile = Join-Path $Temp $ShaAsset.name
-    Invoke-WebRequest -Uri $ShaAsset.browser_download_url -OutFile $ShaFile
+    $ShaFile = Join-Path $Temp $ShaAssetName
+    Invoke-WebRequest -Uri $ShaUrl -OutFile $ShaFile
     $ShaLine = (Get-Content -Raw -LiteralPath $ShaFile).Trim()
     if ($ShaLine -notmatch '^([0-9A-Fa-f]{64})\s+\*?([^\r\n]+)$') {
-        Fail "$($ShaAsset.name) is not a valid SHA-256 sidecar."
+        Fail "$ShaAssetName is not a valid SHA-256 sidecar."
     }
     $Expected = $Matches[1].ToLowerInvariant()
     $ListedAsset = $Matches[2].Trim()
     if ($ListedAsset -ne $AssetName) {
-        Fail "$($ShaAsset.name) names $ListedAsset instead of $AssetName."
+        Fail "$ShaAssetName names $ListedAsset instead of $AssetName."
     }
     $Actual = (Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($Actual -ne $Expected) {

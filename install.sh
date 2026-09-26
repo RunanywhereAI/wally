@@ -32,6 +32,19 @@ BIN_DIR="${HOME}/.local/bin"
 MIN_GLIBC="2.35"
 LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 libcurl.so.4"
 
+# The highest GLIBCXX_/CXXABI_ symbol version the bottle's own ELF files ask
+# of libstdc++.so.6, mirroring versions.toml [linux_abi] (glibcxx_max,
+# cxxabi_max) the same way MIN_GLIBC mirrors glibc_max --
+# scripts/release/check-linux-abi.py computes the real values from the built
+# bottle and fails the release if they exceed these; scripts/ci/check-versions.py
+# fails if these two drift from versions.toml. Checking libstdc++'s own symbol
+# versions (not just its presence, which check_linux_system already does)
+# catches a glibc-2.35 host whose libstdc++ is otherwise too old: v0.6.0's
+# bottle needed GLIBCXX_3.4.32, which a stock 22.04 libstdc++ (3.4.30) does not
+# have, and the installer downloaded before finding that out.
+MIN_GLIBCXX="3.4.30"
+MIN_CXXABI="1.3.13"
+
 # Retries cover a dropped connection or a 5xx from the CDN, which a first-time
 # install on a poor network otherwise reports as "check your internet".
 CURL_RETRY="--retry 3 --retry-delay 2"
@@ -106,7 +119,44 @@ check_linux_system() {
     if [ -n "$missing" ]; then
         fail "Wally needs these system libraries, which are not installed:${missing}. On Ubuntu or Debian: sudo apt install libstdc++6 libssl3 libcurl4"
     fi
+    check_libstdcxx_symbols
     ok "glibc ${glibc:-unknown}, system libraries present"
+}
+
+# libstdc++.so.6 being present (checked above) is not the same as it being new
+# enough: a glibc-2.35 host can still carry a libstdc++ built before GCC 12, so
+# it has the *soname* the bottle needs but not every GLIBCXX_/CXXABI_ symbol
+# version in it. v0.6.0's bottle needed GLIBCXX_3.4.32; a stock 22.04
+# libstdc++ (3.4.30) does not have it, and the installer found out only after
+# downloading, from the loader's own error. Reads the versions libstdc++
+# itself provides straight out of its string table (the same printable text
+# the loader reads), the way `check_linux_system` already found the library's
+# path via ldconfig. WALLY_LIBSTDCXX_SYMBOLS overrides the listing itself
+# (one tag per line) rather than the path, so a test can feed a fixture
+# listing without a real libstdc++ on disk.
+check_libstdcxx_symbols() {
+    if [ -n "${WALLY_LIBSTDCXX_SYMBOLS:-}" ]; then
+        listing="$(cat "$WALLY_LIBSTDCXX_SYMBOLS" 2>/dev/null || true)"
+    else
+        lib="$(printf '%s\n' "$known" | awk '/^[[:space:]]*libstdc\+\+\.so\.6[[:space:]]/{print $NF; exit}')"
+        if [ -z "$lib" ] || [ ! -r "$lib" ]; then
+            warn "could not locate libstdc++.so.6 to check its symbol versions; continuing"
+            return 0
+        fi
+        listing="$(grep -aoE '(GLIBCXX|CXXABI)_[0-9]+(\.[0-9]+)*' "$lib" 2>/dev/null || true)"
+    fi
+    if [ -z "$listing" ]; then
+        warn "could not read libstdc++'s symbol versions; continuing"
+        return 0
+    fi
+    max_glibcxx="$(printf '%s\n' "$listing" | grep '^GLIBCXX_' | sed 's/^GLIBCXX_//' | sort -V | tail -1)"
+    max_cxxabi="$(printf '%s\n' "$listing" | grep '^CXXABI_' | sed 's/^CXXABI_//' | sort -V | tail -1)"
+    if [ -n "$max_glibcxx" ] && [ "$(printf '%s\n%s\n' "$MIN_GLIBCXX" "$max_glibcxx" | sort -V | head -n1)" != "$MIN_GLIBCXX" ]; then
+        fail "Wally needs a libstdc++ with GLIBCXX_${MIN_GLIBCXX} or newer (from GCC 12+); this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+    fi
+    if [ -n "$max_cxxabi" ] && [ "$(printf '%s\n%s\n' "$MIN_CXXABI" "$max_cxxabi" | sort -V | head -n1)" != "$MIN_CXXABI" ]; then
+        fail "Wally needs a libstdc++ with CXXABI_${MIN_CXXABI} or newer (from GCC 12+); this system's libstdc++ only provides up to CXXABI_${max_cxxabi}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+    fi
 }
 
 # Runs a binary once and keeps what it printed. A binary that cannot start
@@ -144,22 +194,48 @@ restore_previous_install() {
 
 # One install at a time per ${LIB_DIR}. The recovery below renames and deletes
 # ${LIB_DIR}.previous.* and ${LIB_DIR}.incoming.*, which a second run working at
-# the same moment would own; the lock makes every leftover it finds dead. mkdir
-# is atomic, and the owner's pid decides whether a lock left behind is stale.
+# the same moment would own; the lock makes every leftover it finds dead.
+#
+# The lock is a *file* containing our pid, put in place with `ln`: link(2) is
+# atomic and fails with the name already existing, so unlike `mkdir` followed
+# by a separate write, there is no window where the lock exists but is still
+# empty. A directory-plus-pid-file lock has exactly that window: a second run
+# can see the freshly made directory, find no pid in it yet, decide the lock
+# is stale, and delete out from under the first run. Writing the pid to a temp
+# file before the `ln` means the lock's content is correct from the instant it
+# has its final name.
 acquire_install_lock() {
     lock="${LIB_DIR}.lock"
-    if ! mkdir "$lock" 2>/dev/null; then
-        owner="$(cat "${lock}/pid" 2>/dev/null || true)"
+    pid_tmp="${lock}.${$}.tmp"
+    printf '%s\n' "$$" > "$pid_tmp"
+    if ! ln "$pid_tmp" "$lock" 2>/dev/null; then
+        owner="$(cat "$lock" 2>/dev/null || true)"
         if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+            rm -f "$pid_tmp"
             fail "another Wally install (pid ${owner}) is running; let it finish, then run this again."
         fi
-        # Stale: its owner is gone. If two runs both find it stale, only one
-        # mkdir below succeeds and the other stops here rather than race.
-        rm -rf "$lock"
-        mkdir "$lock" 2>/dev/null || fail "another Wally install took ${lock} just now; run this again once it finishes."
+        # Stale: its owner is gone. Replace it with our own lock in one step:
+        # unlink the stale file, then link ours into place. If another run
+        # wins that same race, our `ln` fails and we stop instead of both
+        # runs believing they hold the lock.
+        rm -f "$lock"
+        if ! ln "$pid_tmp" "$lock" 2>/dev/null; then
+            rm -f "$pid_tmp"
+            fail "another Wally install took ${lock} just now; run this again once it finishes."
+        fi
     fi
-    printf '%s\n' "$$" > "${lock}/pid"
+    rm -f "$pid_tmp"
     held_lock="$lock"
+}
+
+# Removes ${held_lock} only if it is still the file we created. A stale-lock
+# recovery by another run (above) may have replaced it with its own after we
+# finished acquiring; blindly removing whatever now has that name would let a
+# third run start while the second is still mid-install.
+release_install_lock() {
+    [ -n "${held_lock:-}" ] || return 0
+    [ "$(cat "$held_lock" 2>/dev/null || true)" = "$$" ] && rm -f "$held_lock"
+    return 0
 }
 
 # A run killed outright between the two renames cannot clean up after itself:
@@ -194,6 +270,19 @@ for arg in "$@"; do
         # Debug-only: print the resolved skill targets and exit before any
         # network work. Exercised by scripts/test/test-install-skill-dirs.sh.
         --print-skill-dirs) skill_target_dirs; exit 0 ;;
+        # Debug-only: acquire the real install lock for ${HOME}, print
+        # "acquired" once held, hold it for <seconds>, then release and exit
+        # 0 -- or exit 1 with the normal contention message if another holder
+        # is running. No download, no network. Exercised by
+        # scripts/test/test-install-lock.sh to prove the lock is race-free.
+        --hold-install-lock=*)
+            mkdir -p "$(dirname "$LIB_DIR")"
+            held_lock=""
+            trap 'release_install_lock' EXIT
+            acquire_install_lock
+            ok "acquired"
+            sleep "${arg#--hold-install-lock=}"
+            exit 0 ;;
     esac
 done
 
@@ -292,7 +381,7 @@ held_lock=""
 # Between the two renames below there is no ${LIB_DIR}. An interrupted or
 # failing run puts the previous tree back on the way out; a run killed outright
 # (SIGKILL, power loss) is repaired by recover_interrupted_install next time.
-trap 'restore_previous_install; rm -rf "$tmp" "$incoming"; [ -z "$held_lock" ] || rm -rf "$held_lock"' EXIT
+trap 'restore_previous_install; rm -rf "$tmp" "$incoming"; release_install_lock' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
