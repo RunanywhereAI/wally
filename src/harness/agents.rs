@@ -1072,7 +1072,11 @@ mod tests {
     /// Backdates `path`'s mtime by `age` so `is_removable_leftover_config` sees
     /// a file older than `LEFTOVER_CONFIG_MAX_AGE`.
     fn backdate(path: &Path, age: std::time::Duration) {
-        let file = std::fs::File::open(path).expect("open for backdating");
+        // Write access: Windows refuses SetFileTime on a read-only handle.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open for backdating");
         let backdated = std::time::SystemTime::now() - age;
         file.set_modified(backdated).expect("set_modified");
     }
