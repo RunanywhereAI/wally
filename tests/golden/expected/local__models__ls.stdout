@@ -1,0 +1,5 @@
+Download a model with `wally models pull <id>`:
+  wally models pull qwen3-4b-instruct-2507  # llama.cpp
+  wally models pull mlx-qwen3-4b-instruct-2507  # MLX (Apple GPU)
+
+no models downloaded — try `wally models list --all` then `wally models pull <id>`

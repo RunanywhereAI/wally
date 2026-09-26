@@ -1,0 +1,11 @@
+List downloaded models (--all for the catalog)
+
+Usage: wally models list [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+  -a, --all                   Include catalog models not yet downloaded
+
+Examples:
+  # Browse the whole catalog
+  wally models list --all

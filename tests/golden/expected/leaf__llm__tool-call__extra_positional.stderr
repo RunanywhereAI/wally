@@ -1,0 +1,24 @@
+Error: The following arguments were not expected: four three two one
+Try tool calling with two demo tools
+
+Usage: wally llm tool-call [OPTIONS] prompt
+
+Arguments:
+  prompt                      What to ask the model
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            Model to use (default qwen3-4b-instruct-2507)
+      --engine TEXT           Engine to run on
+      --tool-choice TEXT      When the model may call tools: auto, required,
+                              none, specific
+      --force-tool TEXT       Force one tool by name (implies --tool-choice
+                              specific)
+      --max-tool-calls INT    Cap on tool calls per turn (default 3)
+
+Examples:
+  # Calls get_weather
+  wally llm tool-call "weather in Paris?"
+
+  # Calls calculate
+  wally llm tool-call "what is 19 * 23?"

@@ -143,6 +143,21 @@ def main():
             assert "would not start" in result.stderr and "models pull" in result.stderr, result.stderr
             print("PASS backend failure prevents child and releases model")
 
+            # A model that loads but only gets a small context on this machine
+            # (MINIMUM_CODING_HARNESS_CONTEXT in src/harness/harness.rs) must
+            # be rejected before the coding tool ever runs, and the server it
+            # started to discover that must not be left running.
+            result, backend, captured = invoke(["opencode", "-m", "qwen3-4b-instruct"], 1,
+                                               {"WALLY_TEST_LOADED_CONTEXT": "8192"})
+            assert captured is None, captured
+            assert backend["stopped"], backend
+            assert backend["created"] == backend["destroyed"] == 1, backend
+            assert (
+                "This model can use a 8192-token context on this machine, but coding "
+                "harnesses require at least 16384 tokens."
+            ) in result.stderr, result.stderr
+            print("PASS a loaded context below the coding-harness minimum is rejected before the child runs")
+
             weights.unlink()
             (weights_dir / ".rac-manifest.binpb").write_bytes(b"incomplete manifest fixture")
             result, backend, captured = invoke(

@@ -290,7 +290,9 @@ endfunction()
 # (onnxruntime.dll, sherpa-onnx-c-api.dll, …) must sit next to every binary
 # that links wally_core — wally.exe and the unit-test exes. Linking the import
 # lib is not enough; 0xc0000135 is a missing DLL at process start.
-function(wally_stage_windows_runtime_dlls target)
+# `dest_dir` is where the executable lands; `target` is the (custom) target
+# whose POST_BUILD copies the DLLs there.
+function(wally_stage_windows_runtime_dlls target dest_dir)
     if(NOT WIN32)
         return()
     endif()
@@ -301,8 +303,8 @@ function(wally_stage_windows_runtime_dlls target)
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${_dll}"
-                    "$<TARGET_FILE_DIR:${target}>/${_dll_name}"
-                COMMENT "Stage ${_dll_name} next to $<TARGET_FILE_NAME:${target}>"
+                    "${dest_dir}/${_dll_name}"
+                COMMENT "Stage ${_dll_name} into ${dest_dir}"
                 VERBATIM)
         endforeach()
     endif()
@@ -310,9 +312,9 @@ function(wally_stage_windows_runtime_dlls target)
         add_custom_command(TARGET ${target} POST_BUILD
             COMMAND ${CMAKE_COMMAND}
                 "-DSRC_DIR=${RunAnywhere_LIBRARY_DIR}/../bin"
-                "-DDST_DIR=$<TARGET_FILE_DIR:${target}>"
+                "-DDST_DIR=${dest_dir}"
                 -P "${CMAKE_SOURCE_DIR}/cmake/copy-overlay-dlls.cmake"
-            COMMENT "Stage overlay DLLs next to $<TARGET_FILE_NAME:${target}>"
+            COMMENT "Stage overlay DLLs into ${dest_dir}"
             VERBATIM)
     endif()
 endfunction()
@@ -322,7 +324,7 @@ endfunction()
 # where those DLLs already resolve. Staging them for all ~12 test targets made a
 # dozen POST_BUILD commands copy one DLL into build/tests/ at once, which Windows
 # fails with a sharing violation (wally #122). Bundle them for the product only.
-function(wally_bundle_product_dlls target)
+function(wally_bundle_product_dlls target dest_dir)
     if(NOT WIN32)
         return()
     endif()
@@ -345,8 +347,8 @@ function(wally_bundle_product_dlls target)
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${_rt}"
-                    "$<TARGET_FILE_DIR:${target}>/${_rt_name}"
-                COMMENT "Stage ${_rt_name} next to $<TARGET_FILE_NAME:${target}>"
+                    "${dest_dir}/${_rt_name}"
+                COMMENT "Stage ${_rt_name} into ${dest_dir}"
                 VERBATIM)
         endforeach()
     endif()
@@ -357,7 +359,15 @@ function(wally_bundle_product_dlls target)
     # beside the exe or the archive fails with 0xC0000135 on a machine without
     # OpenSSL. Bundle the two the exe actually imports.
     if(TARGET RunAnywhere::server)
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|aarch64")
+        # The compiler's target, not CMAKE_SYSTEM_PROCESSOR: that is the host when
+        # cross-compiling (an x64 build on an ARM64 machine), which looked for
+        # libcrypto-3-arm64.dll and shipped an x64 exe without its OpenSSL.
+        if(DEFINED CMAKE_CXX_COMPILER_ARCHITECTURE_ID AND NOT CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "")
+            set(_wally_target_arch "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}")
+        else()
+            set(_wally_target_arch "${CMAKE_SYSTEM_PROCESSOR}")
+        endif()
+        if(_wally_target_arch MATCHES "ARM64|arm64|aarch64")
             set(_wally_ssl_arch "arm64")
         else()
             set(_wally_ssl_arch "x64")
@@ -378,8 +388,8 @@ function(wally_bundle_product_dlls target)
                 add_custom_command(TARGET ${target} POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         "${WALLY_${_ossl}_DLL}"
-                        "$<TARGET_FILE_DIR:${target}>/${_ossl_name}"
-                    COMMENT "Stage ${_ossl_name} next to $<TARGET_FILE_NAME:${target}>"
+                        "${dest_dir}/${_ossl_name}"
+                    COMMENT "Stage ${_ossl_name} into ${dest_dir}"
                     VERBATIM)
             else()
                 message(WARNING

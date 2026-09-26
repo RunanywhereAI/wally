@@ -1,0 +1,12 @@
+Sign in through the browser
+
+Usage: wally account login [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+      --no-browser            Print the sign-in URL instead of opening it
+
+Examples:
+  wally account login
+
+  wally account login --no-browser

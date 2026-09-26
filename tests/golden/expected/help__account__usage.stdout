@@ -1,0 +1,37 @@
+Credit and the last day's spend, or --requests
+
+Usage: wally account usage [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+      --json                  Print as JSON
+      --requests              List settled requests instead of the summary (one
+                              page; --follow reads them all)
+      --days INT              Window length in days (1-31)
+      --model TEXT            Only this model id
+      --status INT            Only this HTTP status (100-599)
+      --response-request-id TEXT
+                              Only the rows for this x-request-id (what a
+                              response logged)
+      --limit INT             Rows on the one page read without --follow (1-200)
+      --follow                Read every page until the window is done
+
+Examples:
+  wally account usage
+
+  wally --json account usage
+
+  # every settled request of the last day, first page
+  wally account usage --requests
+
+  # a full week, every page
+  wally account usage --requests --days 7 --follow
+
+  # the requests our side failed
+  wally account usage --requests --status 500
+
+  # the rows behind one x-request-id
+  wally account usage --requests --response-request-id <id>
+
+  # a full week as one JSON document
+  wally --json account usage --requests --days 7 --follow

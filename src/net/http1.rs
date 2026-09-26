@@ -1,0 +1,2720 @@
+//! A minimal blocking HTTP/1.1 client and server, replacing cpp-httplib.
+//! Thread-per-connection, one TCP stream per client lease, no async runtime
+//! -- mirrors the C++ (httplib-backed) concurrency model one to one.
+
+use std::io::{self, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::net::decompress;
+
+/// What went wrong sending or receiving one request. `upstream_pool`'s
+/// `retry_on_fresh_connection` reads this to tell a stale keep-alive
+/// connection from a real outage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    Connection,
+    /// The connect attempt itself ran past `connect_timeout` (httplib's
+    /// `Error::ConnectionTimeout`, distinct from `Connection`). Not
+    /// retry-eligible: a slow network should not be paid for twice, and --
+    /// unlike a stale keep-alive -- there is nothing stale to blame it on.
+    ConnectionTimeout,
+    ConnectionClosed,
+    Read,
+    Write,
+    SslConnection,
+    /// The receiver/response-handler callback asked the call to stop.
+    Canceled,
+    InvalidResponse,
+}
+
+// ---------------------------------------------------------------------
+// A plain-or-TLS byte stream
+// ---------------------------------------------------------------------
+
+/// A `TcpStream` shared, not duplicated: every clone of this `Arc` is the
+/// same OS socket handle, unlike `TcpStream::try_clone()` (`WSADuplicateSocket`
+/// on Windows), which mints a second, independent handle. `StopHandle` needs
+/// to reach the socket a request thread is blocked reading, from another
+/// thread, without racing a fresh `connect()`; sharing the one real handle
+/// (via `&TcpStream`'s own `Read`/`Write` impls, which only need `&self`)
+/// gets that for free, where a duplicate does not -- see `StopHandle::stop`.
+#[derive(Clone)]
+struct SharedTcp(Arc<TcpStream>);
+
+impl Read for SharedTcp {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        (&*self.0).read(buf)
+    }
+}
+
+impl Write for SharedTcp {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        (&*self.0).write(buf)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        (&*self.0).flush()
+    }
+}
+
+enum Stream {
+    Plain(SharedTcp),
+    Tls(Box<native_tls::TlsStream<SharedTcp>>),
+}
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Stream::Plain(s) => s.read(buf),
+            Stream::Tls(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Stream::Plain(s) => s.write(buf),
+            Stream::Tls(s) => s.write(buf),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Stream::Plain(s) => s.flush(),
+            Stream::Tls(s) => s.flush(),
+        }
+    }
+}
+
+/// A reader that replays already-consumed bytes before falling through to the
+/// underlying stream. Reading a request/response head can read a few bytes
+/// past the blank line that terminates it (into the body) in a single
+/// syscall; those bytes must not be lost.
+struct Prefixed<'a, R: Read> {
+    prefix: Vec<u8>,
+    pos: usize,
+    inner: &'a mut R,
+}
+
+impl<R: Read> Read for Prefixed<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.pos < self.prefix.len() {
+            let avail = &self.prefix[self.pos..];
+            let n = avail.len().min(buf.len());
+            buf[..n].copy_from_slice(&avail[..n]);
+            self.pos += n;
+            return Ok(n);
+        }
+        self.inner.read(buf)
+    }
+}
+
+const MAX_HEAD_BYTES: usize = 1 << 20;
+
+/// Reads bytes until `\r\n\r\n`, returning the header block and any bytes read
+/// past it (the start of the body, or -- for a client skipping a 1xx
+/// response -- the start of the next head). `seed` is already-read bytes to
+/// scan before reading more, so nothing is lost across an interim response.
+fn read_head<R: Read>(
+    reader: &mut R,
+    cap: usize,
+    seed: Vec<u8>,
+) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    let mut buf = seed;
+    let mut chunk = [0u8; 4096];
+    loop {
+        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            // `split_off` leaves `buf` holding [0, end+4) -- the head up to
+            // and including the blank line httparse needs to see -- and
+            // returns anything read past it (the start of the body) as
+            // `body_prefix`.
+            let body_prefix = buf.split_off(end + 4);
+            return Ok((buf, body_prefix));
+        }
+        if buf.len() > cap {
+            return Err(Error::InvalidResponse);
+        }
+        let n = reader.read(&mut chunk).map_err(|_| Error::Read)?;
+        if n == 0 {
+            return Err(if buf.is_empty() {
+                Error::ConnectionClosed
+            } else {
+                Error::Read
+            });
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+}
+
+fn read_line<R: Read>(reader: &mut R) -> Result<Vec<u8>, Error> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = reader.read(&mut byte).map_err(|_| Error::Read)?;
+        if n == 0 {
+            return Err(Error::ConnectionClosed);
+        }
+        if byte[0] == b'\n' {
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            return Ok(line);
+        }
+        line.push(byte[0]);
+        if line.len() > 4096 {
+            return Err(Error::InvalidResponse);
+        }
+    }
+}
+
+/// Reads exactly `len` bytes, handing each read to `sink`. `Ok(false)` means
+/// `sink` refused the data (the reader is gone); the caller must not reuse
+/// the connection afterward -- its position in the stream is unknown.
+fn read_exact_len<R: Read>(
+    reader: &mut R,
+    len: usize,
+    sink: &mut dyn FnMut(&[u8]) -> bool,
+) -> Result<bool, Error> {
+    let mut remaining = len;
+    let mut chunk = [0u8; 8192];
+    while remaining > 0 {
+        let want = remaining.min(chunk.len());
+        let n = reader.read(&mut chunk[..want]).map_err(|_| Error::Read)?;
+        if n == 0 {
+            return Err(Error::ConnectionClosed);
+        }
+        if !sink(&chunk[..n]) {
+            return Ok(false);
+        }
+        remaining -= n;
+    }
+    Ok(true)
+}
+
+/// Reads `Transfer-Encoding: chunked` framing until the terminating 0-length
+/// chunk and any trailer headers.
+fn read_chunked<R: Read>(
+    reader: &mut R,
+    sink: &mut dyn FnMut(&[u8]) -> bool,
+) -> Result<bool, Error> {
+    let mut chunk = [0u8; 8192];
+    loop {
+        let size_line = read_line(reader)?;
+        let size_text = size_line.split(|&b| b == b';').next().unwrap_or(&size_line);
+        let size_text = std::str::from_utf8(size_text)
+            .map_err(|_| Error::InvalidResponse)?
+            .trim();
+        let size = usize::from_str_radix(size_text, 16).map_err(|_| Error::InvalidResponse)?;
+        if size == 0 {
+            loop {
+                let trailer = read_line(reader)?;
+                if trailer.is_empty() {
+                    break;
+                }
+            }
+            return Ok(true);
+        }
+        let mut remaining = size;
+        while remaining > 0 {
+            let want = remaining.min(chunk.len());
+            let n = reader.read(&mut chunk[..want]).map_err(|_| Error::Read)?;
+            if n == 0 {
+                return Err(Error::ConnectionClosed);
+            }
+            if !sink(&chunk[..n]) {
+                return Ok(false);
+            }
+            remaining -= n;
+        }
+        let crlf = read_line(reader)?;
+        if !crlf.is_empty() {
+            return Err(Error::InvalidResponse);
+        }
+    }
+}
+
+/// Reads until the peer closes the connection (no Content-Length, no
+/// chunked framing -- the body ends when the socket does).
+fn read_until_close<R: Read>(
+    reader: &mut R,
+    sink: &mut dyn FnMut(&[u8]) -> bool,
+) -> Result<bool, Error> {
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = reader.read(&mut chunk).map_err(|_| Error::Read)?;
+        if n == 0 {
+            return Ok(true);
+        }
+        if !sink(&chunk[..n]) {
+            return Ok(false);
+        }
+    }
+}
+
+/// Tells a connect attempt that ran out of time (httplib's distinct
+/// `Error::ConnectionTimeout`, never retried) from any other connect failure
+/// (`Error::Connection`, e.g. ECONNREFUSED or no route -- also never retried
+/// today, but for an unrelated reason: a fresh connection failing is a real
+/// outage).
+fn classify_connect_error(e: &io::Error) -> Error {
+    if e.kind() == io::ErrorKind::TimedOut {
+        Error::ConnectionTimeout
+    } else {
+        Error::Connection
+    }
+}
+
+fn header_lookup<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+// ---------------------------------------------------------------------
+// Client
+// ---------------------------------------------------------------------
+
+/// One request as the caller builds it. `method`/`path` are set by the
+/// caller; `Host`, `Content-Length` and `Connection` are added by `send`
+/// unless already present in `headers`.
+pub struct Request {
+    pub method: String,
+    pub path: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl Request {
+    pub fn post(path: impl Into<String>, body: Vec<u8>) -> Self {
+        Request {
+            method: "POST".to_string(),
+            path: path.into(),
+            headers: Vec::new(),
+            body,
+        }
+    }
+
+    pub fn get(path: impl Into<String>) -> Self {
+        Request {
+            method: "GET".to_string(),
+            path: path.into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    pub fn head(path: impl Into<String>) -> Self {
+        Request {
+            method: "HEAD".to_string(),
+            path: path.into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
+    }
+}
+
+/// The response head, available (via `on_headers`) before any body byte.
+#[derive(Debug, Clone)]
+pub struct ResponseHead {
+    pub status: i32,
+    pub headers: Vec<(String, String)>,
+}
+
+impl ResponseHead {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        header_lookup(&self.headers, name)
+    }
+}
+
+/// A complete, buffered reply (no `receiver` was given to `send`).
+#[derive(Debug, Clone)]
+pub struct Reply {
+    pub status: i32,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl Reply {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        header_lookup(&self.headers, name)
+    }
+}
+
+fn parse_response_head(bytes: &[u8]) -> Result<ResponseHead, Error> {
+    let mut headers_buf = [httparse::EMPTY_HEADER; 64];
+    let mut response = httparse::Response::new(&mut headers_buf);
+    match response.parse(bytes) {
+        Ok(httparse::Status::Complete(_)) => Ok(ResponseHead {
+            status: response.code.unwrap_or(0) as i32,
+            headers: response
+                .headers
+                .iter()
+                .map(|h| {
+                    (
+                        h.name.to_string(),
+                        String::from_utf8_lossy(h.value).to_string(),
+                    )
+                })
+                .collect(),
+        }),
+        _ => Err(Error::InvalidResponse),
+    }
+}
+
+/// A handle that can force-close a client's active connection from another
+/// thread -- the Rust equivalent of cpp-httplib's `Client::stop()`, used by
+/// `upstream_call`'s watch thread to abandon a call the reader has left.
+/// Shutting down the socket unblocks whichever thread is blocked reading or
+/// writing it; a `stop()` that lands after the call already finished just
+/// closes a connection that would otherwise have gone back to the idle pool
+/// (harmless: `retry_on_fresh_connection` exists for exactly that case).
+///
+/// Holds the same `Arc<TcpStream>` the request thread reads and writes
+/// through (see `SharedTcp`), not a `try_clone()`'d duplicate: on Windows,
+/// `shutdown()` on a `try_clone()`'d handle does not reliably terminate the
+/// connection as observed by a concurrent blocking read on the sibling
+/// handle actually doing I/O -- proven by instrumenting
+/// `an_abandoned_stream_is_cancelled_by_name_and_never_resent` on Windows
+/// ARM64: with the old try_clone()'d `active`, the reader kept receiving
+/// bytes for ~4.7s after `stop()`'s `shutdown(Both)` call, and the peer's
+/// `is_gone()` peek never observed the close either -- the shutdown call
+/// never reached the wire. Sharing the literal same handle removes the
+/// duplicate, and with it the gap.
+#[derive(Clone)]
+pub struct StopHandle(Arc<Mutex<Option<Arc<TcpStream>>>>);
+
+impl StopHandle {
+    pub fn stop(&self) {
+        if let Some(s) = self.0.lock().unwrap().take() {
+            let _ = s.shutdown(Shutdown::Both);
+        }
+    }
+}
+
+fn parse_origin(origin: &str) -> Result<(bool, String, u16), String> {
+    let (https, rest) = if let Some(r) = origin.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = origin.strip_prefix("http://") {
+        (false, r)
+    } else {
+        return Err(format!(
+            "origin must start with http:// or https://: {origin}"
+        ));
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if authority.is_empty() {
+        return Err(format!("origin has no host: {origin}"));
+    }
+    match authority.rsplit_once(':') {
+        Some((host, port_str))
+            if !host.is_empty() && port_str.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            let port: u16 = port_str
+                .parse()
+                .map_err(|_| format!("bad port in origin: {origin}"))?;
+            Ok((https, host.to_string(), port))
+        }
+        _ => Ok((https, authority.to_string(), if https { 443 } else { 80 })),
+    }
+}
+
+/// One connection to one origin, reused across requests (keep-alive) the way
+/// a lease from `upstream_pool` does. Lazy: no I/O happens until `send`.
+pub struct Client {
+    https: bool,
+    host: String,
+    port: u16,
+    connect_timeout: Duration,
+    read_timeout: Duration,
+    conn: Option<Stream>,
+    active: Arc<Mutex<Option<Arc<TcpStream>>>>,
+    bearer: Option<String>,
+}
+
+impl Client {
+    pub fn new(
+        origin: &str,
+        connect_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Result<Self, String> {
+        let (https, host, port) = parse_origin(origin)?;
+        Ok(Client {
+            https,
+            host,
+            port,
+            connect_timeout,
+            read_timeout,
+            conn: None,
+            active: Arc::new(Mutex::new(None)),
+            bearer: None,
+        })
+    }
+
+    /// cpp-httplib's `Client(scheme_host_port)` constructor, when
+    /// `detail::parse_url` cannot make sense of the string (or it names no
+    /// host), does not fail: it falls back to `ClientImpl(scheme_host_port,
+    /// 80, ...)`, i.e. the entire raw, still-malformed string becomes the
+    /// literal (non-TLS, port 80) hostname every request is attempted
+    /// against. `Client::new` above returns `Err` in that situation instead
+    /// -- this is the same fallback `parse_origin` failing takes, so a
+    /// misconfigured origin fails (or misbehaves) using that same
+    /// configured value, the way C++'s does, rather than a hardcoded
+    /// stand-in the operator never set.
+    pub(crate) fn with_literal_host(
+        raw_origin: &str,
+        connect_timeout: Duration,
+        read_timeout: Duration,
+    ) -> Self {
+        Client {
+            https: false,
+            host: raw_origin.to_string(),
+            port: 80,
+            connect_timeout,
+            read_timeout,
+            conn: None,
+            active: Arc::new(Mutex::new(None)),
+            bearer: None,
+        }
+    }
+
+    pub fn stop_handle(&self) -> StopHandle {
+        StopHandle(self.active.clone())
+    }
+
+    /// Sets (or replaces) the `Authorization: Bearer` header sent with every
+    /// later request on this client -- never baked in at connect time, so a
+    /// caller can renew a token and retry on the same, possibly-reused,
+    /// connection.
+    pub fn set_bearer_token(&mut self, token: &str) {
+        self.bearer = Some(token.to_string());
+    }
+
+    /// Whether this client is still holding a live connection. `send()`
+    /// clears `conn` to `None` after a `Connection: close` response or a
+    /// close-delimited (no Content-Length/chunked) reply, so a client
+    /// popped from the idle pool with no connection is effectively fresh,
+    /// not a stale keep-alive.
+    pub fn has_connection(&self) -> bool {
+        self.conn.is_some()
+    }
+
+    fn host_header(&self) -> String {
+        let default_port = if self.https { 443 } else { 80 };
+        if self.port == default_port {
+            self.host.clone()
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+
+    /// cpp-httplib's `CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_SECOND`, unmodified --
+    /// wally's C++ `upstream_pool.cpp::build()` calls `set_read_timeout(600,
+    /// 0)` and `set_connection_timeout(10, 0)` but never `set_write_timeout`,
+    /// so the write side keeps httplib's own 5s default regardless of how
+    /// long the (600s) read timeout is configured. A stalled write must time
+    /// out in ~5s the way C++'s does, not silently inherit the read budget.
+    const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    fn ensure_connected(&mut self) -> Result<(), Error> {
+        if self.conn.is_some() {
+            return Ok(());
+        }
+        let addrs: Vec<SocketAddr> = (self.host.as_str(), self.port)
+            .to_socket_addrs()
+            .map_err(|_| Error::Connection)?
+            .collect();
+        if addrs.is_empty() {
+            return Err(Error::Connection);
+        }
+        let mut last = Error::Connection;
+        for addr in addrs {
+            let tcp = match TcpStream::connect_timeout(&addr, self.connect_timeout) {
+                Ok(t) => t,
+                Err(e) => {
+                    last = classify_connect_error(&e);
+                    continue;
+                }
+            };
+            let _ = tcp.set_nodelay(true);
+            // The TLS handshake reads travel over this same socket before
+            // any request is written, so it must not inherit the 600s read
+            // budget: a peer that accepts the TCP connection and then never
+            // answers the ClientHello would otherwise hold the request for
+            // the full read timeout instead of failing fast. cpp-httplib
+            // gives its connection timeout to the handshake too (explore-main
+            // src/net/upstream_pool.cpp:43 calls only `set_connection_timeout`
+            // and `set_read_timeout`; httplib applies the former to connect
+            // *and* the TLS handshake, the latter only once the handshake is
+            // done) -- match that by holding the connect budget here and
+            // switching to the read budget only after a successful
+            // handshake (or immediately for a plain-HTTP connection, which
+            // has no handshake to protect).
+            let _ = tcp.set_read_timeout(Some(self.connect_timeout));
+            let _ = tcp.set_write_timeout(Some(Self::WRITE_TIMEOUT));
+            // Shared, not duplicated (see `SharedTcp`): `active` and the
+            // stream the request thread reads/writes are clones of the same
+            // `Arc`, i.e. the same OS handle, so `StopHandle::stop()`'s
+            // `shutdown()` actually reaches the connection a concurrent
+            // blocking read is using.
+            let tcp = Arc::new(tcp);
+            *self.active.lock().unwrap() = Some(tcp.clone());
+            let stream = if self.https {
+                let connector = match native_tls::TlsConnector::new() {
+                    Ok(c) => c,
+                    Err(_) => return Err(Error::SslConnection),
+                };
+                match connector.connect(&self.host, SharedTcp(tcp.clone())) {
+                    Ok(tls) => {
+                        let _ = tls.get_ref().0.set_read_timeout(Some(self.read_timeout));
+                        Stream::Tls(Box::new(tls))
+                    }
+                    Err(_) => return Err(Error::SslConnection),
+                }
+            } else {
+                let _ = tcp.set_read_timeout(Some(self.read_timeout));
+                Stream::Plain(SharedTcp(tcp))
+            };
+            self.conn = Some(stream);
+            return Ok(());
+        }
+        Err(last)
+    }
+
+    /// cpp-httplib's default `Accept-Encoding` for this build: Brotli, zlib,
+    /// and Zstd are all linked in (confirmed against the pinned kit's build
+    /// flags), so `prepare_default_headers` concatenates all three in this
+    /// order.
+    const DEFAULT_ACCEPT_ENCODING: &'static str = "br, gzip, deflate, zstd";
+    const DEFAULT_USER_AGENT: &'static str = "cpp-httplib/0.46.1";
+
+    // has_receiver mirrors cpp-httplib's `!r.content_receiver` check in
+    // `prepare_default_headers`: Accept-Encoding and User-Agent are default
+    // headers for a buffered (non-streaming) request only. `Accept: */*` has
+    // no such condition -- it is always added when the caller has not set
+    // one. httplib's Headers is an unordered_multimap, so the wire order of
+    // these is not a real contract; only presence and value are.
+    fn write_request(&mut self, request: &Request, has_receiver: bool) -> Result<(), Error> {
+        let mut head = format!("{} {} HTTP/1.1\r\n", request.method, request.path);
+        head += &format!("Host: {}\r\n", self.host_header());
+        for (k, v) in &request.headers {
+            head += &format!("{k}: {v}\r\n");
+        }
+        if let Some(token) = &self.bearer {
+            if !request
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            {
+                head += &format!("Authorization: Bearer {token}\r\n");
+            }
+        }
+        if !request
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("accept"))
+        {
+            head += "Accept: */*\r\n";
+        }
+        if !has_receiver {
+            if !request
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("accept-encoding"))
+            {
+                head += &format!("Accept-Encoding: {}\r\n", Self::DEFAULT_ACCEPT_ENCODING);
+            }
+            if !request
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
+            {
+                head += &format!("User-Agent: {}\r\n", Self::DEFAULT_USER_AGENT);
+            }
+        }
+        let has_length_header = request
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-length"));
+        if !has_length_header {
+            head += &format!("Content-Length: {}\r\n", request.body.len());
+        }
+        if !request
+            .headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("connection"))
+        {
+            head += "Connection: keep-alive\r\n";
+        }
+        head += "\r\n";
+        let stream = self.conn.as_mut().ok_or(Error::Connection)?;
+        stream
+            .write_all(head.as_bytes())
+            .map_err(|_| Error::Write)?;
+        if !request.body.is_empty() {
+            stream.write_all(&request.body).map_err(|_| Error::Write)?;
+        }
+        stream.flush().map_err(|_| Error::Write)
+    }
+
+    fn read_response_head(&mut self) -> Result<(ResponseHead, Vec<u8>), Error> {
+        let mut seed = Vec::new();
+        loop {
+            let stream = self.conn.as_mut().ok_or(Error::Connection)?;
+            let (head_bytes, leftover) = read_head(stream, MAX_HEAD_BYTES, seed)?;
+            let head = parse_response_head(&head_bytes)?;
+            if (100..200).contains(&head.status) {
+                // Informational; we never send Expect: 100-continue
+                // ourselves so this is defensive only. `leftover` may
+                // already hold the start of the final response -- carry it
+                // forward instead of reading past it.
+                seed = leftover;
+                continue;
+            }
+            return Ok((head, leftover));
+        }
+    }
+
+    /// Sends `request` and reads the reply. `on_headers` sees the status and
+    /// headers before any body byte and may cancel by returning false.
+    /// `receiver` (when given) is called with each body chunk as it arrives
+    /// instead of buffering into `Reply.body`; it too may cancel by
+    /// returning false, e.g. because the reader this stream was for is gone.
+    #[allow(clippy::type_complexity)]
+    pub fn send(
+        &mut self,
+        request: &Request,
+        on_headers: Option<&mut dyn FnMut(&ResponseHead) -> bool>,
+        mut receiver: Option<&mut dyn FnMut(&[u8]) -> bool>,
+    ) -> Result<Reply, Error> {
+        self.ensure_connected()?;
+        if let Err(e) = self.write_request(request, receiver.is_some()) {
+            self.conn = None;
+            return Err(e);
+        }
+        let (head, leftover) = match self.read_response_head() {
+            Ok(v) => v,
+            Err(e) => {
+                self.conn = None;
+                return Err(e);
+            }
+        };
+        if let Some(cb) = on_headers {
+            if !cb(&head) {
+                self.conn = None;
+                return Err(Error::Canceled);
+            }
+        }
+
+        let no_body =
+            request.method.eq_ignore_ascii_case("HEAD") || matches!(head.status, 204 | 304);
+        let chunked = head
+            .header("transfer-encoding")
+            .map(|v| v.to_ascii_lowercase().contains("chunked"))
+            .unwrap_or(false);
+        let content_length = head
+            .header("content-length")
+            .and_then(|v| v.trim().parse::<usize>().ok());
+        let response_says_close = head
+            .header("connection")
+            .map(|v| v.eq_ignore_ascii_case("close"))
+            .unwrap_or(false);
+
+        // Decoding happens between the wire (de-chunked/length-delimited by
+        // the readers below) and whatever the caller does with the bytes,
+        // exactly where cpp-httplib's own `read_with_decompression` sits
+        // (see src/net/decompress.rs). `on_headers` above already saw the
+        // still-encoded `Content-Encoding` header, matching httplib, which
+        // never rewrites the header it hands to its own headers callback.
+        let mut decoder =
+            decompress::Decoder::for_content_encoding(head.header("content-encoding"));
+
+        let mut body_buf = Vec::new();
+        let mut completed = true;
+        let mut decode_failed = false;
+        if !no_body {
+            let stream = self.conn.as_mut().ok_or(Error::Connection)?;
+            let mut reader = Prefixed {
+                prefix: leftover,
+                pos: 0,
+                inner: stream,
+            };
+            let mut deliver = |data: &[u8]| -> bool {
+                match receiver.as_deref_mut() {
+                    Some(r) => r(data),
+                    None => {
+                        body_buf.extend_from_slice(data);
+                        true
+                    }
+                }
+            };
+            let mut sink = |data: &[u8]| -> bool {
+                match decoder.push(data, &mut deliver) {
+                    Ok(cont) => cont,
+                    Err(_) => {
+                        // Matches httplib's `decompressor->decompress()`
+                        // returning false: the compressed bytes themselves
+                        // are invalid, not merely a canceled read. Stop the
+                        // raw reader the same way a cancel does (`Ok(false)`
+                        // from `sink`) and report the more specific error
+                        // once the raw reader has unwound below.
+                        decode_failed = true;
+                        false
+                    }
+                }
+            };
+            let outcome = if chunked {
+                read_chunked(&mut reader, &mut sink)
+            } else if let Some(len) = content_length {
+                read_exact_len(&mut reader, len, &mut sink)
+            } else {
+                read_until_close(&mut reader, &mut sink)
+            };
+            match outcome {
+                Ok(true) => {
+                    // The raw reader finished cleanly (EOF / final chunk /
+                    // content-length reached), but that only means the wire
+                    // framing ended where expected -- it says nothing about
+                    // whether the compressed stream itself reached a real
+                    // end-of-body marker. A dropped connection mid-transfer
+                    // on a `read_until_close` reply, in particular, looks
+                    // identical to a clean close until finish() checks the
+                    // format's own trailer. A final flush can also hand
+                    // `deliver` bytes the receiver rejects, same as any
+                    // other decoded chunk -- handle that `Ok(false)` the
+                    // same way `outcome` itself is handled just below.
+                    match decoder.finish(&mut deliver) {
+                        Ok(true) => {}
+                        Ok(false) => completed = false,
+                        Err(_) => decode_failed = true,
+                    }
+                }
+                Ok(false) => completed = false,
+                Err(e) => {
+                    self.conn = None;
+                    return Err(e);
+                }
+            }
+        }
+
+        if decode_failed {
+            self.conn = None;
+            return Err(Error::Read);
+        }
+
+        if !completed {
+            self.conn = None;
+            return Err(Error::Canceled);
+        }
+
+        let close_delimited = !no_body && !chunked && content_length.is_none();
+        if response_says_close || close_delimited {
+            self.conn = None;
+        }
+
+        Ok(Reply {
+            status: head.status,
+            headers: head.headers,
+            body: body_buf,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------
+// Server
+// ---------------------------------------------------------------------
+
+/// A liveness check on a downstream connection while this thread is busy
+/// elsewhere (e.g. waiting on an upstream call): a peek that never waits, the
+/// equivalent of httplib's `is_connection_closed` (a zero-timeout `select`
+/// plus MSG_PEEK).
+///
+/// The peek must not change the socket's blocking mode. `try_clone` shares
+/// one open socket with the connection's `ResponseWriter`, and O_NONBLOCK /
+/// FIONBIO are properties of that socket, not of a handle: flipping them here
+/// made the writer's `write_all` fail with WouldBlock whenever a slow reader
+/// let the send buffer fill, and the reply was dropped as if the reader had
+/// gone. So each platform asks "readable, and is it EOF?" for this one call
+/// only.
+pub struct LivenessProbe(TcpStream);
+
+impl LivenessProbe {
+    pub fn new(stream: &TcpStream) -> io::Result<Self> {
+        Ok(LivenessProbe(stream.try_clone()?))
+    }
+
+    pub fn is_gone(&self) -> bool {
+        peer_has_closed(&self.0)
+    }
+}
+
+/// `true` when the peer closed or reset the connection; `false` while it is
+/// open, whether or not it has sent anything. Never blocks.
+#[cfg(unix)]
+fn peer_has_closed(stream: &TcpStream) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut buf = [0u8; 1];
+    // SAFETY: the descriptor is live for as long as `stream` is borrowed,
+    // and `buf` is a valid one-byte buffer. MSG_DONTWAIT makes only this
+    // call non-blocking; the descriptor's own flags are untouched.
+    let n = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    match n {
+        0 => true,
+        n if n > 0 => false,
+        _ => !matches!(
+            io::Error::last_os_error().kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+        ),
+    }
+}
+
+#[cfg(windows)]
+fn peer_has_closed(stream: &TcpStream) -> bool {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        recv, select, FD_SET, MSG_PEEK, SOCKET, SOCKET_ERROR, TIMEVAL,
+    };
+    let socket = stream.as_raw_socket() as SOCKET;
+    let mut readable = FD_SET {
+        fd_count: 1,
+        fd_array: [0; 64],
+    };
+    readable.fd_array[0] = socket;
+    let no_wait = TIMEVAL {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    // SAFETY: `readable` holds one live socket and `no_wait` is a valid
+    // zero timeout, so select returns at once without touching the socket's
+    // mode. The first argument is ignored on Windows.
+    let ready = unsafe {
+        select(
+            0,
+            &mut readable,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &no_wait,
+        )
+    };
+    if ready == 0 {
+        // Nothing to read: the peer is still there and quiet.
+        return false;
+    }
+    if ready == SOCKET_ERROR {
+        return true;
+    }
+    let mut buf = [0u8; 1];
+    // SAFETY: select just reported the socket readable, so this peek
+    // returns at once with data, EOF (0) or the connection's error.
+    let n = unsafe { recv(socket, buf.as_mut_ptr(), buf.len() as i32, MSG_PEEK) };
+    n == 0 || n == SOCKET_ERROR
+}
+
+/// One parsed request. `path` never includes the query string.
+#[derive(Debug, Clone)]
+pub struct ServerRequest {
+    pub method: String,
+    pub path: String,
+    pub query: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl ServerRequest {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        header_lookup(&self.headers, name)
+    }
+}
+
+/// The default cpp-httplib serves: `CPPHTTPLIB_KEEPALIVE_TIMEOUT_SECOND` and
+/// `CPPHTTPLIB_KEEPALIVE_MAX_COUNT`, neither overridden by the shim server it
+/// replaces (`httplib::Server`, no `set_keep_alive_*` calls). A fixed pair on
+/// every response that stays open, not a countdown: httplib's
+/// `write_response_core` writes `keep_alive_max_count_` verbatim each time,
+/// it never decrements it.
+const KEEP_ALIVE_TIMEOUT_SEC: i32 = 5;
+const KEEP_ALIVE_MAX_COUNT: i32 = 100;
+
+/// httplib's default per-`read()` timeout during header/body processing
+/// (`CPPHTTPLIB_SERVER_READ_TIMEOUT_SECOND`, also unmodified). Distinct from
+/// `KEEP_ALIVE_TIMEOUT_SEC`, which bounds the wait *between* requests on an
+/// otherwise-idle connection (`wait_keep_alive`): this one bounds a single
+/// stalled read once a request is already underway (a peer that sends a
+/// partial header line or a partial chunk and then goes silent), so that
+/// case cannot block a connection thread -- and thus `ServerHandle::stop()`
+/// -- forever either.
+const SERVER_READ_TIMEOUT_SEC: u64 = 5;
+
+/// Writes the response for one request. Either `send_full` once, or
+/// `begin_chunked` followed by any number of `write_chunk` and a final
+/// `end_chunked` -- never both.
+pub struct ResponseWriter<'a> {
+    stream: &'a mut TcpStream,
+    /// The incoming request already asked to close (its own `Connection:
+    /// close`), independent of this response's status.
+    request_wants_close: bool,
+    /// Whether the connection closes after the response written so far --
+    /// starts at `request_wants_close`; a `send_full`/`begin_chunked` call
+    /// with `status >= 400` raises it, mirroring httplib's "don't leave
+    /// connections open after errors".
+    closing: bool,
+    /// The incoming request's method was HEAD. Mirrors cpp-httplib's
+    /// `Server::routing`, which dispatches HEAD through the very same
+    /// `get_handlers_` table GET uses, and `write_response_core`, which
+    /// then (a) still writes every header a GET response would have --
+    /// including a real `Content-Length` computed from the body the
+    /// handler built -- but never the body bytes themselves, and (b) adds
+    /// `Accept-Ranges: bytes` to any response to a HEAD request that does
+    /// not already have one. Both hold no matter which handler produced
+    /// the response (a route registered under HEAD explicitly, a route
+    /// found by falling back from HEAD to its GET counterpart, or an
+    /// error/not-found handler), so this lives on the writer rather than
+    /// being threaded through each call site.
+    is_head: bool,
+}
+
+/// cpp-httplib's `status_message` table (httplib.h, pinned v0.46.1), ported
+/// verbatim: every status code it names, the same wording (RFC 9110's
+/// "Unprocessable Content" for 422, not the older "Unprocessable Entity"),
+/// and the same fallback. httplib has no case for 499 either, so an
+/// abandoned-request response falls through to the same default as any
+/// other code it does not name -- there is no dedicated "Client Closed
+/// Request" phrase to port, because C++ never sends one.
+fn reason_phrase(status: i32) -> &'static str {
+    match status {
+        100 => "Continue",
+        101 => "Switching Protocol",
+        102 => "Processing",
+        103 => "Early Hints",
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        207 => "Multi-Status",
+        208 => "Already Reported",
+        226 => "IM Used",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        305 => "Use Proxy",
+        306 => "unused",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Payload Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        418 => "I'm a teapot",
+        421 => "Misdirected Request",
+        422 => "Unprocessable Content",
+        423 => "Locked",
+        424 => "Failed Dependency",
+        425 => "Too Early",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        506 => "Variant Also Negotiates",
+        507 => "Insufficient Storage",
+        508 => "Loop Detected",
+        510 => "Not Extended",
+        511 => "Network Authentication Required",
+        _ => "Internal Server Error", // covers 500 and every unnamed code, same as httplib's `default: case InternalServerError_500:`
+    }
+}
+
+impl<'a> ResponseWriter<'a> {
+    fn new(stream: &'a mut TcpStream, request_wants_close: bool, is_head: bool) -> Self {
+        ResponseWriter {
+            stream,
+            request_wants_close,
+            closing: request_wants_close,
+            is_head,
+        }
+    }
+
+    /// Whether the connection closes after the response written so far --
+    /// what `handle_connection` reads once the handler returns to decide
+    /// whether to read another request off this socket. Mirrors cpp-httplib's
+    /// `write_response_core`: the request asked to close, or the last status
+    /// written was `>= 400`.
+    pub fn will_close(&self) -> bool {
+        self.closing
+    }
+
+    /// The `Connection`/`Keep-Alive` header cpp-httplib's `write_response_core`
+    /// would add to this response, unless the caller already set one --
+    /// `Connection: close` when closing, else the fixed
+    /// `Keep-Alive: timeout=<n>, max=<n>` (not decremented per response; see
+    /// `KEEP_ALIVE_MAX_COUNT`). Also updates `closing` for `will_close()`.
+    fn connection_header(&mut self, status: i32, headers: &[(&str, &str)]) -> Option<String> {
+        let close = self.request_wants_close || status >= 400;
+        self.closing = close;
+        if headers.iter().any(|(k, _)| {
+            k.eq_ignore_ascii_case("connection") || k.eq_ignore_ascii_case("keep-alive")
+        }) {
+            return None; // the caller already set it explicitly
+        }
+        Some(if close {
+            "Connection: close\r\n".to_string()
+        } else {
+            format!("Keep-Alive: timeout={KEEP_ALIVE_TIMEOUT_SEC}, max={KEEP_ALIVE_MAX_COUNT}\r\n")
+        })
+    }
+
+    /// The `Accept-Ranges: bytes` line cpp-httplib's `write_response_core`
+    /// adds to every response to a HEAD request that does not already carry
+    /// one (`if (req.method == "HEAD" && !res.has_header("Accept-Ranges"))`)
+    /// -- unconditional on status, so it applies to a routed 200 exactly as
+    /// much as a 404 or 500.
+    fn accept_ranges_header(&self, headers: &[(&str, &str)]) -> Option<&'static str> {
+        if self.is_head
+            && !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("accept-ranges"))
+        {
+            Some("Accept-Ranges: bytes\r\n")
+        } else {
+            None
+        }
+    }
+
+    pub fn send_full(
+        &mut self,
+        status: i32,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> io::Result<()> {
+        let mut head = format!("HTTP/1.1 {} {}\r\n", status, reason_phrase(status));
+        for (k, v) in headers {
+            head += &format!("{k}: {v}\r\n");
+        }
+        if let Some(line) = self.connection_header(status, headers) {
+            head += &line;
+        }
+        if !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        {
+            // A real Content-Length even when the body itself is about to
+            // be withheld below -- httplib computes this from the same
+            // `res.body` a GET would have sent before ever checking the
+            // request method.
+            head += &format!("Content-Length: {}\r\n", body.len());
+        }
+        if let Some(line) = self.accept_ranges_header(headers) {
+            head += line;
+        }
+        head += "\r\n";
+        self.stream.write_all(head.as_bytes())?;
+        // httplib's write_response_core: `if (req.method != "HEAD" && ...)
+        // bstrm.write(res.body...)` -- the handler still built the body (and
+        // its Content-Length above reflects that), but a HEAD response never
+        // puts it on the wire.
+        if !self.is_head {
+            self.stream.write_all(body)?;
+        }
+        self.stream.flush()
+    }
+
+    pub fn begin_chunked(&mut self, status: i32, headers: &[(&str, &str)]) -> io::Result<()> {
+        let mut head = format!("HTTP/1.1 {} {}\r\n", status, reason_phrase(status));
+        for (k, v) in headers {
+            head += &format!("{k}: {v}\r\n");
+        }
+        if let Some(line) = self.connection_header(status, headers) {
+            head += &line;
+        }
+        if !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("transfer-encoding"))
+        {
+            head += "Transfer-Encoding: chunked\r\n";
+        }
+        if let Some(line) = self.accept_ranges_header(headers) {
+            head += line;
+        }
+        head += "\r\n";
+        self.stream.write_all(head.as_bytes())?;
+        self.stream.flush()
+    }
+
+    /// Writes one chunk. `Err` means the reader is gone -- the caller should
+    /// stop producing more data. A no-op for HEAD: httplib never calls its
+    /// content provider (`req.method != "HEAD" && res.content_provider_`) for
+    /// one, so no chunk -- and, in `end_chunked`, no trailer -- ever reaches
+    /// the wire.
+    pub fn write_chunk(&mut self, data: &[u8]) -> io::Result<()> {
+        if data.is_empty() || self.is_head {
+            return Ok(());
+        }
+        write!(self.stream, "{:x}\r\n", data.len())?;
+        self.stream.write_all(data)?;
+        self.stream.write_all(b"\r\n")?;
+        self.stream.flush()
+    }
+
+    pub fn end_chunked(&mut self) -> io::Result<()> {
+        if self.is_head {
+            return Ok(());
+        }
+        self.stream.write_all(b"0\r\n\r\n")?;
+        self.stream.flush()
+    }
+}
+
+type RouteFn = dyn Fn(&ServerRequest, &mut ResponseWriter<'_>, &TcpStream) + Send + Sync;
+type NotFoundFn = dyn Fn(&ServerRequest, &mut ResponseWriter<'_>) + Send + Sync;
+/// Mirrors cpp-httplib's `set_error_handler`: called for a request wally
+/// never got far enough to route at all -- a malformed request line/headers
+/// (400) or an over-long URI (414) -- with whatever `(method, path)` parsing
+/// reached before it gave up. `not_found` (a real 404, after routing) stays
+/// separate since it has a full `ServerRequest`; C++'s single
+/// `error_handler_` covers both cases (any `res.status >= 400`) but nothing
+/// here needs them unified to match its output.
+type OnErrorFn = dyn Fn(i32, &str, &str, &mut ResponseWriter<'_>) + Send + Sync;
+
+struct Route {
+    method: String,
+    path: String,
+    handler: Box<RouteFn>,
+}
+
+/// A minimal HTTP/1.1 server: accept loop plus a thread per connection,
+/// `httparse` for request heads, Content-Length and chunked request bodies,
+/// `Expect: 100-continue`, keep-alive across several requests on the same
+/// connection. Routes are exact `(method, path)` matches -- the shim needs
+/// nothing more.
+pub struct Server {
+    routes: Vec<Route>,
+    not_found: Option<Box<NotFoundFn>>,
+    on_error: Option<Box<OnErrorFn>>,
+}
+
+impl Default for Server {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Server {
+    pub fn new() -> Self {
+        Server {
+            routes: Vec::new(),
+            not_found: None,
+            on_error: None,
+        }
+    }
+
+    pub fn route(
+        &mut self,
+        method: &str,
+        path: &str,
+        handler: impl Fn(&ServerRequest, &mut ResponseWriter<'_>, &TcpStream) + Send + Sync + 'static,
+    ) {
+        self.routes.push(Route {
+            method: method.to_string(),
+            path: path.to_string(),
+            handler: Box::new(handler),
+        });
+    }
+
+    pub fn not_found(
+        &mut self,
+        handler: impl Fn(&ServerRequest, &mut ResponseWriter<'_>) + Send + Sync + 'static,
+    ) {
+        self.not_found = Some(Box::new(handler));
+    }
+
+    pub fn on_error(
+        &mut self,
+        handler: impl Fn(i32, &str, &str, &mut ResponseWriter<'_>) + Send + Sync + 'static,
+    ) {
+        self.on_error = Some(Box::new(handler));
+    }
+
+    /// Binds `host:0` (any free port), starts the accept loop on its own
+    /// thread and returns the handle plus the bound port.
+    pub fn bind_and_run(self, host: &str) -> io::Result<(ServerHandle, u16)> {
+        let listener = TcpListener::bind((host, 0))?;
+        let addr = listener.local_addr()?;
+        let stopping = Arc::new(AtomicBool::new(false));
+        let routes = Arc::new(self.routes);
+        let not_found = Arc::new(self.not_found);
+        let on_error = Arc::new(self.on_error);
+
+        let loop_stopping = stopping.clone();
+        let join = thread::spawn(move || {
+            // Mirrors cpp-httplib's `task_queue` (a local in `listen_internal`,
+            // `shutdown()`-ed -- joining every worker -- before the accept loop
+            // returns): every dispatched connection is tracked here so a caller
+            // that joins this accept thread also waits for whatever request
+            // each one is mid-handling, not just for accept() to stop. That is
+            // what lets `stop_running_instance` observe an abandon's cancel as
+            // already enqueued once it moves on to draining the cancel queue.
+            let mut handlers: Vec<thread::JoinHandle<()>> = Vec::new();
+            for incoming in listener.incoming() {
+                let stream = match incoming {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                if loop_stopping.load(Ordering::SeqCst) {
+                    // The dummy connection `stop()` makes to unblock accept();
+                    // drop it and exit the loop instead of accepting again.
+                    break;
+                }
+                let routes = routes.clone();
+                let not_found = not_found.clone();
+                let on_error = on_error.clone();
+                let conn_stopping = loop_stopping.clone();
+                handlers.push(thread::spawn(move || {
+                    handle_connection(
+                        stream,
+                        &routes,
+                        not_found.as_deref(),
+                        on_error.as_deref(),
+                        conn_stopping,
+                    )
+                }));
+                // Bound the bookkeeping the same way the pool's own worker
+                // list stays small in practice: drop handles for threads that
+                // are already done instead of letting this grow unbounded
+                // across a long keep-alive session.
+                handlers.retain(|h| !h.is_finished());
+            }
+            for handler in handlers {
+                let _ = handler.join();
+            }
+        });
+
+        Ok((
+            ServerHandle {
+                stopping,
+                addr,
+                join: Some(join),
+            },
+            addr.port(),
+        ))
+    }
+}
+
+/// Owns the accept-loop thread. Stops and joins it on `stop()` or drop; the
+/// accept thread itself does not return until every connection it dispatched
+/// has also finished (see `bind_and_run`), so joining this handle is joining
+/// every handler.
+pub struct ServerHandle {
+    stopping: Arc<AtomicBool>,
+    addr: SocketAddr,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl ServerHandle {
+    pub fn stop(&mut self) {
+        if self.stopping.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Unblock the accept() loop; the loop drops this connection once it
+        // sees `stopping`.
+        let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(200));
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
+
+    pub fn port(&self) -> u16 {
+        self.addr.port()
+    }
+}
+
+impl Drop for ServerHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Mirrors cpp-httplib's `keep_alive()`: waits up to `KEEP_ALIVE_TIMEOUT_SEC`
+/// for `stream` to have the start of a request (or EOF) ready to read,
+/// polling in short slices so it notices `stopping` flipping almost
+/// immediately -- matching `keep_alive()`'s own re-check of
+/// `svr_sock == INVALID_SOCKET` on every poll -- rather than blocking a
+/// connection-handler thread (and, via `ServerHandle::stop`, the whole
+/// server shutdown) for the full idle timeout. Returns false if the wait
+/// timed out, the peek failed, or the server is stopping; the caller closes
+/// the connection either way, same as `process_server_socket_core` exiting
+/// its `while (count > 0 && keep_alive(...))` loop.
+fn wait_keep_alive(stream: &TcpStream, stopping: &AtomicBool) -> bool {
+    const POLL_INTERVAL: Duration = Duration::from_millis(10);
+    let deadline = Instant::now() + Duration::from_secs(KEEP_ALIVE_TIMEOUT_SEC as u64);
+    let mut probe = [0u8; 1];
+    loop {
+        if stopping.load(Ordering::SeqCst) {
+            return false;
+        }
+        if stream.set_read_timeout(Some(POLL_INTERVAL)).is_err() {
+            return false;
+        }
+        match stream.peek(&mut probe) {
+            // Either real data is waiting, or the peer closed (a 0-byte
+            // peek) -- either way `read_head` below is what should discover
+            // and report it, so just stop waiting.
+            Ok(_) => return true,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return false,
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+    }
+}
+
+/// The over-long-URI threshold httplib checks `req.target.size()` against
+/// (`CPPHTTPLIB_REQUEST_URI_MAX_LENGTH`, unmodified by `messages.cpp`).
+const REQUEST_URI_MAX_LENGTH: usize = 8192;
+
+/// The request-body cap httplib enforces via `CPPHTTPLIB_PAYLOAD_MAX_LENGTH`
+/// (unmodified by `messages.cpp`): once the accumulated body -- whether
+/// Content-Length-framed or chunked -- passes this many bytes, the read is
+/// aborted and the response is 413, matching `read_content_with_length` /
+/// `read_content_chunked` in httplib.h, which check the running total against
+/// `payload_max_length_` on every chunk rather than trusting a declared
+/// Content-Length upfront.
+const PAYLOAD_MAX_LENGTH: usize = 100 * 1024 * 1024;
+
+/// Writes httplib's `error_handler_`-shaped response for a request wally
+/// never got far enough to route: a malformed request line/headers, or an
+/// over-long URI. Falls back to a bare status line with no body if the
+/// caller registered no `on_error` handler, matching `handle_connection`'s
+/// existing bare-404 fallback for `not_found`.
+fn write_early_failure(
+    stream: &mut TcpStream,
+    status: i32,
+    method: &str,
+    path: &str,
+    on_error: Option<&OnErrorFn>,
+) {
+    // Always the last response on this connection: parsing never got far
+    // enough to know whether the client wanted to keep it alive, and
+    // `connection_header` would force `Connection: close` for status >= 400
+    // anyway.
+    let mut writer = ResponseWriter::new(stream, true, method.eq_ignore_ascii_case("HEAD"));
+    match on_error {
+        Some(f) => f(status, method, path, &mut writer),
+        None => {
+            let _ = writer.send_full(status, &[], b"");
+        }
+    }
+}
+
+fn handle_connection(
+    mut stream: TcpStream,
+    routes: &[Route],
+    not_found: Option<&NotFoundFn>,
+    on_error: Option<&OnErrorFn>,
+    stopping: Arc<AtomicBool>,
+) {
+    let _ = stream.set_nodelay(true);
+    // Mirrors cpp-httplib's `count = keep_alive_max_count_` in
+    // `process_server_socket_core`: the number of requests this connection
+    // may still serve, counting the one about to be read. `count == 1`
+    // forces `Connection: close` on that request's response (below), same as
+    // httplib's `close_connection = count == 1`.
+    let mut count = KEEP_ALIVE_MAX_COUNT;
+    // Bytes read past the previous request's body in the same syscall(s) --
+    // the start of a pipelined next request. `read_head` below folds these
+    // in as its seed instead of reading fresh, mirroring httplib's buffered
+    // `Stream`, which never discards bytes it has already pulled off the
+    // socket. Empty on the first iteration.
+    let mut carry: Vec<u8> = Vec::new();
+    loop {
+        // A pipelined request already sitting in `carry` was read off the
+        // kernel socket buffer in a prior iteration -- polling `peek()` for
+        // it again would find nothing new arriving and just time out. Only
+        // wait when there is nothing left to process yet.
+        if carry.is_empty() && !wait_keep_alive(&stream, &stopping) {
+            return;
+        }
+        // The wait above leaves a short read timeout on `stream`; widen it to
+        // httplib's own per-read timeout (`CPPHTTPLIB_SERVER_READ_TIMEOUT_SECOND`)
+        // for the actual head/body read -- long enough for a slow-but-honest
+        // request, but not unbounded: a peer that stops sending mid-request
+        // must not block this thread (and `ServerHandle::stop()`) forever.
+        if stream
+            .set_read_timeout(Some(Duration::from_secs(SERVER_READ_TIMEOUT_SEC)))
+            .is_err()
+        {
+            return;
+        }
+        let (head_bytes, leftover) =
+            match read_head(&mut stream, MAX_HEAD_BYTES, std::mem::take(&mut carry)) {
+                Ok(v) => v,
+                // A head this connection never finished sending within
+                // MAX_HEAD_BYTES -- closest to httplib's `read_headers` failing
+                // a too-long header line (400); other read failures (EOF/error
+                // partway through the very first line) mirror httplib's own
+                // `!line_reader.getline()` path, which writes nothing.
+                Err(Error::InvalidResponse) => {
+                    write_early_failure(&mut stream, 400, "", "", on_error);
+                    return;
+                }
+                Err(_) => return,
+            };
+        let mut headers_buf = [httparse::EMPTY_HEADER; 64];
+        let mut parsed = httparse::Request::new(&mut headers_buf);
+        if !matches!(parsed.parse(&head_bytes), Ok(httparse::Status::Complete(_))) {
+            // Mirrors httplib's `parse_request_line` failing (bad method,
+            // bad HTTP version, wrong token count, ...): a real 400 response
+            // with whatever (method, path) parsing reached, not a silently
+            // dropped connection.
+            let method = parsed.method.unwrap_or("");
+            let path = parsed.path.unwrap_or("");
+            write_early_failure(&mut stream, 400, method, path, on_error);
+            return;
+        }
+        let method = parsed.method.unwrap_or("").to_string();
+        let raw_path = parsed.path.unwrap_or("").to_string();
+        if raw_path.len() > REQUEST_URI_MAX_LENGTH {
+            write_early_failure(&mut stream, 414, &method, &raw_path, on_error);
+            return;
+        }
+        let (path, query) = match raw_path.split_once('?') {
+            Some((p, q)) => (p.to_string(), q.to_string()),
+            None => (raw_path, String::new()),
+        };
+        let headers: Vec<(String, String)> = parsed
+            .headers
+            .iter()
+            .map(|h| {
+                (
+                    h.name.to_string(),
+                    String::from_utf8_lossy(h.value).to_string(),
+                )
+            })
+            .collect();
+
+        // RFC 9112 6.3 request-smuggling guard, unconditional in
+        // cpp-httplib and run before any body framing is trusted: a
+        // nonzero Content-Length together with any Transfer-Encoding is
+        // rejected outright, since a front end honoring only one of the two
+        // headers could be made to see a different request than wally
+        // does. Content-Length: 0 is tolerated (existing clients send it
+        // alongside chunked out of habit).
+        let content_length_nonzero = header_lookup(&headers, "content-length")
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+            > 0;
+        if content_length_nonzero && header_lookup(&headers, "transfer-encoding").is_some() {
+            write_early_failure(&mut stream, 400, &method, &path, on_error);
+            return;
+        }
+
+        if header_lookup(&headers, "expect")
+            .map(|v| v.eq_ignore_ascii_case("100-continue"))
+            .unwrap_or(false)
+            && stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err()
+        {
+            return;
+        }
+
+        let chunked_req = header_lookup(&headers, "transfer-encoding")
+            .map(|v| v.to_ascii_lowercase().contains("chunked"))
+            .unwrap_or(false);
+        let content_length =
+            header_lookup(&headers, "content-length").and_then(|v| v.trim().parse::<usize>().ok());
+
+        let mut body = Vec::new();
+        // Set once the sink refuses more data because the body has passed
+        // `PAYLOAD_MAX_LENGTH` -- distinguishes "abort, answer 413" from any
+        // other reason a sink might refuse (there is none today, but
+        // `read_exact_len`/`read_chunked`'s `Ok(false)` is generic).
+        let mut payload_too_large = false;
+        let outcome;
+        let new_carry;
+        {
+            let mut reader = Prefixed {
+                prefix: leftover,
+                pos: 0,
+                inner: &mut stream,
+            };
+            let mut sink = |data: &[u8]| -> bool {
+                if body.len() + data.len() > PAYLOAD_MAX_LENGTH {
+                    payload_too_large = true;
+                    return false;
+                }
+                body.extend_from_slice(data);
+                true
+            };
+            outcome = if chunked_req {
+                read_chunked(&mut reader, &mut sink)
+            } else if let Some(len) = content_length {
+                read_exact_len(&mut reader, len, &mut sink)
+            } else {
+                Ok(true)
+            };
+            // Whatever `reader` never handed to `sink` (the tail end of
+            // `leftover`, past this request's body -- the start of a
+            // pipelined next request, if there is one) must not be lost when
+            // `reader` is dropped at the end of this block.
+            new_carry = reader.prefix.split_off(reader.pos);
+        }
+        match outcome {
+            Ok(true) => {}
+            Ok(false) => {
+                // `read_exact_len`/`read_chunked`'s own contract: the sink
+                // refused, so the connection's position in the stream is
+                // unknown and it must not be reused -- same as any other
+                // early return below, this is the last response written.
+                if payload_too_large {
+                    write_early_failure(&mut stream, 413, &method, &path, on_error);
+                }
+                return;
+            }
+            Err(_) => return,
+        }
+        carry = new_carry;
+
+        let keep_alive = count > 1
+            && !header_lookup(&headers, "connection")
+                .map(|v| v.eq_ignore_ascii_case("close"))
+                .unwrap_or(false);
+        let request = ServerRequest {
+            method: method.clone(),
+            path: path.clone(),
+            query,
+            headers,
+            body,
+        };
+
+        let probe_stream = match stream.try_clone() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let is_head = method.eq_ignore_ascii_case("HEAD");
+        let route = routes
+            .iter()
+            .find(|r| r.method.eq_ignore_ascii_case(&method) && r.path == path)
+            .or_else(|| {
+                // cpp-httplib has no separate HEAD table: `Server::routing`
+                // dispatches "GET" and "HEAD" through the very same
+                // `get_handlers_`, so any GET route it serves also answers
+                // HEAD (same status/headers, no body) without a second
+                // registration. Only reached when no route registered HEAD
+                // itself (e.g. `/api/hello` below keeps its own, since the
+                // C++ short-circuits that one path ahead of routing).
+                if is_head {
+                    routes
+                        .iter()
+                        .find(|r| r.method.eq_ignore_ascii_case("GET") && r.path == path)
+                } else {
+                    None
+                }
+            });
+        let should_close = {
+            let mut writer = ResponseWriter::new(&mut stream, !keep_alive, is_head);
+            match route {
+                Some(r) => (r.handler)(&request, &mut writer, &probe_stream),
+                None => match not_found {
+                    Some(h) => h(&request, &mut writer),
+                    None => {
+                        let _ = writer.send_full(404, &[], b"");
+                    }
+                },
+            }
+            writer.will_close()
+        };
+
+        count -= 1;
+        if should_close || count <= 0 {
+            return;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    fn short() -> Duration {
+        Duration::from_secs(5)
+    }
+
+    #[test]
+    fn classify_connect_error_distinguishes_timeout_from_other_failures() {
+        let timed_out = io::Error::new(io::ErrorKind::TimedOut, "connection timed out");
+        assert_eq!(classify_connect_error(&timed_out), Error::ConnectionTimeout);
+
+        let refused = io::Error::new(io::ErrorKind::ConnectionRefused, "refused");
+        assert_eq!(classify_connect_error(&refused), Error::Connection);
+
+        let unreachable = io::Error::other("network unreachable");
+        assert_eq!(classify_connect_error(&unreachable), Error::Connection);
+    }
+
+    // cpp-httplib's Client falls back to using the whole raw, unparseable
+    // origin string as a literal (non-TLS, port 80) hostname rather than
+    // failing or substituting a value the operator never configured -- so
+    // the Host header (and every connect attempt) must still name that
+    // same misconfigured value, byte for byte.
+    #[test]
+    fn with_literal_host_keeps_the_raw_unparseable_origin_as_the_host() {
+        assert!(
+            Client::new("not a url at all", short(), short()).is_err(),
+            "this string should not have parsed as an origin in the first place"
+        );
+        let client = Client::with_literal_host("not a url at all", short(), short());
+        assert_eq!(client.host_header(), "not a url at all");
+        assert!(!client.https);
+        assert_eq!(client.port, 80);
+
+        // Also covers the empty-host case ("http://") that reaches build()
+        // in practice: split_base_url only requires the scheme prefix.
+        let empty_host = Client::with_literal_host("http://", short(), short());
+        assert_eq!(empty_host.host_header(), "http://");
+    }
+
+    // C++'s upstream pool configures a 600s read timeout but never touches
+    // the write side, so cpp-httplib's own unmodified 5s
+    // CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_SECOND default governs writes. The two
+    // must stay independently configured on the connected socket, not
+    // coupled together the way an earlier version of this port had them.
+    #[test]
+    fn write_timeout_is_httplibs_five_second_default_not_the_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept_thread = thread::spawn(move || {
+            // Held for the client's ensure_connected() to complete against;
+            // dropped (closing the accepted socket) once this thread exits.
+            let _ = listener.accept();
+        });
+
+        let production_shaped_read_timeout = Duration::from_secs(600);
+        let mut client = Client::new(
+            &format!("http://127.0.0.1:{port}"),
+            short(),
+            production_shaped_read_timeout,
+        )
+        .unwrap();
+        client.ensure_connected().unwrap();
+        accept_thread.join().unwrap();
+
+        assert!(
+            client.active.lock().unwrap().is_some(),
+            "ensure_connected must populate the handle stop() shuts down"
+        );
+        // `active` and the connection's own stream are the same shared
+        // handle (see `SharedTcp`), so reading through either sees the same
+        // options.
+        let Some(Stream::Plain(raw)) = client.conn.as_ref() else {
+            panic!("a plain-HTTP connection must be held as Stream::Plain");
+        };
+        let raw = &raw.0;
+        assert_eq!(
+            raw.write_timeout().unwrap(),
+            Some(Client::WRITE_TIMEOUT),
+            "the write timeout must stay pinned to httplib's unmodified 5s default"
+        );
+        assert_eq!(
+            raw.read_timeout().unwrap(),
+            Some(production_shaped_read_timeout),
+            "the read timeout must still track the configured value"
+        );
+        assert_ne!(
+            raw.write_timeout().unwrap(),
+            raw.read_timeout().unwrap(),
+            "read and write timeouts must be independently configurable, not coupled together"
+        );
+    }
+
+    // A peer that accepts the TCP connection and then never answers the
+    // ClientHello must fail the handshake on the connect budget, not hold
+    // the request for the full (production-shaped, 600s) read timeout --
+    // cpp-httplib gives its connection timeout to the TLS handshake too
+    // (explore-main src/net/upstream_pool.cpp:43 sets only
+    // `set_connection_timeout(10, 0)` and `set_read_timeout(600, 0)`).
+    #[test]
+    fn tls_handshake_is_bounded_by_the_connect_timeout_not_the_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept_thread = thread::spawn(move || {
+            // Accept and hold the socket open without ever writing a
+            // ServerHello -- the stalled side of a TLS handshake. Sleeps
+            // only long enough to outlast the assertion below, so the test
+            // does not wait on the full production-shaped read timeout to
+            // join this thread.
+            let (stream, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_secs(3));
+            drop(stream);
+        });
+
+        let handshake_timeout = Duration::from_secs(1);
+        let production_shaped_read_timeout = Duration::from_secs(600);
+        let mut client = Client::new(
+            &format!("https://127.0.0.1:{port}"),
+            handshake_timeout,
+            production_shaped_read_timeout,
+        )
+        .unwrap();
+
+        let started = Instant::now();
+        let result = client.ensure_connected();
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a stalled ClientHello must fail the handshake, not hang"
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "expected the handshake to fail near the {handshake_timeout:?} connect \
+             timeout, not the {production_shaped_read_timeout:?} read timeout, took {elapsed:?}"
+        );
+        accept_thread.join().unwrap();
+    }
+
+    // reason_phrase is httplib's status_message table, ported verbatim --
+    // including where it differs from what an earlier, smaller Rust table
+    // used to say: a code httplib names but the old 14-entry list did not
+    // (409, 405, 408) must not fall back to "OK", 422 uses RFC 9110's
+    // "Unprocessable Content" rather than the older "Unprocessable Entity",
+    // and 499 -- a code httplib has no case for at all -- lands on the same
+    // "Internal Server Error" default as any other code neither table names.
+    #[test]
+    fn reason_phrase_matches_httplibs_status_message_table() {
+        assert_eq!(reason_phrase(200), "OK");
+        assert_eq!(reason_phrase(404), "Not Found");
+        assert_eq!(reason_phrase(405), "Method Not Allowed");
+        assert_eq!(reason_phrase(408), "Request Timeout");
+        assert_eq!(reason_phrase(409), "Conflict");
+        assert_eq!(reason_phrase(414), "URI Too Long");
+        assert_eq!(reason_phrase(422), "Unprocessable Content");
+        assert_eq!(reason_phrase(499), "Internal Server Error");
+        assert_eq!(reason_phrase(500), "Internal Server Error");
+        assert_eq!(reason_phrase(9999), "Internal Server Error");
+    }
+
+    #[test]
+    fn server_answers_a_simple_get() {
+        let mut server = Server::new();
+        server.route("GET", "/hello", |_req, res, _peer| {
+            res.send_full(200, &[("Content-Type", "text/plain")], b"hi")
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let reply = client.send(&Request::get("/hello"), None, None).unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(reply.body, b"hi");
+        handle.stop();
+    }
+
+    // cpp-httplib's prepare_default_headers adds Accept: */* to every
+    // request; Accept-Encoding and User-Agent only to a buffered
+    // (non-streaming) one, i.e. when the caller gave it no content_receiver.
+    // `receiver.is_some()` is this port's equivalent signal.
+    #[test]
+    fn default_headers_match_httplib_and_skip_encoding_and_agent_when_streaming() {
+        type SeenHeaders = Vec<Vec<(String, String)>>;
+        let seen: Arc<Mutex<SeenHeaders>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_route = seen.clone();
+        let mut server = Server::new();
+        server.route("POST", "/echo", move |req, res, _peer| {
+            seen_route.lock().unwrap().push(req.headers.clone());
+            res.send_full(200, &[], b"ok").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+
+        // Non-streaming: no receiver given.
+        client
+            .send(&Request::post("/echo", b"hi".to_vec()), None, None)
+            .unwrap();
+        // Streaming: a receiver is given, even though this reply has no body
+        // to hand it -- content_receiver's mere presence is what httplib
+        // keys off of, not whether it is ever actually called.
+        let mut sink = |_data: &[u8]| -> bool { true };
+        client
+            .send(
+                &Request::post("/echo", b"hi".to_vec()),
+                None,
+                Some(&mut sink),
+            )
+            .unwrap();
+        handle.stop();
+
+        let calls = seen.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let non_streaming = &calls[0];
+        let streaming = &calls[1];
+
+        assert_eq!(
+            header_lookup(non_streaming, "Accept"),
+            Some("*/*"),
+            "Accept must be sent unconditionally"
+        );
+        assert_eq!(
+            header_lookup(non_streaming, "Accept-Encoding"),
+            Some("br, gzip, deflate, zstd")
+        );
+        assert_eq!(
+            header_lookup(non_streaming, "User-Agent"),
+            Some("cpp-httplib/0.46.1")
+        );
+
+        assert_eq!(
+            header_lookup(streaming, "Accept"),
+            Some("*/*"),
+            "Accept is still unconditional for a streaming request"
+        );
+        assert_eq!(
+            header_lookup(streaming, "Accept-Encoding"),
+            None,
+            "a streaming (content_receiver-bearing) request must not advertise Accept-Encoding"
+        );
+        assert_eq!(
+            header_lookup(streaming, "User-Agent"),
+            None,
+            "a streaming (content_receiver-bearing) request must not send User-Agent"
+        );
+    }
+
+    #[test]
+    fn keep_alive_reuses_one_connection_for_several_requests() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        let mut server = Server::new();
+        server.route("GET", "/count", move |_req, res, _peer| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"ok").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        for _ in 0..3 {
+            let reply = client.send(&Request::get("/count"), None, None).unwrap();
+            assert_eq!(reply.status, 200);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
+        handle.stop();
+    }
+
+    // `Client::write_request` always frames an outgoing request with
+    // Content-Length (it never chunk-encodes a body regardless of any
+    // Transfer-Encoding header set on the request) -- so this only exercises
+    // chunked *response* framing (server write, client read), not the
+    // server's request-side `read_chunked`. See
+    // `chunked_request_body_is_reassembled_over_a_raw_socket` below for that.
+    #[test]
+    fn chunked_response_body_round_trips_through_the_client_reader() {
+        let mut server = Server::new();
+        server.route("POST", "/echo", |req, res, _peer| {
+            res.begin_chunked(200, &[]).unwrap();
+            for piece in req.body.chunks(3) {
+                res.write_chunk(piece).unwrap();
+            }
+            res.end_chunked().unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let request = Request::post("/echo", b"hello world, chunked".to_vec());
+        let mut collected = Vec::new();
+        let mut receiver = |data: &[u8]| -> bool {
+            collected.extend_from_slice(data);
+            true
+        };
+        let reply = client.send(&request, None, Some(&mut receiver)).unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(collected, b"hello world, chunked");
+        handle.stop();
+    }
+
+    // Codex review (rust/port-cli 269dce8): the previous version of this test
+    // drove everything through `Client::send`, which writes the request head
+    // *and* body back to back without ever waiting for the interim response
+    // -- so it never actually proved the server writes "100 Continue" before
+    // touching the body, only that the end-to-end exchange completes. A raw
+    // socket that deliberately withholds the body until it has read the
+    // interim response proves the real handshake.
+    #[test]
+    fn expect_100_continue_sends_the_interim_response_before_the_server_reads_the_body() {
+        let mut server = Server::new();
+        server.route("POST", "/upload", |req, res, _peer| {
+            res.send_full(200, &[], format!("{}", req.body.len()).as_bytes())
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        write!(
+            raw,
+            "POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 6\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+
+        let (interim, leftover) = read_head(&mut raw, MAX_HEAD_BYTES, Vec::new()).unwrap();
+        assert!(
+            String::from_utf8_lossy(&interim).starts_with("HTTP/1.1 100"),
+            "expected a 100 Continue interim response, got: {:?}",
+            String::from_utf8_lossy(&interim)
+        );
+        assert!(
+            leftover.is_empty(),
+            "server wrote past the interim response before the body was sent: {leftover:?}"
+        );
+
+        raw.write_all(b"abcdef").unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.starts_with("HTTP/1.1 200 "),
+            "expected 200, got: {text:?}"
+        );
+        assert!(
+            text.ends_with('6'),
+            "expected the 6-byte body length echoed back, got: {text:?}"
+        );
+        handle.stop();
+    }
+
+    // Codex review (rust/port-cli 269dce8): the companion test above only
+    // covers chunked *response* framing; this drives a genuine
+    // `Transfer-Encoding: chunked` *request* over a raw socket (the `Client`
+    // helper cannot produce one) to prove `read_chunked` in
+    // `handle_connection` actually reassembles it.
+    #[test]
+    fn chunked_request_body_is_reassembled_over_a_raw_socket() {
+        let mut server = Server::new();
+        server.route("POST", "/echo", |req, res, _peer| {
+            res.send_full(200, &[], &req.body).unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        write!(
+            raw,
+            "POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n1\r\n \r\nf\r\nworld, chunked!\r\n0\r\n\r\n"
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.starts_with("HTTP/1.1 200 "),
+            "expected 200, got: {text:?}"
+        );
+        assert!(
+            text.ends_with("hello world, chunked!"),
+            "expected the reassembled chunked body echoed back, got: {text:?}"
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn stop_handle_unblocks_a_blocked_read() {
+        // A server route that never answers; stop_handle().stop() must
+        // unblock the client's read instead of hanging until the read
+        // timeout.
+        let mut server = Server::new();
+        server.route("GET", "/hang", |_req, _res, _peer| {
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client = Client::new(
+            &format!("http://127.0.0.1:{port}"),
+            short(),
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        let stop = client.stop_handle();
+        let stopper = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            stop.stop();
+        });
+        let result = client.send(&Request::get("/hang"), None, None);
+        assert!(result.is_err());
+        stopper.join().unwrap();
+        handle.stop();
+    }
+
+    #[test]
+    fn not_found_route_answers_404() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let reply = client.send(&Request::get("/nope"), None, None).unwrap();
+        assert_eq!(reply.status, 404);
+        handle.stop();
+    }
+
+    // cpp-httplib has no separate HEAD table (`Server::routing` dispatches
+    // "GET" and "HEAD" through the same `get_handlers_`): a route registered
+    // only under GET answers HEAD too, with the exact status and headers the
+    // GET response would have carried -- including a real Content-Length
+    // computed from the body the handler built -- but never the body bytes.
+    #[test]
+    fn head_on_a_get_only_route_answers_like_the_get_but_without_a_body() {
+        let mut server = Server::new();
+        server.route("GET", "/v1/models", |_req, res, _peer| {
+            let _ = res.send_full(
+                200,
+                &[("Content-Type", "application/json")],
+                b"{\"object\":\"list\",\"data\":[]}",
+            );
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+
+        let get_reply = client
+            .send(&Request::get("/v1/models"), None, None)
+            .unwrap();
+        let head_reply = client
+            .send(&Request::head("/v1/models"), None, None)
+            .unwrap();
+
+        assert_eq!(head_reply.status, get_reply.status);
+        assert!(head_reply.body.is_empty(), "HEAD must not carry a body");
+        assert_eq!(
+            head_reply.header("content-length"),
+            get_reply.header("content-length"),
+            "HEAD's Content-Length must match what the GET body would have been"
+        );
+        assert_eq!(
+            head_reply.header("content-type"),
+            get_reply.header("content-type")
+        );
+        assert_eq!(head_reply.header("accept-ranges"), Some("bytes"));
+        handle.stop();
+    }
+
+    // cpp-httplib's `write_response_core` adds `Accept-Ranges: bytes` to
+    // every response to a HEAD request that doesn't already carry one --
+    // unconditional on status, so a HEAD that misses every route still gets
+    // it on its 404 the same as a HEAD that hits a real route gets it on its
+    // 200.
+    #[test]
+    fn head_accept_ranges_is_added_even_on_a_404() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+
+        let reply = client.send(&Request::head("/nope"), None, None).unwrap();
+        assert_eq!(reply.status, 404);
+        assert!(reply.body.is_empty());
+        assert_eq!(reply.header("accept-ranges"), Some("bytes"));
+
+        // A plain GET to the same path must not pick up the HEAD-only
+        // header.
+        let get_reply = client.send(&Request::get("/nope"), None, None).unwrap();
+        assert_eq!(get_reply.header("accept-ranges"), None);
+        handle.stop();
+    }
+
+    // A route registered explicitly under HEAD (cpp-httplib short-circuits
+    // `/api/hello` this way, ahead of routing, rather than falling back to
+    // its GET) still gets `Accept-Ranges` from the writer, not from the
+    // handler.
+    #[test]
+    fn head_accept_ranges_is_added_to_an_explicit_head_route() {
+        let mut server = Server::new();
+        server.route("HEAD", "/api/hello", |_req, res, _peer| {
+            let _ = res.send_full(200, &[], b"");
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+
+        let reply = client
+            .send(&Request::head("/api/hello"), None, None)
+            .unwrap();
+        assert_eq!(reply.status, 200);
+        assert!(reply.body.is_empty());
+        assert_eq!(reply.header("content-length"), Some("0"));
+        assert_eq!(reply.header("accept-ranges"), Some("bytes"));
+        handle.stop();
+    }
+
+    // An idle keep-alive connection is dropped after
+    // `KEEP_ALIVE_TIMEOUT_SEC`, mirroring cpp-httplib's `keep_alive()`
+    // timing out in `process_server_socket_core` -- not left to block a
+    // connection-handler thread (and thus `ServerHandle::stop`) forever.
+    #[test]
+    fn idle_keep_alive_connection_is_closed_after_the_timeout() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(8))).unwrap();
+        let started = Instant::now();
+        let mut buf = [0u8; 1];
+        // Never send a request; the server should close its end on its own
+        // once the idle wait exceeds the keep-alive timeout, so this read
+        // sees EOF rather than blocking for the full 8s bound above.
+        let n = raw.read(&mut buf).unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(
+            n, 0,
+            "expected EOF from an idle connection the server closed"
+        );
+        assert!(
+            elapsed >= Duration::from_secs(4),
+            "closed too early: {elapsed:?} (expected close near KEEP_ALIVE_TIMEOUT_SEC={KEEP_ALIVE_TIMEOUT_SEC})"
+        );
+        handle.stop();
+    }
+
+    // A connection is force-closed (Connection: close) after its
+    // `KEEP_ALIVE_MAX_COUNT`th request, mirroring cpp-httplib's
+    // `close_connection = count == 1`.
+    #[test]
+    fn a_connection_is_closed_after_its_hundredth_request() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        let mut server = Server::new();
+        server.route("GET", "/count", move |_req, res, _peer| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"ok").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let mut last = None;
+        for _ in 0..KEEP_ALIVE_MAX_COUNT {
+            last = Some(client.send(&Request::get("/count"), None, None).unwrap());
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), KEEP_ALIVE_MAX_COUNT as usize);
+        let last = last.unwrap();
+        assert_eq!(last.status, 200);
+        assert_eq!(last.header("connection"), Some("close"));
+        handle.stop();
+    }
+
+    // A request line httplib's grammar rejects (unknown method, bad
+    // HTTP version, ...) gets a real 400 response, not a silently dropped
+    // connection -- with no `on_error` handler registered, the bare-status
+    // fallback still writes a status line.
+    #[test]
+    fn a_malformed_request_line_gets_a_400_not_a_silent_close() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.write_all(b"NOT A REQUEST\r\n\r\n").unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let head = String::from_utf8_lossy(&buf);
+        assert!(
+            head.starts_with("HTTP/1.1 400 "),
+            "expected a 400 response, got: {head:?}"
+        );
+        handle.stop();
+    }
+
+    // The registered `on_error` handler (messages.rs's translator
+    // error body, in production) fires for a pre-routing failure the same
+    // way it fires for a routed 404, with the status/method/path parsing
+    // reached.
+    #[test]
+    fn on_error_handler_fires_for_a_malformed_request_line() {
+        let seen = Arc::new(Mutex::new(None));
+        let recorded = seen.clone();
+        let mut server = Server::new();
+        server.on_error(move |status, method, path, writer| {
+            *recorded.lock().unwrap() = Some((status, method.to_string(), path.to_string()));
+            let _ = writer.send_full(status, &[], b"boom");
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.write_all(b"NOT A REQUEST\r\n\r\n").unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        assert!(String::from_utf8_lossy(&buf).ends_with("boom"));
+        let (status, method, _path) = seen.lock().unwrap().clone().expect("on_error not called");
+        assert_eq!(status, 400);
+        assert_eq!(method, "NOT");
+        handle.stop();
+    }
+
+    // A URI past httplib's CPPHTTPLIB_REQUEST_URI_MAX_LENGTH is 414,
+    // not silently dropped.
+    #[test]
+    fn an_over_long_uri_gets_a_414() {
+        let server = Server::new();
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let long_path = "/".to_string() + &"x".repeat(REQUEST_URI_MAX_LENGTH + 1);
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(raw, "GET {long_path} HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let head = String::from_utf8_lossy(&buf);
+        assert!(
+            head.starts_with("HTTP/1.1 414 "),
+            "expected a 414 response, got the first 80 bytes: {:?}",
+            &head[..head.len().min(80)]
+        );
+        handle.stop();
+    }
+
+    // RFC 9112 6.3 -- a request carrying both a nonzero
+    // Content-Length and a Transfer-Encoding is rejected with 400 before
+    // the body is read, never treated as chunked. Content-Length: 0
+    // alongside Transfer-Encoding is tolerated (below).
+    #[test]
+    fn conflicting_content_length_and_transfer_encoding_is_rejected() {
+        let hit = Arc::new(AtomicUsize::new(0));
+        let counted = hit.clone();
+        let mut server = Server::new();
+        server.route("POST", "/echo", move |_req, res, _peer| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"should not run").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            raw,
+            "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n\r\n"
+        )
+        .unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let head = String::from_utf8_lossy(&buf);
+        assert!(
+            head.starts_with("HTTP/1.1 400 "),
+            "expected a 400 response, got: {head:?}"
+        );
+        assert_eq!(
+            hit.load(Ordering::SeqCst),
+            0,
+            "the route must never see a smuggling-shaped request"
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn zero_content_length_alongside_transfer_encoding_is_tolerated() {
+        let mut server = Server::new();
+        server.route("POST", "/echo", |req, res, _peer| {
+            res.send_full(200, &[], format!("{}", req.body.len()).as_bytes())
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            raw,
+            "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nhi\r\n0\r\n\r\n"
+        )
+        .unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut buf = Vec::new();
+        raw.read_to_end(&mut buf).unwrap();
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.starts_with("HTTP/1.1 200 "),
+            "expected a 200 response, got: {text:?}"
+        );
+        assert!(
+            text.ends_with('2'),
+            "expected the chunked 2-byte body length echoed back, got: {text:?}"
+        );
+        handle.stop();
+    }
+
+    // httplib caps a request body at `CPPHTTPLIB_PAYLOAD_MAX_LENGTH`
+    // (100MB, unmodified) and answers 413 once the running total passes it,
+    // for both Content-Length-framed and chunked bodies, instead of
+    // buffering an unbounded body and handing it to the route.
+    #[test]
+    fn a_request_body_past_the_payload_cap_gets_a_413() {
+        let hit = Arc::new(AtomicUsize::new(0));
+        let counted = hit.clone();
+        let mut server = Server::new();
+        server.route("POST", "/echo", move |_req, res, _peer| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"should not run").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let target = PAYLOAD_MAX_LENGTH + 1;
+        write!(
+            raw,
+            "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: {target}\r\n\r\n"
+        )
+        .unwrap();
+        let piece = vec![b'x'; 1 << 20];
+        let mut sent = 0usize;
+        while sent < target {
+            let want = (target - sent).min(piece.len());
+            raw.write_all(&piece[..want]).unwrap();
+            sent += want;
+        }
+
+        let (head, _) = read_head(&mut raw, MAX_HEAD_BYTES, Vec::new()).unwrap();
+        let text = String::from_utf8_lossy(&head);
+        assert!(
+            text.starts_with("HTTP/1.1 413 "),
+            "expected a 413 response, got: {text:?}"
+        );
+        assert_eq!(
+            hit.load(Ordering::SeqCst),
+            0,
+            "the route must never see a body past the payload cap"
+        );
+        handle.stop();
+    }
+
+    // Codex review (rust/port-cli 269dce8): `read_head`'s `leftover` (bytes
+    // read past the previous request's body in the same syscall) was
+    // discarded once `Prefixed` went out of scope, so two requests sent in a
+    // single TCP write left the second one stuck -- never dispatched, and
+    // the client waiting for a response that would never come. This proves
+    // both requests get answered on the same connection.
+    #[test]
+    fn pipelined_requests_in_one_tcp_write_both_get_answered() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_a = hits.clone();
+        let hits_b = hits.clone();
+        let mut server = Server::new();
+        server.route("GET", "/a", move |_req, res, _peer| {
+            hits_a.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"a").unwrap();
+        });
+        server.route("GET", "/b", move |_req, res, _peer| {
+            hits_b.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"b").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        raw.write_all(b"GET /a HTTP/1.1\r\nHost: x\r\n\r\nGET /b HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut collected = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while hits.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+            match raw.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => collected.extend_from_slice(&chunk[..n]),
+                Err(_) => break,
+            }
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "second pipelined request was never dispatched; bytes seen so far: {:?}",
+            String::from_utf8_lossy(&collected)
+        );
+        handle.stop();
+    }
+
+    // Codex review (rust/port-cli 269dce8): `ServerHandle::stop()` sets
+    // `stopping` and joins the accept-loop thread, which itself joins every
+    // dispatched connection handler (see `bind_and_run`) -- so a handler
+    // idling in `wait_keep_alive` must have already noticed `stopping` and
+    // exited, closing its socket, by the time `stop()` returns. This proves
+    // a client holding an established keep-alive connection sees it closed,
+    // not served, once `stop()` has returned.
+    #[test]
+    fn stop_closes_an_idle_keep_alive_connection() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        let mut server = Server::new();
+        server.route("GET", "/count", move |_req, res, _peer| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            res.send_full(200, &[], b"ok").unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut raw = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        raw.write_all(b"GET /count HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        let (head, mut rest) = read_head(&mut raw, MAX_HEAD_BYTES, Vec::new()).unwrap();
+        assert!(String::from_utf8_lossy(&head).starts_with("HTTP/1.1 200 "));
+        // Consume the 2-byte "ok" body too; otherwise the read after stop()
+        // below returns those unread bytes, not the close it is checking for.
+        while rest.len() < 2 {
+            let mut byte = [0u8; 1];
+            if raw.read(&mut byte).unwrap_or(0) == 0 {
+                break;
+            }
+            rest.push(byte[0]);
+        }
+        assert_eq!(rest, b"ok");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+        // The connection is now idle-but-kept-alive; the handler thread is
+        // parked in `wait_keep_alive`. Stop the server -- by the time this
+        // returns, that thread must already be gone.
+        handle.stop();
+
+        let _ = raw.write_all(b"GET /count HTTP/1.1\r\nHost: x\r\n\r\n");
+        let mut buf = [0u8; 8];
+        let n = raw.read(&mut buf).unwrap_or(0);
+        assert_eq!(
+            n, 0,
+            "expected the connection to be closed after stop(), got {n} bytes"
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the handler ran again on a connection after stop()"
+        );
+    }
+
+    // Real gzip bytes (`gzip -c`), matching the fixture in
+    // src/net/decompress.rs -- proves `Client::send` itself decodes a
+    // Content-Encoding reply end to end, not just the decoder in isolation.
+    const GZIP_ENCODED_BODY: &[u8] = &[
+        0x1f, 0x8b, 0x08, 0x08, 0x4b, 0x42, 0xb5, 0x6a, 0x00, 0x03, 0x64, 0x65, 0x63, 0x6f, 0x6d,
+        0x70, 0x2d, 0x66, 0x69, 0x78, 0x74, 0x75, 0x72, 0x65, 0x2e, 0x74, 0x78, 0x74, 0x00, 0xcb,
+        0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x48, 0x2b, 0xca, 0xcf, 0x55, 0x28, 0xc9, 0x48, 0x55, 0x28,
+        0xce, 0xc8, 0xcc, 0x55, 0x48, 0x49, 0x4d, 0xce, 0xcf, 0x2d, 0x28, 0x4a, 0x2d, 0x2e, 0xce,
+        0xcc, 0xcf, 0x53, 0x28, 0x49, 0x2d, 0x2e, 0xe1, 0x02, 0x00, 0xb9, 0x92, 0x41, 0x58, 0x27,
+        0x00, 0x00, 0x00,
+    ];
+    // Real brotli bytes (`brotli -c`) for the same plaintext.
+    const BROTLI_ENCODED_BODY: &[u8] = &[
+        0xa1, 0x30, 0x01, 0xc0, 0xef, 0x48, 0x9d, 0xfa, 0xe4, 0xe1, 0x92, 0xac, 0x6d, 0xae, 0xca,
+        0xd0, 0x12, 0x44, 0x21, 0xad, 0x07, 0x39, 0x44, 0x11, 0x78, 0xf4, 0x28, 0xb7, 0xf0, 0x72,
+        0x0e, 0x76, 0xe4, 0xff, 0x21, 0x89, 0x2b,
+    ];
+    const ENCODED_BODY_PLAINTEXT: &[u8] = b"hello from the shim decompression test\n";
+
+    #[test]
+    fn send_decodes_a_gzip_encoded_buffered_reply() {
+        let mut server = Server::new();
+        server.route("GET", "/gz", |_req, res, _peer| {
+            res.send_full(200, &[("Content-Encoding", "gzip")], GZIP_ENCODED_BODY)
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let reply = client.send(&Request::get("/gz"), None, None).unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            reply.body, ENCODED_BODY_PLAINTEXT,
+            "a gzip Content-Encoding reply must reach the caller decoded, not as raw gzip bytes"
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn send_decodes_a_br_encoded_streamed_reply() {
+        let mut server = Server::new();
+        server.route("GET", "/br", |_req, res, _peer| {
+            res.send_full(200, &[("Content-Encoding", "br")], BROTLI_ENCODED_BODY)
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let mut streamed = Vec::new();
+        let mut receiver = |data: &[u8]| -> bool {
+            streamed.extend_from_slice(data);
+            true
+        };
+        let reply = client
+            .send(&Request::get("/br"), None, Some(&mut receiver))
+            .unwrap();
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            streamed, ENCODED_BODY_PLAINTEXT,
+            "a br Content-Encoding SSE-style reply must decode through the streaming receiver too"
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn send_fails_like_any_other_read_error_on_a_corrupt_compressed_body() {
+        let mut server = Server::new();
+        server.route("GET", "/corrupt-gz", |_req, res, _peer| {
+            // Valid gzip magic bytes, garbage deflate stream after them --
+            // labeled compressed, but not decodable.
+            let corrupt: &[u8] = &[0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff];
+            res.send_full(200, &[("Content-Encoding", "gzip")], corrupt)
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let result = client.send(&Request::get("/corrupt-gz"), None, None);
+        assert!(
+            matches!(result.as_ref(), Err(Error::Read)),
+            "a corrupt compressed body must fail the same way any other body-read error does, got {result:?}"
+        );
+        handle.stop();
+    }
+
+    // No Content-Length and no chunked framing, so `Client::send` falls
+    // through to `read_until_close`, which reports success as soon as the
+    // peer closes -- indistinguishable, at the wire-framing level, from a
+    // connection dropped mid-transfer. Only decoder.finish()'s gzip trailer
+    // check tells the two apart; before it existed this reply came back as
+    // Ok(Reply) with a silently-shortened body instead of Err(Error::Read).
+    #[test]
+    fn send_fails_when_a_read_until_close_gzip_reply_is_cut_off_mid_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept_thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut discard = [0u8; 1024];
+            let _ = stream.read(&mut discard); // drain the request line/headers
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n\r\n")
+                .unwrap();
+            // Drop the trailing CRC32/ISIZE (8 bytes): the deflate stream
+            // decodes fine on its own, so push() alone never notices this.
+            stream
+                .write_all(&GZIP_ENCODED_BODY[..GZIP_ENCODED_BODY.len() - 8])
+                .unwrap();
+            // Close without ever sending the rest of the trailer.
+            drop(stream);
+        });
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let result = client.send(&Request::get("/gz-cut-off"), None, None);
+        accept_thread.join().unwrap();
+
+        assert!(
+            matches!(result.as_ref(), Err(Error::Read)),
+            "a gzip body cut off before its trailer must fail like any other read error, got {result:?}"
+        );
+    }
+
+    /// A connected loopback pair: (the server's accepted side, the client).
+    fn loopback_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let client = TcpStream::connect(listener.local_addr().unwrap()).expect("connect");
+        let (server, _) = listener.accept().expect("accept");
+        (server, client)
+    }
+
+    // The shim keeps a probe alive for a whole request while it writes the
+    // reply. The probe used to switch the shared socket to non-blocking, so
+    // a reply bigger than the send buffer failed with WouldBlock the moment
+    // a reader paused, and was dropped as "reader gone".
+    #[test]
+    fn a_live_probe_does_not_break_a_large_write_to_a_slow_reader() {
+        let (mut server, mut client) = loopback_pair();
+        let probe = LivenessProbe::new(&server).expect("probe");
+        assert!(!probe.is_gone());
+
+        const TOTAL: usize = 32 * 1024 * 1024;
+        let reader = std::thread::spawn(move || {
+            // Let the send buffer fill before draining it.
+            std::thread::sleep(Duration::from_millis(300));
+            let mut received = Vec::new();
+            client.read_to_end(&mut received).expect("read");
+            received.len()
+        });
+        let payload = vec![b'x'; TOTAL];
+        server
+            .write_all(&payload)
+            .expect("a slow reader must stall the write, not fail it");
+        assert!(!probe.is_gone(), "the reader is still connected");
+        server.shutdown(Shutdown::Write).expect("shutdown");
+        drop(probe);
+        drop(server);
+        assert_eq!(reader.join().unwrap(), TOTAL);
+    }
+
+    #[test]
+    fn the_probe_tells_a_quiet_or_talking_peer_from_a_closed_one() {
+        let (server, mut client) = loopback_pair();
+        let probe = LivenessProbe::new(&server).expect("probe");
+        assert!(!probe.is_gone(), "a quiet open connection is not gone");
+
+        client.write_all(b"x").expect("write");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut buf = [0u8; 1];
+        while server.peek(&mut buf).unwrap_or(0) == 0 && Instant::now() < deadline {}
+        assert!(!probe.is_gone(), "pending bytes do not mean the peer left");
+
+        drop(client);
+        // The close queues behind the unread byte, so it only shows once
+        // that byte is read, as the server would read it.
+        let mut drain = [0u8; 1];
+        (&server)
+            .read_exact(&mut drain)
+            .expect("read the pending byte");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !probe.is_gone() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(probe.is_gone(), "a closed peer must read as gone");
+    }
+}

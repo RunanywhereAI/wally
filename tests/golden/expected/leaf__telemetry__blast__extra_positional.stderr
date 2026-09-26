@@ -1,0 +1,13 @@
+Error: The following arguments were not expected: four three two one
+Emit --count events of EVERY modality (all 12) in one run, flush, and print a per-modality result table parsed from the backend's batch responses. Emits one event of every modality.
+
+Usage: wally telemetry blast [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+      --count POSITIVE        Events per modality (default 1)
+      --session-id TEXT       Session id attached to every event (default: fresh
+                              UUID)
+      --processing-ms FLOAT   processing_time_ms metric for every event
+      --input-tokens INT      input_tokens metric (llm/vlm modalities)
+      --output-tokens INT     output_tokens metric (llm/vlm modalities)

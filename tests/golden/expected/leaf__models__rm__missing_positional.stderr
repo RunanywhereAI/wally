@@ -1,0 +1,14 @@
+Error: model is required
+Delete a downloaded model
+
+Usage: wally models rm [OPTIONS] model
+
+Arguments:
+  model                       Model id or alias
+
+Options:
+  -h, --help                  Show help
+  -f, --force                 Skip the confirmation prompt
+
+Examples:
+  wally models rm qwen3-4b-instruct-2507

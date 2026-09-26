@@ -25,6 +25,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/install-rust
+      with:
+        platform: ${{ inputs.platform }}
+
     - name: Configure + build (${{ inputs.variant }})
       shell: bash
       env:
@@ -38,8 +42,6 @@ runs:
         # Windows ninja wants a forward-slash prefix.
         if command -v cygpath >/dev/null 2>&1; then prefix="$(cygpath -m "$prefix")"; fi
         extra=()
-        # Linux links the product but not the header-only-httplib test exes.
-        [[ "${{ inputs.platform }}" == linux-x64 ]] && extra+=(-DBUILD_TESTING=OFF)
         # Compiler cache is best-effort: use whichever the caller's cache step
         # installed (ccache, or sccache for MSVC), never fail the build for its
         # absence.

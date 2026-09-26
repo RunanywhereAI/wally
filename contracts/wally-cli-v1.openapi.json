@@ -73,6 +73,86 @@
           "$ref": "#/components/schemas/GetCurrentIdentityHeaderXUserIdValue"
         }
       },
+      "ListCliUsageRequestsHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsHeaderAuthorizationValue"
+        }
+      },
+      "ListCliUsageRequestsQueryApiKeyIdParameter": {
+        "in": "query",
+        "name": "api_key_id",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryApiKeyIdValue"
+        }
+      },
+      "ListCliUsageRequestsQueryCursorParameter": {
+        "in": "query",
+        "name": "cursor",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryCursorValue"
+        }
+      },
+      "ListCliUsageRequestsQueryLimitParameter": {
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryLimitValue"
+        }
+      },
+      "ListCliUsageRequestsQueryModelParameter": {
+        "in": "query",
+        "name": "model",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryModelValue"
+        }
+      },
+      "ListCliUsageRequestsQueryRequestIdParameter": {
+        "in": "query",
+        "name": "request_id",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryRequestIdValue"
+        }
+      },
+      "ListCliUsageRequestsQueryResponseRequestIdParameter": {
+        "in": "query",
+        "name": "response_request_id",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryResponseRequestIdValue"
+        }
+      },
+      "ListCliUsageRequestsQuerySinceParameter": {
+        "in": "query",
+        "name": "since",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQuerySinceValue"
+        }
+      },
+      "ListCliUsageRequestsQueryStatusCodeParameter": {
+        "in": "query",
+        "name": "status_code",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryStatusCodeValue"
+        }
+      },
+      "ListCliUsageRequestsQueryUntilParameter": {
+        "in": "query",
+        "name": "until",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryUntilValue"
+        }
+      },
       "RevokeCliAuthorizationHeaderAuthorizationParameter": {
         "in": "header",
         "name": "authorization",
@@ -890,6 +970,107 @@
         "title": "IdentityResponse",
         "type": "object"
       },
+      "ListCliUsageRequestsHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "ListCliUsageRequestsQueryApiKeyIdValue": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Api Key Id"
+      },
+      "ListCliUsageRequestsQueryCursorValue": {
+        "anyOf": [
+          {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cursor"
+      },
+      "ListCliUsageRequestsQueryLimitValue": {
+        "default": 100,
+        "maximum": 200,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "ListCliUsageRequestsQueryModelValue": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "ListCliUsageRequestsQueryRequestIdValue": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Request Id"
+      },
+      "ListCliUsageRequestsQueryResponseRequestIdValue": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Response Request Id"
+      },
+      "ListCliUsageRequestsQuerySinceValue": {
+        "format": "date-time",
+        "title": "Since",
+        "type": "string"
+      },
+      "ListCliUsageRequestsQueryStatusCodeValue": {
+        "anyOf": [
+          {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Status Code"
+      },
+      "ListCliUsageRequestsQueryUntilValue": {
+        "format": "date-time",
+        "title": "Until",
+        "type": "string"
+      },
       "ModelCatalogResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1321,6 +1502,348 @@
         "title": "UsageModelRollup",
         "type": "object"
       },
+      "UsageProvider": {
+        "enum": [
+          "self_hosted_sglang",
+          "vertex_ai",
+          "unknown"
+        ],
+        "title": "UsageProvider",
+        "type": "string"
+      },
+      "UsageRequestPage": {
+        "additionalProperties": false,
+        "description": "One page of an account's settled request history, newest first.\n\nEvery row is a settled usage event: a hold still open, or a request refused\nbefore anything wrote usage for it, is not in this list. `as_of` is the\nsnapshot the first page took, a minute behind the ledger's clock; every\npage of one export (follow\n`next_cursor`, sending the same `since`, `until` and filters) reports rows\nwritten at or before it, and `totals` covers all of them. A request that\nsettles later appears in the next fresh export. `next_cursor` is null on\nthe last page.",
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/UsageRequestRecord"
+            },
+            "title": "Requests",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/UsageRequestTotals"
+          }
+        },
+        "required": [
+          "as_of",
+          "totals",
+          "requests",
+          "next_cursor"
+        ],
+        "title": "UsageRequestPage",
+        "type": "object"
+      },
+      "UsageRequestRecord": {
+        "additionalProperties": false,
+        "description": "One settled request, as the ledger recorded and charged it.\n\n`cost_micros` is the amount charged: the priced cost, or 0 when the failure\nwas ours (status >= 500). `noncached_prompt_tokens` is DERIVED, not an\nengine count: the prompt less its cached subset, clamped the way pricing\nclamps it, so it is the fresh input `cost_micros` was priced on.\n`reasoning_tokens` is reported as the engine sent it and is not guaranteed\nto be a subset of `completion_tokens`. `request_id` is the ledger's own,\nunique id; `response_request_id` is the `x-request-id` the response carried,\nwhich is what a client logs, and is null when none was recorded.\n`ts_start`/`ts_end` are when the request ran; `recorded_at` is when the\nledger wrote the row. No prompt or completion text, key material or account\nidentity is ever included.",
+        "properties": {
+          "api_key_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Id"
+          },
+          "cached_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Cached Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cost Micros",
+            "type": "integer"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "finish_reason": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finish Reason"
+          },
+          "max_tokens_granted": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens Granted"
+          },
+          "max_tokens_requested": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens Requested"
+          },
+          "model": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Model",
+            "type": "string"
+          },
+          "noncached_prompt_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Noncached Prompt Tokens",
+            "type": "integer"
+          },
+          "pricing_version": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Pricing Version",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageProvider"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasoning_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "response_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Request Id"
+          },
+          "status_code": {
+            "maximum": 599.0,
+            "minimum": 100.0,
+            "title": "Status Code",
+            "type": "integer"
+          },
+          "stream": {
+            "title": "Stream",
+            "type": "boolean"
+          },
+          "tpot_ms": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tpot Ms"
+          },
+          "ts_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ts End"
+          },
+          "ts_start": {
+            "format": "date-time",
+            "title": "Ts Start",
+            "type": "string"
+          },
+          "ttft_ms": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft Ms"
+          }
+        },
+        "required": [
+          "request_id",
+          "response_request_id",
+          "api_key_id",
+          "model",
+          "provider",
+          "status_code",
+          "error_code",
+          "finish_reason",
+          "stream",
+          "ts_start",
+          "ts_end",
+          "recorded_at",
+          "prompt_tokens",
+          "cached_tokens",
+          "noncached_prompt_tokens",
+          "completion_tokens",
+          "reasoning_tokens",
+          "max_tokens_requested",
+          "max_tokens_granted",
+          "ttft_ms",
+          "tpot_ms",
+          "cost_micros",
+          "pricing_version"
+        ],
+        "title": "UsageRequestRecord",
+        "type": "object"
+      },
+      "UsageRequestTotals": {
+        "additionalProperties": false,
+        "description": "The whole snapshot's totals, identical on every page of one export.",
+        "properties": {
+          "cached_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cached Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cost Micros",
+            "type": "integer"
+          },
+          "noncached_prompt_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Noncached Prompt Tokens",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "requests": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "prompt_tokens",
+          "cached_tokens",
+          "noncached_prompt_tokens",
+          "completion_tokens",
+          "reasoning_tokens",
+          "cost_micros"
+        ],
+        "title": "UsageRequestTotals",
+        "type": "object"
+      },
       "UsageTimelinePoint": {
         "additionalProperties": false,
         "properties": {
@@ -1618,6 +2141,71 @@
         ]
       }
     },
+    "/v1/cli/usage/requests": {
+      "get": {
+        "description": "The account's settled requests in `[since, until)`, newest first.\n\nBoth ends must carry a timezone and span at most 31 days. To read the next\npage, send the same window and filters with `cursor` set to the previous\npage's `next_cursor`; a cursor from a different window, filter set or\naccount is refused rather than reinterpreted. `api_key_id` and\n`request_id` narrow within this account only, so another account's key or\nrequest reads as an empty page, never as a 404.\n\n`response_request_id` finds the rows for the `x-request-id` a response\ncarried -- the id a client logs; `request_id` is the ledger's own. The\nformer is a label rather than a key, so it may match more than one row.",
+        "operationId": "listCliUsageRequests",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQuerySinceParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryUntilParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryModelParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryStatusCodeParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryRequestIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryApiKeyIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryResponseRequestIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryLimitParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryCursorParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsHeaderAuthorizationParameter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageRequestPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Usage Requests",
+        "tags": [
+          "cli"
+        ]
+      }
+    },
     "/v1/me": {
       "get": {
         "description": "`rcli whoami`. Authenticated by the API key the CLI was issued, because\nthat is the only credential it has.\n\nThe contract declares that key as `BearerAuth`. The same Authorization\nheader also carries the console's signed PropelAuth session token, and\nwhere PropelAuth is not configured, never in production, the `X-User-Id`\nand `X-User-Email` development identity headers are accepted instead.\nNeither is a separate security scheme: this contract declares no console\nsession scheme on any operation, and the development headers are not a\ncredential.",
@@ -1766,8 +2354,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "openrouter/readiness-consolidated",
-    "commit": "6bca3bbaf72970c089469c1a30d07b51b429db74",
+    "branch": "development",
+    "commit": "deeec19d12df6fd601a906b3d1a7bb59ec2dcc4e",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

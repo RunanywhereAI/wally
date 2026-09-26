@@ -1,7 +1,7 @@
 name: Auto-Tag Release
 
 # When a PR is merged to main with release:patch|minor|major, tag v<version>
-# from CMakeLists.txt and dispatch release.yml. Tag pushes with GITHUB_TOKEN
+# from versions.toml and dispatch release.yml. Tag pushes with GITHUB_TOKEN
 # do not trigger other workflows, so the dispatch is required.
 
 on:
@@ -77,7 +77,16 @@ jobs:
         run: |
           set -euo pipefail
           if git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
-            echo "::notice::Tag v${NEW_VERSION} already exists; dispatching release anyway."
+            # Re-running this job for the same merge is fine. A tag left by an
+            # earlier release is not: dispatching it would rebuild that older
+            # commit instead of this merge, and the release would look green
+            # while shipping the wrong code.
+            TAGGED=$(git rev-list -n 1 "v${NEW_VERSION}")
+            if [ "$TAGGED" != "$(git rev-parse HEAD)" ]; then
+              echo "::error::Tag v${NEW_VERSION} already exists at ${TAGGED}, not at this merge ($(git rev-parse HEAD)). Bump the version in versions.toml before labeling a release."
+              exit 1
+            fi
+            echo "::notice::Tag v${NEW_VERSION} already points at this merge; dispatching release."
           else
             git tag "v${NEW_VERSION}"
             git push origin "v${NEW_VERSION}"

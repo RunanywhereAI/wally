@@ -1,0 +1,7 @@
+Error: The following arguments were not expected: four three two one
+Report resident models and disk usage
+
+Usage: wally models state [OPTIONS]
+
+Options:
+  -h, --help                  Show help

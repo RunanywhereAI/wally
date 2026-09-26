@@ -1,0 +1,7 @@
+Error: The following argument was not expected: --bogus-flag
+List registered inference backends
+
+Usage: wally backends [OPTIONS]
+
+Options:
+  -h, --help                  Show help

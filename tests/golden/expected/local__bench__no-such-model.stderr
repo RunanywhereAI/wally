@@ -1,0 +1,4 @@
+telemetry POST /api/v2/sdk/telemetry/system -> rc=Network error (-151) http=0 body=(empty)
+telemetry POST /api/v2/sdk/telemetry/system -> rc=Network error (-151) http=0 body=(empty)
+telemetry ready | has_completed_http_setup=yes
+Error: unknown model 'no-such-model' (try `wally models list --all`, an hf.co/org/repo[:quant] ref, a direct URL, or a path to a local bundle directory — or, if it's a model your account has on the hosted console, `wally claude-code -m no-such-model` / `wally opencode --cloud -m no-such-model`)

@@ -1,0 +1,2948 @@
+[
+ {
+  "name": "help__ROOT",
+  "args": [
+   "--help"
+  ]
+ },
+ {
+  "name": "help__run",
+  "args": [
+   "run",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__llm",
+  "args": [
+   "llm",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__llm__generate",
+  "args": [
+   "llm",
+   "generate",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__llm__stream",
+  "args": [
+   "llm",
+   "stream",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__llm__tool-call",
+  "args": [
+   "llm",
+   "tool-call",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__info",
+  "args": [
+   "info",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__version",
+  "args": [
+   "version",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help",
+  "args": [
+   "help",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__bench",
+  "args": [
+   "bench",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__backends",
+  "args": [
+   "backends",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__telemetry",
+  "args": [
+   "telemetry",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__telemetry__emit",
+  "args": [
+   "telemetry",
+   "emit",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__telemetry__blast",
+  "args": [
+   "telemetry",
+   "blast",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__load",
+  "args": [
+   "models",
+   "load",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__unload",
+  "args": [
+   "models",
+   "unload",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__register",
+  "args": [
+   "models",
+   "register",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__state",
+  "args": [
+   "models",
+   "state",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__ls",
+  "args": [
+   "models",
+   "ls",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__get",
+  "args": [
+   "models",
+   "get",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__download",
+  "args": [
+   "models",
+   "download",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__remove",
+  "args": [
+   "models",
+   "remove",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__delete",
+  "args": [
+   "models",
+   "delete",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__catalog",
+  "args": [
+   "models",
+   "catalog",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__account__usage",
+  "args": [
+   "account",
+   "usage",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__serve",
+  "args": [
+   "serve",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__list",
+  "args": [
+   "models",
+   "list",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__show",
+  "args": [
+   "models",
+   "show",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__pull",
+  "args": [
+   "models",
+   "pull",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__rm",
+  "args": [
+   "models",
+   "rm",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__default",
+  "args": [
+   "models",
+   "default",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__claude-code",
+  "args": [
+   "help",
+   "claude-code"
+  ]
+ },
+ {
+  "name": "help__claude-desktop",
+  "args": [
+   "help",
+   "claude-desktop"
+  ]
+ },
+ {
+  "name": "help__opencode",
+  "args": [
+   "help",
+   "opencode"
+  ]
+ },
+ {
+  "name": "help__hermes",
+  "args": [
+   "help",
+   "hermes"
+  ]
+ },
+ {
+  "name": "help__openclaw",
+  "args": [
+   "help",
+   "openclaw"
+  ]
+ },
+ {
+  "name": "help__deepseek",
+  "args": [
+   "help",
+   "deepseek"
+  ]
+ },
+ {
+  "name": "help__account__login",
+  "args": [
+   "account",
+   "login",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__account__logout",
+  "args": [
+   "account",
+   "logout",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__account__whoami",
+  "args": [
+   "account",
+   "whoami",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__about",
+  "args": [
+   "about",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__update",
+  "args": [
+   "update",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__uninstall",
+  "args": [
+   "uninstall",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__run",
+  "args": [
+   "help",
+   "run",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__serve",
+  "args": [
+   "help",
+   "serve",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__models__list",
+  "args": [
+   "help",
+   "models",
+   "list",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__models__show",
+  "args": [
+   "help",
+   "models",
+   "show",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__models__pull",
+  "args": [
+   "help",
+   "models",
+   "pull",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__models__rm",
+  "args": [
+   "help",
+   "models",
+   "rm",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__models__default",
+  "args": [
+   "help",
+   "models",
+   "default",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__claude-code",
+  "args": [
+   "help",
+   "claude-code",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__claude-desktop",
+  "args": [
+   "help",
+   "claude-desktop",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__opencode",
+  "args": [
+   "help",
+   "opencode",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__hermes",
+  "args": [
+   "help",
+   "hermes",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__openclaw",
+  "args": [
+   "help",
+   "openclaw",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__deepseek",
+  "args": [
+   "help",
+   "deepseek",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__account__login",
+  "args": [
+   "help",
+   "account",
+   "login",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__account__logout",
+  "args": [
+   "help",
+   "account",
+   "logout",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__account__whoami",
+  "args": [
+   "help",
+   "account",
+   "whoami",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__account__usage",
+  "args": [
+   "help",
+   "account",
+   "usage",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__about",
+  "args": [
+   "help",
+   "about",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__update",
+  "args": [
+   "help",
+   "update",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__uninstall",
+  "args": [
+   "help",
+   "uninstall",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__catalog__list",
+  "args": [
+   "models",
+   "catalog",
+   "list",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__catalog__show",
+  "args": [
+   "models",
+   "catalog",
+   "show",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__catalog__pull",
+  "args": [
+   "models",
+   "catalog",
+   "pull",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__catalog__rm",
+  "args": [
+   "models",
+   "catalog",
+   "rm",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__models__catalog__default",
+  "args": [
+   "models",
+   "catalog",
+   "default",
+   "--help"
+  ]
+ },
+ {
+  "name": "alt_help__-h",
+  "args": [
+   "-h"
+  ]
+ },
+ {
+  "name": "alt_help__help",
+  "args": [
+   "help"
+  ]
+ },
+ {
+  "name": "alt_help__help__models",
+  "args": [
+   "help",
+   "models"
+  ]
+ },
+ {
+  "name": "alt_help__help__nope",
+  "args": [
+   "help",
+   "nope"
+  ]
+ },
+ {
+  "name": "alt_help__help__models__pull",
+  "args": [
+   "help",
+   "models",
+   "pull"
+  ]
+ },
+ {
+  "name": "alt_help__models__-h",
+  "args": [
+   "models",
+   "-h"
+  ]
+ },
+ {
+  "name": "alt_help__--no-color__--help",
+  "args": [
+   "--no-color",
+   "--help"
+  ]
+ },
+ {
+  "name": "alt_help__models__pull__-h",
+  "args": [
+   "models",
+   "pull",
+   "-h"
+  ]
+ },
+ {
+  "name": "alt_help__--help__models",
+  "args": [
+   "--help",
+   "models"
+  ]
+ },
+ {
+  "name": "alt_help__help__opencode",
+  "args": [
+   "help",
+   "opencode"
+  ]
+ },
+ {
+  "name": "alt_help__help__claude-code",
+  "args": [
+   "help",
+   "claude-code"
+  ]
+ },
+ {
+  "name": "version__bare",
+  "args": []
+ },
+ {
+  "name": "version__--version",
+  "args": [
+   "--version"
+  ]
+ },
+ {
+  "name": "version__-V",
+  "args": [
+   "-V"
+  ]
+ },
+ {
+  "name": "version__version",
+  "args": [
+   "version"
+  ]
+ },
+ {
+  "name": "version__version__--json",
+  "args": [
+   "version",
+   "--json"
+  ]
+ },
+ {
+  "name": "version__--json__version",
+  "args": [
+   "--json",
+   "version"
+  ]
+ },
+ {
+  "name": "version__-V__models",
+  "args": [
+   "-V",
+   "models"
+  ]
+ },
+ {
+  "name": "version__--version__--json",
+  "args": [
+   "--version",
+   "--json"
+  ]
+ },
+ {
+  "name": "unknown__stt",
+  "args": [
+   "stt"
+  ]
+ },
+ {
+  "name": "unknown__tts",
+  "args": [
+   "tts"
+  ]
+ },
+ {
+  "name": "unknown__vad",
+  "args": [
+   "vad"
+  ]
+ },
+ {
+  "name": "unknown__vlm",
+  "args": [
+   "vlm"
+  ]
+ },
+ {
+  "name": "unknown__embed",
+  "args": [
+   "embed"
+  ]
+ },
+ {
+  "name": "unknown__rerank",
+  "args": [
+   "rerank"
+  ]
+ },
+ {
+  "name": "unknown__image",
+  "args": [
+   "image"
+  ]
+ },
+ {
+  "name": "unknown__diarize",
+  "args": [
+   "diarize"
+  ]
+ },
+ {
+  "name": "unknown__segment",
+  "args": [
+   "segment"
+  ]
+ },
+ {
+  "name": "unknown__voice",
+  "args": [
+   "voice"
+  ]
+ },
+ {
+  "name": "unknown__rag",
+  "args": [
+   "rag"
+  ]
+ },
+ {
+  "name": "unknown__lora",
+  "args": [
+   "lora"
+  ]
+ },
+ {
+  "name": "unknown__auth",
+  "args": [
+   "auth"
+  ]
+ },
+ {
+  "name": "unknown__chat",
+  "args": [
+   "chat"
+  ]
+ },
+ {
+  "name": "unknown__list",
+  "args": [
+   "list"
+  ]
+ },
+ {
+  "name": "unknown__ls",
+  "args": [
+   "ls"
+  ]
+ },
+ {
+  "name": "unknown__pull",
+  "args": [
+   "pull"
+  ]
+ },
+ {
+  "name": "unknown__rm",
+  "args": [
+   "rm"
+  ]
+ },
+ {
+  "name": "unknown__show",
+  "args": [
+   "show"
+  ]
+ },
+ {
+  "name": "unknown__foo",
+  "args": [
+   "foo"
+  ]
+ },
+ {
+  "name": "parse__models__foo",
+  "args": [
+   "models",
+   "foo"
+  ]
+ },
+ {
+  "name": "parse__llm__foo",
+  "args": [
+   "llm",
+   "foo"
+  ]
+ },
+ {
+  "name": "parse__account__foo",
+  "args": [
+   "account",
+   "foo"
+  ]
+ },
+ {
+  "name": "parse__telemetry__foo",
+  "args": [
+   "telemetry",
+   "foo"
+  ]
+ },
+ {
+  "name": "parse__models",
+  "args": [
+   "models"
+  ]
+ },
+ {
+  "name": "parse__llm",
+  "args": [
+   "llm"
+  ]
+ },
+ {
+  "name": "parse__account",
+  "args": [
+   "account"
+  ]
+ },
+ {
+  "name": "parse__telemetry",
+  "args": [
+   "telemetry"
+  ]
+ },
+ {
+  "name": "parse__models__list__-u",
+  "args": [
+   "models",
+   "list",
+   "-u"
+  ]
+ },
+ {
+  "name": "parse__-u__-v",
+  "args": [
+   "-u",
+   "-v"
+  ]
+ },
+ {
+  "name": "parse__-U__--json",
+  "args": [
+   "-U",
+   "--json"
+  ]
+ },
+ {
+  "name": "parse__--bogus",
+  "args": [
+   "--bogus"
+  ]
+ },
+ {
+  "name": "parse__-z",
+  "args": [
+   "-z"
+  ]
+ },
+ {
+  "name": "parse__--home",
+  "args": [
+   "--home"
+  ]
+ },
+ {
+  "name": "parse__--json__--bogus__models__list",
+  "args": [
+   "--json",
+   "--bogus",
+   "models",
+   "list"
+  ]
+ },
+ {
+  "name": "leaf__run__bogus_flag",
+  "args": [
+   "run",
+   "x",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__run__extra_positional",
+  "args": [
+   "run",
+   "x",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__run__missing_positional",
+  "args": [
+   "run"
+  ]
+ },
+ {
+  "name": "leaf__run__system-prompt__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--system-prompt"
+  ]
+ },
+ {
+  "name": "leaf__run__lora__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--lora"
+  ]
+ },
+ {
+  "name": "leaf__run__lora-scale__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--lora-scale",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__lora-scale__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--lora-scale"
+  ]
+ },
+ {
+  "name": "leaf__run__engine__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--engine"
+  ]
+ },
+ {
+  "name": "leaf__run__image__missing_file",
+  "args": [
+   "run",
+   "x",
+   "--image",
+   "/nonexistent/wally-golden-file"
+  ]
+ },
+ {
+  "name": "leaf__run__temperature__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--temperature",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__temperature__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--temperature"
+  ]
+ },
+ {
+  "name": "leaf__run__top-p__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--top-p",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__top-p__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--top-p"
+  ]
+ },
+ {
+  "name": "leaf__run__top-k__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--top-k",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__top-k__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--top-k"
+  ]
+ },
+ {
+  "name": "leaf__run__top-k__fraction",
+  "args": [
+   "run",
+   "x",
+   "--top-k",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__run__min-p__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--min-p",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__min-p__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--min-p"
+  ]
+ },
+ {
+  "name": "leaf__run__repetition-penalty__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--repetition-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__repetition-penalty__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--repetition-penalty"
+  ]
+ },
+ {
+  "name": "leaf__run__seed__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--seed",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__seed__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--seed"
+  ]
+ },
+ {
+  "name": "leaf__run__seed__fraction",
+  "args": [
+   "run",
+   "x",
+   "--seed",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__run__frequency-penalty__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--frequency-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__frequency-penalty__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--frequency-penalty"
+  ]
+ },
+ {
+  "name": "leaf__run__presence-penalty__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--presence-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__presence-penalty__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--presence-penalty"
+  ]
+ },
+ {
+  "name": "leaf__run__stop__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--stop"
+  ]
+ },
+ {
+  "name": "leaf__run__max-output-tokens__not_a_number",
+  "args": [
+   "run",
+   "x",
+   "--max-output-tokens",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__run__max-output-tokens__missing_value",
+  "args": [
+   "run",
+   "x",
+   "--max-output-tokens"
+  ]
+ },
+ {
+  "name": "leaf__run__max-output-tokens__fraction",
+  "args": [
+   "run",
+   "x",
+   "--max-output-tokens",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__run__reasoning__not_member",
+  "args": [
+   "run",
+   "x",
+   "--reasoning",
+   "zzz"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__bogus_flag",
+  "args": [
+   "llm",
+   "generate",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__extra_positional",
+  "args": [
+   "llm",
+   "generate",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__model__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--model"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__system-prompt__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--system-prompt"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__lora__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--lora"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__lora-scale__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--lora-scale",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__lora-scale__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--lora-scale"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__engine__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--engine"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__temperature__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--temperature",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__temperature__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--temperature"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__top-p__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--top-p",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__top-p__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--top-p"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__top-k__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--top-k",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__top-k__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--top-k"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__top-k__fraction",
+  "args": [
+   "llm",
+   "generate",
+   "--top-k",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__min-p__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--min-p",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__min-p__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--min-p"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__repetition-penalty__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--repetition-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__repetition-penalty__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--repetition-penalty"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__seed__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--seed",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__seed__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--seed"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__seed__fraction",
+  "args": [
+   "llm",
+   "generate",
+   "--seed",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__frequency-penalty__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--frequency-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__frequency-penalty__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--frequency-penalty"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__presence-penalty__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--presence-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__presence-penalty__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--presence-penalty"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__stop__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--stop"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__max-output-tokens__not_a_number",
+  "args": [
+   "llm",
+   "generate",
+   "--max-output-tokens",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__max-output-tokens__missing_value",
+  "args": [
+   "llm",
+   "generate",
+   "--max-output-tokens"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__max-output-tokens__fraction",
+  "args": [
+   "llm",
+   "generate",
+   "--max-output-tokens",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__llm__generate__reasoning__not_member",
+  "args": [
+   "llm",
+   "generate",
+   "--reasoning",
+   "zzz"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__bogus_flag",
+  "args": [
+   "llm",
+   "stream",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__extra_positional",
+  "args": [
+   "llm",
+   "stream",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__model__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--model"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__system-prompt__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--system-prompt"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__lora__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--lora"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__lora-scale__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--lora-scale",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__lora-scale__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--lora-scale"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__engine__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--engine"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__temperature__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--temperature",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__temperature__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--temperature"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__top-p__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--top-p",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__top-p__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--top-p"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__top-k__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--top-k",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__top-k__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--top-k"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__top-k__fraction",
+  "args": [
+   "llm",
+   "stream",
+   "--top-k",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__min-p__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--min-p",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__min-p__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--min-p"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__repetition-penalty__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--repetition-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__repetition-penalty__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--repetition-penalty"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__seed__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--seed",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__seed__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--seed"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__seed__fraction",
+  "args": [
+   "llm",
+   "stream",
+   "--seed",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__frequency-penalty__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--frequency-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__frequency-penalty__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--frequency-penalty"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__presence-penalty__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--presence-penalty",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__presence-penalty__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--presence-penalty"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__stop__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--stop"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__max-output-tokens__not_a_number",
+  "args": [
+   "llm",
+   "stream",
+   "--max-output-tokens",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__max-output-tokens__missing_value",
+  "args": [
+   "llm",
+   "stream",
+   "--max-output-tokens"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__max-output-tokens__fraction",
+  "args": [
+   "llm",
+   "stream",
+   "--max-output-tokens",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__llm__stream__reasoning__not_member",
+  "args": [
+   "llm",
+   "stream",
+   "--reasoning",
+   "zzz"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__bogus_flag",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__extra_positional",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__missing_positional",
+  "args": [
+   "llm",
+   "tool-call"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__model__missing_value",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "--model"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__engine__missing_value",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "--engine"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__tool-choice__missing_value",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "--tool-choice"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__force-tool__missing_value",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "--force-tool"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__max-tool-calls__not_a_number",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "--max-tool-calls",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__max-tool-calls__missing_value",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "--max-tool-calls"
+  ]
+ },
+ {
+  "name": "leaf__llm__tool-call__max-tool-calls__fraction",
+  "args": [
+   "llm",
+   "tool-call",
+   "x",
+   "--max-tool-calls",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__serve__bogus_flag",
+  "args": [
+   "serve",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__serve__extra_positional",
+  "args": [
+   "serve",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__serve__host__missing_value",
+  "args": [
+   "serve",
+   "--host"
+  ]
+ },
+ {
+  "name": "leaf__serve__port__not_a_number",
+  "args": [
+   "serve",
+   "--port",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__serve__port__missing_value",
+  "args": [
+   "serve",
+   "--port"
+  ]
+ },
+ {
+  "name": "leaf__serve__port__fraction",
+  "args": [
+   "serve",
+   "--port",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__serve__port__negative",
+  "args": [
+   "serve",
+   "--port=-1"
+  ]
+ },
+ {
+  "name": "leaf__serve__context-length__not_a_number",
+  "args": [
+   "serve",
+   "--context-length",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__serve__context-length__missing_value",
+  "args": [
+   "serve",
+   "--context-length"
+  ]
+ },
+ {
+  "name": "leaf__serve__context-length__fraction",
+  "args": [
+   "serve",
+   "--context-length",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__serve__threads__not_a_number",
+  "args": [
+   "serve",
+   "--threads",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__serve__threads__missing_value",
+  "args": [
+   "serve",
+   "--threads"
+  ]
+ },
+ {
+  "name": "leaf__serve__threads__fraction",
+  "args": [
+   "serve",
+   "--threads",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__serve__gpu-layers__not_a_number",
+  "args": [
+   "serve",
+   "--gpu-layers",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__serve__gpu-layers__missing_value",
+  "args": [
+   "serve",
+   "--gpu-layers"
+  ]
+ },
+ {
+  "name": "leaf__serve__gpu-layers__fraction",
+  "args": [
+   "serve",
+   "--gpu-layers",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__models__list__bogus_flag",
+  "args": [
+   "models",
+   "list",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__list__extra_positional",
+  "args": [
+   "models",
+   "list",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__models__show__bogus_flag",
+  "args": [
+   "models",
+   "show",
+   "x",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__show__extra_positional",
+  "args": [
+   "models",
+   "show",
+   "x",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__models__show__missing_positional",
+  "args": [
+   "models",
+   "show"
+  ]
+ },
+ {
+  "name": "leaf__models__pull__bogus_flag",
+  "args": [
+   "models",
+   "pull",
+   "x",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__pull__extra_positional",
+  "args": [
+   "models",
+   "pull",
+   "x",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__models__pull__missing_positional",
+  "args": [
+   "models",
+   "pull"
+  ]
+ },
+ {
+  "name": "leaf__models__pull__engine__missing_value",
+  "args": [
+   "models",
+   "pull",
+   "x",
+   "--engine"
+  ]
+ },
+ {
+  "name": "leaf__models__rm__bogus_flag",
+  "args": [
+   "models",
+   "rm",
+   "x",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__rm__extra_positional",
+  "args": [
+   "models",
+   "rm",
+   "x",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__models__rm__missing_positional",
+  "args": [
+   "models",
+   "rm"
+  ]
+ },
+ {
+  "name": "leaf__models__default__bogus_flag",
+  "args": [
+   "models",
+   "default",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__default__extra_positional",
+  "args": [
+   "models",
+   "default",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__models__load__bogus_flag",
+  "args": [
+   "models",
+   "load",
+   "x",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__load__extra_positional",
+  "args": [
+   "models",
+   "load",
+   "x",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__models__load__missing_positional",
+  "args": [
+   "models",
+   "load"
+  ]
+ },
+ {
+  "name": "leaf__models__load__engine__missing_value",
+  "args": [
+   "models",
+   "load",
+   "x",
+   "--engine"
+  ]
+ },
+ {
+  "name": "leaf__models__load__category__missing_value",
+  "args": [
+   "models",
+   "load",
+   "x",
+   "--category"
+  ]
+ },
+ {
+  "name": "leaf__models__unload__bogus_flag",
+  "args": [
+   "models",
+   "unload",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__unload__extra_positional",
+  "args": [
+   "models",
+   "unload",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__models__register__bogus_flag",
+  "args": [
+   "models",
+   "register",
+   "x",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__register__extra_positional",
+  "args": [
+   "models",
+   "register",
+   "x",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__models__register__missing_positional",
+  "args": [
+   "models",
+   "register"
+  ]
+ },
+ {
+  "name": "leaf__models__register__engine__missing_value",
+  "args": [
+   "models",
+   "register",
+   "x",
+   "--engine"
+  ]
+ },
+ {
+  "name": "leaf__models__state__bogus_flag",
+  "args": [
+   "models",
+   "state",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__models__state__extra_positional",
+  "args": [
+   "models",
+   "state",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__account__login__bogus_flag",
+  "args": [
+   "account",
+   "login",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__account__login__extra_positional",
+  "args": [
+   "account",
+   "login",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__account__logout__bogus_flag",
+  "args": [
+   "account",
+   "logout",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__account__logout__extra_positional",
+  "args": [
+   "account",
+   "logout",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__account__whoami__bogus_flag",
+  "args": [
+   "account",
+   "whoami",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__account__whoami__extra_positional",
+  "args": [
+   "account",
+   "whoami",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__account__usage__bogus_flag",
+  "args": [
+   "account",
+   "usage",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__account__usage__extra_positional",
+  "args": [
+   "account",
+   "usage",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__about__bogus_flag",
+  "args": [
+   "about",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__about__extra_positional",
+  "args": [
+   "about",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__info__bogus_flag",
+  "args": [
+   "info",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__info__extra_positional",
+  "args": [
+   "info",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__version__bogus_flag",
+  "args": [
+   "version",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__version__extra_positional",
+  "args": [
+   "version",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__backends__bogus_flag",
+  "args": [
+   "backends",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__backends__extra_positional",
+  "args": [
+   "backends",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__bench__bogus_flag",
+  "args": [
+   "bench",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__bench__extra_positional",
+  "args": [
+   "bench",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__bench__engine__missing_value",
+  "args": [
+   "bench",
+   "--engine"
+  ]
+ },
+ {
+  "name": "leaf__bench__trials__not_a_number",
+  "args": [
+   "bench",
+   "--trials",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__bench__trials__missing_value",
+  "args": [
+   "bench",
+   "--trials"
+  ]
+ },
+ {
+  "name": "leaf__bench__trials__fraction",
+  "args": [
+   "bench",
+   "--trials",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__bench__vlm-image__missing_value",
+  "args": [
+   "bench",
+   "--vlm-image"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__bogus_flag",
+  "args": [
+   "telemetry",
+   "emit",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__extra_positional",
+  "args": [
+   "telemetry",
+   "emit",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__modality__not_member",
+  "args": [
+   "telemetry",
+   "emit",
+   "--modality",
+   "zzz"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__modality__required_missing",
+  "args": [
+   "telemetry",
+   "emit"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__event-type__missing_value",
+  "args": [
+   "telemetry",
+   "emit",
+   "--event-type"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__count__not_a_number",
+  "args": [
+   "telemetry",
+   "emit",
+   "--count",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__count__missing_value",
+  "args": [
+   "telemetry",
+   "emit",
+   "--count"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__count__fraction",
+  "args": [
+   "telemetry",
+   "emit",
+   "--count",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__count__negative",
+  "args": [
+   "telemetry",
+   "emit",
+   "--count=-1"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__count__zero",
+  "args": [
+   "telemetry",
+   "emit",
+   "--count",
+   "0"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__session-id__missing_value",
+  "args": [
+   "telemetry",
+   "emit",
+   "--session-id"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__processing-ms__not_a_number",
+  "args": [
+   "telemetry",
+   "emit",
+   "--processing-ms",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__processing-ms__missing_value",
+  "args": [
+   "telemetry",
+   "emit",
+   "--processing-ms"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__input-tokens__not_a_number",
+  "args": [
+   "telemetry",
+   "emit",
+   "--input-tokens",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__input-tokens__missing_value",
+  "args": [
+   "telemetry",
+   "emit",
+   "--input-tokens"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__input-tokens__fraction",
+  "args": [
+   "telemetry",
+   "emit",
+   "--input-tokens",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__output-tokens__not_a_number",
+  "args": [
+   "telemetry",
+   "emit",
+   "--output-tokens",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__output-tokens__missing_value",
+  "args": [
+   "telemetry",
+   "emit",
+   "--output-tokens"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__output-tokens__fraction",
+  "args": [
+   "telemetry",
+   "emit",
+   "--output-tokens",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__audio-duration-ms__not_a_number",
+  "args": [
+   "telemetry",
+   "emit",
+   "--audio-duration-ms",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__emit__audio-duration-ms__missing_value",
+  "args": [
+   "telemetry",
+   "emit",
+   "--audio-duration-ms"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__bogus_flag",
+  "args": [
+   "telemetry",
+   "blast",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__extra_positional",
+  "args": [
+   "telemetry",
+   "blast",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__count__not_a_number",
+  "args": [
+   "telemetry",
+   "blast",
+   "--count",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__count__missing_value",
+  "args": [
+   "telemetry",
+   "blast",
+   "--count"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__count__fraction",
+  "args": [
+   "telemetry",
+   "blast",
+   "--count",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__count__negative",
+  "args": [
+   "telemetry",
+   "blast",
+   "--count=-1"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__count__zero",
+  "args": [
+   "telemetry",
+   "blast",
+   "--count",
+   "0"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__session-id__missing_value",
+  "args": [
+   "telemetry",
+   "blast",
+   "--session-id"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__processing-ms__not_a_number",
+  "args": [
+   "telemetry",
+   "blast",
+   "--processing-ms",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__processing-ms__missing_value",
+  "args": [
+   "telemetry",
+   "blast",
+   "--processing-ms"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__input-tokens__not_a_number",
+  "args": [
+   "telemetry",
+   "blast",
+   "--input-tokens",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__input-tokens__missing_value",
+  "args": [
+   "telemetry",
+   "blast",
+   "--input-tokens"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__input-tokens__fraction",
+  "args": [
+   "telemetry",
+   "blast",
+   "--input-tokens",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__output-tokens__not_a_number",
+  "args": [
+   "telemetry",
+   "blast",
+   "--output-tokens",
+   "abc"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__output-tokens__missing_value",
+  "args": [
+   "telemetry",
+   "blast",
+   "--output-tokens"
+  ]
+ },
+ {
+  "name": "leaf__telemetry__blast__output-tokens__fraction",
+  "args": [
+   "telemetry",
+   "blast",
+   "--output-tokens",
+   "1.5"
+  ]
+ },
+ {
+  "name": "leaf__update__bogus_flag",
+  "args": [
+   "update",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__update__extra_positional",
+  "args": [
+   "update",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "leaf__uninstall__bogus_flag",
+  "args": [
+   "uninstall",
+   "--bogus-flag"
+  ]
+ },
+ {
+  "name": "leaf__uninstall__extra_positional",
+  "args": [
+   "uninstall",
+   "one",
+   "two",
+   "three",
+   "four"
+  ]
+ },
+ {
+  "name": "local__models__list",
+  "args": [
+   "models",
+   "list"
+  ]
+ },
+ {
+  "name": "local__models__list__--json",
+  "args": [
+   "models",
+   "list",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__--json__models__list",
+  "args": [
+   "--json",
+   "models",
+   "list"
+  ]
+ },
+ {
+  "name": "local__models__ls",
+  "args": [
+   "models",
+   "ls"
+  ]
+ },
+ {
+  "name": "local__models__list__--all",
+  "args": [
+   "models",
+   "list",
+   "--all"
+  ]
+ },
+ {
+  "name": "local__models__list__--all__--json",
+  "args": [
+   "models",
+   "list",
+   "--all",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__models__show__qwen3-0.6b",
+  "args": [
+   "models",
+   "show",
+   "qwen3-0.6b"
+  ]
+ },
+ {
+  "name": "local__models__show__qwen3-0.6b__--json",
+  "args": [
+   "models",
+   "show",
+   "qwen3-0.6b",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__models__show__no-such-model",
+  "args": [
+   "models",
+   "show",
+   "no-such-model"
+  ]
+ },
+ {
+  "name": "local__models__rm__no-such-model",
+  "args": [
+   "models",
+   "rm",
+   "no-such-model"
+  ]
+ },
+ {
+  "name": "local__models__default",
+  "args": [
+   "models",
+   "default"
+  ]
+ },
+ {
+  "name": "local__models__default__--json",
+  "args": [
+   "models",
+   "default",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__models__default__some-id__--json",
+  "args": [
+   "models",
+   "default",
+   "some-id",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__models__default__--clear",
+  "args": [
+   "models",
+   "default",
+   "--clear"
+  ]
+ },
+ {
+  "name": "local__models__default__--clear__--json",
+  "args": [
+   "models",
+   "default",
+   "--clear",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__account__whoami",
+  "args": [
+   "account",
+   "whoami"
+  ]
+ },
+ {
+  "name": "local__account__whoami__--json",
+  "args": [
+   "account",
+   "whoami",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__--json__account__whoami",
+  "args": [
+   "--json",
+   "account",
+   "whoami"
+  ]
+ },
+ {
+  "name": "local__account__usage",
+  "args": [
+   "account",
+   "usage"
+  ]
+ },
+ {
+  "name": "local__account__usage__--json",
+  "args": [
+   "account",
+   "usage",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__account__logout",
+  "args": [
+   "account",
+   "logout"
+  ]
+ },
+ {
+  "name": "local__backends",
+  "args": [
+   "backends"
+  ]
+ },
+ {
+  "name": "local__backends__--json",
+  "args": [
+   "backends",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__-q__models__list",
+  "args": [
+   "-q",
+   "models",
+   "list"
+  ]
+ },
+ {
+  "name": "local__--home__HOMEelsewhere__models__list__--json",
+  "args": [
+   "--home",
+   "$HOME/elsewhere",
+   "models",
+   "list",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__models__list__--home__HOMEelsewhere",
+  "args": [
+   "models",
+   "list",
+   "--home",
+   "$HOME/elsewhere"
+  ]
+ },
+ {
+  "name": "local__llm__generate__no-such-model__hi",
+  "args": [
+   "llm",
+   "generate",
+   "no-such-model",
+   "hi"
+  ]
+ },
+ {
+  "name": "local__run__no-such-model__hi",
+  "args": [
+   "run",
+   "no-such-model",
+   "hi"
+  ]
+ },
+ {
+  "name": "local__run__no-such-model__hi__--json",
+  "args": [
+   "run",
+   "no-such-model",
+   "hi",
+   "--json"
+  ]
+ },
+ {
+  "name": "local__bench__no-such-model",
+  "args": [
+   "bench",
+   "no-such-model"
+  ]
+ }
+]

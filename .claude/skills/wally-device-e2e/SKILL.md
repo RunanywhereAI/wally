@@ -8,7 +8,7 @@ description: Run wally's LLM e2e on Apple Neural Engine (NeuRT) and Snapdragon H
 Do not write per-engine tests. The harness is `scripts/test/e2e-modalities.sh`,
 called from `scripts/test/e2e.sh`, keyed by primitive (`llm`, `stt`, `tts`,
 `vlm`, `embed`, `image`, `vad`, `rerank`, `segment`, `diarize`). This build's
-LLM-only cut (`src/app.cpp`) registers only the `llm` command — every other
+LLM-only cut (`src/app.rs`) registers only the `llm` command — every other
 primitive's wally subcommand is commented out, so pointing the harness at one
 now fails with "no such command", not a skip. Run `llm` only until that cut is
 lifted. wally picks the engine from catalog framework, local path, or plugin
@@ -66,7 +66,7 @@ model was selected and the command failed.
 
 Non-LLM overlay coverage (NeuRT image generation, llama.cpp VLM, segment, STT)
 is deferred, not deleted: those primitives run through this same harness once
-`src/app.cpp`'s LLM-only cut is uncommented, but until then their wally
+`src/app.rs`'s LLM-only cut is uncommented, but until then their wally
 subcommands do not exist, so this skill does not instruct running them.
 
 See `wally-e2e` for bottle/backends assertions and Apple MLX host link flags.

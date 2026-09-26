@@ -1,0 +1,12 @@
+Manage your RunAnywhere cloud account
+
+Usage: wally account [OPTIONS] COMMAND
+
+Options:
+  -h, --help                  Show help
+
+Commands:
+  login                       Sign in through the browser
+  logout                      Sign out and revoke the session
+  whoami                      Show the signed-in account
+  usage                       Credit and the last day's spend, or --requests

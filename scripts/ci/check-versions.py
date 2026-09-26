@@ -2,11 +2,13 @@
 """Fail if a version that cannot read versions.toml at its own build step has
 drifted from it.
 
-CMake reads versions.toml directly, so the build always agrees with it. Two
-files cannot: the Homebrew formula's `version` line and the download URLs it
-builds from that version, and the Swift package's exact SDK pin. This checks
-both against versions.toml so a bump in one place that misses the other fails
-CI rather than shipping a mismatch.
+CMake reads versions.toml directly, so the build always agrees with it. Cargo
+and rustup cannot: Cargo.toml's `version` and rust-toolchain.toml's `channel`
+are each their own tool's source of truth and never open versions.toml. Same
+for the Homebrew formula's `version` line and the download URLs it builds from
+that version, and the Swift package's exact SDK pin. This checks all of them
+against versions.toml so a bump in one place that misses the others fails CI
+rather than shipping a mismatch.
 
     python3 scripts/ci/check-versions.py
 
@@ -15,6 +17,7 @@ Run from anywhere in the repo. Exits non-zero on the first mismatch.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sys
@@ -25,22 +28,39 @@ VERSIONS = ROOT / "versions.toml"
 FORMULA = ROOT / "Formula" / "wally.rb"
 PACKAGE = ROOT / "swift" / "Package.swift"
 CMAKELISTS = ROOT / "CMakeLists.txt"
+CARGO_TOML = ROOT / "Cargo.toml"
+RUST_TOOLCHAIN = ROOT / "rust-toolchain.toml"
 WORKFLOWS = ROOT / ".github" / "workflows"
+INSTALLER = ROOT / "install.sh"
+# Part of glibc itself, so present on any system that passes install.sh's
+# MIN_GLIBC check and not worth probing one by one.
+GLIBC_LIBRARIES = {
+    "ld-linux-x86-64.so.2", "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
+}
+
+# The release ABI checker owns reading versions.toml [linux_abi]; reuse it rather
+# than parse the same section a second way here.
+_ABI_SPEC = importlib.util.spec_from_file_location(
+    "check_linux_abi", ROOT / "scripts" / "release" / "check-linux-abi.py"
+)
+assert _ABI_SPEC is not None and _ABI_SPEC.loader is not None
+LINUX_ABI = importlib.util.module_from_spec(_ABI_SPEC)
+_ABI_SPEC.loader.exec_module(LINUX_ABI)
 
 
-def read_toml_value(key: str) -> str:
+def read_toml_value(key: str, path: Path = VERSIONS) -> str:
     pattern = re.compile(rf'^\s*{re.escape(key)}\s*=\s*"([^"]*)"', re.M)
-    match = pattern.search(VERSIONS.read_text(encoding="utf-8"))
+    match = pattern.search(path.read_text(encoding="utf-8"))
     if not match:
-        sys.exit(f"versions.toml is missing '{key}'")
+        sys.exit(f"{path} is missing '{key}'")
     return match.group(1)
 
 
-def read_toml_section(name: str) -> dict[str, str]:
-    text = VERSIONS.read_text(encoding="utf-8")
+def read_toml_section(name: str, path: Path = VERSIONS) -> dict[str, str]:
+    text = path.read_text(encoding="utf-8")
     body = re.search(rf'^\[{re.escape(name)}\]\n(.*?)(?=^\[|\Z)', text, re.M | re.S)
     if not body:
-        sys.exit(f"versions.toml is missing section '[{name}]'")
+        sys.exit(f"{path} is missing section '[{name}]'")
     return dict(re.findall(r'^\s*(\w+)\s*=\s*"([^"]*)"', body.group(1), re.M))
 
 
@@ -173,6 +193,50 @@ def main() -> None:
         if found and (found.group(1) != product or found.group(2) != product):
             failures.append(f"{FORMULA}: url names {found.group(1)}/{found.group(2)}, not {product}")
 
+    # install.sh refuses a Linux system before downloading, from its own copy of
+    # the floor the release checker enforces. The two must name the same glibc,
+    # and every non-libc library the installer checks must be one the bottle is
+    # allowed to take from the system.
+    installer = INSTALLER.read_text(encoding="utf-8")
+    abi = LINUX_ABI.read_linux_abi_policy(VERSIONS)
+    min_glibc = re.search(r'^MIN_GLIBC="([^"]*)"', installer, re.M)
+    if not min_glibc:
+        failures.append(f"{INSTALLER}: no MIN_GLIBC line found")
+    elif min_glibc.group(1) != abi["glibc_max"]:
+        failures.append(
+            f"{INSTALLER}: MIN_GLIBC \"{min_glibc.group(1)}\" != versions.toml "
+            f"[linux_abi] glibc_max \"{abi['glibc_max']}\""
+        )
+    for var, key in (("MIN_GLIBCXX", "glibcxx_max"), ("MIN_CXXABI", "cxxabi_max")):
+        found = re.search(rf'^{var}="([^"]*)"', installer, re.M)
+        if not found:
+            failures.append(f"{INSTALLER}: no {var} line found")
+        elif found.group(1) != abi[key]:
+            failures.append(
+                f"{INSTALLER}: {var} \"{found.group(1)}\" != versions.toml "
+                f"[linux_abi] {key} \"{abi[key]}\""
+            )
+    checked = re.search(r'^LINUX_SYSTEM_LIBRARIES="([^"]*)"', installer, re.M)
+    if not checked:
+        failures.append(f"{INSTALLER}: no LINUX_SYSTEM_LIBRARIES line found")
+    else:
+        installer_checks = set(checked.group(1).split())
+        allowed = set(abi["system_libraries"])
+        for library in sorted(installer_checks - allowed):
+            failures.append(
+                f"{INSTALLER}: checks {library}, which versions.toml [linux_abi] "
+                "system_libraries does not list"
+            )
+        # The other direction matters more: a library the bottle takes from the
+        # system but the installer does not look for is only discovered after
+        # the download, as a loader error. glibc's own libraries are covered by
+        # the MIN_GLIBC check instead.
+        for library in sorted(allowed - installer_checks - GLIBC_LIBRARIES):
+            failures.append(
+                f"{INSTALLER}: LINUX_SYSTEM_LIBRARIES does not check {library}, which the "
+                "bottle takes from the system (versions.toml [linux_abi] system_libraries)"
+            )
+
     # The Swift package's exact SDK pin.
     package = PACKAGE.read_text(encoding="utf-8")
     package_pin = re.search(r'runanywhere-swift\.git",\s*exact:\s*"([^"]*)"', package)
@@ -185,6 +249,18 @@ def main() -> None:
 
     # CMake declares its own floor and C++ standard; hold them to the pins here.
     toolchain = read_toml_section("toolchain")
+
+    # Cargo's own version, and rustup's own channel pin, each read by a tool
+    # that never opens versions.toml.
+    cargo_version = read_toml_section("package", CARGO_TOML).get("version")
+    if cargo_version != product:
+        failures.append(f"{CARGO_TOML}: version \"{cargo_version}\" != versions.toml \"{product}\"")
+    rust_channel = read_toml_section("toolchain", RUST_TOOLCHAIN).get("channel")
+    if rust_channel != toolchain.get("rust"):
+        failures.append(
+            f"{RUST_TOOLCHAIN}: channel \"{rust_channel}\" != versions.toml toolchain.rust \"{toolchain.get('rust')}\""
+        )
+
     cmake = CMAKELISTS.read_text(encoding="utf-8")
     for label, pattern, key in (
         ("cmake_minimum_required", r"cmake_minimum_required\(VERSION\s+([0-9.]+)", "cmake_minimum"),

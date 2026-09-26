@@ -1,0 +1,47 @@
+Error: model is required
+Run a model
+
+Usage: wally run [OPTIONS] model [prompt]
+
+Arguments:
+  model                       Model id, alias, hf.co/... ref or URL
+  prompt                      Prompt to answer (omit for an interactive chat)
+
+Options:
+  -h, --help                  Show help
+      --system-prompt, --system TEXT
+                              System prompt
+      --lora TEXT             LoRA adapter (.gguf) to attach
+      --lora-scale FLOAT      LoRA strength (default 1.0)
+      --engine TEXT           Engine to run on (mlx, llamacpp, onnx, sherpa)
+      --image FILE            Ask about this image instead (vision models)
+
+Sampling:
+      --temperature, --temp FLOAT
+                              Sampling temperature (0 = engine default)
+      --top-p FLOAT           Keep the smallest token set above this probability
+      --top-k INT             Sample from this many highest-probability tokens
+      --min-p FLOAT           Drop tokens below this share of the top token
+      --repetition-penalty FLOAT
+                              Penalize tokens already in the context
+      --seed INT              Fix the RNG for a repeatable answer
+      --frequency-penalty FLOAT
+                              Penalize tokens by how often they appeared
+      --presence-penalty FLOAT
+                              Penalize tokens that appeared at all
+      --stop TEXT ...         Stop at this text (repeat for several)
+      --max-output-tokens, --max-tokens INT
+                              Cap on generated tokens (default 1024)
+
+Reasoning:
+      --reasoning {on,off}    Model thinking phase (default on)
+      --show-thinking, --hide-thinking
+                              Print thinking tokens on stderr (default on)
+      --no-think              Same as --reasoning off
+
+Examples:
+  # Chat interactively
+  wally run qwen3-4b-instruct-2507
+
+  # Answer one prompt
+  wally run qwen3-4b-instruct-2507 "write a haiku"

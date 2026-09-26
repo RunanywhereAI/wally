@@ -85,3 +85,6 @@ dist/
 # Local review notes — never part of the product repo.
 /comments/
 __pycache__/
+
+# Rust (cargo target dirs outside build/)
+/target/

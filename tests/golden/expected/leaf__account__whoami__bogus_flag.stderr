@@ -1,0 +1,13 @@
+Error: The following argument was not expected: --bogus-flag
+Show the signed-in account
+
+Usage: wally account whoami [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+      --json                  Print as JSON
+
+Examples:
+  wally account whoami
+
+  wally --json account whoami

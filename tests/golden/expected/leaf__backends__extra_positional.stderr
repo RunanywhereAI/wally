@@ -1,0 +1,7 @@
+Error: The following arguments were not expected: four three two one
+List registered inference backends
+
+Usage: wally backends [OPTIONS]
+
+Options:
+  -h, --help                  Show help

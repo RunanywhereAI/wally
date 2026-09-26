@@ -1,0 +1,36 @@
+Download a model with `wally models pull <id>`:
+  wally models pull qwen3-4b-instruct-2507  # llama.cpp
+  wally models pull mlx-qwen3-4b-instruct-2507  # MLX (Apple GPU)
+
+ID                        MODALITY    BACKEND          SIZE        DOWNLOADED    TAGS
+bonsai-1.7b               llm         mlx/llama.cpp    256.6 MB    no            
+bonsai-27b                llm         mlx/llama.cpp    4.8 GB      no            
+bonsai-4b                 llm         mlx/llama.cpp    599.7 MB    no            
+bonsai-8b                 llm         mlx/llama.cpp    1.2 GB      no            
+gemma-4-12b               llm         mlx/llama.cpp    10.2 GB     no            
+gemma-4-26b-a4b           llm         mlx/llama.cpp    14.3 GB     no            
+gemma-4-31b               llm         mlx/llama.cpp    17.1 GB     no            
+gemma-4-e2b               llm         mlx/llama.cpp    3.3 GB      no            
+gemma-4-e4b               llm         mlx/llama.cpp    6.3 GB      no            
+granite-4.1-30b           llm         mlx/llama.cpp    16.8 GB     no            
+granite-4.1-3b            llm         mlx/llama.cpp    2.0 GB      no            
+granite-4.1-8b            llm         mlx/llama.cpp    4.9 GB      no            
+granite-4.2-30b           llm         llama.cpp        16.8 GB     no            
+granite-4.2-8b            llm         llama.cpp        5.2 GB      no            
+lfm2.5-1.2b               llm         llama.cpp        697.0 MB    no            
+lfm2.5-2.6b               llm         llama.cpp        1.6 GB      no            
+lfm2.5-230m               llm         llama.cpp        146.3 MB    no            
+lfm2.5-350m               llm         llama.cpp        219.0 MB    no            
+llama-3.2-3b              llm         llama.cpp        2.0 GB      no            
+maple-preview             llm         mlx/llama.cpp    5.0 GB      no            
+mlx-nemotron-nano         llm         mlx              4.2 GB      no            
+mlx-llama3.2              llm         mlx              679.6 MB    no            
+mlx-nemotron-mini         llm         mlx              2.2 GB      no            
+qwen3-0.6b                llm         mlx/llama.cpp    335.1 MB    no            
+qwen3-4b-instruct-2507    llm         mlx/llama.cpp    2.2 GB      no            [harness-compatible]
+qwen3.8-27b               llm         mlx/llama.cpp    15.0 GB     no            
+ternary-bonsai-1.7b       llm         mlx/llama.cpp    461.6 MB    no            
+ternary-bonsai-27b        llm         mlx              7.9 GB      no            
+ternary-bonsai-4b         llm         mlx/llama.cpp    1.1 GB      no            
+ternary-bonsai-8b         llm         mlx/llama.cpp    2.1 GB      no            
+smollm2-135m              llm         llama.cpp        96.0 MB     no            

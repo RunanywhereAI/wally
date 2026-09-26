@@ -5,10 +5,13 @@
 > recreates the link and mirrors `.claude/skills/` → `.agents/skills/`. CI fails
 > if the pair drifts.
 
-This repository is the official `wally` product CLI. It consumes a **packaged
-C++ desktop kit** via `find_package(RunAnywhere)`. It does not `add_subdirectory`
-or FetchContent the SDK, and it does not compile llama.cpp / Sherpa / ONNX / MLX
-from source.
+This repository is the official `wally` product CLI. The application is a Rust
+crate (`Cargo.toml`); it consumes a **packaged C++ desktop kit** via CMake's
+`find_package(RunAnywhere)`. CMake stays the build entry (`cmake -B build && cmake
+--build build && ctest --test-dir build`) and the owner of the kit — discovery,
+pins, link closure, runtime staging, the Swift MLX host — and runs `cargo` for
+the application code. It does not `add_subdirectory` or FetchContent the SDK,
+and it does not compile llama.cpp / Sherpa / ONNX / MLX from source.
 
 Pin: `cmake/sdk-pin.cmake`. Prefix: `-DCMAKE_PREFIX_PATH=` or `-DWALLY_SDK_KIT=`.
 Pointing `WALLY_SDK_DIR` at SDK **source** is a configure error.
@@ -20,7 +23,7 @@ must stay gitignored. The rules below are the subset that applies to this CLI.
 
 ```text
 argv / flags / env
-  -> src/commands/cmd_*.cpp     thin: parse → bootstrap() → one rac_* → render
+  -> src/commands/cmd_*.rs      thin: parse → bootstrap() → one rac_* → render
   -> C++ desktop kit            catalog, download, lifecycle, generate, serve
   -> engines (in the kit)       llama.cpp, Sherpa, ONNX, MLX (Apple host)
 ```
@@ -32,14 +35,17 @@ SDK — fix it there, then consume a new kit.
 
 ## Layering
 
-- Command TUs stay thin. Business rules do not live in CLI11 callbacks, Swift,
-  or the REPL.
-- **Proto is the SOT.** Include kit `include/runanywhere/proto/*.pb.h` (same
-  protoc that built commons). Do not run `protoc` here. Do not compile `*.pb.cc`
-  (those objects are already inside `librac_commons.a`). Parse `rac_*` byte
-  buffers with `src/io/proto.h` into `runanywhere::v1::*`.
-- Typed contracts at every boundary: CLI11 → proto messages → `rac_*` → stdout.
-  No parallel hand-written enums for values that exist in `idl/*.proto`.
+- Command modules stay thin. Business rules do not live in command callbacks
+  (`src/cli/mod.rs`'s CLI11-compatible builder), Swift, or the REPL.
+- **Proto is the SOT.** `crate::io::proto::v1::*` (prost) is generated at build
+  time straight from the kit's own `.proto` files (`build.rs`, via `protox`),
+  after checking the kit's `SCHEMA_LOCK` hash against the pin in
+  `versions.toml`. Wally never runs `protoc`, and nothing generated is
+  committed. Parse `rac_*` byte buffers with `io::proto` (`ProtoBuffer`,
+  `parse_proto_buffer`) into `v1::*`.
+- Typed contracts at every boundary: the CLI parser → proto messages → `rac_*`
+  → stdout. No parallel hand-written enums for values that exist in
+  `idl/*.proto`.
 - Structured errors. Machine-readable codes from the ABI; human text on stderr.
   Results on stdout. `--json` prints exactly one document on stdout.
 - Never log API keys, tokens, or Authorization headers. Status/progress go to
@@ -51,7 +57,7 @@ Protobuf remains the source of truth for the packaged SDK/ABI boundary. For a
 direct HTTP API owned by RunAnywhere—especially Wally auth, account, billing,
 catalog, usage, and inference—the source of truth is the service's pinned
 OpenAPI 3.1 artifact. Add the operation to that contract first, then consume a
-generated C++ binding (or a mechanically verified thin adapter) from the exact
+generated binding (or a mechanically verified thin adapter) from the exact
 contract hash.
 
 - Every operation has a stable `operationId` and named request, response,
@@ -71,19 +77,24 @@ Do not wrap protobuf in OpenAPI merely to change protocol names. When Wally only
 transports SDK-owned bytes, protobuf generation and `SCHEMA_LOCK` satisfy this
 rule. When Wally directly owns an HTTP call, the OpenAPI requirement applies.
 
-The console's nine CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
-`/v1/cli/usage`, `/v1/models`, `/v1/models/catalog`,
+The console's ten CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
+`/v1/cli/usage`, `/v1/cli/usage/requests`, `/v1/models`, `/v1/models/catalog`,
 `/v1/requests/{request_id}/cancel`) follow this.
 `contracts/wally-cli-v1.openapi.json` is the pinned artifact, extracted from
 InferenceInfra's `control-plane-v1.openapi.json` by
 `contracts/extract-cli-contract.py`. `contracts/generate_console_binding.py`
-turns it into `src/account/console_contract.h` (typed requests and responses,
-DO NOT EDIT), which `console.cpp` uses instead of hand-built JSON. Requests
+turns it into `src/account/console_contract.rs` (typed requests and responses,
+DO NOT EDIT), which `console.rs` uses instead of hand-built JSON. Requests
 serialize strictly; responses read tolerantly (a missing field defaults, a wrong
 type or unknown enum value still fails) so the CLI survives a server that lags
-the contract. `test_wally_contract` and
-`python3 contracts/sync_from_inferenceinfra.py --check` fail the build if the
-header, the pin, and the artifact drift.
+the contract. One field is exempt: the usage export's `provider` is a label the
+CLI only reports, so `console.rs` lifts a value the binding does not know out
+of the body before parsing and carries it as text instead of failing the page.
+One field goes the other way: the export's `next_cursor` is required, and a
+defaulted one would read as the last page, so `console.rs` fails a page that
+omits it rather than end the export early.
+`test_wally_contract` and `python3 contracts/sync_from_inferenceinfra.py
+--check` fail the build if the header, the pin, and the artifact drift.
 
 To re-vendor from an InferenceInfra checkout (records the source commit on the
 extract):
@@ -116,7 +127,7 @@ built with namespace isolation. Never `find_package(Protobuf)` against Homebrew.
 Dual grammar: spec namespaces (`llm generate`, `models download`) plus the
 terminal alias `run`. Model verbs (`list`/`pull`/`rm`/`show`/`default`) live
 under `models` only — no top-level shortcut. One `configure_*` wires both. See
-`src/commands/commands.h`.
+`src/commands/mod.rs`.
 
 Do not reintroduce FetchContent of the SDK, a second inference backend tree,
 or a retired MetalRT / hardcoded catalog.
@@ -131,7 +142,7 @@ The four endpoints it calls are **not ours to rename**: an installed binary
 talks to whatever the console deploys, so a field or path change breaks every
 copy in the wild. They are `POST /auth/cli/start`, `/auth/cli/poll`,
 `/auth/cli/refresh`, and `GET /v1/me`. The console side has a test that reads
-`src/account/console.cpp` directly and fails if the two drift.
+`src/account/console.rs` directly and fails if the two drift.
 
 Two secrets do different jobs. `request_code` is public and names the attempt;
 `poll_secret` proves the process collecting the grant is the one that started
@@ -146,7 +157,7 @@ the page a person approves the sign-in on.
 | API | `https://inference.runanywhere.ai` | `WALLY_CONSOLE_URL` |
 | Approval page | `https://console.runanywhere.ai` | `WALLY_CONSOLE_WEB_URL` |
 
-Both defaults live together in `src/account/credentials.cpp` so they cannot
+Both defaults live together in `src/account/credentials.rs` so they cannot
 drift apart, and `TrustedBrowserOrigins()` is what pairs them: with no override
 it trusts the deployed console, and for any other API origin it trusts only
 that origin. Pointing at a local dev console needs `WALLY_CONSOLE_URL` set
@@ -175,10 +186,14 @@ never logged.
 
 `WALLY_SDK_KIT` points at a built kit, not at SDK source. `cmake/sdk-pin.cmake`
 pins the IDL version and its hash; a mismatch is a hard error and the fix is to
-consume a matching kit or bump the pin, **never to run protoc**.
+consume a matching kit or bump the pin, **never to run protoc**. CMake hands
+`cargo` the kit's link line through the file API reply of a configured-but-
+never-built probe target (`cmake/WallyRust.cmake`), so every binary `cargo`
+links carries the same kit closure a CMake executable had.
 
-Two binaries come out of a build. `wally-cxx` is the CLI. `wally` is the same
-thing plus the MLX backend, and it only builds when `WALLY_SDK_SWIFT_PATH` names
+Two binaries come out of a build. `wally-cxx` is the plain `cargo`-built CLI.
+`wally` is the same crate's static library (`src/lib.rs`) plus the MLX backend
+linked by the Swift host, and it only builds when `WALLY_SDK_SWIFT_PATH` names
 an SDK checkout with the Swift tree. Ship `wally`.
 
 MLX resolves its Metal shaders from `mlx-swift_Cmlx.bundle` beside the
@@ -195,8 +210,12 @@ register, so an install puts both together and points a wrapper at them.
 
 ## Tests
 
-Hermetic unit tests (`tests/test_wally_unit.cpp`): no models, no network, no real
-keys. `ctest` is the default CI bar.
+Hermetic unit tests (`tests/test_wally_unit.rs`, one sub-file per owner under
+`tests/test_wally_unit/`, plus `tests/cli_golden.rs` replaying `tests/golden/`
+byte-exact): no models, no network, no real keys. `ctest --test-dir build` runs
+`cargo test` and is the default CI bar. `scripts/test/test-ledger.py` checks
+that every C++ test case named in `tests/cpp_case_ledger.txt` exists as a
+same-named Rust `#[test] fn`.
 
 Smoke / e2e (`scripts/test/smoke.sh`, `scripts/test/e2e.sh`) prove the product promise
 against a **pinned kit**, not SDK source. `scripts/test/e2e-modalities.sh` (called
@@ -213,17 +232,30 @@ smoke: `scripts/test/smoke-mlx.sh`.
 
 ## CI
 
-Minimum: fetch the pinned kit (`scripts/build/fetch-kit.sh`) → configure → build →
-ctest → smoke. Fail on pin / schema mismatch. `scripts/ci/check-agents-sync.sh`
-fails the PR when `CLAUDE.md` is not a symlink to `AGENTS.md`, or when
-`.claude/skills` and `.agents/skills` differ.
+Minimum: install the pinned Rust toolchain (`rust-toolchain.toml`, held to
+`versions.toml [toolchain] rust` by `scripts/ci/check-versions.py`) → fetch the
+pinned kit (`scripts/build/fetch-kit.sh`) → configure → build → ctest → smoke.
+Fail on pin / schema mismatch. `cargo fmt --check`, `cargo clippy --all-targets
+-- -D warnings`, `python3 scripts/test/test-ledger.py` and (macOS)
+`scripts/build/gen-sys-bindings.sh --check` gate every PR.
+`scripts/ci/check-agents-sync.sh` fails the PR when `CLAUDE.md` is not a
+symlink to `AGENTS.md`, or when `.claude/skills` and `.agents/skills` differ.
 
 Linux bottles are not a v1 merge blocker. Windows x64 and macOS arm64 are.
+
+The Linux bottle is packaged on every PR and checked twice. `scripts/release/check-linux-abi.py`
+fails it when any ELF in it needs a glibc/libstdc++ symbol version above
+versions.toml `[linux_abi]`, or a shared library it neither ships nor is
+allowed to take from the system. `scripts/test/linux-install-matrix.sh` runs
+`install.sh` against it on clean Ubuntu 22.04/24.04 and Debian 12, and expects
+Ubuntu 20.04 and Alpine to be refused before download. `install.sh` keeps its
+own `MIN_GLIBC` and library list; `check-versions.py` holds them to
+`[linux_abi]`.
 
 ## Build
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release \
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=/path/to/cpp-desktop-<os>-<arch>
 cmake --build build -j "$(sysctl -n hw.logicalcpu)"
 ctest --test-dir build --output-on-failure
@@ -231,12 +263,24 @@ ctest --test-dir build --output-on-failure
 bash scripts/test/e2e.sh ./build/wally
 ```
 
+CMake resolves the kit and runs `cargo build --release` for the crate
+(`cmake/WallyRust.cmake`); `ctest` runs `cargo test`. `rustup` (reading
+`rust-toolchain.toml`) must already have the pinned toolchain installed.
+CMake 3.27+ and Ninja are also prerequisites: `cmake/WallyRust.cmake` picks
+the Cargo profile from `CMAKE_BUILD_TYPE` at configure time, so it rejects
+multi-config generators (Visual Studio, Xcode, Ninja Multi-Config) outright,
+which is why the build above passes `-G Ninja` (`Unix Makefiles` also works on
+macOS/Linux, but Windows' default generator, Visual Studio, is multi-config;
+CI uses Ninja everywhere).
+
 On Apple Silicon, `cmake --build` produces `build/wally` (Swift host wrapping
 `wally_run_main`). Users never run `wally-cxx`; that name exists only so CMake
 cannot overwrite the product binary. Independent clones set
 `WALLY_SDK_SWIFT_PATH` to a runanywhere-sdks checkout (CI does this). Nested
 `EXTERNAL/Wally` finds `../../Package.swift` automatically. Disable the host
-with `-DWALLY_APPLE_MLX_HOST=OFF` only for a C++-only compile loop.
+with `-DWALLY_APPLE_MLX_HOST=OFF` only for a fast loop that skips the Swift
+build (`WALLY_APPLE_CXX_BINARY=ON` then gets the plain `cargo` binary at
+`build/wally-cxx`).
 
 NeuRT and QHexRT are optional private packs (`NEURUN_TOKEN`), never required to
 configure or link the public bottle. QHexRT is not shipped for Windows x64.

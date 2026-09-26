@@ -1,0 +1,8 @@
+Error: The following arguments were not expected: four three two one
+Remove wally, its models and its config
+
+Usage: wally uninstall [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+  -y, --yes                   Skip the confirmation prompt

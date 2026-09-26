@@ -1,0 +1,6 @@
+Show versions, paths, memory and backends
+
+Usage: wally info [OPTIONS]
+
+Options:
+  -h, --help                  Show help

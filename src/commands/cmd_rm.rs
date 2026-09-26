@@ -1,0 +1,417 @@
+//! `wally models rm <model>` (alias `wally models delete`/`wally models
+//! remove`) — delete downloaded files + unregister.
+//!
+//! File deletion is CLI-owned (registry remove only unregisters, per the
+//! rac_model_registry_remove contract). Deletion targets come from the
+//! registry's local_path and are confined to the models directory before
+//! anything is removed.
+
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
+use crate::bootstrap::{bootstrap, GlobalOptions};
+use crate::catalog::model_ref;
+use crate::cli::{App, ValueType};
+use crate::commands::model_setup::refresh_registry;
+use crate::io::output as out;
+use crate::io::proto::{parse_proto_buffer, v1, ProtoBuffer};
+use crate::sys;
+use crate::util::term;
+
+// Resolve the directory to delete for a model. Single-file artifacts live in
+// a per-model folder ({models}/{framework}/{id}/file) — delete the folder when
+// its name matches the model id, otherwise just the file itself. `None` means
+// nothing here is safe to delete: `local_path` names a directory whose
+// basename is not this model's id, which reads as a shared/framework
+// directory rather than the model's own folder — recursing into it would
+// delete other models' files too.
+fn deletion_target(model: &v1::ModelInfo) -> Option<PathBuf> {
+    let local = Path::new(&model.local_path);
+    if local.is_dir() {
+        return if local.file_name().and_then(|n| n.to_str()) == Some(model.id.as_str()) {
+            Some(local.to_path_buf())
+        } else {
+            None
+        };
+    }
+    if let Some(parent) = local.parent() {
+        if parent.file_name().and_then(|n| n.to_str()) == Some(model.id.as_str()) {
+            return Some(parent.to_path_buf());
+        }
+    }
+    Some(local.to_path_buf())
+}
+
+/// `std::filesystem::weakly_canonical`: canonicalize the longest existing
+/// leading path, then append the (lexically normalized) remainder.
+fn weakly_canonical(path: &Path) -> Option<PathBuf> {
+    let mut existing = path.to_path_buf();
+    let mut remainder: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match existing.canonicalize() {
+            Ok(canonical) => {
+                let mut result = canonical;
+                for part in remainder.iter().rev() {
+                    result.push(part);
+                }
+                return Some(result);
+            }
+            Err(_) => {
+                let file_name = existing.file_name()?.to_os_string();
+                remainder.push(file_name);
+                if !existing.pop() {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+// The target must live strictly inside the models root.
+fn confined_to(target: &Path, models_root: &Path) -> bool {
+    let Some(canonical_target) = weakly_canonical(target) else {
+        return false;
+    };
+    let Some(canonical_root) = weakly_canonical(models_root) else {
+        return false;
+    };
+    // Whole components, strictly inside. The C++ string test (`root + "/"`)
+    // never matched on Windows, where canonical paths use `\`, so every
+    // `models rm` there was refused as "outside models directory".
+    canonical_target != canonical_root && canonical_target.starts_with(&canonical_root)
+}
+
+fn confirm_on_tty(prompt: &str) -> bool {
+    eprint!("{prompt} [y/N] ");
+    let _ = std::io::stderr().flush();
+    let mut buffer = String::new();
+    if std::io::stdin().read_line(&mut buffer).is_err() {
+        return false;
+    }
+    matches!(buffer.chars().next(), Some('y') | Some('Y'))
+}
+
+/// Chooses the registry-unregister warning text the same way C++'s
+/// `cmd_rm.cpp` does: `!parse_proto_buffer(&remove_out, &remove_result,
+/// &error) || proto_rc != RAC_SUCCESS` always prints the shared `error`
+/// local, which is only overwritten by a genuine parse failure (buffer
+/// status != SUCCESS or decode failure) — NOT by a clean parse paired with a
+/// failing `proto_rc` alone. So when the buffer parses cleanly but
+/// `proto_rc` signals failure, C++ prints whatever `error` held before this
+/// call (`stale_error`: empty, or a message left over from an earlier
+/// registry-refresh failure in the same run), not a fresh
+/// `describe_result(proto_rc)`. Returns `None` on overall success.
+fn registry_unregister_warning(
+    proto_rc: sys::rac_result_t,
+    parsed: Result<v1::ModelDeleteResult, String>,
+    stale_error: &str,
+) -> Option<String> {
+    match parsed {
+        Ok(_) if proto_rc == sys::SUCCESS => None,
+        Ok(_) => Some(stale_error.to_string()),
+        Err(fresh_error) => Some(fresh_error),
+    }
+}
+
+fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
+    let Ok(env) = bootstrap(options) else {
+        return 1;
+    };
+
+    let resolved = match model_ref::resolve(reference, None) {
+        Ok(resolved) => resolved,
+        Err((_, error)) => {
+            out::error_line(&error);
+            return 1;
+        }
+    };
+
+    // C++ reuses a single `std::string error` across resolve/refresh/get/
+    // remove, only overwriting it when a parse actually fails; on a later
+    // step that fails solely via a non-SUCCESS rc (proto parses cleanly),
+    // the warning below prints whatever `error` was last set to — empty, or
+    // a stale message from this refresh_registry() failure. Preserve that
+    // exact (buggy) reuse instead of computing a fresh message each time.
+    let mut error = String::new();
+
+    // Link on-disk artifacts before deciding what to delete — mirrors
+    // list/ensure_model_ready so rm sees the same downloaded state.
+    if let Err(err) = refresh_registry() {
+        out::status_line(&format!("warning: registry refresh failed: {err}"));
+        error = err;
+    }
+
+    let mut model_out = ProtoBuffer::new();
+    // SAFETY: rac_get_model_registry() returns the process-wide registry
+    // handle; model_out is a valid out-param for this call only.
+    let model_id_c = std::ffi::CString::new(resolved.model_id.as_str()).unwrap_or_default();
+    let get_rc = unsafe {
+        sys::rac_model_registry_get_proto_buffer(
+            sys::rac_get_model_registry(),
+            model_id_c.as_ptr(),
+            model_out.as_mut_ptr(),
+        )
+    };
+    // parse unconditionally: it interprets the {status,error_message} envelope
+    // and frees the buffer on every path (no leak on get failure).
+    let model: v1::ModelInfo = match parse_proto_buffer(model_out) {
+        Ok(model) if get_rc == sys::SUCCESS => model,
+        _ => {
+            out::error_line(&format!("model not found: {}", resolved.model_id));
+            return 1;
+        }
+    };
+
+    let mut freed_bytes: u64 = 0;
+    if !model.local_path.is_empty() {
+        let Some(target) = deletion_target(&model) else {
+            out::error_line(&format!(
+                "refusing to delete {} for {} (not this model's own directory; likely shared across models)",
+                model.local_path, resolved.model_id
+            ));
+            return 1;
+        };
+        if !confined_to(&target, Path::new(&env.models_dir)) {
+            out::error_line(&format!(
+                "refusing to delete {} (outside models directory {})",
+                target.display(),
+                env.models_dir
+            ));
+            return 1;
+        }
+        if target.exists() {
+            if !force
+                && term::stdin_is_tty()
+                && !confirm_on_tty(&format!("delete {}?", target.display()))
+            {
+                out::status_line("aborted");
+                return 1;
+            }
+            // Best-effort size accounting before removal.
+            if target.is_dir() {
+                freed_bytes = directory_size(&target);
+            } else if let Ok(metadata) = std::fs::metadata(&target) {
+                if metadata.is_file() {
+                    freed_bytes = metadata.len();
+                }
+            }
+            if let Err(error) = remove_all(&target) {
+                out::error_line(&format!("failed to delete {}: {error}", target.display()));
+                return 1;
+            }
+        }
+    } else {
+        out::status_line(&format!("{} has no downloaded files", resolved.model_id));
+    }
+
+    let mut remove_out = ProtoBuffer::new();
+    // SAFETY: as above.
+    let proto_rc = unsafe {
+        sys::rac_model_registry_remove_proto_buffer(
+            sys::rac_get_model_registry(),
+            model_id_c.as_ptr(),
+            remove_out.as_mut_ptr(),
+        )
+    };
+    if let Some(message) =
+        registry_unregister_warning(proto_rc, parse_proto_buffer(remove_out), &error)
+    {
+        out::status_line(&format!("warning: registry unregister failed: {message}"));
+    }
+
+    if options.json {
+        let mut json = out::JsonWriter::new();
+        json.begin_object()
+            .field_str("id", &resolved.model_id)
+            .field_i64("freed_bytes", freed_bytes as i64)
+            .end_object();
+        out::result_line(json.str());
+    } else {
+        let suffix = if freed_bytes > 0 {
+            format!(" (freed {})", out::human_bytes(freed_bytes))
+        } else {
+            String::new()
+        };
+        out::result_line(&format!("deleted {}{suffix}", resolved.model_id));
+    }
+    0
+}
+
+fn directory_size(target: &Path) -> u64 {
+    let mut total = 0u64;
+    let Ok(entries) = std::fs::read_dir(target) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Ok(metadata) = entry.metadata() {
+            if metadata.is_dir() {
+                total += directory_size(&path);
+            } else if metadata.is_file() {
+                total += metadata.len();
+            } else if metadata.is_symlink() {
+                // C++'s fs::recursive_directory_iterator +
+                // is_regular_file(ec)/file_size(ec) resolve through status(),
+                // which follows symlinks, so a symlinked file's target size
+                // is added into freed_bytes. It does not recurse into
+                // symlinked directories (the iterator's default
+                // follow_directory_symlink is off), so only symlinks to a
+                // regular file are counted here.
+                if let Ok(target_metadata) = std::fs::metadata(&path) {
+                    if target_metadata.is_file() {
+                        total += target_metadata.len();
+                    }
+                }
+            }
+        }
+    }
+    total
+}
+
+fn remove_all(target: &Path) -> std::io::Result<()> {
+    if target.is_dir() {
+        std::fs::remove_dir_all(target)
+    } else {
+        std::fs::remove_file(target)
+    }
+}
+
+pub fn configure_models_delete(cmd: &mut App) {
+    cmd.add_option("model", ValueType::Text, "Model id or alias")
+        .required();
+    cmd.add_flag("-f,--force", "Skip the confirmation prompt");
+    cmd.callback(|p, g| {
+        let reference = p.get_str("model").unwrap_or_default();
+        let force = p.flag("--force");
+        run_rm(g, &reference, force)
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // local_path pointing straight at a shared framework directory (its
+    // basename is "llama-cpp", not this model's id) must not become the
+    // deletion target — that directory can hold other models' files.
+    #[test]
+    fn deletion_target_refuses_a_directory_that_is_not_the_models_own_folder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let shared = temp.path().join("llama-cpp");
+        std::fs::create_dir_all(&shared).expect("mkdir shared");
+        std::fs::write(shared.join("unrelated-model.gguf"), b"not qwen").expect("write file");
+
+        let model = v1::ModelInfo {
+            id: "qwen3-0.6b".to_string(),
+            local_path: shared.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            deletion_target(&model),
+            None,
+            "a directory not named for the model must not be handed back for wholesale removal"
+        );
+    }
+
+    #[test]
+    fn deletion_target_accepts_a_directory_named_for_the_model() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let model_dir = temp.path().join("llama-cpp").join("qwen3-0.6b");
+        std::fs::create_dir_all(&model_dir).expect("mkdir model dir");
+
+        let model = v1::ModelInfo {
+            id: "qwen3-0.6b".to_string(),
+            local_path: model_dir.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(deletion_target(&model), Some(model_dir));
+    }
+
+    #[test]
+    fn confined_to_accepts_only_paths_strictly_inside_the_models_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("Models");
+        let model = root.join("LlamaCpp").join("smollm2-135m");
+        std::fs::create_dir_all(&model).expect("mkdir model");
+        let sibling = temp.path().join("Models-evil").join("x");
+        std::fs::create_dir_all(&sibling).expect("mkdir sibling");
+
+        assert!(confined_to(&model, &root), "a model folder is inside");
+        assert!(
+            confined_to(&root.join("LlamaCpp").join("not-yet-there"), &root),
+            "a path that does not exist yet is judged by where it would be"
+        );
+        assert!(
+            !confined_to(&root, &root),
+            "the root itself is not deletable"
+        );
+        assert!(
+            !confined_to(&sibling, &root),
+            "a sibling sharing a prefix is outside"
+        );
+        assert!(
+            !confined_to(&root.join("..").join("Models-evil"), &root),
+            "a path that climbs out is outside"
+        );
+    }
+
+    // A clean parse (buffer status SUCCESS, decode OK) paired with a
+    // failing proto_rc must print the stale/empty `error` C++ carries over,
+    // not a freshly computed describe_result(proto_rc).
+    #[test]
+    fn clean_parse_with_failing_rc_uses_stale_error_not_a_fresh_description() {
+        let parsed: Result<v1::ModelDeleteResult, String> = Ok(v1::ModelDeleteResult::default());
+        let warning = registry_unregister_warning(sys::RAC_ERROR_NOT_INITIALIZED, parsed, "");
+        assert_eq!(warning, Some(String::new()));
+
+        let parsed: Result<v1::ModelDeleteResult, String> = Ok(v1::ModelDeleteResult::default());
+        let warning = registry_unregister_warning(
+            sys::RAC_ERROR_NOT_INITIALIZED,
+            parsed,
+            "warning: registry refresh failed: disk full",
+        );
+        assert_eq!(
+            warning,
+            Some("warning: registry refresh failed: disk full".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_failure_surfaces_its_own_fresh_message_regardless_of_stale_error() {
+        let parsed: Result<v1::ModelDeleteResult, String> =
+            Err("failed to parse ModelDeleteResult bytes".to_string());
+        let warning = registry_unregister_warning(sys::SUCCESS, parsed, "some stale text");
+        assert_eq!(
+            warning,
+            Some("failed to parse ModelDeleteResult bytes".to_string())
+        );
+    }
+
+    #[test]
+    fn success_on_both_axes_warns_nothing() {
+        let parsed: Result<v1::ModelDeleteResult, String> = Ok(v1::ModelDeleteResult::default());
+        let warning = registry_unregister_warning(sys::SUCCESS, parsed, "irrelevant");
+        assert_eq!(warning, None);
+    }
+
+    // `directory_size` must follow symlinks to a regular file, matching
+    // C++'s recursive_directory_iterator + is_regular_file(ec)/file_size(ec).
+    #[test]
+    fn directory_size_follows_symlinked_regular_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blob = dir.path().join("blob.bin");
+        std::fs::write(&blob, b"shared model bytes").expect("write blob");
+
+        let model_dir = dir.path().join("model");
+        std::fs::create_dir(&model_dir).expect("mkdir");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&blob, model_dir.join("blob.bin")).expect("symlink");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&blob, model_dir.join("blob.bin")).expect("symlink");
+
+        #[cfg(unix)]
+        assert_eq!(directory_size(&model_dir), 18);
+    }
+}

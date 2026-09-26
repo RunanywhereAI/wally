@@ -43,7 +43,7 @@ SCANNED = (
     ".agents/skills",
     "src",
 )
-TEXT_SUFFIXES = {".sh", ".ps1", ".md", ".cpp", ".h", ".hpp", ".swift", ".txt", ""}
+TEXT_SUFFIXES = {".sh", ".ps1", ".md", ".rs", ".cpp", ".h", ".hpp", ".swift", ".txt", ""}
 
 
 def pattern_for(model_id: str) -> re.Pattern[str]:

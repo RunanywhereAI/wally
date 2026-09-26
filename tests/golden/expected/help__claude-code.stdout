@@ -1,0 +1,20 @@
+Open Claude Code with a model
+
+Usage: wally claude-code [OPTIONS] [args...]
+
+Arguments:
+  args                        Passed through to the tool
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your
+                              account
+      --serve                 Print the endpoint and keep it open instead of
+                              launching
+
+Examples:
+  # The certified local coding model
+  wally claude-code -m qwen3-4b-instruct-2507
+
+  # A hosted model (needs `wally account login`)
+  wally claude-code -m glm-5.3-flash

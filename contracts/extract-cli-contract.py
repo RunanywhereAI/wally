@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Carve the CLI-facing slice out of the full control-plane contract.
 
-The CLI uses nine of the control plane's operations. Rather than vendor the whole
+The CLI uses ten of the control plane's operations. Rather than vendor the whole
 8000-line `control-plane-v1.openapi.json`, this extracts those operations and the
 transitive closure of the schemas they reference into a self-contained, valid
 OpenAPI document, `wally-cli-v1.openapi.json`, which is what gets pinned and fed
@@ -46,6 +46,9 @@ CLI_OPERATION_IDS = {
     # POST /v1/requests/{request_id}/cancel (InferenceInfra #440): the shim
     # calls it when the editor abandons a stream (wally #81).
     "cancelRequest",
+    # GET /v1/cli/usage/requests (InferenceInfra #809): the paged per-request
+    # export behind `wally account usage --requests`.
+    "listCliUsageRequests",
 }
 HTTP_METHODS = {"get", "post", "put", "delete", "patch"}
 # The component sections a kept operation may reference. Until wally #81 only

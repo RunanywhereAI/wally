@@ -1,0 +1,21 @@
+Open Hermes with a model
+
+Usage: wally hermes [OPTIONS] [args...]
+
+Arguments:
+  args                        Passed through to the tool
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your
+                              account
+
+Examples:
+  # Download the certified local model once
+  wally models pull qwen3-4b-instruct-2507
+
+  # Start the tool with the certified local model
+  wally hermes -m qwen3-4b-instruct-2507
+
+  # Use a cloud model after wally account login
+  wally hermes -m glm-5.3-flash

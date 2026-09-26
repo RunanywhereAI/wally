@@ -1,0 +1,23 @@
+Serve a model over an OpenAI-compatible API
+
+Usage: wally serve [OPTIONS] [model]
+
+Arguments:
+  model                       Model to serve (default qwen3-4b-instruct-2507)
+
+Options:
+  -h, --help                  Show help
+  -H, --host TEXT             Address to bind (default 127.0.0.1)
+  -p, --port UINT             Port to listen on (default 8080)
+  -c, --context-length, --context INT
+                              Context window in tokens (default 8192)
+  -t, --threads INT           Inference threads (default 4)
+      --gpu-layers, --ngl INT
+                              Layers to offload to the GPU
+      --cors                  Allow cross-origin browser requests (off by
+                              default)
+
+Examples:
+  wally serve qwen3-4b-instruct-2507
+
+  wally serve granite-4.2-8b --port 8000

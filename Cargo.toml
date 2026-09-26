@@ -1,0 +1,105 @@
+# The wally CLI. Application code is Rust; the RunAnywhere SDK stays a packaged
+# native kit behind its C ABI (src/sys). CMake (CMakeLists.txt) builds this
+# crate as a static library and links it into the shipped executables with the
+# kit, so `cmake --build build` remains the product build. See AGENTS.md.
+[package]
+name = "wally"
+# Must equal [product] version in versions.toml (scripts/ci/check-versions.py).
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.93"
+license = "Apache-2.0"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "wally"
+path = "src/lib.rs"
+# staticlib: what CMake and the Swift MLX host link. rlib: tests and the dev bin.
+crate-type = ["staticlib", "rlib"]
+# The generated SDK bindings carry the kit headers' C examples as doc comments;
+# rustdoc would try to compile them. wally has no doc-tests of its own.
+doctest = false
+
+# Developer entry (`cargo run`, integration tests). The shipped binaries come
+# from CMake: cmake/wally_main.cpp and the Swift host both call wally_run_main.
+[[bin]]
+name = "wally"
+path = "src/main.rs"
+test = false
+
+# Dev-only fixtures for tests/local_harness/test_local_harness.py (port of
+# fake_llm.cpp / harness_child.cpp). CMake's product build asks cargo for
+# `--bin wally` only (cmake/WallyRust.cmake), so these never ship; the CTest
+# fixture `wally_local_harness_bins` (CMakeLists.txt) builds them for
+# `wally_local_harness_cli_e2e`.
+[[bin]]
+name = "fake_llm"
+path = "tests/local_harness/fake_llm.rs"
+test = false
+
+[[bin]]
+name = "harness_child"
+path = "tests/local_harness/harness_child.rs"
+test = false
+
+[dependencies]
+libc = "0.2"
+prost = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["native-tls", "json"] }
+native-tls = "0.2"
+httparse = "1"
+sha2 = "0.10"
+hex = "0.4"
+getrandom = "0.3"
+ctrlc = { version = "3", features = ["termination"] }
+# Upstream response decompression (src/net/decompress.rs), matching the four
+# encodings cpp-httplib's Accept-Encoding advertises and decodes: gzip and
+# zlib-wrapped deflate share flate2's rust_backend (miniz_oxide) -- pure Rust,
+# no vendored/system zlib, same backend httplib's own zlib codepath is
+# functionally equivalent to. brotli-decompressor and ruzstd are decode-only,
+# pure-Rust, and (unlike the `brotli`/`zstd` crates) do not pull in an
+# encoder or a C library binding neither this client nor cpp-httplib's
+# client-side ever needs.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+brotli-decompressor = "6"
+ruzstd = "0.9"
+
+[target.'cfg(not(windows))'.dependencies]
+rustyline = { version = "18", default-features = false, features = ["with-file-history"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    "Win32_System_IO",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_Environment",
+    "Win32_System_SystemInformation",
+    "Win32_Globalization",
+    "Win32_System_Registry",
+    "Win32_System_Power",
+    "Win32_UI_Shell",
+    "Win32_Networking_WinSock",
+    "Win32_Networking_WinHttp",
+] }
+
+[build-dependencies]
+prost-build = "0.14"
+protox = "0.9"
+sha2 = "0.10"
+hex = "0.4"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# Symbols stay for crash reports; the product binary is linked by CMake/Xcode.
+debug = "line-tables-only"

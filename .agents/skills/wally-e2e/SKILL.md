@@ -61,7 +61,7 @@ plugin. The fix is pin a routable kit (0.20.28+), not weaken the assertion.
 
 ## `backends` must walk every live primitive
 
-`src/commands/cmd_backends.cpp` iterates `1 .. RAC_PRIMITIVE_COUNT-1`, skipping
+`src/commands/cmd_backends.rs` iterates `1 .. RAC_PRIMITIVE_COUNT-1`, skipping
 retired wire value 6. ONNX without RAG only advertises SEGMENT / DIARIZE. A
 hardcoded GENERATE_TEXT / TRANSCRIBE / EMBED list made onnx invisible even when
 the plugin was registered. Do not reintroduce a primitive allow-list.
@@ -79,19 +79,26 @@ stage the DLL at runtime.
 GitHub Windows: `GITHUB_WORKSPACE` is `D:\a\...`; msys `tar -C` needs
 `cygpath -u` (`fetch-kit.sh` already does).
 
-## Apple MLX host link (Ninja)
+## Apple MLX host link
 
-`scripts/build/bundle-core.sh` merges everything `wally` links into `libwally_bundle.a`
-for SwiftPM.
+`cmake/WallyRust.cmake` gets the kit's link line without hand-parsing Ninja: it
+queries the CMake file API (`cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)`)
+against `wally_link_probe`, a target configured
+but never built that carries the same kit closure the old C++ `wally`
+executable had. `build.rs` (`link_native`/`probe_link_args`) reads that reply,
+drops compile-only fragments (`-D`/`-I`/`-O`/…), hands the rest to `cargo` as
+`rustc-link-arg`s for every artifact it links, and — when
+`WALLY_NATIVE_LINK_ARGS_OUT` is set (CMake sets it) — writes the same list to
+`build/wally-native-link-args.txt`. `scripts/build/build-mlx.sh` reads that
+file and turns each fragment into an `xcodebuild` `OTHER_LDFLAGS` token, then
+links `build/cargo/release/libwally.a` (the crate's staticlib, built with the
+same fragments) against it. No manual `ninja -t commands` harvesting, no
+`bundle-core.sh` merge step — both are gone.
 
-- Ninja **never** writes `CMakeFiles/wally.dir/link.txt` (Makefiles only).
-- Harvest with `ninja -t commands wally | tail -1`. The **last** command is the
-  link. Grepping for `wally` hits compile lines (`CMakeFiles/wally.dir/…`).
-- Apple ld emits one token `-Wl,-force_load,/abs/path/lib.a`. That ends in
-  `.a` but is not a path. Prefixing `BUILD/` produces
-  `build/-Wl,-force_load,…`. Strip `-Wl,-force_load,` first.
-- Ninja lists archives twice; `libtool -static` then fails on duplicate
-  members unless you dedupe.
+- swiftc (Xcode 27) rejects raw `-Wl,` options and ignores bare archive paths
+  in `OTHER_LDFLAGS`, so `build-mlx.sh` sends everything aimed at `ld` through
+  `-Xlinker`; `-l`/`-L`/`-F` and `-framework` are swiftc options and pass
+  through as-is.
 
 `scripts/build/build-mlx.sh` must dump the xcodebuild log on failure (`Undefined
 symbols` does not contain `error:`). Do not grep bare `error:` — every
@@ -104,17 +111,16 @@ run (empty `xcodebuild-mlx.log`, status taken from a later assignment).
 
 Link flags that must survive the Swift host:
 
-- `-Wl,-force_load,$BUILD/libwally_plugins.a` then `-L$BUILD -lwally_bundle`.
-  Force-load **only** the plugin backends (static registrars). Do **not**
-  force-load llama-common: that pulls `download.cpp.o`, which references
-  cpp-httplib `Client::Get` methods the kit never emitted as objects
-  (`wally-cxx` never needed that TU). Observed locally after revealing the
-  real `Ld` log.
-- `-L$KIT/third_party -lonnxruntime` and `-Wl,-rpath,$KIT/third_party` —
-  `bundle-core.sh` rewrites the kit dylib to `-l` and must keep `-L` plus the
-  rpath `wally-cxx` already had, or the Swift host abort-traps at launch
-  (`Library not loaded: @rpath/libonnxruntime.dylib`). Harvest `-l*` as well
-  as dylib conversions (`-ldl`, `-lbz2`).
+- The kit's plugin backends (static registrars) arrive already force-loaded in
+  the fragments CMake recorded for `wally_link_probe` — `build-mlx.sh` does not
+  re-derive which archives need `-force_load`, it replays what CMake linked.
+- `-L$KIT/third_party -lonnxruntime` and `-Wl,-rpath,$KIT/third_party` must
+  both survive the flag rewrite, or the Swift host abort-traps at launch
+  (`Library not loaded: @rpath/libonnxruntime.dylib`).
+- The crate's own native dependencies (Rust std, native-tls's
+  `Security.framework`, `-liconv`) and the C++ runtime (`-lc++`, the kit links
+  through the C++ driver) go on the link line after the kit's own flags
+  (`build-mlx.sh`'s `rust_native` array).
 - Canonicalize `WALLY_SDK_SWIFT_PATH` with `cd && pwd`. SwiftPM's local package
   identity is the **directory name**, so `…/EXTERNAL/Wally/../..` registers as
   `..`. Nested checkouts named `sdks1` must use that name in
@@ -143,7 +149,7 @@ NeuRT / QHexRT only appear in `backends` when the overlay was applied.
 `lib/librac_backend_neurt.a` or `lib/rac_backend_qhexrt.lib` exists — not by
 grepping packaged `HAS_NEURT FALSE` (that stays false; find_package flips it
 when the archive is present). Public CI must pass without overlays. Image gen
-(`cmd_image.cpp`) is compiled out unless NeuRT is present.
+(`cmd_image.rs`, gated `#[cfg(wally_has_neurt)]`) is compiled out unless NeuRT is present.
 
 ## Device / overlay gotchas (0.5.1 + kit 0.20.28)
 

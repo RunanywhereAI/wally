@@ -1,0 +1,54 @@
+Error: The following argument was not expected: diarize
+Run models on this machine or on your RunAnywhere account
+
+Usage: wally [OPTIONS] [COMMAND]
+
+Chat:
+  run                         Run a model
+  serve                       Serve a model over an OpenAI-compatible API
+
+Models:
+  models list                 List downloaded models (--all for the catalog)
+  models show                 Show a model's details
+  models pull                 Download a model
+  models rm                   Delete a downloaded model
+  models default              Show or set the default model for coding tools
+
+Coding tools:
+  claude-code                 Open Claude Code with a model
+  claude-desktop              Open Claude Desktop with a model
+  opencode                    Open OpenCode with a local or cloud model
+  hermes                      Open Hermes with a model
+  openclaw                    Open OpenClaw with a model
+  deepseek                    Open DeepSeek Harness with a model
+
+Account:
+  account login               Sign in through the browser
+  account logout              Sign out and revoke the session
+  account whoami              Show the signed-in account
+  account usage               Credit and the last day's spend, or --requests
+
+Wally:
+  about                       Versions, backends, paths and account
+  update                      Update wally to the latest release
+  uninstall                   Remove wally, its models and its config
+
+Options:
+  -h, --help                  Show help
+  -V, --version               Show the wally version
+      --json                  Print results as JSON
+  -v, --verbose               Debug logging on stderr
+  -q, --quiet                 Errors only
+      --no-progress           Disable progress rendering
+      --no-color              Disable colored --help output
+      --home TEXT             Where models live (default $RUNANYWHERE_HOME or
+                              ~/.local/share/runanywhere)
+
+Get started:
+  # Download a local model and chat on this machine
+  wally models pull qwen3-4b-instruct-2507 && wally run qwen3-4b-instruct-2507
+
+  # Sign in and use a cloud model
+  wally account login && wally opencode --cloud -m glm-5.3-flash
+
+Run "wally <command> --help" for details.
