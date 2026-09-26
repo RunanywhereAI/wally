@@ -328,7 +328,8 @@
           "gateway_protocol_error",
           "gateway_operation_pending",
           "reconciliation_unverified",
-          "retention_managed_by_runanywhere"
+          "retention_managed_by_runanywhere",
+          "card_required"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -2235,7 +2236,7 @@
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
     "branch": "development",
-    "commit": "50926c70babf8cccb06ea482cddc57a36b19e7c2",
+    "commit": "98665f50093d81f95e64399aaf5937ff5fbdafbd",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

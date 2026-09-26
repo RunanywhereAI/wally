@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "5070bc5c28a894460de8b6b1bcc9359cbd3f23d6846e76af2e599cb4ed49289f";
+    "cd8b65933cdd82a72e1679947880359c5732f025e45f88948602b6b9c39e2adc";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -50,6 +50,7 @@ pub enum ApiErrorCode {
     KGatewayOperationPending,
     KReconciliationUnverified,
     KRetentionManagedByRunanywhere,
+    KCardRequired,
 }
 
 impl ApiErrorCode {
@@ -90,6 +91,7 @@ impl ApiErrorCode {
             ApiErrorCode::KGatewayOperationPending => "gateway_operation_pending",
             ApiErrorCode::KReconciliationUnverified => "reconciliation_unverified",
             ApiErrorCode::KRetentionManagedByRunanywhere => "retention_managed_by_runanywhere",
+            ApiErrorCode::KCardRequired => "card_required",
         }
     }
 
@@ -130,6 +132,7 @@ impl ApiErrorCode {
             "gateway_operation_pending" => Ok(ApiErrorCode::KGatewayOperationPending),
             "reconciliation_unverified" => Ok(ApiErrorCode::KReconciliationUnverified),
             "retention_managed_by_runanywhere" => Ok(ApiErrorCode::KRetentionManagedByRunanywhere),
+            "card_required" => Ok(ApiErrorCode::KCardRequired),
             other => Err(format!("unknown ApiErrorCode: {other}")),
         }
     }
