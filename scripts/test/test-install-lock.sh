@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Proves install.sh's install lock (acquire_install_lock / release_install_lock)
-# is race-free: exactly one holder at a time, a stale lock from a dead pid is
+# holds under contention: exactly one of many concurrent runs acquires it, a
+# stale lock from a dead pid is
 # recovered, a live holder is never treated as stale, and a run only ever
 # removes the lock it created itself.
 #

@@ -214,10 +214,12 @@ acquire_install_lock() {
             rm -f "$pid_tmp"
             fail "another Wally install (pid ${owner}) is running; let it finish, then run this again."
         fi
-        # Stale: its owner is gone. Replace it with our own lock in one step:
-        # unlink the stale file, then link ours into place. If another run
-        # wins that same race, our `ln` fails and we stop instead of both
-        # runs believing they hold the lock.
+        # Stale: its owner is gone. Unlink it and link ours into place; a run
+        # that links first makes our `ln` fail, and we stop. Not airtight:
+        # two runs that both found the same stale lock can each unlink and
+        # link in turn. That needs a crashed install and two new ones started
+        # within the same instant, and shell has no compare-and-swap to close
+        # it without a second lock.
         rm -f "$lock"
         if ! ln "$pid_tmp" "$lock" 2>/dev/null; then
             rm -f "$pid_tmp"
