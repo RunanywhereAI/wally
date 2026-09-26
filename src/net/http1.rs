@@ -770,7 +770,19 @@ impl Client {
                 read_until_close(&mut reader, &mut sink)
             };
             match outcome {
-                Ok(true) => {}
+                Ok(true) => {
+                    // The raw reader finished cleanly (EOF / final chunk /
+                    // content-length reached), but that only means the wire
+                    // framing ended where expected -- it says nothing about
+                    // whether the compressed stream itself reached a real
+                    // end-of-body marker. A dropped connection mid-transfer
+                    // on a `read_until_close` reply, in particular, looks
+                    // identical to a clean close until finish() checks the
+                    // format's own trailer.
+                    if decoder.finish(&mut deliver).is_err() {
+                        decode_failed = true;
+                    }
+                }
                 Ok(false) => completed = false,
                 Err(e) => {
                     self.conn = None;
@@ -2590,6 +2602,43 @@ mod tests {
             "a corrupt compressed body must fail the same way any other body-read error does, got {result:?}"
         );
         handle.stop();
+    }
+
+    // No Content-Length and no chunked framing, so `Client::send` falls
+    // through to `read_until_close`, which reports success as soon as the
+    // peer closes -- indistinguishable, at the wire-framing level, from a
+    // connection dropped mid-transfer. Only decoder.finish()'s gzip trailer
+    // check tells the two apart; before it existed this reply came back as
+    // Ok(Reply) with a silently-shortened body instead of Err(Error::Read).
+    #[test]
+    fn send_fails_when_a_read_until_close_gzip_reply_is_cut_off_mid_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept_thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut discard = [0u8; 1024];
+            let _ = stream.read(&mut discard); // drain the request line/headers
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n\r\n")
+                .unwrap();
+            // Drop the trailing CRC32/ISIZE (8 bytes): the deflate stream
+            // decodes fine on its own, so push() alone never notices this.
+            stream
+                .write_all(&GZIP_ENCODED_BODY[..GZIP_ENCODED_BODY.len() - 8])
+                .unwrap();
+            // Close without ever sending the rest of the trailer.
+            drop(stream);
+        });
+
+        let mut client =
+            Client::new(&format!("http://127.0.0.1:{port}"), short(), short()).unwrap();
+        let result = client.send(&Request::get("/gz-cut-off"), None, None);
+        accept_thread.join().unwrap();
+
+        assert!(
+            matches!(result.as_ref(), Err(Error::Read)),
+            "a gzip body cut off before its trailer must fail like any other read error, got {result:?}"
+        );
     }
 
     /// A connected loopback pair: (the server's accepted side, the client).
