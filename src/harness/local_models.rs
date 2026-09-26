@@ -67,7 +67,13 @@ fn scan_model_dir(dir: &Path) -> (String, bool, i64) {
                 None
             };
             let is_dir = match &target_metadata {
-                Some(target) if target.is_dir() => true,
+                // A symlinked directory is not followed: the walk keeps no
+                // visited set, so a link back to the model dir itself or an
+                // ancestor would loop forever, and a link elsewhere would pull
+                // a tree outside the model folder into the byte count. This
+                // matches the C++ walk (`recursive_directory_iterator`, which
+                // does not follow directory symlinks by default).
+                Some(target) if target.is_dir() => continue,
                 Some(target) if target.is_file() => false,
                 // A symlink to a special file (socket, device, ...): skip.
                 Some(_) => continue,

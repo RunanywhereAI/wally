@@ -1003,6 +1003,63 @@ fn local_models_discovers_a_symlinked_weight_file() {
     );
 }
 
+// A symlinked *directory* is a different case from the symlinked *file*
+// above, and must not be followed: `scan_model_dir` keeps no visited set, so
+// a link back to the model dir itself (or any ancestor) would otherwise make
+// the walk loop forever, and a link elsewhere would pull a tree outside the
+// model folder into the byte count. The C++ original's
+// `recursive_directory_iterator` does not follow directory symlinks by
+// default; the walk must not either.
+#[cfg(unix)]
+#[test]
+fn local_models_does_not_follow_a_symlinked_directory() {
+    let root = tempfile::tempdir().expect("temp dir");
+
+    let home = root.path().join("home");
+    let model_dir = home
+        .join("RunAnywhere")
+        .join("Models")
+        .join("llama-cpp")
+        .join("looping-model");
+    std::fs::create_dir_all(&model_dir).expect("mkdir model dir");
+    let real_weights = model_dir.join("weights.gguf");
+    std::fs::write(&real_weights, b"not a real gguf, just nonzero content")
+        .expect("write real weights");
+    let real_len = std::fs::metadata(&real_weights)
+        .expect("stat real weights")
+        .len();
+
+    // A link from inside the model dir back up to `home`, one of its own
+    // ancestors. Following it re-enters the same tree (which contains this
+    // same link), so a walk that follows directory symlinks never finishes.
+    std::os::unix::fs::symlink(&home, model_dir.join("loop")).expect("symlink loop");
+
+    // Run off-thread and bound with a timeout so a regression here fails the
+    // test instead of hanging the run forever.
+    let home_for_thread = home.to_string_lossy().into_owned();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let models = harness::local_models(&home_for_thread);
+        // If the receiver already gave up (timed out below), there's no one
+        // left to send to; that's fine, the leaked thread doesn't affect the
+        // assertions.
+        let _ = tx.send(models);
+    });
+    let models = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("local_models must return promptly instead of following the directory symlink");
+
+    let found = models
+        .iter()
+        .find(|m| m.id == "looping-model")
+        .unwrap_or_else(|| panic!("looping-model missing from {models:?}"));
+    assert!(!found.path.is_empty(), "path must not be empty: {found:?}");
+    assert_eq!(
+        found.bytes as u64, real_len,
+        "bytes must count only the real weight file, not anything reached through the symlink: {found:?}"
+    );
+}
+
 // `launch_open_code_cloud_with` used to check the model-cache gate before
 // `verify_cloud_session` could refresh an expired access token, so a valid
 // refresh token could never unblock a newly cataloged model -- the catalog
