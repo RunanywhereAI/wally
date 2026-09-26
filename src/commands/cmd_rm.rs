@@ -20,18 +20,26 @@ use crate::util::term;
 
 // Resolve the directory to delete for a model. Single-file artifacts live in
 // a per-model folder ({models}/{framework}/{id}/file) — delete the folder when
-// its name matches the model id, otherwise just the file itself.
-fn deletion_target(model: &v1::ModelInfo) -> PathBuf {
+// its name matches the model id, otherwise just the file itself. `None` means
+// nothing here is safe to delete: `local_path` names a directory whose
+// basename is not this model's id, which reads as a shared/framework
+// directory rather than the model's own folder — recursing into it would
+// delete other models' files too.
+fn deletion_target(model: &v1::ModelInfo) -> Option<PathBuf> {
     let local = Path::new(&model.local_path);
     if local.is_dir() {
-        return local.to_path_buf();
+        return if local.file_name().and_then(|n| n.to_str()) == Some(model.id.as_str()) {
+            Some(local.to_path_buf())
+        } else {
+            None
+        };
     }
     if let Some(parent) = local.parent() {
         if parent.file_name().and_then(|n| n.to_str()) == Some(model.id.as_str()) {
-            return parent.to_path_buf();
+            return Some(parent.to_path_buf());
         }
     }
-    local.to_path_buf()
+    Some(local.to_path_buf())
 }
 
 /// `std::filesystem::weakly_canonical`: canonicalize the longest existing
@@ -156,7 +164,13 @@ fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
 
     let mut freed_bytes: u64 = 0;
     if !model.local_path.is_empty() {
-        let target = deletion_target(&model);
+        let Some(target) = deletion_target(&model) else {
+            out::error_line(&format!(
+                "refusing to delete {} for {} (not this model's own directory; likely shared across models)",
+                model.local_path, resolved.model_id
+            ));
+            return 1;
+        };
         if !confined_to(&target, Path::new(&env.models_dir)) {
             out::error_line(&format!(
                 "refusing to delete {} (outside models directory {})",
@@ -276,6 +290,44 @@ pub fn configure_models_delete(cmd: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // local_path pointing straight at a shared framework directory (its
+    // basename is "llama-cpp", not this model's id) must not become the
+    // deletion target — that directory can hold other models' files.
+    #[test]
+    fn deletion_target_refuses_a_directory_that_is_not_the_models_own_folder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let shared = temp.path().join("llama-cpp");
+        std::fs::create_dir_all(&shared).expect("mkdir shared");
+        std::fs::write(shared.join("unrelated-model.gguf"), b"not qwen").expect("write file");
+
+        let model = v1::ModelInfo {
+            id: "qwen3-0.6b".to_string(),
+            local_path: shared.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            deletion_target(&model),
+            None,
+            "a directory not named for the model must not be handed back for wholesale removal"
+        );
+    }
+
+    #[test]
+    fn deletion_target_accepts_a_directory_named_for_the_model() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let model_dir = temp.path().join("llama-cpp").join("qwen3-0.6b");
+        std::fs::create_dir_all(&model_dir).expect("mkdir model dir");
+
+        let model = v1::ModelInfo {
+            id: "qwen3-0.6b".to_string(),
+            local_path: model_dir.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+
+        assert_eq!(deletion_target(&model), Some(model_dir));
+    }
 
     #[test]
     fn confined_to_accepts_only_paths_strictly_inside_the_models_root() {
