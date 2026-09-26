@@ -457,16 +457,18 @@ fn stt_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
     let _ = stt_transcribe(&make_pcm16(0.5, false)); // warmup, errors ignored
 
     let t0 = now_ms();
-    let r = stt_transcribe(&make_pcm16(c.scenario.seconds, c.scenario.sine)).inspect_err(|_| {
+    // The transcript text itself isn't reported (RTF is commons-owned, not
+    // derived here) -- only that transcription succeeded. An empty
+    // transcript is a valid, successful result for the `Silent 2s` scenario
+    // on any engine that correctly suppresses silence, so it must not be
+    // rejected as a failed trial; it keeps the timing/memory metrics below.
+    stt_transcribe(&make_pcm16(c.scenario.seconds, c.scenario.sine)).inspect_err(|_| {
         unload_category(c.category);
     })?;
     m.end_to_end_ms = (now_ms() - t0) as f64;
     m.memory_delta_bytes = mem_before - available_ram_bytes();
     unload_category(c.category);
 
-    if r.text.is_empty() {
-        return Err("no transcript".to_string());
-    }
     // RTF is commons-owned; do not derive from wall / scenario / duration.
     m.real_time_factor = 0.0;
     Ok(())
