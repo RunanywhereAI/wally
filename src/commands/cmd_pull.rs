@@ -107,6 +107,15 @@ fn download_start_result(
     }
 }
 
+/// The "already downloaded, nothing to fetch" fast path is only safe right
+/// after a rescan that actually succeeded; a failed rescan (`refresh_ok`
+/// false) cannot rule out files deleted from disk since the registry was
+/// last written, so it must fall through to plan/start instead of trusting a
+/// stale `Downloaded` status.
+fn should_report_already_downloaded(refresh_ok: bool, status: Option<i32>) -> bool {
+    refresh_ok && status == Some(v1::ModelRegistryStatus::Downloaded as i32)
+}
+
 /// Shared pull flow (plan → start → progress → terminal state) for an
 /// already-registered model id. Returns 0 / 1 / 130 (cancel).
 pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
@@ -117,12 +126,18 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
     // were deleted since, and `wally models pull` would report success without
     // fetching anything. A refresh failure is not fatal here: the download path
     // that follows is the fallback, and refusing to pull because a rescan
-    // failed would be worse than pulling something already present.
-    if let Err(refresh_error) = refresh_registry() {
-        out::status_line(&format!(
-            "could not rescan local models ({refresh_error}); continuing from the registry as it stands"
-        ));
-    }
+    // failed would be worse than pulling something already present — but it
+    // does mean a failed refresh can never be trusted to say "already
+    // downloaded" (see should_report_already_downloaded below).
+    let refresh_ok = match refresh_registry() {
+        Ok(()) => true,
+        Err(refresh_error) => {
+            out::status_line(&format!(
+                "could not rescan local models ({refresh_error}); continuing from the registry as it stands"
+            ));
+            false
+        }
+    };
 
     // The orchestrator plans from embedded metadata (it does not consult the
     // registry), so fetch the saved ModelInfo first.
@@ -158,8 +173,11 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
     // to "download" zero remaining bytes, which it reports as a download that
     // completed instantly — a progress bar animating to 100% at whatever
     // (bytes / ~0 elapsed) works out to, not a real transfer rate. Nothing to
-    // fetch, so say so and stop before any of that renders.
-    if model_info.registry_status == Some(v1::ModelRegistryStatus::Downloaded as i32) {
+    // fetch, so say so and stop before any of that renders. But only when the
+    // rescan above actually ran: a failed refresh_ok=false status is stale by
+    // construction, and falling through to plan/start below is what
+    // rediscovers files deleted from disk.
+    if should_report_already_downloaded(refresh_ok, model_info.registry_status) {
         if options.json {
             let mut json = out::JsonWriter::new();
             json.begin_object()
@@ -477,5 +495,34 @@ mod download_start_result_tests {
         };
         let result = download_start_result(sys::SUCCESS, Ok(start.clone()));
         assert_eq!(result, Ok(start));
+    }
+}
+
+#[cfg(test)]
+mod should_report_already_downloaded_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_rescan_never_reports_already_downloaded() {
+        // The bug: a stale Downloaded status survived a failed refresh and
+        // returned success without fetching the files a broken rescan could
+        // not see were gone.
+        assert!(!should_report_already_downloaded(
+            false,
+            Some(v1::ModelRegistryStatus::Downloaded as i32)
+        ));
+    }
+
+    #[test]
+    fn a_successful_rescan_still_reports_already_downloaded() {
+        assert!(should_report_already_downloaded(
+            true,
+            Some(v1::ModelRegistryStatus::Downloaded as i32)
+        ));
+    }
+
+    #[test]
+    fn a_successful_rescan_with_no_downloaded_status_falls_through() {
+        assert!(!should_report_already_downloaded(true, None));
     }
 }
