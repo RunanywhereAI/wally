@@ -9,6 +9,7 @@
 
 use crate::cli::App;
 use crate::io::output as out;
+#[cfg(not(windows))]
 use crate::util::getenv;
 
 // The same script the install line in the README pipes to a shell. Kept as one
