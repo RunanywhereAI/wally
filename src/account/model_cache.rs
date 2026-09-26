@@ -38,18 +38,19 @@ fn read_document() -> serde_json::Value {
 
 /// Atomic replace: a sibling temp then a rename, so a reader (or a launch
 /// racing a refresh) never sees a half-written file, and a killed write leaves
-/// the previous cache intact.
-fn write_cache(ids: &[String]) {
+/// the previous cache intact. Returns whether the cache was actually replaced,
+/// so a caller can tell "wrote the new catalog" from "kept the old one".
+fn write_cache(ids: &[String]) -> bool {
     let path = model_cache_path();
     if path.is_empty() {
-        return;
+        return false;
     }
     let target = std::path::Path::new(&path);
     let Some(parent) = target.parent() else {
-        return;
+        return false;
     };
     if std::fs::create_dir_all(parent).is_err() {
-        return;
+        return false;
     }
 
     let mut document = serde_json::Map::new();
@@ -91,14 +92,16 @@ fn write_cache(ids: &[String]) {
         Ok(mut file) => {
             if file.write_all(text.as_bytes()).is_err() {
                 let _ = std::fs::remove_file(&temp);
-                return;
+                return false;
             }
         }
-        Err(_) => return,
+        Err(_) => return false,
     }
     if std::fs::rename(&temp, target).is_err() {
         let _ = std::fs::remove_file(&temp);
+        return false;
     }
+    true
 }
 
 fn is_stale(ttl_seconds: i64) -> bool {
@@ -170,7 +173,13 @@ pub fn refresh_model_cache_now(credentials: &Credentials) -> Result<(), bool> {
         .filter(|model| !model.id.is_empty())
         .map(|model| model.id)
         .collect();
-    write_cache(&ids);
+    // A failed write must not report success: the caller (and the launch
+    // path validating against the cache) would otherwise trust a catalog that
+    // was never actually persisted, and reject a valid model against the
+    // stale one still on disk.
+    if !write_cache(&ids) {
+        return Err(false);
+    }
     Ok(())
 }
 
@@ -299,6 +308,40 @@ mod tests {
             assert!(
                 is_stale(3600),
                 "a future fetched_at must be stale at once, not last forever"
+            );
+        });
+    }
+
+    // #133 comment 13: a failed write must not report success, or the caller
+    // (and the launch path validating against the cache) trusts a catalog
+    // that was never actually persisted. A read-only profile directory makes
+    // the second write's temp-file create() fail without touching the real
+    // cache file already on disk.
+    #[cfg(unix)]
+    #[test]
+    fn write_cache_reports_failure_and_keeps_the_old_cache() {
+        use std::os::unix::fs::PermissionsExt;
+
+        with_profile_dir(|dir| {
+            assert!(write_cache(&["m1".to_string()]));
+            assert_eq!(cached_model_ids(), vec!["m1".to_string()]);
+
+            let original = std::fs::metadata(dir).expect("dir metadata").permissions();
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555))
+                .expect("make profile dir read-only");
+            let wrote = write_cache(&["m2".to_string()]);
+            // Restore before any assertion can panic and leave the temp dir
+            // read-only for its own cleanup.
+            std::fs::set_permissions(dir, original).expect("restore profile dir permissions");
+
+            assert!(
+                !wrote,
+                "a write that cannot create its temp file must report failure"
+            );
+            assert_eq!(
+                cached_model_ids(),
+                vec!["m1".to_string()],
+                "a failed write must leave the previous cache untouched"
             );
         });
     }
