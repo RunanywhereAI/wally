@@ -388,6 +388,15 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
     }
     renderer.finish();
     unwire_progress_callback();
+    // The orchestrator keeps a task-map entry alive per download so cancel /
+    // resume / progress_poll can still find it after the worker thread exits;
+    // every terminal state (completed, cancelled, or failed below) leaves one
+    // behind unless something purges it. The call is documented idempotent
+    // and safe on every terminal path, so it runs unconditionally here rather
+    // than only on success.
+    let mut purged_tasks: usize = 0;
+    // SAFETY: purged_tasks is a valid out-param for this call only.
+    unsafe { sys::rac_download_cleanup_terminal_tasks_proto(&mut purged_tasks) };
 
     match v1::DownloadState::try_from(final_progress.state) {
         Ok(v1::DownloadState::Completed) => {}
