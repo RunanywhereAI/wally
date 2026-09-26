@@ -174,6 +174,92 @@ fn temp_directory_path() -> Option<PathBuf> {
         .then_some(directory)
 }
 
+// Neither C++ nor this port ever cleaned these up: a launch that is killed
+// (a crash, `kill -9`, a closed terminal) skips TemporaryConfig's Drop, so
+// its file -- which for OpenClaw's handoff still holds the session's API
+// key -- sits in the temp directory indefinitely. Anything younger than this
+// may belong to a launch still running right now.
+const LEFTOVER_CONFIG_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// `true` for exactly the names `TemporaryConfig::write` creates:
+/// `wally-agent-<digits>.json` or `wally-agent-<digits>.yaml`. Nothing else
+/// in the temp directory matches, including a name we wrote ourselves for a
+/// different purpose.
+fn is_leftover_config_name(name: &str) -> bool {
+    for extension in [".json", ".yaml"] {
+        if let Some(digits) = name
+            .strip_prefix("wally-agent-")
+            .and_then(|rest| rest.strip_suffix(extension))
+        {
+            return !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit());
+        }
+    }
+    false
+}
+
+/// Whether `clean_leftover_configs` may delete the entry `metadata` describes:
+/// a regular file (never a symlink -- never follow one into deleting
+/// something else), owned by the account running this process, and older
+/// than `LEFTOVER_CONFIG_MAX_AGE`. Ownership has no check on Windows: the
+/// per-user temp directory `temp_directory_path` resolves there is already
+/// ACL-restricted to its owner, the same reasoning `TemporaryConfig::write`
+/// already relies on to skip setting Unix-style file permissions there.
+fn is_removable_leftover_config(metadata: &std::fs::Metadata, now: std::time::SystemTime) -> bool {
+    if metadata.is_symlink() || !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid() takes no arguments and cannot fail.
+        let euid = unsafe { libc::geteuid() };
+        if metadata.uid() != euid {
+            return false;
+        }
+    }
+    match metadata.modified() {
+        Ok(modified) => now
+            .duration_since(modified)
+            .is_ok_and(|age| age >= LEFTOVER_CONFIG_MAX_AGE),
+        // No mtime to judge by: never treat it as safe to remove.
+        Err(_) => false,
+    }
+}
+
+/// Removes our own abandoned `wally-agent-*` configs from the temp directory
+/// before this launch writes a new one. Best-effort throughout: a directory
+/// that cannot be listed, or a single entry whose metadata cannot be read or
+/// which cannot be removed (already gone, permissions, a live process still
+/// holding it open on Windows), is silently skipped -- this is background
+/// housekeeping, never the operation the caller actually asked for.
+fn clean_leftover_configs() {
+    let Some(directory) = temp_directory_path() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
+            continue;
+        };
+        if !is_leftover_config_name(name) {
+            continue;
+        }
+        // `DirEntry::metadata()` does not traverse a symlink where the
+        // platform supports telling the difference -- the same "look, don't
+        // follow" guarantee `is_removable_leftover_config` depends on.
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if is_removable_leftover_config(&metadata, now) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 impl TemporaryConfig {
     fn new() -> Self {
         TemporaryConfig { path: None }
@@ -656,6 +742,10 @@ pub fn build_deep_seek_patch(settings_path: &str, model: &str) -> String {
 }
 
 pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &GlobalOptions) -> i32 {
+    // A launch killed before its own Drop runs (crash, kill -9, a closed
+    // terminal) leaves its config behind; sweep those before this one
+    // possibly writes another, rather than only ever growing the pile.
+    clean_leftover_configs();
     if model.is_empty() {
         // Nothing to wire, so do not pretend to. Same contract as
         // `wally opencode` with no model.
@@ -953,6 +1043,132 @@ mod tests {
             None,
             "a set-but-empty TMPDIR wins and is not a directory"
         );
+        unsafe {
+            for (name, value) in saved {
+                match value {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn is_leftover_config_name_matches_only_temporary_configs_own_naming() {
+        assert!(is_leftover_config_name("wally-agent-12345.json"));
+        assert!(is_leftover_config_name("wally-agent-0.yaml"));
+        // No digits at all is not a name `TemporaryConfig::write` ever produced.
+        assert!(!is_leftover_config_name("wally-agent-.json"));
+        assert!(!is_leftover_config_name("wally-agent-.yaml"));
+        // A non-digit anywhere in the id must reject, not just stop matching.
+        assert!(!is_leftover_config_name("wally-agent-12a45.json"));
+        // Wrong extension, wrong prefix, and no extension at all.
+        assert!(!is_leftover_config_name("wally-agent-12345.yml"));
+        assert!(!is_leftover_config_name("other-agent-12345.json"));
+        assert!(!is_leftover_config_name("wally-agent-12345"));
+        assert!(!is_leftover_config_name(""));
+    }
+
+    /// Backdates `path`'s mtime by `age` so `is_removable_leftover_config` sees
+    /// a file older than `LEFTOVER_CONFIG_MAX_AGE`.
+    fn backdate(path: &Path, age: std::time::Duration) {
+        let file = std::fs::File::open(path).expect("open for backdating");
+        let backdated = std::time::SystemTime::now() - age;
+        file.set_modified(backdated).expect("set_modified");
+    }
+
+    #[test]
+    fn is_removable_leftover_config_rejects_a_file_younger_than_the_max_age() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("wally-agent-1.json");
+        std::fs::write(&path, "{}").expect("write fixture");
+        let metadata = std::fs::symlink_metadata(&path).expect("metadata");
+        assert!(
+            !is_removable_leftover_config(&metadata, std::time::SystemTime::now()),
+            "a file written moments ago may belong to a launch that is still running"
+        );
+    }
+
+    #[test]
+    fn is_removable_leftover_config_accepts_a_file_older_than_the_max_age() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("wally-agent-2.json");
+        std::fs::write(&path, "{}").expect("write fixture");
+        backdate(&path, LEFTOVER_CONFIG_MAX_AGE + std::time::Duration::from_secs(60));
+        let metadata = std::fs::symlink_metadata(&path).expect("metadata");
+        assert!(is_removable_leftover_config(
+            &metadata,
+            std::time::SystemTime::now()
+        ));
+    }
+
+    #[test]
+    fn is_removable_leftover_config_rejects_a_directory() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let sub = dir.path().join("wally-agent-3.json");
+        std::fs::create_dir(&sub).expect("mkdir fixture");
+        let metadata = std::fs::symlink_metadata(&sub).expect("metadata");
+        assert!(!is_removable_leftover_config(
+            &metadata,
+            std::time::SystemTime::now()
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn is_removable_leftover_config_rejects_a_symlink_even_when_old() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("wally-agent-4-target.json");
+        std::fs::write(&target, "{}").expect("write fixture");
+        backdate(&target, LEFTOVER_CONFIG_MAX_AGE + std::time::Duration::from_secs(60));
+        let link = dir.path().join("wally-agent-4.json");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink fixture");
+        let metadata = std::fs::symlink_metadata(&link).expect("metadata");
+        assert!(
+            !is_removable_leftover_config(&metadata, std::time::SystemTime::now()),
+            "never follow a symlink into deleting something else, no matter its age"
+        );
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn clean_leftover_configs_removes_only_its_own_old_leftovers() {
+        let _lock = env_lock();
+        let names = ["TMPDIR", "TMP", "TEMP", "TEMPDIR"];
+        let saved: Vec<_> = names.iter().map(|n| (n, std::env::var_os(n))).collect();
+        let dir = tempfile::tempdir().expect("temp dir");
+        // SAFETY: env_lock serializes every test here that touches the env.
+        unsafe {
+            for name in names {
+                std::env::remove_var(name);
+            }
+            std::env::set_var("TMPDIR", dir.path());
+        }
+
+        let old_json = dir.path().join("wally-agent-100.json");
+        let old_yaml = dir.path().join("wally-agent-200.yaml");
+        let young = dir.path().join("wally-agent-300.json");
+        let unrelated = dir.path().join("wally-agent-400.txt");
+        for path in [&old_json, &old_yaml, &young, &unrelated] {
+            std::fs::write(path, "{}").expect("write fixture");
+        }
+        let old_age = LEFTOVER_CONFIG_MAX_AGE + std::time::Duration::from_secs(60);
+        backdate(&old_json, old_age);
+        backdate(&old_yaml, old_age);
+        backdate(&unrelated, old_age);
+        // `young` keeps its just-written mtime: still inside the age window.
+
+        clean_leftover_configs();
+
+        assert!(!old_json.exists(), "an old wally-agent-*.json must be removed");
+        assert!(!old_yaml.exists(), "an old wally-agent-*.yaml must be removed");
+        assert!(young.exists(), "a fresh leftover may belong to a running launch");
+        assert!(
+            unrelated.exists(),
+            "a name that only partly matches must never be touched"
+        );
+
+        // SAFETY: as above.
         unsafe {
             for (name, value) in saved {
                 match value {
