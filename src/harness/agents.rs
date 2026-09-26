@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::account::{self, ConsoleClient};
 use crate::bootstrap::GlobalOptions;
-use crate::io::json::dump;
+use crate::io::json::{dump, dump_pretty};
 use crate::io::output as out;
 
 use super::catalog_models::{catalog_models_for, CatalogModel};
@@ -415,6 +415,78 @@ fn open_claw_state_directory() -> PathBuf {
         }
     }
     PathBuf::new()
+}
+
+/// Drop our provider from every agent's generated `models.json`, so OpenClaw
+/// rebuilds it from this run's config. In its default `merge` mode OpenClaw
+/// keeps an existing provider's `apiKey` and `baseUrl` over the config's, so
+/// the first run's key and endpoint would otherwise stick: a new login, a
+/// local server on a fresh port, or a switch to hosted all failed auth. Other
+/// providers in the file are left as they are.
+///
+/// Agents live under `<state>/agents/<id>/agent` unless their config entry
+/// (`agents.entries` or `agents.list`) names an `agentDir`, the same lookup as
+/// OpenClaw's `resolveAgentDir`.
+fn drop_stale_open_claw_provider(state: &Path, config: &str) {
+    let mut agent_dirs: Vec<PathBuf> = std::fs::read_dir(state.join("agents"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path().join("agent"))
+                .collect()
+        })
+        .unwrap_or_default();
+    let config: Value = serde_json::from_str(config).unwrap_or(Value::Null);
+    let roster = config["agents"]
+        .get("entries")
+        .or_else(|| config["agents"].get("list"));
+    let entries: Vec<&Value> = match roster {
+        Some(Value::Object(entries)) => entries.values().collect(),
+        Some(Value::Array(entries)) => entries.iter().collect(),
+        _ => Vec::new(),
+    };
+    for entry in entries {
+        if let Some(dir) = entry["agentDir"].as_str().map(str::trim) {
+            if !dir.is_empty() {
+                agent_dirs.push(expand_home(dir));
+            }
+        }
+    }
+    for dir in agent_dirs {
+        let path = dir.join("models.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut document) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let removed = document
+            .get_mut("providers")
+            .and_then(Value::as_object_mut)
+            .and_then(|providers| providers.remove(PROVIDER_ID))
+            .is_some();
+        if removed {
+            if let Err(error) = std::fs::write(&path, dump_pretty(&document, 2)) {
+                out::status_line(&format!(
+                    "warning: could not update {} ({error}); openclaw may reuse an old key or endpoint",
+                    path.display()
+                ));
+            }
+        }
+    }
+}
+
+/// `~` and `~/…` against HOME, as OpenClaw's `resolveUserPath` does, falling
+/// back to USERPROFILE on Windows the way `open_claw_state_directory` does.
+fn expand_home(path: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+    #[cfg(windows)]
+    let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()));
+    match (path, home) {
+        ("~", Some(home)) => PathBuf::from(home),
+        (_, Some(home)) if path.starts_with("~/") => Path::new(&home).join(&path[2..]),
+        _ => PathBuf::from(path),
+    }
 }
 
 /// What the console says this model costs and how much it can hold.
@@ -853,6 +925,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                 release(&endpoint);
                 return 1;
             }
+            drop_stale_open_claw_provider(&state, &read_open_claw_config());
             // Pinned before the config path, because OpenClaw derives the
             // state directory from the config file's folder when this is
             // unset.
@@ -944,6 +1017,132 @@ mod tests {
     //! temp-directory lookup, each as the C++ behaved.
     use super::*;
     use crate::util::env_lock::lock as env_lock;
+
+    #[test]
+    fn stale_runanywhere_provider_is_dropped_and_others_kept() {
+        let state = tempfile::tempdir().unwrap();
+        let agent = state.path().join("agents").join("main").join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        let models = agent.join("models.json");
+        std::fs::write(
+            &models,
+            r#"{"providers":{"runanywhere":{"baseUrl":"https://old/v1","apiKey":"old"},"openai":{"apiKey":"theirs"}}}"#,
+        )
+        .unwrap();
+
+        drop_stale_open_claw_provider(state.path(), "");
+
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&models).unwrap()).unwrap();
+        assert!(left["providers"].get(PROVIDER_ID).is_none());
+        assert_eq!(left["providers"]["openai"]["apiKey"], "theirs");
+    }
+
+    #[test]
+    fn stale_provider_is_dropped_from_a_configured_agent_dir() {
+        let state = tempfile::tempdir().unwrap();
+        let custom = tempfile::tempdir().unwrap();
+        let models = custom.path().join("models.json");
+        std::fs::write(&models, r#"{"providers":{"runanywhere":{"apiKey":"old"}}}"#).unwrap();
+        let config = json!({"agents": {"list": [{"id": "work", "agentDir": custom.path()}]}});
+
+        drop_stale_open_claw_provider(state.path(), &config.to_string());
+
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&models).unwrap()).unwrap();
+        assert!(left["providers"].get(PROVIDER_ID).is_none());
+    }
+
+    /// Puts HOME and USERPROFILE back on drop, so a failed assertion in a
+    /// test body cannot leak them into the tests after it.
+    struct RestoreHome([(&'static str, Option<std::ffi::OsString>); 2]);
+
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                // SAFETY: dropped before the env_lock() guard it sits beside.
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Runs `body` with HOME (and on Windows USERPROFILE) set as given, `None`
+    /// meaning unset, restoring both after, even if `body` panics.
+    fn with_home<T>(home: Option<&str>, profile: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let _lock = env_lock();
+        let _restore = RestoreHome([
+            ("HOME", std::env::var_os("HOME")),
+            ("USERPROFILE", std::env::var_os("USERPROFILE")),
+        ]);
+        // SAFETY: env_lock() is held until after `_restore` has run.
+        unsafe {
+            for (name, value) in [("HOME", home), ("USERPROFILE", profile)] {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        body()
+    }
+
+    #[test]
+    fn expand_home_follows_home() {
+        with_home(Some("/h"), None, || {
+            assert_eq!(expand_home("~"), PathBuf::from("/h"));
+            assert_eq!(expand_home("~/work"), Path::new("/h").join("work"));
+            assert_eq!(expand_home("~work"), PathBuf::from("~work"));
+            assert_eq!(expand_home("/abs"), PathBuf::from("/abs"));
+        });
+    }
+
+    // PowerShell and cmd.exe leave HOME unset, so `~` must fall back to
+    // USERPROFILE, and stay literal when that is empty too.
+    #[cfg(windows)]
+    #[test]
+    fn expand_home_falls_back_to_userprofile_on_windows() {
+        with_home(None, Some(r"C:\Users\me"), || {
+            assert_eq!(
+                expand_home("~/work"),
+                Path::new(r"C:\Users\me").join("work")
+            );
+        });
+        with_home(Some("/h"), Some(r"C:\Users\me"), || {
+            assert_eq!(expand_home("~/work"), Path::new("/h").join("work"));
+        });
+        with_home(None, Some(""), || {
+            assert_eq!(expand_home("~/work"), PathBuf::from("~/work"));
+        });
+    }
+
+    // A models.json wally cannot rewrite is warned about, not a crash, and
+    // is left as it was.
+    #[cfg(unix)]
+    #[test]
+    fn unwritable_models_json_is_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = tempfile::tempdir().unwrap();
+        let agent = state.path().join("agents").join("main").join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        let models = agent.join("models.json");
+        let original = r#"{"providers":{"runanywhere":{"apiKey":"old"}}}"#;
+        std::fs::write(&models, original).unwrap();
+        std::fs::set_permissions(&models, std::fs::Permissions::from_mode(0o444)).unwrap();
+        if std::fs::OpenOptions::new()
+            .write(true)
+            .open(&models)
+            .is_ok()
+        {
+            return; // root ignores the mode; nothing to prove here
+        }
+
+        drop_stale_open_claw_provider(state.path(), "");
+
+        assert_eq!(std::fs::read_to_string(&models).unwrap(), original);
+    }
 
     /// `setenv(name, value.c_str(), 1)` in C++ truncates silently
     /// at the first embedded NUL byte rather than failing; `set_environment`

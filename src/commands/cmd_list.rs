@@ -46,6 +46,9 @@ struct GroupedRow {
     harness_compatible: bool,
     // Distinct backends, ordered by (rank, label) so the join is stable.
     backends: std::collections::BTreeSet<(i32, &'static str)>,
+    // Every member as (id, rank, download size), so the row's size can be
+    // taken from the variant its id actually pulls once the id is settled.
+    variants: Vec<(String, i32, i64)>,
 }
 
 impl Default for GroupedRow {
@@ -63,6 +66,7 @@ impl Default for GroupedRow {
             downloaded: false,
             harness_compatible: false,
             backends: std::collections::BTreeSet::new(),
+            variants: Vec::new(),
         }
     }
 }
@@ -153,13 +157,51 @@ fn group_models(
                 .unwrap_or(v1::ModelCategory::Unspecified);
         }
         let size = model.download_size_bytes;
+        row.variants.push((model.id.clone(), rank, size));
         if size > 0 && rank < row.size_rank {
             row.size_rank = rank;
             row.size_bytes = size;
             row.size_id = model.id.clone();
         }
     }
+    for row in groups.values_mut() {
+        settle_row_id_and_size(row);
+    }
     (order, groups)
+}
+
+// The merge key only resolves when a variant is registered under it or under
+// it as an alias; a model that ships a single `mlx-` build (ternary-bonsai-27b)
+// has neither, so `pull <key>` failed as an unknown model. Show the
+// best-ranked real id instead. The size then comes from the variant that id
+// pulls: the best-ranked size alone showed the MLX build while `pull <key>`
+// fetched the GGUF (2.2 GB listed, 4.0 GB pulled for qwen3-4b-instruct-2507).
+fn settle_row_id_and_size(row: &mut GroupedRow) {
+    let pulled = crate::catalog::find(&row.id)
+        .map(|entry| entry.id.to_string())
+        .filter(|id| row.variants.iter().any(|(variant, _, _)| variant == id))
+        .or_else(|| {
+            row.variants
+                .iter()
+                .find(|(variant, _, _)| *variant == row.id)
+                .map(|(variant, _, _)| variant.clone())
+        });
+    let pulled = match pulled {
+        Some(id) => id,
+        None => match row.variants.iter().min_by_key(|(_, rank, _)| *rank) {
+            Some((id, _, _)) => {
+                row.id = id.clone();
+                id.clone()
+            }
+            None => return,
+        },
+    };
+    if let Some((id, rank, size)) = row.variants.iter().find(|(id, _, _)| *id == pulled) {
+        // An unknown size shows as `-`, not as another backend's size.
+        row.size_bytes = *size;
+        row.size_rank = if *size > 0 { *rank } else { i32::MAX };
+        row.size_id = if *size > 0 { id.clone() } else { String::new() };
+    }
 }
 
 fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
@@ -295,6 +337,7 @@ mod tests {
     fn llamacpp_variant(local_path: &str) -> v1::ModelInfo {
         v1::ModelInfo {
             id: "qwen3-4b-instruct-2507".to_string(),
+            download_size_bytes: 4_280_000_000,
             name: "Qwen3 4B Instruct 2507 Q8_0".to_string(),
             category: v1::ModelCategory::Language as i32,
             framework: v1::InferenceFramework::LlamaCpp as i32,
@@ -306,6 +349,7 @@ mod tests {
     fn mlx_variant(local_path: &str) -> v1::ModelInfo {
         v1::ModelInfo {
             id: "mlx-qwen3-4b-instruct-2507-4bit".to_string(),
+            download_size_bytes: 2_360_000_000,
             name: "Qwen3 4B Instruct 2507".to_string(),
             category: v1::ModelCategory::Language as i32,
             framework: v1::InferenceFramework::Mlx as i32,
@@ -343,5 +387,57 @@ mod tests {
         let row = &groups["qwen3-4b-instruct-2507"];
         assert_eq!(row.id, "qwen3-4b-instruct-2507");
         assert!(!row.downloaded);
+    }
+
+    #[test]
+    fn size_is_the_variant_the_row_id_pulls() {
+        let models = vec![llamacpp_variant(""), mlx_variant("")];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (_, groups) = group_models(&models, &downloaded, true);
+        let row = &groups["qwen3-4b-instruct-2507"];
+        assert_eq!(row.id, "qwen3-4b-instruct-2507");
+        assert_eq!(row.size_bytes, 4_280_000_000);
+    }
+
+    #[test]
+    fn downloaded_mlx_row_shows_the_mlx_size() {
+        let models = vec![
+            llamacpp_variant(""),
+            mlx_variant("/models/mlx-qwen3-4b-instruct-2507-4bit"),
+        ];
+        let downloaded: std::collections::HashSet<String> =
+            std::iter::once("mlx-qwen3-4b-instruct-2507-4bit".to_string()).collect();
+        let (_, groups) = group_models(&models, &downloaded, true);
+        assert_eq!(groups["qwen3-4b-instruct-2507"].size_bytes, 2_360_000_000);
+    }
+
+    #[test]
+    fn mlx_only_model_shows_a_pullable_id() {
+        // ternary-bonsai-27b ships only an mlx- build, so its merge key names
+        // no registered model.
+        let models = vec![v1::ModelInfo {
+            id: "mlx-ternary-bonsai-27b-2bit".to_string(),
+            name: "Ternary Bonsai 27B".to_string(),
+            category: v1::ModelCategory::Language as i32,
+            framework: v1::InferenceFramework::Mlx as i32,
+            download_size_bytes: 8_480_000_000,
+            ..Default::default()
+        }];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (order, groups) = group_models(&models, &downloaded, true);
+        let row = &groups[&order[0]];
+        assert_eq!(order, vec!["ternary-bonsai-27b".to_string()]);
+        assert_eq!(row.id, "mlx-ternary-bonsai-27b-2bit");
+        assert_eq!(row.size_bytes, 8_480_000_000);
+    }
+
+    #[test]
+    fn unknown_size_of_the_pulled_build_is_not_filled_from_another() {
+        let mut gguf = llamacpp_variant("");
+        gguf.download_size_bytes = 0;
+        let models = vec![gguf, mlx_variant("")];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (_, groups) = group_models(&models, &downloaded, true);
+        assert_eq!(groups["qwen3-4b-instruct-2507"].size_bytes, 0);
     }
 }
