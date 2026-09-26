@@ -47,8 +47,11 @@ fn eta_text(eta_seconds: i64) -> String {
 }
 
 fn fraction_of(p: &v1::DownloadProgress) -> f32 {
-    if p.overall_progress > 0.0 {
-        return p.overall_progress.min(1.0);
+    // A legitimate 0.0 (freshly started) must be accepted, and a NaN or
+    // out-of-range value must fall back to the byte ratio instead of being
+    // clamped into something that looks valid.
+    if p.overall_progress.is_finite() && (0.0..=1.0).contains(&p.overall_progress) {
+        return p.overall_progress;
     }
     if p.total_bytes > 0 {
         return (p.bytes_downloaded as f32 / p.total_bytes as f32).min(1.0);
@@ -256,4 +259,44 @@ unsafe extern "C" fn callback(proto_bytes: *const u8, proto_size: usize, _user_d
             renderer.finish();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn progress_with(overall_progress: f32) -> v1::DownloadProgress {
+        v1::DownloadProgress {
+            overall_progress,
+            // Stale byte fields from a previous stage: if `fraction_of`
+            // ever fell through to these when `overall_progress` was a
+            // legitimate value, the two would disagree.
+            bytes_downloaded: 500,
+            total_bytes: 1000,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_fresh_zero_overall_progress_is_not_rejected() {
+        // Before this fix, `overall_progress > 0.0` was false for a
+        // legitimate 0.0, so this fell through to the byte ratio (0.5)
+        // instead of reporting the fresh-start 0.0 the SDK actually sent.
+        assert_eq!(fraction_of(&progress_with(0.0)), 0.0);
+    }
+
+    #[test]
+    fn nan_overall_progress_falls_back_to_the_byte_ratio() {
+        assert_eq!(fraction_of(&progress_with(f32::NAN)), 0.5);
+    }
+
+    #[test]
+    fn out_of_range_overall_progress_falls_back_to_the_byte_ratio() {
+        assert_eq!(fraction_of(&progress_with(1.5)), 0.5);
+    }
+
+    #[test]
+    fn an_in_range_overall_progress_is_used_directly() {
+        assert_eq!(fraction_of(&progress_with(0.75)), 0.75);
+    }
 }
