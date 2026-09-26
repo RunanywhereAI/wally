@@ -787,9 +787,14 @@ impl Client {
                     // end-of-body marker. A dropped connection mid-transfer
                     // on a `read_until_close` reply, in particular, looks
                     // identical to a clean close until finish() checks the
-                    // format's own trailer.
-                    if decoder.finish(&mut deliver).is_err() {
-                        decode_failed = true;
+                    // format's own trailer. A final flush can also hand
+                    // `deliver` bytes the receiver rejects, same as any
+                    // other decoded chunk -- handle that `Ok(false)` the
+                    // same way `outcome` itself is handled just below.
+                    match decoder.finish(&mut deliver) {
+                        Ok(true) => {}
+                        Ok(false) => completed = false,
+                        Err(_) => decode_failed = true,
                     }
                 }
                 Ok(false) => completed = false,

@@ -124,12 +124,17 @@ impl Decoder {
     /// dropped connection mid-transfer on a `read_until_close` reply, for
     /// example -- looks identical to one that ended cleanly until something
     /// checks for the trailer each format ends with.
-    pub fn finish(&mut self, sink: &mut Sink<'_>) -> io::Result<()> {
+    ///
+    /// Returns `Ok(false)` if a final flush handed `sink` bytes and it
+    /// canceled, the same contract `push()` already uses -- a trailer-only
+    /// finalize (nothing left to flush) never calls `sink` at all, so this
+    /// is `Ok(true)` in the common case.
+    pub fn finish(&mut self, sink: &mut Sink<'_>) -> io::Result<bool> {
         match self {
-            Decoder::Identity => Ok(()),
+            Decoder::Identity => Ok(true),
             Decoder::GzipOrZlibPending(buf) => {
                 if buf.is_empty() {
-                    Ok(())
+                    Ok(true)
                 } else {
                     // Never received the 2 bytes needed to even tell gzip
                     // and zlib framing apart, so this is definitely
@@ -142,8 +147,9 @@ impl Decoder {
             }
             Decoder::Gzip(d) => {
                 let result = d.try_finish();
-                drain_finished_output(d.as_mut(), sink);
-                result
+                let ok = drain_finished_output(d.as_mut(), sink);
+                result?;
+                Ok(ok)
             }
             // flate2's ZlibDecoder has no CRC/ISIZE trailer the way
             // GzDecoder does, so try_finish() cannot reliably distinguish a
@@ -151,15 +157,16 @@ impl Decoder {
             // variant's truncation undetected here rather than fail closed
             // on legitimate streams. See the module docs on the gzip/zlib
             // auto-detect.
-            Decoder::Zlib(_) => Ok(()),
+            Decoder::Zlib(_) => Ok(true),
             Decoder::Brotli(d) => {
                 let result = d.close();
-                drain_finished_output(d.as_mut(), sink);
-                result
+                let ok = drain_finished_output(d.as_mut(), sink);
+                result?;
+                Ok(ok)
             }
             Decoder::Zstd(z) => {
                 if z.decoder.is_finished() {
-                    Ok(())
+                    Ok(true)
                 } else {
                     Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -175,11 +182,17 @@ impl Decoder {
 /// into `decoder`'s owned output buffer, same as `write_and_drain` does for
 /// an ordinary `push()`. Called regardless of whether the finalize call
 /// succeeded: a truncated stream can still have legitimate trailing bytes
-/// worth delivering before the caller sees the error.
-fn drain_finished_output<D: DecodingWriter>(decoder: &mut D, sink: &mut Sink<'_>) {
+/// worth delivering before the caller sees the error. Returns `sink`'s
+/// verdict on those bytes (`true` if there was nothing to drain), which
+/// `finish()` must not drop the way it would by calling this for its
+/// side effect alone -- see `push()` reporting `sink`'s cancellation the
+/// same way for the non-final case.
+fn drain_finished_output<D: DecodingWriter>(decoder: &mut D, sink: &mut Sink<'_>) -> bool {
     let out = std::mem::take(decoder.buffered_output());
-    if !out.is_empty() {
-        sink(&out);
+    if out.is_empty() {
+        true
+    } else {
+        sink(&out)
     }
 }
 
@@ -665,6 +678,26 @@ mod tests {
         assert!(
             result.is_err(),
             "expected a zstd body missing its checksum trailer to fail finish(), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_canceling_sink_stops_a_gzip_final_flush() {
+        // push() always flush()es right after every write (see
+        // write_and_drain's doc comment), so on the real body-reading path
+        // this decoder's own output buffer is already empty by the time
+        // finish() runs. Write straight to the inner GzDecoder instead,
+        // skipping that flush, to reproduce the case it normally prevents:
+        // bytes still sitting in the decoder when finish()'s try_finish()
+        // is the one that flushes them out to `sink`.
+        let mut inner = GzDecoder::new(Vec::new());
+        inner.write_all(GZIP_FIXTURE).unwrap();
+        let mut decoder = Decoder::Gzip(Box::new(inner));
+        let mut sink: Box<Sink<'_>> = Box::new(|_: &[u8]| -> bool { false });
+        let result = decoder.finish(&mut *sink);
+        assert!(
+            matches!(result, Ok(false)),
+            "a sink that rejects finish()'s final flush must be reported back to the caller, got {result:?}"
         );
     }
 
