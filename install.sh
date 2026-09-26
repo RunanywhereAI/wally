@@ -32,6 +32,19 @@ BIN_DIR="${HOME}/.local/bin"
 MIN_GLIBC="2.35"
 LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 libcurl.so.4"
 
+# The highest GLIBCXX_/CXXABI_ symbol version the bottle's own ELF files ask
+# of libstdc++.so.6, mirroring versions.toml [linux_abi] (glibcxx_max,
+# cxxabi_max) the same way MIN_GLIBC mirrors glibc_max --
+# scripts/release/check-linux-abi.py computes the real values from the built
+# bottle and fails the release if they exceed these; scripts/ci/check-versions.py
+# fails if these two drift from versions.toml. Checking libstdc++'s own symbol
+# versions (not just its presence, which check_linux_system already does)
+# catches a glibc-2.35 host whose libstdc++ is otherwise too old: v0.6.0's
+# bottle needed GLIBCXX_3.4.32, which a stock 22.04 libstdc++ (3.4.30) does not
+# have, and the installer downloaded before finding that out.
+MIN_GLIBCXX="3.4.30"
+MIN_CXXABI="1.3.13"
+
 # Retries cover a dropped connection or a 5xx from the CDN, which a first-time
 # install on a poor network otherwise reports as "check your internet".
 CURL_RETRY="--retry 3 --retry-delay 2"
@@ -106,7 +119,44 @@ check_linux_system() {
     if [ -n "$missing" ]; then
         fail "Wally needs these system libraries, which are not installed:${missing}. On Ubuntu or Debian: sudo apt install libstdc++6 libssl3 libcurl4"
     fi
+    check_libstdcxx_symbols
     ok "glibc ${glibc:-unknown}, system libraries present"
+}
+
+# libstdc++.so.6 being present (checked above) is not the same as it being new
+# enough: a glibc-2.35 host can still carry a libstdc++ built before GCC 12, so
+# it has the *soname* the bottle needs but not every GLIBCXX_/CXXABI_ symbol
+# version in it. v0.6.0's bottle needed GLIBCXX_3.4.32; a stock 22.04
+# libstdc++ (3.4.30) does not have it, and the installer found out only after
+# downloading, from the loader's own error. Reads the versions libstdc++
+# itself provides straight out of its string table (the same printable text
+# the loader reads), the way `check_linux_system` already found the library's
+# path via ldconfig. WALLY_LIBSTDCXX_SYMBOLS overrides the listing itself
+# (one tag per line) rather than the path, so a test can feed a fixture
+# listing without a real libstdc++ on disk.
+check_libstdcxx_symbols() {
+    if [ -n "${WALLY_LIBSTDCXX_SYMBOLS:-}" ]; then
+        listing="$(cat "$WALLY_LIBSTDCXX_SYMBOLS" 2>/dev/null || true)"
+    else
+        lib="$(printf '%s\n' "$known" | awk '/^[[:space:]]*libstdc\+\+\.so\.6[[:space:]]/{print $NF; exit}')"
+        if [ -z "$lib" ] || [ ! -r "$lib" ]; then
+            warn "could not locate libstdc++.so.6 to check its symbol versions; continuing"
+            return 0
+        fi
+        listing="$(grep -aoE '(GLIBCXX|CXXABI)_[0-9]+(\.[0-9]+)*' "$lib" 2>/dev/null || true)"
+    fi
+    if [ -z "$listing" ]; then
+        warn "could not read libstdc++'s symbol versions; continuing"
+        return 0
+    fi
+    max_glibcxx="$(printf '%s\n' "$listing" | grep '^GLIBCXX_' | sed 's/^GLIBCXX_//' | sort -V | tail -1)"
+    max_cxxabi="$(printf '%s\n' "$listing" | grep '^CXXABI_' | sed 's/^CXXABI_//' | sort -V | tail -1)"
+    if [ -n "$max_glibcxx" ] && [ "$(printf '%s\n%s\n' "$MIN_GLIBCXX" "$max_glibcxx" | sort -V | head -n1)" != "$MIN_GLIBCXX" ]; then
+        fail "Wally needs a libstdc++ with GLIBCXX_${MIN_GLIBCXX} or newer (from GCC 12+); this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+    fi
+    if [ -n "$max_cxxabi" ] && [ "$(printf '%s\n%s\n' "$MIN_CXXABI" "$max_cxxabi" | sort -V | head -n1)" != "$MIN_CXXABI" ]; then
+        fail "Wally needs a libstdc++ with CXXABI_${MIN_CXXABI} or newer (from GCC 12+); this system's libstdc++ only provides up to CXXABI_${max_cxxabi}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+    fi
 }
 
 # Runs a binary once and keeps what it printed. A binary that cannot start

@@ -207,6 +207,15 @@ def main() -> None:
             f"{INSTALLER}: MIN_GLIBC \"{min_glibc.group(1)}\" != versions.toml "
             f"[linux_abi] glibc_max \"{abi['glibc_max']}\""
         )
+    for var, key in (("MIN_GLIBCXX", "glibcxx_max"), ("MIN_CXXABI", "cxxabi_max")):
+        found = re.search(rf'^{var}="([^"]*)"', installer, re.M)
+        if not found:
+            failures.append(f"{INSTALLER}: no {var} line found")
+        elif found.group(1) != abi[key]:
+            failures.append(
+                f"{INSTALLER}: {var} \"{found.group(1)}\" != versions.toml "
+                f"[linux_abi] {key} \"{abi[key]}\""
+            )
     checked = re.search(r'^LINUX_SYSTEM_LIBRARIES="([^"]*)"', installer, re.M)
     if not checked:
         failures.append(f"{INSTALLER}: no LINUX_SYSTEM_LIBRARIES line found")
