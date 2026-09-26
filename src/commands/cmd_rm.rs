@@ -67,9 +67,10 @@ fn confined_to(target: &Path, models_root: &Path) -> bool {
     let Some(canonical_root) = weakly_canonical(models_root) else {
         return false;
     };
-    let target_str = canonical_target.to_string_lossy().into_owned();
-    let root_str = canonical_root.to_string_lossy().into_owned();
-    target_str.len() > root_str.len() + 1 && target_str.starts_with(&format!("{root_str}/"))
+    // Whole components, strictly inside. The C++ string test (`root + "/"`)
+    // never matched on Windows, where canonical paths use `\`, so every
+    // `models rm` there was refused as "outside models directory".
+    canonical_target != canonical_root && canonical_target.starts_with(&canonical_root)
 }
 
 fn confirm_on_tty(prompt: &str) -> bool {
@@ -275,6 +276,34 @@ pub fn configure_models_delete(cmd: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confined_to_accepts_only_paths_strictly_inside_the_models_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("Models");
+        let model = root.join("LlamaCpp").join("smollm2-135m");
+        std::fs::create_dir_all(&model).expect("mkdir model");
+        let sibling = temp.path().join("Models-evil").join("x");
+        std::fs::create_dir_all(&sibling).expect("mkdir sibling");
+
+        assert!(confined_to(&model, &root), "a model folder is inside");
+        assert!(
+            confined_to(&root.join("LlamaCpp").join("not-yet-there"), &root),
+            "a path that does not exist yet is judged by where it would be"
+        );
+        assert!(
+            !confined_to(&root, &root),
+            "the root itself is not deletable"
+        );
+        assert!(
+            !confined_to(&sibling, &root),
+            "a sibling sharing a prefix is outside"
+        );
+        assert!(
+            !confined_to(&root.join("..").join("Models-evil"), &root),
+            "a path that climbs out is outside"
+        );
+    }
 
     // A clean parse (buffer status SUCCESS, decode OK) paired with a
     // failing proto_rc must print the stale/empty `error` C++ carries over,
