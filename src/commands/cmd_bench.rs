@@ -731,10 +731,6 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
     Ok(models)
 }
 
-/// Message for a VLM row skipped because no usable `--vlm-image` was given.
-/// wally ships no built-in sample, so an empty `path` (the flag was never
-/// passed) and a non-empty one that doesn't exist on disk get distinct
-/// wording rather than both claiming a nonexistent in-tree default.
 /// Message for a resolved model that isn't in the downloaded registry.
 /// Names the fix with the ref the caller actually typed (`model_ref_arg`),
 /// which `wally models pull` accepts directly, rather than only reporting
@@ -743,6 +739,10 @@ fn model_not_downloaded_error(only_model: &str, model_ref_arg: &str) -> String {
     format!("model '{only_model}' is not downloaded; pull it first with `wally models pull {model_ref_arg}`")
 }
 
+/// Message for a VLM row skipped because no usable `--vlm-image` was given.
+/// wally ships no built-in sample, so an empty `path` (the flag was never
+/// passed) and a non-empty one that doesn't exist on disk get distinct
+/// wording rather than both claiming a nonexistent in-tree default.
 fn vlm_image_missing_error(path: &str) -> String {
     if path.is_empty() {
         "wally ships no built-in VLM sample image; pass --vlm-image <path>".to_string()
