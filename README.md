@@ -4,9 +4,8 @@
 
 **Run open models on your own machine, or hosted when the job outgrows it.**
 
-Chat with a language model from one terminal command. Local models never leave
-your device. Hosted ones run on RunAnywhere Cloud and are billed against your
-own credit.
+One terminal command to chat with a model. Local models stay on your device;
+hosted ones bill against your RunAnywhere credit.
 
 <br clear="right">
 
@@ -19,7 +18,7 @@ Debian 12+):
 curl -fsSL https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.sh | sh
 ```
 
-Windows:
+Windows (x64 and ARM64):
 
 ```powershell
 irm https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.ps1 | iex
@@ -30,7 +29,7 @@ irm https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.ps1 | iex
 You don't need an account or a key, and nothing leaves the machine.
 
 ```bash
-wally models pull qwen3     # download
+wally models pull qwen3     # download Qwen3 0.6B
 wally run qwen3             # chat
 wally run qwen3 "Hello"     # one answer and exit
 wally serve qwen3           # OpenAI-compatible API on :8080 (macOS, Linux)
@@ -43,9 +42,11 @@ works too:
 wally models pull hf.co/Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf
 ```
 
-## Use the certified local model in your coding agent
+## Use a local model in your coding agent
 
-Download Qwen3 4B once, then launch any supported harness against it:
+Qwen3 4B is the one local model certified for coding agents, meaning it's
+tested for tool calls and long context. Download it once, then launch any
+supported agent against it:
 
 ```bash
 wally models pull qwen3-4b-instruct-2507
@@ -54,11 +55,21 @@ wally claude-code -m qwen3-4b-instruct-2507
 ```
 
 `claude-desktop`, `deepseek`, `hermes` and `openclaw` are wired the same way.
-Other local models are not certified for coding harnesses and are rejected.
+Other local models are rejected.
+
+## Use a hosted model
+
+Sign in once, then pass a model id from your account:
+
+```bash
+wally account login
+wally opencode --cloud -m glm-5.3-flash
+wally account usage         # remaining credit
+```
 
 ## Commands you'll use
 
-| | |
+| Command | What it does |
 |---|---|
 | `wally run` | chat, or one answer with a prompt |
 | `wally models pull` / `wally models rm` | download or delete a model |
@@ -73,14 +84,16 @@ Other local models are not certified for coding harnesses and are rejected.
 
 ## Build from source
 
-Needs a built C++ desktop kit, not the SDK source. [CONTRIBUTING.md](CONTRIBUTING.md)
-has the steps.
+Wally is Rust, built through CMake against a prebuilt RunAnywhere C++ desktop
+kit (not the SDK source tree). [CONTRIBUTING.md](CONTRIBUTING.md) has the steps.
 
 ## More
 
 - [Engines and platforms](docs/ENGINES.md): what runs where and how wally picks
 - [Models](docs/MODELS.md): the full catalog
 - [Editors and hosted models](docs/EDITORS.md): how each tool is wired, where your session lives
-- [docs.runanywhere.ai](https://docs.runanywhere.ai) · [Discord](https://discord.gg/N359FBbDVd) · [Hugging Face](https://huggingface.co/runanywhere)
+- [docs.runanywhere.ai](https://docs.runanywhere.ai)
+- [Discord](https://discord.gg/N359FBbDVd)
+- [Hugging Face](https://huggingface.co/runanywhere)
 
 MIT. See [LICENSE](./LICENSE).
