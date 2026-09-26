@@ -382,11 +382,9 @@ fn windows_static_system_proxy(scheme: &str) -> Option<String> {
     // The static (non-PAC) half of what the C++ gets from
     // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY: the same "Use a proxy server"
     // settings under Internet Options that WinHttpGetIEProxyConfigForCurrentUser
-    // reads. Full WPAD/PAC auto-detection (WinHttpGetProxyForUrl with
-    // auto-detect flags, fetching and running the .pac script) is not
-    // implemented -- a network the console reaches only through PAC, with no
-    // static proxy and no proxy env vars set, will go direct here instead of
-    // through the proxy the C++ would have discovered.
+    // reads. The WPAD/PAC half lives in `windows_autodetected_system_proxy`,
+    // which `console_proxy_url` tries first; this is only the fallback for a
+    // network with a manually configured proxy and no auto-detection.
     use std::ffi::CStr;
     use windows_sys::Win32::System::Registry::{
         RegGetValueA, HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
@@ -446,21 +444,181 @@ fn windows_static_system_proxy(_scheme: &str) -> Option<String> {
     None
 }
 
+/// A NUL-terminated wide (UTF-16) string a WinHTTP out-param points at,
+/// decoded losslessly. Mirrors the `CStr::from_ptr` read of the narrow
+/// registry string above, just for a wide one; an unpaired surrogate in a PAC
+/// URL or resolved proxy host is not expected, so lossy replacement (matching
+/// the console's own credential code at the same OS boundary) is fine.
+///
+/// # Safety
+/// `ptr` must be non-null and point at a NUL-terminated UTF-16 buffer that
+/// stays valid for the read.
+#[cfg(windows)]
+unsafe fn wide_pwstr_to_string(ptr: windows_sys::core::PWSTR) -> String {
+    let mut len = 0usize;
+    while *ptr.add(len) != 0 {
+        len += 1;
+    }
+    String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len))
+}
+
+/// The WPAD/PAC half of what the C++ got for free from
+/// `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY`: read whether Internet Options has
+/// "Automatically detect settings" and/or a proxy auto-config script URL
+/// turned on, and if either is, ask WinHTTP to resolve a proxy for `url`
+/// through WPAD discovery and/or that script -- the same
+/// `WinHttpGetProxyForUrl` call the C++'s automatic-proxy access type made
+/// internally. Bounded by a short timeout: an unreachable WPAD server or a
+/// hung PAC script must not stall every console request.
+#[cfg(windows)]
+fn windows_autodetected_system_proxy(url: &str) -> Option<String> {
+    use windows_sys::Win32::Foundation::GlobalFree;
+    use windows_sys::Win32::Networking::WinHttp::{
+        WinHttpCloseHandle, WinHttpGetIEProxyConfigForCurrentUser, WinHttpGetProxyForUrl,
+        WinHttpOpen, WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_NO_PROXY,
+        WINHTTP_AUTOPROXY_AUTO_DETECT, WINHTTP_AUTOPROXY_CONFIG_URL, WINHTTP_AUTOPROXY_OPTIONS,
+        WINHTTP_AUTO_DETECT_TYPE_DHCP, WINHTTP_AUTO_DETECT_TYPE_DNS_A,
+        WINHTTP_CURRENT_USER_IE_PROXY_CONFIG, WINHTTP_PROXY_INFO,
+    };
+
+    let mut ie_config = WINHTTP_CURRENT_USER_IE_PROXY_CONFIG::default();
+    // SAFETY: `ie_config` is a valid, zeroed, correctly-sized out param.
+    let got_config = unsafe { WinHttpGetIEProxyConfigForCurrentUser(&mut ie_config) } != 0;
+
+    let auto_detect = got_config && ie_config.fAutoDetect != 0;
+    let auto_config_url = if got_config && !ie_config.lpszAutoConfigUrl.is_null() {
+        // SAFETY: WinHttpGetIEProxyConfigForCurrentUser NUL-terminates a
+        // returned auto-config URL.
+        Some(unsafe { wide_pwstr_to_string(ie_config.lpszAutoConfigUrl) })
+    } else {
+        None
+    };
+    // `lpszAutoConfigUrl`/`lpszProxy`/`lpszProxyBypass` are GlobalAlloc'd by
+    // WinHTTP; the caller frees them (MSDN, WinHttpGetIEProxyConfigForCurrentUser).
+    for ptr in [
+        ie_config.lpszAutoConfigUrl,
+        ie_config.lpszProxy,
+        ie_config.lpszProxyBypass,
+    ] {
+        if !ptr.is_null() {
+            // SAFETY: `ptr` came from the GlobalAlloc'd fields above.
+            unsafe {
+                GlobalFree(ptr as *mut core::ffi::c_void);
+            }
+        }
+    }
+
+    if !auto_detect && auto_config_url.is_none() {
+        return None;
+    }
+
+    let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_auto_config_url: Option<Vec<u16>> = auto_config_url
+        .as_deref()
+        .map(|s| s.encode_utf16().chain(std::iter::once(0)).collect());
+
+    let mut options = WINHTTP_AUTOPROXY_OPTIONS::default();
+    if auto_detect {
+        options.dwFlags |= WINHTTP_AUTOPROXY_AUTO_DETECT;
+        options.dwAutoDetectFlags = WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A;
+    }
+    if let Some(wide) = &wide_auto_config_url {
+        options.dwFlags |= WINHTTP_AUTOPROXY_CONFIG_URL;
+        options.lpszAutoConfigUrl = wide.as_ptr();
+    }
+
+    let agent: Vec<u16> = "wally".encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `agent` is a NUL-terminated wide string; the proxy/bypass args
+    // are null because this handle is only used for autoproxy discovery
+    // below, never to send a real request through a configured proxy.
+    let session = unsafe {
+        WinHttpOpen(
+            agent.as_ptr(),
+            WINHTTP_ACCESS_TYPE_NO_PROXY,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    if session.is_null() {
+        return None;
+    }
+
+    const DISCOVERY_TIMEOUT_MS: i32 = 3000;
+    // SAFETY: `session` is the handle WinHttpOpen just returned.
+    unsafe {
+        WinHttpSetTimeouts(
+            session,
+            DISCOVERY_TIMEOUT_MS,
+            DISCOVERY_TIMEOUT_MS,
+            DISCOVERY_TIMEOUT_MS,
+            DISCOVERY_TIMEOUT_MS,
+        );
+    }
+
+    let mut proxy_info = WINHTTP_PROXY_INFO::default();
+    // SAFETY: `session` is valid; `wide_url` is NUL-terminated; `options`/
+    // `proxy_info` are correctly-sized in/out params.
+    let resolved =
+        unsafe { WinHttpGetProxyForUrl(session, wide_url.as_ptr(), &mut options, &mut proxy_info) }
+            != 0;
+
+    // SAFETY: `session` is the handle WinHttpOpen returned above.
+    unsafe {
+        WinHttpCloseHandle(session);
+    }
+
+    if !resolved {
+        return None;
+    }
+
+    let proxy = if !proxy_info.lpszProxy.is_null() {
+        // SAFETY: WinHttpGetProxyForUrl NUL-terminates a returned proxy list.
+        Some(unsafe { wide_pwstr_to_string(proxy_info.lpszProxy) })
+    } else {
+        None
+    };
+    for ptr in [proxy_info.lpszProxy, proxy_info.lpszProxyBypass] {
+        if !ptr.is_null() {
+            // SAFETY: `ptr` came from the GlobalAlloc'd fields above.
+            unsafe {
+                GlobalFree(ptr as *mut core::ffi::c_void);
+            }
+        }
+    }
+
+    // WinHttpGetProxyForUrl can return several fallback proxies separated by
+    // semicolons; ureq::Proxy only takes one, so use the first, same as the
+    // bare (unprefixed) case in `static_proxy_for_scheme`.
+    let first = proxy?.split(';').next()?.trim().to_string();
+    if first.is_empty() {
+        None
+    } else {
+        Some(first)
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_autodetected_system_proxy(_url: &str) -> Option<String> {
+    None
+}
+
 /// The proxy (if any) to use for a console request, matching the C++'s
 /// per-platform behaviour exactly. On Windows the C++ uses WinHTTP with
 /// `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY` (loopback gets
 /// `WINHTTP_ACCESS_TYPE_NO_PROXY` instead) -- it never reads any proxy
-/// environment variable, so Windows here is loopback -> direct, otherwise the
-/// static system (Internet Options) proxy setting, else direct. Everywhere
-/// else the C++ goes through libcurl, so non-Windows keeps
-/// `resolve_proxy_url`'s environment-variable rules unchanged. `is_windows` is
-/// a parameter rather than `cfg!(windows)` so both platforms' rules are
-/// covered by hermetic tests on every host; production always passes
-/// `cfg!(windows)`.
+/// environment variable, so Windows here is loopback -> direct, otherwise
+/// WPAD/PAC auto-detection, then the static system (Internet Options) proxy
+/// setting, else direct. Everywhere else the C++ goes through libcurl, so
+/// non-Windows keeps `resolve_proxy_url`'s environment-variable rules
+/// unchanged. `is_windows` is a parameter rather than `cfg!(windows)` so both
+/// platforms' rules are covered by hermetic tests on every host; production
+/// always passes `cfg!(windows)`.
 fn console_proxy_url(
     url: &str,
     is_windows: bool,
     get_env: &dyn Fn(&str) -> Option<String>,
+    autodetected_system_proxy: &dyn Fn(&str) -> Option<String>,
     static_system_proxy: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     if !is_windows {
@@ -468,6 +626,9 @@ fn console_proxy_url(
     }
     if url_is_loopback(url) {
         return None;
+    }
+    if let Some(proxy) = autodetected_system_proxy(url) {
+        return Some(proxy);
     }
     let scheme = url
         .parse::<ureq::http::Uri>()
@@ -482,6 +643,7 @@ fn resolve_console_proxy(url: &str) -> Option<ureq::Proxy> {
         url,
         cfg!(windows),
         &|name| std::env::var(name).ok(),
+        &windows_autodetected_system_proxy,
         &windows_static_system_proxy,
     )?;
     ureq::Proxy::new(&value).ok()
@@ -1844,6 +2006,10 @@ mod tests {
         None
     }
 
+    fn no_autodetected_proxy(_url: &str) -> Option<String> {
+        None
+    }
+
     #[test]
     fn non_windows_ignores_the_static_system_proxy_and_follows_the_env_rules() {
         let env = env_of(&[("https_proxy", "http://proxy.example:8080")]);
@@ -1851,6 +2017,7 @@ mod tests {
             "https://console.example/v1/me",
             false,
             &lookup(&env),
+            &no_autodetected_proxy,
             &|scheme| Some(format!("static-{scheme}:9")),
         );
         assert_eq!(resolved.as_deref(), Some("http://proxy.example:8080"));
@@ -1863,6 +2030,7 @@ mod tests {
             "https://console.example/v1/me",
             false,
             &lookup(&env),
+            &no_autodetected_proxy,
             &|scheme| Some(format!("static-{scheme}:9")),
         );
         assert_eq!(resolved, None);
@@ -1878,6 +2046,7 @@ mod tests {
             "https://console.example/v1/me",
             true,
             &lookup(&env),
+            &no_autodetected_proxy,
             &|scheme| Some(format!("static-{scheme}:9")),
         );
         assert_eq!(resolved.as_deref(), Some("static-https:9"));
@@ -1890,6 +2059,7 @@ mod tests {
             "https://console.example/v1/me",
             true,
             &lookup(&env),
+            &no_autodetected_proxy,
             &no_static_proxy,
         );
         assert_eq!(resolved, None);
@@ -1898,10 +2068,13 @@ mod tests {
     #[test]
     fn windows_loopback_urls_go_direct_even_when_a_static_system_proxy_is_configured() {
         let env = env_of(&[]);
-        let resolved =
-            super::console_proxy_url("http://127.0.0.1:9999/x", true, &lookup(&env), &|scheme| {
-                Some(format!("static-{scheme}:9"))
-            });
+        let resolved = super::console_proxy_url(
+            "http://127.0.0.1:9999/x",
+            true,
+            &lookup(&env),
+            &no_autodetected_proxy,
+            &|scheme| Some(format!("static-{scheme}:9")),
+        );
         assert_eq!(resolved, None);
     }
 
@@ -1912,8 +2085,43 @@ mod tests {
             "http://console.example/v1/me",
             true,
             &lookup(&env),
+            &no_autodetected_proxy,
             &|scheme| super::static_proxy_for_scheme("http=proxy1:8080;https=proxy2:8443", scheme),
         );
         assert_eq!(resolved.as_deref(), Some("proxy1:8080"));
+    }
+
+    #[test]
+    fn windows_prefers_the_autodetected_pac_wpad_proxy_over_the_static_one() {
+        // A PAC/WPAD-only managed network: auto-detect is on, there is no
+        // static ProxyServer entry, and no proxy env var is set either --
+        // exactly the case cubic review comment #9 flagged as falling
+        // through to direct. The fake autoproxy resolver stands in for
+        // WinHttpGetIEProxyConfigForCurrentUser + WinHttpGetProxyForUrl.
+        let env = env_of(&[]);
+        let resolved = super::console_proxy_url(
+            "https://console.example/v1/me",
+            true,
+            &lookup(&env),
+            &|url| {
+                assert_eq!(url, "https://console.example/v1/me");
+                Some("pac-resolved-proxy:8080".to_string())
+            },
+            &no_static_proxy,
+        );
+        assert_eq!(resolved.as_deref(), Some("pac-resolved-proxy:8080"));
+    }
+
+    #[test]
+    fn windows_loopback_urls_go_direct_without_even_trying_pac_wpad_autodetection() {
+        let env = env_of(&[]);
+        let resolved = super::console_proxy_url(
+            "http://127.0.0.1:9999/x",
+            true,
+            &lookup(&env),
+            &|_url| panic!("autodetection must not run for a loopback URL"),
+            &no_static_proxy,
+        );
+        assert_eq!(resolved, None);
     }
 }
