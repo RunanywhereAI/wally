@@ -960,3 +960,44 @@ fn verify_cloud_session_unreachable_refresh_is_unverified_not_bad() {
         error.message
     );
 }
+
+// A model stored through a file symlink (rather than a plain copy) must
+// still be discovered: `scan_model_dir` used to look at the link itself
+// (`file_type()`), see neither a directory nor a regular file, and skip the
+// weight file entirely -- which left the whole model directory looking empty
+// (no manifest, no weights) and omitted from the result.
+#[cfg(unix)]
+#[test]
+fn local_models_discovers_a_symlinked_weight_file() {
+    let root = tempfile::tempdir().expect("temp dir");
+
+    let store = root.path().join("store");
+    std::fs::create_dir_all(&store).expect("mkdir store");
+    let real_weights = store.join("weights.gguf");
+    std::fs::write(&real_weights, b"not a real gguf, just nonzero content")
+        .expect("write real weights");
+    let real_len = std::fs::metadata(&real_weights)
+        .expect("stat real weights")
+        .len();
+
+    let home = root.path().join("home");
+    let model_dir = home
+        .join("RunAnywhere")
+        .join("Models")
+        .join("llama-cpp")
+        .join("symlinked-model");
+    std::fs::create_dir_all(&model_dir).expect("mkdir model dir");
+    std::os::unix::fs::symlink(&real_weights, model_dir.join("weights.gguf"))
+        .expect("symlink weights into the model dir");
+
+    let models = harness::local_models(&home.to_string_lossy());
+    let found = models
+        .iter()
+        .find(|m| m.id == "symlinked-model")
+        .unwrap_or_else(|| panic!("symlinked-model missing from {models:?}"));
+    assert!(!found.path.is_empty(), "path must not be empty: {found:?}");
+    assert_eq!(
+        found.bytes as u64, real_len,
+        "bytes must match the symlink target: {found:?}"
+    );
+}

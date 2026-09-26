@@ -47,18 +47,47 @@ fn scan_model_dir(dir: &Path) -> (String, bool, i64) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            if file_type.is_dir() {
+            // `file_type()` describes the link itself, not what it points at,
+            // so a symlinked weight file would otherwise look like neither a
+            // directory nor a regular file and vanish from the walk.
+            // `fs::metadata` follows the link to learn the target's real
+            // type and size -- `DirEntry::metadata()` (used below for a
+            // plain file) does not follow a symlink either, and lstat's
+            // reported size for one is the length of the target path
+            // string, not the target's content, so the resolved metadata
+            // fetched here is reused for the byte count too.
+            let target_metadata = if file_type.is_symlink() {
+                match fs::metadata(&path) {
+                    Ok(target) => Some(target),
+                    // Broken link, or a stat that failed: skip, same as this
+                    // function's other best-effort cases.
+                    Err(_) => continue,
+                }
+            } else {
+                None
+            };
+            let is_dir = match &target_metadata {
+                Some(target) if target.is_dir() => true,
+                Some(target) if target.is_file() => false,
+                // A symlink to a special file (socket, device, ...): skip.
+                Some(_) => continue,
+                None if file_type.is_dir() => true,
+                None if file_type.is_file() => false,
+                None => continue,
+            };
+            if is_dir {
                 stack.push(path);
-                continue;
-            }
-            if !file_type.is_file() {
                 continue;
             }
             // A file that vanished between the listing and the stat is skipped
             // rather than counted as size 0, which would otherwise silently
             // undercount the total.
-            if let Ok(metadata) = entry.metadata() {
-                bytes += metadata.len() as i64;
+            let size = match &target_metadata {
+                Some(target) => Some(target.len()),
+                None => entry.metadata().ok().map(|m| m.len()),
+            };
+            if let Some(size) = size {
+                bytes += size as i64;
             }
             if path.file_name().and_then(|n| n.to_str()) == Some(MANIFEST) {
                 manifest = true;
