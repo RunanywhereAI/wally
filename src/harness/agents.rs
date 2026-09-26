@@ -1094,7 +1094,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("wally-agent-2.json");
         std::fs::write(&path, "{}").expect("write fixture");
-        backdate(&path, LEFTOVER_CONFIG_MAX_AGE + std::time::Duration::from_secs(60));
+        backdate(
+            &path,
+            LEFTOVER_CONFIG_MAX_AGE + std::time::Duration::from_secs(60),
+        );
         let metadata = std::fs::symlink_metadata(&path).expect("metadata");
         assert!(is_removable_leftover_config(
             &metadata,
@@ -1120,7 +1123,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let target = dir.path().join("wally-agent-4-target.json");
         std::fs::write(&target, "{}").expect("write fixture");
-        backdate(&target, LEFTOVER_CONFIG_MAX_AGE + std::time::Duration::from_secs(60));
+        backdate(
+            &target,
+            LEFTOVER_CONFIG_MAX_AGE + std::time::Duration::from_secs(60),
+        );
         let link = dir.path().join("wally-agent-4.json");
         std::os::unix::fs::symlink(&target, &link).expect("symlink fixture");
         let metadata = std::fs::symlink_metadata(&link).expect("metadata");
@@ -1160,9 +1166,18 @@ mod tests {
 
         clean_leftover_configs();
 
-        assert!(!old_json.exists(), "an old wally-agent-*.json must be removed");
-        assert!(!old_yaml.exists(), "an old wally-agent-*.yaml must be removed");
-        assert!(young.exists(), "a fresh leftover may belong to a running launch");
+        assert!(
+            !old_json.exists(),
+            "an old wally-agent-*.json must be removed"
+        );
+        assert!(
+            !old_yaml.exists(),
+            "an old wally-agent-*.yaml must be removed"
+        );
+        assert!(
+            young.exists(),
+            "a fresh leftover may belong to a running launch"
+        );
         assert!(
             unrelated.exists(),
             "a name that only partly matches must never be touched"

@@ -264,7 +264,9 @@ fn launcher_target(launcher: &Path, lib_dir: &Path) -> Option<PathBuf> {
         return None;
     }
     let resolved = std::fs::canonicalize(launcher).ok()?;
-    resolved.starts_with(lib_dir).then(|| launcher.to_path_buf())
+    resolved
+        .starts_with(lib_dir)
+        .then(|| launcher.to_path_buf())
 }
 
 // The whole tree install.ps1 put down (`%LOCALAPPDATA%\Programs\wally`),
@@ -607,7 +609,9 @@ mod tests {
     #[cfg(unix)]
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(())).lock().unwrap()
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
     }
 
     // A real install.sh tree in a temp HOME: LIB_DIR with a `bin/wally`
@@ -725,5 +729,59 @@ mod tests {
         let dangling = fixture.home_path.join(".local/bin/dangling");
         std::os::unix::fs::symlink(&missing_target, &dangling).expect("symlink dangling");
         assert_eq!(launcher_target(&dangling, &lib_dir), None);
+    }
+
+    // Serializes every test below that sets LOCALAPPDATA -- same pattern as
+    // the Unix env_lock() above, kept separate since it guards a different
+    // variable and only ever runs on Windows.
+    #[cfg(windows)]
+    fn windows_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_install_directory_finds_the_directory_from_the_running_exe() {
+        let _lock = windows_env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let local_app_data = temp.path();
+        // SAFETY: windows_env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("LOCALAPPDATA", local_app_data) };
+
+        let install_dir = local_app_data.join("Programs").join("wally");
+        std::fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let exe = install_dir.join("wally.exe");
+        std::fs::write(&exe, b"stub").expect("write exe");
+
+        let canonical_exe = std::fs::canonicalize(&exe).expect("canonicalize exe");
+        let resolved = windows_install_directory(&canonical_exe.to_string_lossy())
+            .expect("windows install directory should be recognised");
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(&install_dir).expect("canonicalize install dir")
+        );
+
+        // SAFETY: still holding windows_env_lock().
+        unsafe { std::env::remove_var("LOCALAPPDATA") };
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_install_directory_rejects_a_binary_outside_the_programs_tree() {
+        let _lock = windows_env_lock();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let local_app_data = temp.path();
+        // SAFETY: windows_env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("LOCALAPPDATA", local_app_data) };
+
+        let elsewhere = local_app_data.join("elsewhere-wally.exe");
+        std::fs::write(&elsewhere, b"stub").expect("write elsewhere");
+        assert!(windows_install_directory(&elsewhere.to_string_lossy()).is_none());
+
+        // SAFETY: still holding windows_env_lock().
+        unsafe { std::env::remove_var("LOCALAPPDATA") };
     }
 }

@@ -154,7 +154,9 @@ mod tests {
         let _lock = env_lock();
         // SAFETY: env_lock() is held for this whole test body.
         unsafe { std::env::remove_var("HOMEBREW_PREFIX") };
-        assert!(!is_homebrew_managed("/home/user/.local/lib/wally/bin/wally"));
+        assert!(!is_homebrew_managed(
+            "/home/user/.local/lib/wally/bin/wally"
+        ));
     }
 
     #[test]
