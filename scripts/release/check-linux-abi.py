@@ -45,6 +45,14 @@ DT_NEEDED = 1
 FAMILIES = {"GLIBC": "glibc_max", "GLIBCXX": "glibcxx_max", "CXXABI": "cxxabi_max"}
 VERSION_TAG = re.compile(r"^(GLIBC|GLIBCXX|CXXABI)_([0-9]+(?:\.[0-9]+)*)$")
 
+# glibc also defines synthetic ABI markers instead of a normal per-symbol
+# version: a verneed entry that names a capability rather than a release, so
+# VERSION_TAG never matches it and it silently passed as an unrecognised tag.
+# GLIBC_ABI_DT_RELR is the one seen in the wild: a binary linked with
+# -Wl,-z,pack-relative-relocs (DT_RELR) needs it, and only the loader from the
+# glibc release that added DT_RELR support -- 2.36 -- provides it.
+GLIBC_ABI_MARKERS = {"GLIBC_ABI_DT_RELR": "2.36"}
+
 
 class AbiError(RuntimeError):
     pass
@@ -179,10 +187,18 @@ def check_files(files: dict[str, bytes], policy: dict[str, object]) -> list[str]
         needed, versions = read_elf(data, relative)
         for tag in sorted(versions):
             match = VERSION_TAG.match(tag)
-            if match and version_key(match.group(2)) > version_key(ceilings[match.group(1)]):
+            if match:
+                if version_key(match.group(2)) > version_key(ceilings[match.group(1)]):
+                    problems.append(
+                        f"{relative}: needs {tag}, above the {match.group(1)}_{ceilings[match.group(1)]} "
+                        "the supported Linux floor provides"
+                    )
+                continue
+            marker_floor = GLIBC_ABI_MARKERS.get(tag)
+            if marker_floor and version_key(marker_floor) > version_key(ceilings["GLIBC"]):
                 problems.append(
-                    f"{relative}: needs {tag}, above the {match.group(1)}_{ceilings[match.group(1)]} "
-                    "the supported Linux floor provides"
+                    f"{relative}: needs {tag}, which requires glibc {marker_floor}, above the "
+                    f"GLIBC_{ceilings['GLIBC']} the supported Linux floor provides"
                 )
         for soname in sorted(needed - shipped - system):
             problems.append(
