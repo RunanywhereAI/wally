@@ -269,7 +269,7 @@ CMake resolves the kit and runs `cargo build --release` for the crate
 CMake 3.27+ and Ninja are also prerequisites: `cmake/WallyRust.cmake` picks
 the Cargo profile from `CMAKE_BUILD_TYPE` at configure time, so it rejects
 multi-config generators (Visual Studio, Xcode, Ninja Multi-Config) outright,
-which is why `-G Ninja` above is required (`Unix Makefiles` also works on
+which is why the build above passes `-G Ninja` (`Unix Makefiles` also works on
 macOS/Linux, but Windows' default generator, Visual Studio, is multi-config;
 CI uses Ninja everywhere).
 

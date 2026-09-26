@@ -1962,7 +1962,7 @@ mod tests {
     fn remaining_after_discovery_ms_subtracts_what_discovery_spent() {
         // Discovery's own 3s bound consumed against the request's 30s
         // default -- without this the request would still get the full 30s
-        // on top, per cubic review comment #66.
+        // on top.
         let remaining = super::remaining_after_discovery_ms(30_000, Duration::from_millis(3_000));
         assert_eq!(remaining, 27_000);
     }
@@ -2218,8 +2218,8 @@ mod tests {
     fn windows_prefers_the_autodetected_pac_wpad_proxy_over_the_static_one() {
         // A PAC/WPAD-only managed network: auto-detect is on, there is no
         // static ProxyServer entry, and no proxy env var is set either --
-        // exactly the case cubic review comment #9 flagged as falling
-        // through to direct. The fake autoproxy resolver stands in for
+        // the case that used to fall through to going direct. The fake
+        // autoproxy resolver stands in for
         // WinHttpGetIEProxyConfigForCurrentUser + WinHttpGetProxyForUrl.
         let env = env_of(&[]);
         let resolved = super::console_proxy_url(

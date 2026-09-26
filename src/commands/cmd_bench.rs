@@ -690,10 +690,12 @@ struct BenchModel {
 }
 
 /// `collect_models`'s outcome for the requested (or every) downloaded model:
-/// `models` is what's benchmarkable, `only_model_unsupported` is true when
-/// `only_model` was non-empty and did match a downloaded registry entry, but
-/// that entry got filtered out below (builtin framework or a category bench
-/// doesn't cover) rather than never having been downloaded at all.
+/// `models` is what's benchmarkable, `only_model_unsupported` is true when a
+/// downloaded registry entry passed the `only_model` filter but was then
+/// dropped below (builtin framework or a category bench doesn't cover). It
+/// is only consulted when `only_model` is non-empty, where that entry can
+/// only be the requested model -- so it tells "downloaded but not
+/// benchmarkable" apart from "never downloaded at all".
 struct CollectedModels {
     models: Vec<BenchModel>,
     only_model_unsupported: bool,
@@ -1110,9 +1112,9 @@ mod model_not_downloaded_error_tests {
 
     #[test]
     fn benchmarkable_error_does_not_suggest_pulling_an_already_downloaded_model() {
-        // Regression for cubic #65: a present-but-filtered model (builtin
-        // framework, or a category bench doesn't cover) must not tell the
-        // caller to `models pull` something they already have.
+        // A present-but-filtered model (builtin framework, or a category
+        // bench doesn't cover) must not tell the caller to `models pull`
+        // something they already have.
         let message = model_not_benchmarkable_error("resolved-id");
         assert!(!message.contains("models pull"));
         assert!(message.contains("resolved-id"));
@@ -1131,10 +1133,9 @@ mod no_models_to_bench_error_tests {
 
     #[test]
     fn unsupported_downloaded_model_gets_the_benchmarkability_diagnostic_not_a_pull_hint() {
-        // The bug cubic flagged: before this, any empty `collect_models`
-        // result with a non-empty `only_model` always got the "pull it
-        // first" message, even when the model was downloaded and simply
-        // filtered out as not benchmarkable.
+        // Before this, any empty `collect_models` result with a non-empty
+        // `only_model` always got the "pull it first" message, even when the
+        // model was downloaded and simply filtered out as not benchmarkable.
         let message = no_models_to_bench_error("resolved-id", "hf.co/org/repo", true);
         assert!(
             !message.contains("models pull"),
