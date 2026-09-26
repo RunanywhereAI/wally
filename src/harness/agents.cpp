@@ -21,6 +21,7 @@
 
 #include "account/console.h"
 #include "account/credentials.h"
+#include "harness/declared_harness.h"
 #include "harness/harness.h"
 #include "harness/local_models.h"
 #include "io/output.h"
@@ -448,10 +449,15 @@ std::string BuildOpenClawConfig(const std::string& existing, const std::string& 
         }
         entries.push_back(std::move(entry));
     }
+    // `headers` is OpenClaw's per-provider static header map, merged into
+    // every model request (checked against OpenClaw 2026.6.35). It matters
+    // here: on a generic OpenAI-compatible provider OpenClaw sends the OpenAI
+    // SDK's own User-Agent ("OpenAI/JS ..."), which names no harness at all.
     config["models"]["providers"][kProviderId] = {
         {"baseUrl", base_url},
         {"apiKey", KeyOrPlaceholder(api_key)},
         {"api", "openai-completions"},
+        {"headers", {{kHarnessHeader, HarnessHeaderValue(DeclaredHarness::kOpenclaw)}}},
         {"models", std::move(entries)}};
     config["agents"]["defaults"]["model"]["primary"] = std::string(kProviderId) + "/" + primary;
     // Mark onboarding done so a first launch skips OpenClaw's wizard: it goes
@@ -492,7 +498,13 @@ std::string BuildDeepSeekSettings(const std::string& base_url, const std::string
                                // runanywhere" before any request is made. The variable
                                // carries a placeholder for a local server, which ignores
                                // the Authorization header anyway.
-                               {"apiKeyEnv", key_variable}};
+                               {"apiKeyEnv", key_variable},
+                               // dsh's llm-pi-ai profile `headers`, sent on every
+                               // provider request beside its own attribution
+                               // User-Agent (checked against dsh 0.1.5).
+                               {"headers",
+                                {{kHarnessHeader,
+                                  HarnessHeaderValue(DeclaredHarness::kDeepseek)}}}};
     const nlohmann::json settings = {
         {"llm-pi-ai", {{"providers", {{kProviderId, provider}}}}}};
     return settings.dump();

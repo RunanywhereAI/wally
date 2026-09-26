@@ -136,6 +136,9 @@ struct Runtime {
     // processes out.
     std::string local_token;
     bool verbose = false;
+    // Sent on every upstream request: the harness this translator serves, in
+    // `X-RA-Harness` and in the User-Agent. Fixed for the session.
+    httplib::Headers upstream_headers;
     // Upstream connections, kept open across requests (#80). Shared, not owned:
     // a streaming worker can still be running its request after Stop(), and the
     // lease it holds keeps the pool alive until it is done.
@@ -210,6 +213,7 @@ wally::net::WatchedResult PostUpstream(Runtime& runtime, bool streaming, const s
         wally::net::WatchedCall call;
         call.path = path;
         call.body = body;
+        call.headers = runtime.upstream_headers;
         call.receiver = receiver;
         call.reader_gone = reader_gone;
         call.on_headers = on_headers;
@@ -615,7 +619,8 @@ void HandleStreaming(Runtime& runtime, const httplib::Request& editor, const Jso
 
 }  // namespace
 
-bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* shim, bool verbose,
+bool Start(const harness::Endpoint& upstream, const std::string& model,
+           harness::DeclaredHarness declared, Shim* shim, bool verbose,
            const std::string& advertised, const ModelAliases& aliases) {
     if (shim == nullptr) {
         return false;
@@ -636,6 +641,10 @@ bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* sh
     runtime->aliases = aliases;
     runtime->local_token = wally::net::GenerateLoopbackToken();
     runtime->verbose = verbose;
+    runtime->upstream_headers = {
+        {harness::kHarnessHeader, harness::HarnessHeaderValue(declared)},
+        {"User-Agent", harness::UpstreamUserAgent(declared)},
+    };
     wally::net::UpstreamOptions pool_options;
     pool_options.origin = runtime->origin;
     runtime->pool = std::make_shared<wally::net::UpstreamPool>(pool_options);

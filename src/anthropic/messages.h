@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "harness/declared_harness.h"
 #include "harness/harness.h"
 
 /// An Anthropic-shaped front door onto an OpenAI-shaped model.
@@ -47,6 +48,12 @@ struct Shim {
 /// caller asked Claude Code for: Claude Code sends its own model strings, and
 /// forwarding those to a local GGUF would ask for a model that is not there.
 ///
+/// `declared` is the tool this translator was started for (Claude Code or
+/// Claude Desktop). Every upstream request declares it in `X-RA-Harness` and
+/// names it in the User-Agent (see harness/declared_harness.h), because the
+/// endpoint otherwise sees only httplib's default agent string and attributes
+/// the traffic to nobody.
+///
 /// Returns false having said why. The caller owns stopping it.
 /// `verbose` narrates each request to stderr. Off by default: the body carries
 /// the reader's prompt, and a translator that logs conversations unasked is one
@@ -60,9 +67,9 @@ struct Shim {
 /// answering.
 /// `aliases`, when set, advertises each family name to the app and routes a
 /// request naming one back to its real model id. Empty for the CLI path.
-bool Start(const harness::Endpoint& upstream, const std::string& model, Shim* shim,
-           bool verbose = false, const std::string& advertised = {},
-           const ModelAliases& aliases = {});
+bool Start(const harness::Endpoint& upstream, const std::string& model,
+           harness::DeclaredHarness declared, Shim* shim, bool verbose = false,
+           const std::string& advertised = {}, const ModelAliases& aliases = {});
 
 /// Stops the translator and waits for its thread. Safe on a stopped shim.
 void Stop(Shim* shim);

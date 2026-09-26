@@ -281,9 +281,36 @@ TestResult test_config_injects_limit_and_cost() {
     return result;
 }
 
+// OpenCode hands `options.headers` to the AI SDK provider, which sends them on
+// every request; this is how its traffic declares itself (`X-RA-Harness`).
+// Both builders: the local/`wally opencode -m` path and the cloud session path.
+TestResult test_config_declares_the_harness() {
+    TestResult result;
+    result.test_name = "config_declares_the_harness";
+    using Json = nlohmann::json;
+    const std::vector<wally::harness::CatalogModel> catalog = {{"glm-5.3-flash", 0, 0, 0, 0}};
+    const Json configs[] = {
+        Json::parse(wally::harness::BuildOpenCodeConfig("glm-5.3-flash",
+                                                        "http://127.0.0.1:52431/v1", "", catalog)),
+        Json::parse(wally::harness::BuildOpenCodeCloudConfig(
+            "glm-5.3-flash", "https://inference.runanywhere.ai/v1", "tok", catalog)),
+    };
+    for (const Json& config : configs) {
+        const Json& options = config["provider"]["runanywhere"]["options"];
+        if (!options.contains("headers") || options["headers"].size() != 1 ||
+            options["headers"].value("X-RA-Harness", "") != "opencode") {
+            result.details = "provider options: " + options.dump();
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+
 int main(int argc, char** argv) {
     TestSuite suite("wally_opencode");
     suite.add("config_injects_limit_and_cost", test_config_injects_limit_and_cost);
+    suite.add("config_declares_the_harness", test_config_declares_the_harness);
     suite.add("ephemeral_config_and_passthrough", test_ephemeral_config_and_passthrough);
     suite.add("refreshes_expired_session_without_sdk_bootstrap",
               test_refreshes_expired_session_without_sdk_bootstrap);

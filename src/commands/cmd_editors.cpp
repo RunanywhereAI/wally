@@ -21,6 +21,7 @@
 #include "io/output.h"
 #include "desktop/claude_profile.h"
 #include "harness/catalog_models.h"
+#include "harness/declared_harness.h"
 #include "harness/harness.h"
 
 namespace wally::commands {
@@ -59,6 +60,9 @@ struct Editor {
     const char* bundle;
     const char* summary;
     Wiring wiring;
+    /// What the translator declares upstream for this tool (`X-RA-Harness`),
+    /// so the endpoint attributes the traffic to it rather than to nobody.
+    harness::DeclaredHarness declared;
 };
 
 /// Only tools that speak the Anthropic Messages API belong here. Anything
@@ -68,9 +72,10 @@ struct Editor {
 /// to the Claude Code it runs inside itself, and ANTHROPIC_BASE_URL is one of
 /// them. That is the same trick as `wally claude-code`, one process further out.
 constexpr Editor kEditors[] = {
-    {"claude-code", "claude", "", "Open Claude Code with a model", Wiring::Environment},
+    {"claude-code", "claude", "", "Open Claude Code with a model", Wiring::Environment,
+     harness::DeclaredHarness::kClaudeCode},
     {"claude-desktop", "", "Claude.app", "Open Claude Desktop with a model",
-     Wiring::ClaudeProfile},
+     Wiring::ClaudeProfile, harness::DeclaredHarness::kClaudeDesktop},
 };
 
 /// Where `editor`'s application bundle is, or empty when it is not installed.
@@ -316,7 +321,9 @@ int Serve(const Editor& editor, const std::string& model,
         return 1;
     }
     anthropic::Shim shim;
-    if (!anthropic::Start(endpoint, model, &shim, options.verbose)) {
+    // `--serve` is named after a tool too (`wally claude-code --serve`), so the
+    // endpoint it holds open declares that tool.
+    if (!anthropic::Start(endpoint, model, editor.declared, &shim, options.verbose)) {
         harness::Release(endpoint);
         return 1;
     }
@@ -394,7 +401,8 @@ int Run(const Editor& editor, const std::string& model,
     }
 
     anthropic::Shim shim;
-    if (!anthropic::Start(endpoint, model, &shim, options.verbose, advertised, desktop_aliases)) {
+    if (!anthropic::Start(endpoint, model, editor.declared, &shim, options.verbose, advertised,
+                          desktop_aliases)) {
         harness::Release(endpoint);
         return 1;
     }

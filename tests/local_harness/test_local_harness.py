@@ -164,7 +164,8 @@ def main():
                                                  "WALLY_TEST_SEED_CLOUD": "test-cloud-token"})
             assert backend["created"] == 0
             provider = json.loads(captured["inherited_config"])["provider"]["runanywhere"]
-            assert provider["options"] == {"baseURL": origin + "/v1", "apiKey": "test-cloud-token"}
+            assert provider["options"] == {"baseURL": origin + "/v1", "apiKey": "test-cloud-token",
+                                           "headers": {"X-RA-Harness": "opencode"}}
             print("PASS explicit cloud launch bypasses local auto-pull")
     finally:
         console.shutdown()

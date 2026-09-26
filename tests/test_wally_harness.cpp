@@ -6,10 +6,13 @@
 #include <nlohmann/json.hpp>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "account/console.h"
 #include "account/credentials.h"
 #include "harness/agents.h"
+#include "harness/declared_harness.h"
 #include "harness/harness.h"
 #include "harness/local_models.h"
 #include "harness/opencode.h"
@@ -758,6 +761,93 @@ TestResult test_deepseek_settings_carry_the_route() {
     return result;
 }
 
+// wally launches these agents, so it declares which one each request came from
+// (`X-RA-Harness`) instead of leaving the endpoint to guess from an agent
+// string. The values are pinned as literals here, not re-derived from the
+// generated enum, because they are what InferenceInfra's harness.py matches:
+// a spelling change on either side is a silent "unknown" in production.
+TestResult test_declared_harness_values_match_the_server() {
+    TestResult result;
+    result.test_name = "declared_harness_values_match_the_server";
+    using wally::harness::DeclaredHarness;
+    using wally::harness::HarnessHeaderValue;
+    using wally::harness::UpstreamUserAgent;
+    if (std::string(wally::harness::kHarnessHeader) != "X-RA-Harness") {
+        result.details = "the header must be the one harness.py reads";
+        return result;
+    }
+    const std::pair<DeclaredHarness, const char*> expected[] = {
+        {DeclaredHarness::kClaudeCode, "claude_code"},
+        {DeclaredHarness::kClaudeDesktop, "claude_desktop"},
+        {DeclaredHarness::kOpencode, "opencode"},
+        {DeclaredHarness::kOpenclaw, "openclaw"},
+        {DeclaredHarness::kDeepseek, "deepseek"},
+    };
+    for (const auto& [harness, value] : expected) {
+        if (HarnessHeaderValue(harness) != value) {
+            result.details = "header value " + HarnessHeaderValue(harness) + " != " + value;
+            return result;
+        }
+    }
+    // The User-Agent carries the User-Agent table's hyphenated needle, so a
+    // server that ignores the declaration still attributes the bridge.
+    const std::string code = UpstreamUserAgent(DeclaredHarness::kClaudeCode);
+    const std::string desktop = UpstreamUserAgent(DeclaredHarness::kClaudeDesktop);
+    if (code.rfind("wally/", 0) != 0 || code.find("(claude-code)") == std::string::npos ||
+        desktop.find("(claude-desktop)") == std::string::npos) {
+        result.details = "user agents: " + code + " / " + desktop;
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+TestResult test_openclaw_config_declares_the_harness() {
+    TestResult result;
+    result.test_name = "openclaw_config_declares_the_harness";
+    const std::vector<wally::harness::CatalogModel> catalog = {{"glm-5.3-flash", 0, 0, 0, 0}};
+    for (const std::string& base : {std::string("https://inference.runanywhere.ai/v1"),
+                                    std::string("http://127.0.0.1:52431/v1")}) {
+        const Json config = Json::parse(
+            wally::harness::BuildOpenClawConfig("", "glm-5.3-flash", base, "sk-live-xyz", catalog));
+        const Json& provider = config["models"]["providers"]["runanywhere"];
+        if (!provider.contains("headers") || provider["headers"].size() != 1 ||
+            provider["headers"].value("X-RA-Harness", "") != "openclaw") {
+            result.details = "provider headers for " + base + ": " + provider.dump();
+            return result;
+        }
+    }
+    // A provider of ours already in their file is replaced whole, so a stale
+    // header of theirs cannot outvote the declaration.
+    const Json replaced = Json::parse(wally::harness::BuildOpenClawConfig(
+        R"({"models":{"providers":{"runanywhere":{"headers":{"X-RA-Harness":"sdk"}}}}})",
+        "glm-5.3-flash", "https://inference.runanywhere.ai/v1", "k", catalog));
+    if (replaced["models"]["providers"]["runanywhere"]["headers"]["X-RA-Harness"] != "openclaw") {
+        result.details = "an existing runanywhere provider must not keep its own declaration";
+        return result;
+    }
+    result.passed = true;
+    return result;
+}
+
+TestResult test_deepseek_settings_declare_the_harness() {
+    TestResult result;
+    result.test_name = "deepseek_settings_declare_the_harness";
+    for (const std::string& base : {std::string("https://inference.runanywhere.ai/api-dev/v1"),
+                                    std::string("http://127.0.0.1:52431/v1")}) {
+        const Json settings = Json::parse(wally::harness::BuildDeepSeekSettings(
+            base, "RUNANYWHERE_API_KEY", {{"glm-5.3-flash", 0, 0, 0, 0}}));
+        const Json& provider = settings["llm-pi-ai"]["providers"]["runanywhere"];
+        if (!provider.contains("headers") || provider["headers"].size() != 1 ||
+            provider["headers"].value("X-RA-Harness", "") != "deepseek") {
+            result.details = "provider headers for " + base + ": " + provider.dump();
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+
 // The overlay is the only thing that reaches dsh: it repoints the settings row
 // at our document and names our provider for a fresh agent. Getting either row
 // id wrong is reported on stderr as an unmatched target and otherwise ignored.
@@ -994,6 +1084,10 @@ int main(int argc, char** argv) {
     suite.add("hermes_context_hint_surfaces_the_real_window",
               test_hermes_context_hint_surfaces_the_real_window);
     suite.add("deepseek_settings_carry_the_route", test_deepseek_settings_carry_the_route);
+    suite.add("declared_harness_values_match_the_server",
+              test_declared_harness_values_match_the_server);
+    suite.add("openclaw_config_declares_the_harness", test_openclaw_config_declares_the_harness);
+    suite.add("deepseek_settings_declare_the_harness", test_deepseek_settings_declare_the_harness);
     suite.add("deepseek_patch_targets_both_rows", test_deepseek_patch_targets_both_rows);
     suite.add("deepseek_prompt_picks_headless", test_deepseek_prompt_picks_headless);
     suite.add("hermes_argv_pins_provider_and_model_ahead_of_the_rest",

@@ -43,6 +43,10 @@ struct WatchedCall {
     std::string path;
     std::string body;
     std::string content_type = "application/json";
+    /// Extra request headers, set on the request as given. The bridge uses
+    /// them to declare the harness (`X-RA-Harness`) and its own User-Agent;
+    /// a User-Agent here replaces httplib's default one.
+    httplib::Headers headers;
     /// Called with each response body chunk, exactly as `httplib::Client::Post`
     /// would; never called once the reader is known to be gone. Returning
     /// false MEANS the reader is gone -- a write to it failed -- and is the

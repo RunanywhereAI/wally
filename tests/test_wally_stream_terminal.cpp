@@ -60,7 +60,8 @@ TestResult test_stream_terminal_contract() {
         wally::harness::Endpoint endpoint;
         endpoint.base_url = "http://127.0.0.1:" + std::to_string(port) + "/v1";
         wally::anthropic::Shim shim;
-        const bool started = wally::anthropic::Start(endpoint, "test-model", &shim);
+        const bool started = wally::anthropic::Start(
+            endpoint, "test-model", wally::harness::DeclaredHarness::kClaudeCode, &shim);
         httplib::Client client(shim.base_url);
         client.set_read_timeout(10, 0);
         const auto reply = client.Post("/v1/messages", {{"Authorization", "Bearer " + shim.auth_token}},
