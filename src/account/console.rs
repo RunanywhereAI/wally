@@ -301,13 +301,19 @@ fn connect_timeout_ms(total_timeout_ms: i32) -> i32 {
 /// discovery time is on top of the request's own timeout instead of counted
 /// against it, so the first request of a process (a cache miss in
 /// `cached_autodetected_system_proxy`) could take up to 3s longer than
-/// configured. Never negative, and never below
-/// `MIN_REMAINING_TOTAL_TIMEOUT_MS`.
+/// configured. Never negative, never below `MIN_REMAINING_TOTAL_TIMEOUT_MS`,
+/// and never above `total_timeout_ms` itself -- discovery can only spend
+/// budget, never hand back more than the caller asked for, so the floor is
+/// only allowed to pull the remainder back up when discovery actually ate
+/// into it.
 fn remaining_after_discovery_ms(total_timeout_ms: i32, discovery_elapsed: Duration) -> i32 {
     let elapsed_ms = i32::try_from(discovery_elapsed.as_millis()).unwrap_or(i32::MAX);
-    std::cmp::max(
-        total_timeout_ms.saturating_sub(elapsed_ms),
-        MIN_REMAINING_TOTAL_TIMEOUT_MS,
+    std::cmp::min(
+        total_timeout_ms,
+        std::cmp::max(
+            total_timeout_ms.saturating_sub(elapsed_ms),
+            MIN_REMAINING_TOTAL_TIMEOUT_MS,
+        ),
     )
 }
 
@@ -1967,6 +1973,17 @@ mod tests {
         // request with zero or negative time to run.
         let remaining = super::remaining_after_discovery_ms(2_000, Duration::from_millis(5_000));
         assert_eq!(remaining, super::MIN_REMAINING_TOTAL_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn remaining_after_discovery_ms_never_exceeds_the_original_total() {
+        // A caller-configured timeout below the floor, with discovery taking
+        // no time at all (macOS/Linux never run discovery; a Windows cache
+        // hit is instant), must come back unchanged -- the floor exists to
+        // protect against discovery eating into the budget, not to inflate
+        // a budget discovery never touched.
+        let remaining = super::remaining_after_discovery_ms(500, Duration::ZERO);
+        assert_eq!(remaining, 500);
     }
 
     // resolve_proxy_url / proxy_env_value: libcurl proxy-selection parity.
