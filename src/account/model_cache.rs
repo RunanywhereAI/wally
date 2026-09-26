@@ -109,7 +109,13 @@ fn is_stale(ttl_seconds: i64) -> bool {
     {
         // Never written, or malformed.
         None => true,
-        Some(fetched_at) => now_seconds() - fetched_at > ttl_seconds,
+        Some(fetched_at) => {
+            let now = now_seconds();
+            // A future timestamp is stale at once (a bare subtraction would
+            // otherwise go negative and read as "fresh forever"); a very
+            // negative one saturates instead of overflowing the subtraction.
+            fetched_at > now || now.saturating_sub(fetched_at) > ttl_seconds
+        }
     }
 }
 
@@ -268,4 +274,32 @@ mod tests {
         });
     }
 
+    // #133 comment 12: a future or wildly out-of-range fetched_at must read as
+    // stale, not panic (overflow) or last forever (a negative bare subtraction
+    // reading as "fresh").
+    #[test]
+    fn is_stale_treats_out_of_range_timestamps_as_stale() {
+        with_profile_dir(|dir| {
+            let path = dir.join(FILE_NAME);
+            std::fs::write(
+                &path,
+                r#"{"fetched_at": -9223372036854775800, "models": ["x"]}"#,
+            )
+            .expect("write malformed cache");
+            assert!(
+                is_stale(3600),
+                "a wildly negative fetched_at must saturate to stale, not overflow"
+            );
+
+            std::fs::write(
+                &path,
+                format!(r#"{{"fetched_at": {}, "models": ["x"]}}"#, i64::MAX),
+            )
+            .expect("write malformed cache");
+            assert!(
+                is_stale(3600),
+                "a future fetched_at must be stale at once, not last forever"
+            );
+        });
+    }
 }
