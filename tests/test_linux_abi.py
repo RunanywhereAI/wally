@@ -263,6 +263,24 @@ class LinuxAbiTests(unittest.TestCase):
             ABI.read_elf(bytes(data), "wally")
         self.assertIn("PT_INTERP", str(raised.exception))
 
+    def test_a_program_header_entry_smaller_than_elf64_is_rejected(self) -> None:
+        # Each program header is unpacked as a full 56-byte ELF64 entry; a
+        # smaller declared e_phentsize would read p_filesz and the rest from
+        # bytes that belong to the next entry, or to nothing at all.
+        data = bytearray(elf(["libc.so.6"], {}))
+        struct.pack_into("<H", data, 0x36, 16)  # e_phentsize
+        with self.assertRaises(ABI.AbiError) as raised:
+            ABI.read_elf(bytes(data), "wally")
+        self.assertIn("program header entries are 16 bytes", str(raised.exception))
+
+    def test_a_section_header_entry_smaller_than_elf64_is_rejected(self) -> None:
+        # Same for the section table: each entry is unpacked as 64 bytes.
+        data = bytearray(elf(["libc.so.6"], {}))
+        struct.pack_into("<H", data, 0x3A, 32)  # e_shentsize
+        with self.assertRaises(ABI.AbiError) as raised:
+            ABI.read_elf(bytes(data), "wally")
+        self.assertIn("section header entries are 32 bytes", str(raised.exception))
+
     def test_a_shared_library_without_pt_interp_is_normal(self) -> None:
         # Every real .so this bottle ships is dynamically linked (has
         # DT_NEEDED) but is never exec'd directly, so it correctly has no

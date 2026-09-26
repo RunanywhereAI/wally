@@ -39,6 +39,11 @@ SHT_GNU_VERNEED = 0x6FFFFFFE
 DT_NULL = 0
 DT_NEEDED = 1
 PT_INTERP = 3
+# The fixed ELF64 entry sizes every unpack below assumes. A smaller declared
+# e_phentsize/e_shentsize would have each unpack read past its own entry into
+# the next one, so a malformed file could pass on bytes it never declared.
+ELF64_PHDR_SIZE = 56
+ELF64_SHDR_SIZE = 64
 
 # The symbol-version families whose ceiling is checked. Anything else a
 # library versions (OPENSSL_3.0.0, CURL_OPENSSL_4, a bundled library's own
@@ -106,9 +111,14 @@ def read_interp(data: bytes, name: str) -> str | None:
     phentsize, phnum = struct.unpack_from("<HH", data, 0x36)
     if phoff == 0 or phnum == 0:
         return None
+    if phentsize < ELF64_PHDR_SIZE:
+        raise AbiError(
+            f"{name}: program header entries are {phentsize} bytes, "
+            f"smaller than an ELF64 program header ({ELF64_PHDR_SIZE})"
+        )
     for index in range(phnum):
         pos = phoff + index * phentsize
-        if pos + 56 > len(data):
+        if pos + ELF64_PHDR_SIZE > len(data):
             raise AbiError(f"{name}: program header {index} runs past the end of the file")
         p_type, _p_flags, p_offset, _p_vaddr, _p_paddr, p_filesz, _p_memsz, _p_align = struct.unpack_from(
             "<IIQQQQQQ", data, pos
@@ -153,6 +163,11 @@ def _read_elf(data: bytes, name: str) -> tuple[set[str], set[str], str | None]:
         # Without one this reads nothing, and nothing would pass as "needs
         # nothing"; refuse instead.
         raise AbiError(f"{name}: no section header table, so its needs cannot be read")
+    if shentsize < ELF64_SHDR_SIZE:
+        raise AbiError(
+            f"{name}: section header entries are {shentsize} bytes, "
+            f"smaller than an ELF64 section header ({ELF64_SHDR_SIZE})"
+        )
     sections = [
         struct.unpack_from("<IIQQQQIIQQ", data, shoff + i * shentsize) for i in range(shnum)
     ]
