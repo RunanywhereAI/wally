@@ -2145,6 +2145,77 @@ fn the_cancel_worker_sends_in_order_with_the_current_bearer() {
     assert_eq!(reported[1], "second=202");
 }
 
+// Two overlapping stop() callers (e.g. a signal handler and normal shutdown)
+// must both block until the worker has actually finished. Before the fix,
+// the caller that only observes `stopping == true` returned 0 at once
+// instead of waiting on the same join as the caller that flipped the flag.
+#[test]
+fn concurrent_stop_calls_both_wait_for_the_worker_to_finish() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Barrier};
+
+    let done = Arc::new(AtomicBool::new(false));
+    let done_clone = Arc::clone(&done);
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+
+    let transport: Transport = Arc::new(
+        move |_request: &HttpRequest| -> Result<HttpResponse, String> {
+            // Held open until the test releases it, so both stop() callers are
+            // guaranteed to be inside stop() while the worker is still busy.
+            if let Some(rx) = release_rx.lock().unwrap().take() {
+                let _ = rx.recv();
+            }
+            done_clone.store(true, Ordering::SeqCst);
+            Ok(HttpResponse {
+                status: 202,
+                body: json(serde_json::json!({"request_id": "x", "status": "cancelling"})),
+                headers: BTreeMap::new(),
+            })
+        },
+    );
+
+    let worker = Arc::new(account::CancelWorker::new(
+        "https://inference.runanywhere.ai",
+        Arc::new(|| "token".to_string()),
+        3000,
+        Arc::new(|_id: &str, _outcome: CancelOutcome, _error: &str| {}),
+        Some(transport),
+    ));
+    worker.enqueue("x");
+
+    let barrier = Arc::new(Barrier::new(2));
+    let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut stoppers = Vec::new();
+    for _ in 0..2 {
+        let worker = Arc::clone(&worker);
+        let barrier = Arc::clone(&barrier);
+        let done = Arc::clone(&done);
+        let observed = Arc::clone(&observed);
+        stoppers.push(std::thread::spawn(move || {
+            barrier.wait(); // both callers enter stop() at the same instant
+            worker.stop();
+            // No sleep: if stop() returned, the worker must already be done.
+            observed.lock().unwrap().push(done.load(Ordering::SeqCst));
+        }));
+    }
+
+    // Give both threads time to be inside stop() (one joining, one waiting on
+    // the same `thread` mutex) before letting the in-flight cancel finish.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    release_tx.send(()).expect("release the in-flight cancel");
+
+    for stopper in stoppers {
+        stopper.join().expect("stopper thread panicked");
+    }
+
+    assert_eq!(
+        observed.lock().unwrap().as_slice(),
+        &[true, true],
+        "every stop() caller must observe the worker already stopped"
+    );
+}
+
 // The transport honours `timeout_ms`: a socket that accepts and never answers
 // is given up within the request's own bound, not the 30s default. Bites: with
 // the field ignored this test takes ~30s and fails its budget.
