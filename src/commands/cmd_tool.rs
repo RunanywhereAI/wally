@@ -206,12 +206,12 @@ fn run_tool_call(options: &GlobalOptions, params: &ToolCallParams) -> i32 {
         }
     };
 
-    let load_framework = if resolved.from_catalog {
-        v1::InferenceFramework::Unspecified
-    } else {
-        engine_hint.framework
-    };
-    if !load_model(options, &resolved.model_id, load_framework) {
+    // An explicit --engine is honoured whatever the ref resolved to. Discarding
+    // it for catalog entries would silently ignore the flag for every built-in
+    // model; when the flag is absent engine_hint.framework is UNSPECIFIED, so
+    // catalog entries still fall back to their own declared framework exactly
+    // as before. Mirrors cmd_run.rs / cmd_embed.rs.
+    if !load_model(options, &resolved.model_id, engine_hint.framework) {
         return 1;
     }
 
