@@ -243,6 +243,19 @@ class LinuxAbiTests(unittest.TestCase):
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("no PT_INTERP", problems[0])
 
+    def test_a_pt_interp_shorter_than_its_declared_path_is_rejected(self) -> None:
+        # The loader only ever reads p_filesz bytes from a PT_INTERP segment.
+        # Shrinking p_filesz to stop mid-path -- while the real NUL-terminated
+        # string is still sitting in the file just past it -- is exactly what
+        # a scan for the first NUL from p_offset, ignoring p_filesz entirely,
+        # would still happily accept as the real interpreter.
+        data = bytearray(elf(["libc.so.6"], {}))
+        phoff = struct.unpack_from("<Q", data, 0x20)[0]
+        struct.pack_into("<Q", data, phoff + 32, 4)  # p_filesz: "/lib", no NUL in range
+        with self.assertRaises(ABI.AbiError) as raised:
+            ABI.read_elf(bytes(data), "wally")
+        self.assertIn("PT_INTERP", str(raised.exception))
+
     def test_a_shared_library_without_pt_interp_is_normal(self) -> None:
         # Every real .so this bottle ships is dynamically linked (has
         # DT_NEEDED) but is never exec'd directly, so it correctly has no

@@ -108,13 +108,23 @@ def read_interp(data: bytes, name: str) -> str | None:
         return None
     for index in range(phnum):
         pos = phoff + index * phentsize
-        if pos + 16 > len(data):
+        if pos + 56 > len(data):
             raise AbiError(f"{name}: program header {index} runs past the end of the file")
-        p_type, _p_flags, p_offset = struct.unpack_from("<IIQ", data, pos)
+        p_type, _p_flags, p_offset, _p_vaddr, _p_paddr, p_filesz, _p_memsz, _p_align = struct.unpack_from(
+            "<IIQQQQQQ", data, pos
+        )
         if p_type == PT_INTERP:
-            if p_offset >= len(data):
-                raise AbiError(f"{name}: PT_INTERP offset runs past the end of the file")
-            return _cstring(data, p_offset)
+            # p_filesz is what the loader actually reads from this segment; a
+            # NUL found past it would never be seen by the real loader, so the
+            # path and its terminator must both fit inside [p_offset, p_offset
+            # + p_filesz) before it is trusted.
+            if p_offset >= len(data) or p_filesz == 0 or p_offset + p_filesz > len(data):
+                raise AbiError(f"{name}: PT_INTERP segment runs past the end of the file")
+            try:
+                end = data.index(b"\0", p_offset, p_offset + p_filesz)
+            except ValueError as exc:
+                raise AbiError(f"{name}: PT_INTERP is not NUL-terminated within its segment") from exc
+            return data[p_offset:end].decode("ascii", "replace")
     return None
 
 
