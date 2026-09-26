@@ -18,8 +18,10 @@ use crate::util::{getenv, term};
 
 // The path of the running wally binary, symlinks resolved. Empty when the
 // platform gives no answer; uninstall then just skips deleting the binary.
+// `pub(crate)`: `wally update` also needs it, to tell a Homebrew-managed
+// binary apart from one install.sh or install.ps1 put down.
 #[cfg(target_os = "macos")]
-fn self_executable() -> String {
+pub(crate) fn self_executable() -> String {
     extern "C" {
         fn _NSGetExecutablePath(buf: *mut std::os::raw::c_char, bufsize: *mut u32) -> i32;
     }
@@ -58,14 +60,26 @@ fn self_executable() -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn self_executable() -> String {
+pub(crate) fn self_executable() -> String {
     std::fs::read_link("/proc/self/exe")
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn self_executable() -> String {
+// `std::env::current_exe()` wraps `GetModuleFileNameW`, giving the exact
+// Unicode path with no ANSI round trip -- unlike the C++ build, which had no
+// Windows branch here at all (self_executable() there returns {} on every
+// platform but macOS and Linux) and so never found its own binary to remove
+// or to warn about on `wally uninstall`.
+#[cfg(windows)]
+pub(crate) fn self_executable() -> String {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+pub(crate) fn self_executable() -> String {
     String::new()
 }
 
@@ -216,9 +230,71 @@ fn remove_all(path: &Path) -> std::io::Result<()> {
     }
 }
 
+// The whole tree install.sh put down: LIB_DIR (`~/.local/lib/wally`) plus its
+// launcher symlink at `~/.local/bin/wally`. `None` for a Homebrew install, a
+// from-source build, or anything else uninstall must leave alone -- matching
+// `windows_install_directory` below for install.ps1's layout.
+#[cfg(not(windows))]
+fn install_sh_layout(exe: &str) -> Option<(PathBuf, PathBuf)> {
+    if exe.is_empty() {
+        return None;
+    }
+    let home = getenv("HOME")?;
+    if home.is_empty() {
+        return None;
+    }
+    let lib_dir = Path::new(&home).join(".local").join("lib").join("wally");
+    let launcher = Path::new(&home).join(".local").join("bin").join("wally");
+    // Resolved the same way `exe` already was (self_executable() realpaths
+    // it), so a HOME whose own path has a symlinked component cannot defeat
+    // the prefix check on either side.
+    let canonical_lib_dir = std::fs::canonicalize(&lib_dir).unwrap_or(lib_dir);
+    Path::new(exe)
+        .starts_with(&canonical_lib_dir)
+        .then_some((canonical_lib_dir, launcher))
+}
+
+// `launcher` only when it is really install.sh's own symlink into
+// `lib_dir` -- never a same-named file or symlink somebody else put on
+// ~/.local/bin, and never a dangling link uninstall cannot verify.
+#[cfg(not(windows))]
+fn launcher_target(launcher: &Path, lib_dir: &Path) -> Option<PathBuf> {
+    let metadata = std::fs::symlink_metadata(launcher).ok()?;
+    if !metadata.file_type().is_symlink() {
+        return None;
+    }
+    let resolved = std::fs::canonicalize(launcher).ok()?;
+    resolved.starts_with(lib_dir).then(|| launcher.to_path_buf())
+}
+
+// The whole tree install.ps1 put down (`%LOCALAPPDATA%\Programs\wally`),
+// when `exe` lives inside it -- the Windows analogue of `install_sh_layout`.
+// `None` for a dev build placed anywhere else.
+#[cfg(windows)]
+fn windows_install_directory(exe: &str) -> Option<PathBuf> {
+    if exe.is_empty() {
+        return None;
+    }
+    let local_app_data = getenv("LOCALAPPDATA")?;
+    if local_app_data.is_empty() {
+        return None;
+    }
+    let expected = Path::new(&local_app_data).join("Programs").join("wally");
+    let canonical_expected = std::fs::canonicalize(&expected).unwrap_or(expected);
+    Path::new(exe)
+        .starts_with(&canonical_expected)
+        .then_some(canonical_expected)
+}
+
 /// Shared by `wally uninstall` and the whole-argv `-U/--uninstall` shortcut.
 pub fn run_uninstall(yes: bool) -> i32 {
     let mut targets: Vec<Target> = Vec::new();
+    // Windows cannot delete the program file backing its own running
+    // process (unlike a Unix inode, which stays live under an unlinked
+    // name until the process exits) -- see the note below, where this is
+    // reported instead of attempted.
+    #[cfg(windows)]
+    let mut manual_removal: Option<PathBuf> = None;
 
     let models = models_directory();
     if !models.is_empty() {
@@ -238,21 +314,49 @@ pub fn run_uninstall(yes: bool) -> i32 {
     let exe = self_executable();
     if !exe.is_empty() {
         let exe_path = PathBuf::from(&exe);
-        targets.push(Target {
-            label: "binary",
-            path: exe_path.clone(),
-        });
-        // The Metal shader bundles the installer placed beside the binary. Only
-        // *.bundle next to wally, never anything else on PATH.
-        if let Some(parent) = exe_path.parent() {
-            if let Ok(entries) = std::fs::read_dir(parent) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("bundle") {
-                        targets.push(Target {
-                            label: "bundle",
-                            path,
-                        });
+        #[cfg(windows)]
+        {
+            if let Some(dir) = windows_install_directory(&exe) {
+                manual_removal = Some(dir);
+            } else {
+                targets.push(Target {
+                    label: "binary",
+                    path: exe_path,
+                });
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if let Some((lib_dir, launcher)) = install_sh_layout(&exe) {
+                if let Some(link) = launcher_target(&launcher, &lib_dir) {
+                    targets.push(Target {
+                        label: "launcher",
+                        path: link,
+                    });
+                }
+                targets.push(Target {
+                    label: "install",
+                    path: lib_dir,
+                });
+            } else {
+                targets.push(Target {
+                    label: "binary",
+                    path: exe_path.clone(),
+                });
+                // The Metal shader bundles the installer placed beside the
+                // binary. Only *.bundle next to wally, never anything else
+                // on PATH.
+                if let Some(parent) = exe_path.parent() {
+                    if let Ok(entries) = std::fs::read_dir(parent) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.extension().and_then(|e| e.to_str()) == Some("bundle") {
+                                targets.push(Target {
+                                    label: "bundle",
+                                    path,
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -260,28 +364,51 @@ pub fn run_uninstall(yes: bool) -> i32 {
     }
 
     let present: Vec<Target> = targets.into_iter().filter(|t| t.path.exists()).collect();
-    if present.is_empty() {
+    #[cfg(windows)]
+    let has_manual_removal = manual_removal.is_some();
+    #[cfg(not(windows))]
+    let has_manual_removal = false;
+
+    if present.is_empty() && !has_manual_removal {
         out::status_line("nothing to uninstall; wally is already gone.");
         return 0;
     }
 
-    out::status_line("wally uninstall will delete:");
-    for target in &present {
-        let size = human_size(&target.path);
-        let size_suffix = if size.is_empty() {
-            String::new()
-        } else {
-            format!("  ({size})")
-        };
+    if !present.is_empty() {
+        out::status_line("wally uninstall will delete:");
+        for target in &present {
+            let size = human_size(&target.path);
+            let size_suffix = if size.is_empty() {
+                String::new()
+            } else {
+                format!("  ({size})")
+            };
+            out::status_line(&format!(
+                "  {}  {}{size_suffix}",
+                target.label,
+                target.path.display()
+            ));
+        }
+    }
+    #[cfg(windows)]
+    if let Some(dir) = &manual_removal {
+        // Windows will not let a running process delete (or even rename) its
+        // own program file, so there is no safe way to have this process
+        // finish that part of the job itself. Spawning a detached helper
+        // that waits on our pid and deletes behind us is the other option
+        // the C++ never had either, but it trades one guaranteed, honest
+        // message for a background process that can be killed, blocked by
+        // antivirus, or race a relaunch of wally -- worse failure modes than
+        // telling the person the one folder left to remove by hand.
         out::status_line(&format!(
-            "  {}  {}{size_suffix}",
-            target.label,
-            target.path.display()
+            "wally cannot delete its own running program on Windows; close this window, \
+             then delete {} yourself to finish uninstalling.",
+            dir.display()
         ));
     }
     out::status_line("your coding tools (claude-code, opencode, ...) are left untouched.");
 
-    if !yes {
+    if !present.is_empty() && !yes {
         // Never delete without a real confirmation. A non-interactive shell
         // (piped or redirected stdin) cannot answer, so it must pass --yes on
         // purpose rather than have the prompt silently skipped.
@@ -298,14 +425,16 @@ pub fn run_uninstall(yes: bool) -> i32 {
         }
     }
 
-    // Everything but the running binary first; the binary last, because on a
-    // unix filesystem deleting the file the process is executing is safe -- the
-    // inode lives until the process exits.
+    // Everything but the running binary (or the tree containing it) first;
+    // that one last, because on a unix filesystem deleting the file the
+    // process is executing is safe -- the inode lives until the process
+    // exits -- and the same now holds for deleting the whole install.sh
+    // tree out from under it.
     let mut failures = 0;
-    let mut binary: Option<PathBuf> = None;
+    let mut deferred: Option<PathBuf> = None;
     for target in &present {
-        if target.label == "binary" {
-            binary = Some(target.path.clone());
+        if target.label == "binary" || target.label == "install" {
+            deferred = Some(target.path.clone());
             continue;
         }
         if let Err(e) = remove_all(&target.path) {
@@ -317,15 +446,21 @@ pub fn run_uninstall(yes: bool) -> i32 {
             failures += 1;
         }
     }
-    if let Some(binary) = binary {
-        if let Err(e) = std::fs::remove_file(&binary) {
+    if let Some(deferred) = deferred {
+        if let Err(e) = remove_all(&deferred) {
             out::error_line(&format!(
                 "could not delete {}: {}",
-                binary.display(),
+                deferred.display(),
                 os_error_message(&e)
             ));
             failures += 1;
         }
+    }
+    // Reported above already; counted here so a script checking the exit
+    // code sees an incomplete uninstall rather than a clean 0.
+    #[cfg(windows)]
+    if has_manual_removal {
+        failures += 1;
     }
 
     if failures != 0 {
@@ -466,4 +601,129 @@ mod tests {
     // register_help's registration time, before bench/backends/telemetry
     // exist) lives in tests/test_wally_help_routing.rs, which drives the real
     // built binary through app::run's non-shortcut parse path.
+
+    // Serializes every test below that sets HOME -- the same pattern
+    // src/harness/agents.rs uses for its own env-touching tests.
+    #[cfg(unix)]
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(())).lock().unwrap()
+    }
+
+    // A real install.sh tree in a temp HOME: LIB_DIR with a `bin/wally`
+    // file, and the launcher symlink install.sh creates at
+    // ~/.local/bin/wally pointing at it.
+    #[cfg(unix)]
+    struct InstallShLayout {
+        _home: tempfile::TempDir,
+        home_path: PathBuf,
+        exe: PathBuf,
+        lib_dir: PathBuf,
+        launcher: PathBuf,
+    }
+
+    #[cfg(unix)]
+    fn install_sh_layout_fixture() -> InstallShLayout {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home_path = home.path().to_path_buf();
+        let lib_dir = home_path.join(".local/lib/wally");
+        let bin_dir = lib_dir.join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("mkdir lib/bin");
+        let exe = bin_dir.join("wally");
+        std::fs::write(&exe, b"#!/bin/sh\n").expect("write exe");
+
+        let bin_link_dir = home_path.join(".local/bin");
+        std::fs::create_dir_all(&bin_link_dir).expect("mkdir bin");
+        let launcher = bin_link_dir.join("wally");
+        std::os::unix::fs::symlink(&exe, &launcher).expect("symlink launcher");
+
+        InstallShLayout {
+            _home: home,
+            home_path,
+            exe,
+            lib_dir,
+            launcher,
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn install_sh_layout_finds_lib_dir_and_launcher_from_the_running_exe() {
+        let _lock = env_lock();
+        let fixture = install_sh_layout_fixture();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("HOME", &fixture.home_path) };
+
+        let resolved_exe = std::fs::canonicalize(&fixture.exe).expect("canonicalize exe");
+        let (lib_dir, launcher) = install_sh_layout(&resolved_exe.to_string_lossy())
+            .expect("install.sh layout should be recognised");
+        assert_eq!(
+            lib_dir,
+            std::fs::canonicalize(&fixture.lib_dir).expect("canonicalize lib_dir")
+        );
+        assert_eq!(launcher, fixture.launcher);
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn install_sh_layout_rejects_a_binary_outside_the_tree() {
+        let _lock = env_lock();
+        let fixture = install_sh_layout_fixture();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("HOME", &fixture.home_path) };
+
+        let elsewhere = fixture.home_path.join("elsewhere-wally");
+        std::fs::write(&elsewhere, b"#!/bin/sh\n").expect("write elsewhere");
+        assert!(install_sh_layout(&elsewhere.to_string_lossy()).is_none());
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn launcher_target_accepts_a_symlink_that_resolves_into_lib_dir() {
+        let fixture = install_sh_layout_fixture();
+        let lib_dir = std::fs::canonicalize(&fixture.lib_dir).expect("canonicalize lib_dir");
+        assert_eq!(
+            launcher_target(&fixture.launcher, &lib_dir),
+            Some(fixture.launcher.clone())
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn launcher_target_rejects_a_plain_file() {
+        let fixture = install_sh_layout_fixture();
+        let lib_dir = std::fs::canonicalize(&fixture.lib_dir).expect("canonicalize lib_dir");
+        let not_a_symlink = fixture.home_path.join(".local/bin/not-a-symlink");
+        std::fs::write(&not_a_symlink, b"plain file").expect("write plain file");
+        assert_eq!(launcher_target(&not_a_symlink, &lib_dir), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn launcher_target_rejects_a_symlink_pointing_outside_lib_dir() {
+        let fixture = install_sh_layout_fixture();
+        let lib_dir = std::fs::canonicalize(&fixture.lib_dir).expect("canonicalize lib_dir");
+        let outside_target = fixture.home_path.join("someone-elses-wally");
+        std::fs::write(&outside_target, b"not ours").expect("write outside target");
+        let rogue_link = fixture.home_path.join(".local/bin/rogue");
+        std::os::unix::fs::symlink(&outside_target, &rogue_link).expect("symlink rogue");
+        assert_eq!(launcher_target(&rogue_link, &lib_dir), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn launcher_target_rejects_a_dangling_symlink() {
+        let fixture = install_sh_layout_fixture();
+        let lib_dir = std::fs::canonicalize(&fixture.lib_dir).expect("canonicalize lib_dir");
+        let missing_target = fixture.lib_dir.join("bin/gone");
+        let dangling = fixture.home_path.join(".local/bin/dangling");
+        std::os::unix::fs::symlink(&missing_target, &dangling).expect("symlink dangling");
+        assert_eq!(launcher_target(&dangling, &lib_dir), None);
+    }
 }
