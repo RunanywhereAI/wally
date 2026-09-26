@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::account::{self, ConsoleClient};
 use crate::bootstrap::GlobalOptions;
-use crate::io::json::dump;
+use crate::io::json::{dump, dump_pretty};
 use crate::io::output as out;
 
 use super::catalog_models::{catalog_models_for, CatalogModel};
@@ -419,12 +419,37 @@ fn open_claw_state_directory() -> PathBuf {
 /// the first run's key and endpoint would otherwise stick: a new login, a
 /// local server on a fresh port, or a switch to hosted all failed auth. Other
 /// providers in the file are left as they are.
-fn drop_stale_open_claw_provider(state: &Path) {
-    let Ok(agents) = std::fs::read_dir(state.join("agents")) else {
-        return;
+///
+/// Agents live under `<state>/agents/<id>/agent` unless their config entry
+/// (`agents.entries` or `agents.list`) names an `agentDir`, the same lookup as
+/// OpenClaw's `resolveAgentDir`.
+fn drop_stale_open_claw_provider(state: &Path, config: &str) {
+    let mut agent_dirs: Vec<PathBuf> = std::fs::read_dir(state.join("agents"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.path().join("agent"))
+                .collect()
+        })
+        .unwrap_or_default();
+    let config: Value = serde_json::from_str(config).unwrap_or(Value::Null);
+    let roster = config["agents"]
+        .get("entries")
+        .or_else(|| config["agents"].get("list"));
+    let entries: Vec<&Value> = match roster {
+        Some(Value::Object(entries)) => entries.values().collect(),
+        Some(Value::Array(entries)) => entries.iter().collect(),
+        _ => Vec::new(),
     };
-    for agent in agents.flatten() {
-        let path = agent.path().join("agent").join("models.json");
+    for entry in entries {
+        if let Some(dir) = entry["agentDir"].as_str().map(str::trim) {
+            if !dir.is_empty() {
+                agent_dirs.push(expand_home(dir));
+            }
+        }
+    }
+    for dir in agent_dirs {
+        let path = dir.join("models.json");
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -437,8 +462,18 @@ fn drop_stale_open_claw_provider(state: &Path) {
             .and_then(|providers| providers.remove(PROVIDER_ID))
             .is_some();
         if removed {
-            let _ = std::fs::write(&path, dump(&document));
+            let _ = std::fs::write(&path, dump_pretty(&document, 2));
         }
+    }
+}
+
+/// `~` and `~/…` against HOME, as OpenClaw's `resolveUserPath` does.
+fn expand_home(path: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+    match (path, home) {
+        ("~", Some(home)) => PathBuf::from(home),
+        (_, Some(home)) if path.starts_with("~/") => Path::new(&home).join(&path[2..]),
+        _ => PathBuf::from(path),
     }
 }
 
@@ -871,7 +906,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                 release(&endpoint);
                 return 1;
             }
-            drop_stale_open_claw_provider(&state);
+            drop_stale_open_claw_provider(&state, &read_open_claw_config());
             // Pinned before the config path, because OpenClaw derives the
             // state directory from the config file's folder when this is
             // unset.
@@ -976,11 +1011,25 @@ mod tests {
         )
         .unwrap();
 
-        drop_stale_open_claw_provider(state.path());
+        drop_stale_open_claw_provider(state.path(), "");
 
         let left: Value = serde_json::from_str(&std::fs::read_to_string(&models).unwrap()).unwrap();
         assert!(left["providers"].get(PROVIDER_ID).is_none());
         assert_eq!(left["providers"]["openai"]["apiKey"], "theirs");
+    }
+
+    #[test]
+    fn stale_provider_is_dropped_from_a_configured_agent_dir() {
+        let state = tempfile::tempdir().unwrap();
+        let custom = tempfile::tempdir().unwrap();
+        let models = custom.path().join("models.json");
+        std::fs::write(&models, r#"{"providers":{"runanywhere":{"apiKey":"old"}}}"#).unwrap();
+        let config = json!({"agents": {"list": [{"id": "work", "agentDir": custom.path()}]}});
+
+        drop_stale_open_claw_provider(state.path(), &config.to_string());
+
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&models).unwrap()).unwrap();
+        assert!(left["providers"].get(PROVIDER_ID).is_none());
     }
 
     /// `setenv(name, value.c_str(), 1)` in C++ truncates silently
