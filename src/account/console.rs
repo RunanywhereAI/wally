@@ -270,8 +270,9 @@ pub struct ConsoleClient {
 
 // Both transports (curl and WinHTTP in the C++; ureq here) share the same
 // defaults: 10s to connect, 30s in all. A request's own `timeout_ms` bounds
-// the whole call instead; the connect phase never gets more than its usual
-// share of it.
+// the whole call instead (minus whatever proxy discovery already spent, see
+// remaining_after_discovery_ms below); the connect phase never gets more
+// than its usual share of what's left.
 const CONNECT_TIMEOUT_MS: i32 = 10_000;
 const TOTAL_TIMEOUT_MS: i32 = 30_000;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
