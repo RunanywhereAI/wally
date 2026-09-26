@@ -28,6 +28,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      # Ahead of every other step: the pinned toolchain's rustfmt is the one
+      # thing here that isn't a script or a system package, and the "Console
+      # binding matches its pinned contract" step below shells out to it. A
+      # clean runner has no rustc/rustfmt at all until this runs.
+      - uses: ./.github/actions/install-rust
       - name: Validate distribution tooling
         run: |
           set -euo pipefail
@@ -73,7 +78,6 @@ jobs:
           set -euo pipefail
           python3 tests/test_retired_model_ids.py
           python3 scripts/ci/check-retired-model-ids.py
-      - uses: ./.github/actions/install-rust
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: Every C++ test case has a Rust counterpart
