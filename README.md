@@ -77,9 +77,9 @@ coding model; the rest are listed in your RunAnywhere console.
 
 ```bash
 wally account login
-wally opencode --cloud -m glm-5.3-flash
+wally opencode -m glm-5.3-flash
 wally claude-code -m glm-5.3-flash
-wally account usage         # credit left, recent spend
+wally account usage
 ```
 
 Hosted models go through the coding-agent commands; `wally run` and
@@ -114,7 +114,7 @@ has the full catalog.
 
 | Models | |
 |---|---|
-| `wally models list [--all]` | models on this machine, or the whole catalog |
+| `wally models list --all` | models on this machine, or the whole catalog |
 | `wally models pull` / `rm` | download or delete a model |
 | `wally models show` | size, context window, files |
 | `wally models default` | the model coding tools open with |
