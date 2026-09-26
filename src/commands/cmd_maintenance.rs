@@ -217,6 +217,7 @@ fn confirm(question: &str) -> bool {
     matches!(line.as_bytes().first(), Some(b'y') | Some(b'Y'))
 }
 
+#[derive(Debug)]
 struct Target {
     label: &'static str,
     path: PathBuf,
@@ -293,6 +294,31 @@ fn windows_install_directory(exe: &str) -> Option<PathBuf> {
         .then_some(expected)
 }
 
+// The exe-related targets uninstall may delete: only install.sh's own tree
+// (verified by `install_sh_layout`), never a Homebrew install or a source
+// build -- uninstall cannot prove it laid either of those down, so it must
+// only report them (see the call site), never delete. A pure function so the
+// decision is unit-testable without touching the real filesystem outside a
+// fixture.
+#[cfg(not(windows))]
+fn unix_exe_targets(exe: &str) -> Vec<Target> {
+    let mut targets = Vec::new();
+    let Some((lib_dir, launcher)) = install_sh_layout(exe) else {
+        return targets;
+    };
+    if let Some(link) = launcher_target(&launcher, &lib_dir) {
+        targets.push(Target {
+            label: "launcher",
+            path: link,
+        });
+    }
+    targets.push(Target {
+        label: "install",
+        path: lib_dir,
+    });
+    targets
+}
+
 /// Shared by `wally uninstall` and the whole-argv `-U/--uninstall` shortcut.
 pub fn run_uninstall(yes: bool) -> i32 {
     let mut targets: Vec<Target> = Vec::new();
@@ -331,38 +357,22 @@ pub fn run_uninstall(yes: bool) -> i32 {
         }
         #[cfg(not(windows))]
         {
-            let exe_path = PathBuf::from(&exe);
-            if let Some((lib_dir, launcher)) = install_sh_layout(&exe) {
-                if let Some(link) = launcher_target(&launcher, &lib_dir) {
-                    targets.push(Target {
-                        label: "launcher",
-                        path: link,
-                    });
-                }
-                targets.push(Target {
-                    label: "install",
-                    path: lib_dir,
-                });
-            } else {
-                targets.push(Target {
-                    label: "binary",
-                    path: exe_path.clone(),
-                });
-                // The Metal shader bundles the installer placed beside the
-                // binary. Only *.bundle next to wally, never anything else
-                // on PATH.
-                if let Some(parent) = exe_path.parent() {
-                    if let Ok(entries) = std::fs::read_dir(parent) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.extension().and_then(|e| e.to_str()) == Some("bundle") {
-                                targets.push(Target {
-                                    label: "bundle",
-                                    path,
-                                });
-                            }
-                        }
-                    }
+            targets.extend(unix_exe_targets(&exe));
+            // Only install.sh's own tree is ever deleted (unix_exe_targets
+            // above); a Homebrew install or an unverified (e.g. source-build)
+            // location is reported instead, the same way the Windows branch
+            // only reports manual_removal rather than deleting an unverified
+            // binary.
+            if install_sh_layout(&exe).is_none() {
+                if crate::commands::cmd_update::is_homebrew_managed(&exe) {
+                    out::status_line(
+                        "wally was installed with Homebrew; run `brew uninstall wally` to \
+                         remove the binary.",
+                    );
+                } else {
+                    out::status_line(&format!(
+                        "{exe} could not be verified as wally's own install; leaving it in place."
+                    ));
                 }
             }
         }
@@ -685,6 +695,68 @@ mod tests {
         let elsewhere = fixture.home_path.join("elsewhere-wally");
         std::fs::write(&elsewhere, b"#!/bin/sh\n").expect("write elsewhere");
         assert!(install_sh_layout(&elsewhere.to_string_lossy()).is_none());
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+    }
+
+    // `wally uninstall` must never delete a binary it cannot prove came from
+    // install.sh -- a Homebrew Cellar install is the case this comment fixed.
+    #[test]
+    #[cfg(unix)]
+    fn unix_exe_targets_skips_a_homebrew_binary() {
+        let _lock = env_lock();
+        let fixture = install_sh_layout_fixture();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("HOME", &fixture.home_path) };
+
+        let targets = unix_exe_targets("/opt/homebrew/Cellar/wally/0.5.10/bin/wally");
+        assert!(
+            targets.is_empty(),
+            "a Homebrew-managed binary is never install.sh's own tree, so there is nothing to \
+             delete: {targets:?}"
+        );
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+    }
+
+    // A source build (arbitrary path, no install.sh tree behind it) must be
+    // left alone too -- uninstall has no way to verify it owns the binary.
+    #[test]
+    #[cfg(unix)]
+    fn unix_exe_targets_skips_an_unverified_source_build() {
+        let _lock = env_lock();
+        let fixture = install_sh_layout_fixture();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("HOME", &fixture.home_path) };
+
+        let targets = unix_exe_targets("/home/dev/wally/target/release/wally");
+        assert!(
+            targets.is_empty(),
+            "an unverified binary location is never deleted: {targets:?}"
+        );
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+    }
+
+    // The one case that IS deleted -- install.sh's own tree -- must still
+    // produce the launcher + install targets, unaffected by the two skips
+    // above.
+    #[test]
+    #[cfg(unix)]
+    fn unix_exe_targets_still_covers_the_install_sh_layout() {
+        let _lock = env_lock();
+        let fixture = install_sh_layout_fixture();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("HOME", &fixture.home_path) };
+
+        let resolved_exe = std::fs::canonicalize(&fixture.exe).expect("canonicalize exe");
+        let targets = unix_exe_targets(&resolved_exe.to_string_lossy());
+        let labels: Vec<&str> = targets.iter().map(|t| t.label).collect();
+        assert!(labels.contains(&"launcher"), "targets: {labels:?}");
+        assert!(labels.contains(&"install"), "targets: {labels:?}");
 
         // SAFETY: still holding env_lock().
         unsafe { std::env::remove_var("HOME") };

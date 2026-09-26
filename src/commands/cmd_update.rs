@@ -30,7 +30,7 @@ const HOMEBREW_PREFIXES: [&str; 3] = [
 ];
 
 #[cfg(not(windows))]
-fn is_homebrew_managed(exe: &str) -> bool {
+pub(crate) fn is_homebrew_managed(exe: &str) -> bool {
     if exe.is_empty() {
         return false;
     }
