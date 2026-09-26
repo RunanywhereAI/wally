@@ -44,6 +44,19 @@ fn to_cstring(value: &str) -> CString {
     CString::new(value).unwrap_or_default()
 }
 
+/// `--voice` names the voice *inside* the selected model; it never selects
+/// the model itself. Only `--model` does that, defaulting to
+/// `DEFAULT_VOICE` when omitted. `_voice` stays a parameter (rather than
+/// being dropped) so a test can prove a `--voice` value has no effect on
+/// model selection.
+fn select_model_ref<'a>(model: &'a str, _voice: &'a str) -> &'a str {
+    if !model.is_empty() {
+        model
+    } else {
+        DEFAULT_VOICE
+    }
+}
+
 fn run_tts(options: &GlobalOptions, p: &Parsed) -> i32 {
     let Ok(_env) = bootstrap(options) else {
         return 1;
@@ -69,16 +82,7 @@ fn run_tts(options: &GlobalOptions, p: &Parsed) -> i32 {
 
     let model = p.get_str("--model").unwrap_or_default();
     let voice_field = p.get_str("--voice").unwrap_or_default();
-    let model_ref = if !model.is_empty() {
-        &model
-    } else {
-        &voice_field
-    };
-    let model_ref: &str = if model_ref.is_empty() {
-        DEFAULT_VOICE
-    } else {
-        model_ref
-    };
+    let model_ref = select_model_ref(&model, &voice_field);
     let voice = match ensure_model_ready(options, model_ref) {
         Ok(v) => v,
         Err(code) => return code,
@@ -263,5 +267,15 @@ mod tests {
         assert_eq!(options.audio_format, sys::RAC_AUDIO_FORMAT_PCM);
         assert_eq!(options.sample_rate, 0);
         assert_eq!(options.use_ssml, sys::FALSE);
+    }
+
+    // --voice names a voice inside the chosen model, never the model
+    // itself: it must never be used as a model-reference fallback, even
+    // when --model is absent.
+    #[test]
+    fn select_model_ref_ignores_voice_when_model_is_absent() {
+        assert_eq!(select_model_ref("", "af_bella"), DEFAULT_VOICE);
+        assert_eq!(select_model_ref("my-model", "af_bella"), "my-model");
+        assert_eq!(select_model_ref("", ""), DEFAULT_VOICE);
     }
 }
