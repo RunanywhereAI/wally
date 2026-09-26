@@ -11,10 +11,14 @@ use crate::io::json::dump;
 use crate::io::output as out;
 
 use super::catalog_models::{catalog_models_for, CatalogModel};
+use super::declared_harness::{harness_header_value, DeclaredHarness, HARNESS_HEADER};
 use super::harness::{launch, release, resolve, Endpoint};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handoff {
+    /// The one handoff that declares no harness (`X-RA-Harness`): Hermes takes
+    /// extra request headers only from `config.yaml`, never the environment,
+    /// and wally does not write that file.
     CustomEndpointEnvironment,
     ConfigFile,
     PatchOverlay,
@@ -647,6 +651,10 @@ pub fn build_open_claw_config(
         "baseUrl": base_url,
         "apiKey": key_or_placeholder(api_key),
         "api": "openai-completions",
+        // OpenClaw's per-provider static headers (checked against OpenClaw
+        // 2026.6.35). On a generic OpenAI-compatible provider it sends the
+        // OpenAI SDK's User-Agent, which names no harness at all.
+        "headers": { HARNESS_HEADER: harness_header_value(DeclaredHarness::KOpenclaw) },
         "models": entries,
     });
     config["agents"]["defaults"]["model"]["primary"] = json!(format!("{PROVIDER_ID}/{primary}"));
@@ -704,6 +712,9 @@ pub fn build_deep_seek_settings(
         // variable carries a placeholder for a local server, which ignores
         // the Authorization header anyway.
         "apiKeyEnv": key_variable,
+        // dsh's llm-pi-ai profile `headers`, sent on every provider request
+        // (checked against dsh 0.1.5).
+        "headers": { HARNESS_HEADER: harness_header_value(DeclaredHarness::KDeepseek) },
     });
     let settings = json!({
         "llm-pi-ai": { "providers": { PROVIDER_ID: provider } },

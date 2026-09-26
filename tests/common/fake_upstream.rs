@@ -35,7 +35,17 @@ pub struct Cancel {
     pub authorization: String,
 }
 
+/// The attribution headers one chat completion arrived with.
+#[derive(Debug, Clone)]
+pub struct Seen {
+    /// `X-RA-Harness`, or None when it was absent.
+    pub harness: Option<String>,
+    pub user_agent: String,
+    pub streaming: bool,
+}
+
 struct State {
+    seen: Vec<Seen>,
     ports: Vec<u16>,
     cancels: Vec<Cancel>,
     arrivals: i32,
@@ -151,6 +161,11 @@ fn handle_chat(
         .ok()
         .and_then(|v| v.get("stream").and_then(|s| s.as_bool()))
         .unwrap_or(false);
+    shared.state.lock().unwrap().seen.push(Seen {
+        harness: req.header("X-RA-Harness").map(str::to_string),
+        user_agent: req.header("User-Agent").unwrap_or_default().to_string(),
+        streaming,
+    });
     if !streaming {
         shared.wait_for_hold();
         let _ = writer.send_full(
@@ -247,6 +262,7 @@ impl FakeUpstream {
     pub fn new() -> Self {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
+                seen: Vec::new(),
                 ports: Vec::new(),
                 cancels: Vec::new(),
                 arrivals: 0,
@@ -292,6 +308,11 @@ impl FakeUpstream {
     /// The port alone, for building an `UpstreamOptions.origin` directly.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// The attribution headers each chat completion arrived with, in order.
+    pub fn seen(&self) -> Vec<Seen> {
+        self.shared.state.lock().unwrap().seen.clone()
     }
 
     pub fn ports(&self) -> Vec<u16> {

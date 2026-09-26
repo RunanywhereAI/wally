@@ -1146,3 +1146,66 @@ fn launch_open_code_cloud_with_refreshes_before_the_catalog_cache_gate() {
         "the injected spawn must have been invoked"
     );
 }
+
+// wally launches these agents, so each config it writes declares which one
+// every request came from (`X-RA-Harness`), hosted and local alike.
+fn declare_catalog() -> Vec<CatalogModel> {
+    vec![CatalogModel {
+        id: "glm-5.3-flash".to_string(),
+        context_window: 0,
+        max_output: 0,
+        input_per_mtok: 0,
+        output_per_mtok: 0,
+    }]
+}
+
+#[test]
+fn openclaw_config_declares_the_harness() {
+    for base in [
+        "https://inference.runanywhere.ai/v1",
+        "http://127.0.0.1:52431/v1",
+    ] {
+        let config: Value = serde_json::from_str(&harness::build_open_claw_config(
+            "",
+            "glm-5.3-flash",
+            base,
+            "sk-live-xyz",
+            &declare_catalog(),
+        ))
+        .unwrap();
+        let headers = &config["models"]["providers"]["runanywhere"]["headers"];
+        assert_eq!(
+            headers,
+            &serde_json::json!({"X-RA-Harness": "openclaw"}),
+            "{base}"
+        );
+    }
+    // A provider of ours already in their file is replaced whole, so a stale
+    // header of theirs cannot outvote the declaration.
+    let replaced: Value = serde_json::from_str(&harness::build_open_claw_config(
+        r#"{"models":{"providers":{"runanywhere":{"headers":{"X-RA-Harness":"sdk"}}}}}"#,
+        "glm-5.3-flash",
+        "https://inference.runanywhere.ai/v1",
+        "k",
+        &declare_catalog(),
+    ))
+    .unwrap();
+    assert_eq!(
+        replaced["models"]["providers"]["runanywhere"]["headers"]["X-RA-Harness"],
+        "openclaw"
+    );
+}
+
+#[test]
+fn deepseek_settings_declare_the_harness() {
+    let settings: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+        "https://inference.runanywhere.ai/v1",
+        "RUNANYWHERE_API_KEY",
+        &declare_catalog(),
+    ))
+    .unwrap();
+    assert_eq!(
+        settings["llm-pi-ai"]["providers"]["runanywhere"]["headers"],
+        serde_json::json!({"X-RA-Harness": "deepseek"})
+    );
+}

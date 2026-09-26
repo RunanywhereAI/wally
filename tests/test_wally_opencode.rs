@@ -293,3 +293,24 @@ fn config_injects_limit_and_cost() {
         "all catalog models must appear, primary as default: {all:?}"
     );
 }
+
+#[test]
+fn opencode_config_declares_the_harness() {
+    let config: serde_json::Value = serde_json::from_str(&harness::build_open_code_config(
+        "glm-5.3-flash",
+        "https://inference.runanywhere.ai/v1",
+        "sk-live-xyz",
+        &[CatalogModel {
+            id: "glm-5.3-flash".to_string(),
+            context_window: 0,
+            max_output: 0,
+            input_per_mtok: 0,
+            output_per_mtok: 0,
+        }],
+    ))
+    .unwrap();
+    assert_eq!(
+        config["provider"]["runanywhere"]["options"]["headers"],
+        serde_json::json!({"X-RA-Harness": "opencode"})
+    );
+}

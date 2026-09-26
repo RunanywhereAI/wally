@@ -5,7 +5,9 @@ use crate::account::console::CancelOutcome;
 use crate::account::model_cache::cached_model_ids;
 use crate::anthropic::translate;
 use crate::config::cli_paths::state_dir;
-use crate::harness::Endpoint;
+use crate::harness::{
+    harness_header_value, upstream_user_agent, DeclaredHarness, Endpoint, HARNESS_HEADER,
+};
 use crate::io::output::{error_line, status_line};
 use crate::net::http1::{
     LivenessProbe, ResponseHead, ResponseWriter, Server, ServerHandle, ServerRequest,
@@ -171,6 +173,9 @@ struct Runtime {
     console_url: String,
     stopping: AtomicBool,
     cancels: Option<CancelWorker>,
+    /// Sent on every upstream request: the harness this translator serves, in
+    /// `X-RA-Harness` and in the User-Agent. Fixed for the session.
+    upstream_headers: Vec<(String, String)>,
 }
 
 struct RunningInstance {
@@ -270,6 +275,7 @@ fn post_upstream(
             path: path.to_string(),
             body: body.to_vec(),
             content_type: "application/json".to_string(),
+            headers: runtime.upstream_headers.clone(),
             receiver: receiver_box,
             reader_gone: Some(Box::new(reader_gone) as Box<dyn Fn() -> bool + Sync + '_>),
             on_headers: on_headers_box,
@@ -1194,7 +1200,9 @@ fn stop_running_instance() {
     }
 }
 
-/// Start the shim in front of `upstream`, serving `model`. `advertised` is the
+/// Start the shim in front of `upstream`, serving `model`, declaring
+/// `declared` (Claude Code or Claude Desktop) on every upstream request so the
+/// endpoint attributes the traffic to it. `advertised` is the
 /// model name reported to the tool (defaults to `model`); `aliases` map names
 /// the tool may send onto upstream ids. C++ defaulted verbose=false,
 /// advertised="" and aliases={}. Like the C++ (which returned bool), it reports
@@ -1202,6 +1210,7 @@ fn stop_running_instance() {
 pub fn start(
     upstream: &Endpoint,
     model: &str,
+    declared: DeclaredHarness,
     verbose: bool,
     advertised: &str,
     aliases: &ModelAliases,
@@ -1275,6 +1284,13 @@ pub fn start(
         console_url,
         stopping: AtomicBool::new(false),
         cancels,
+        upstream_headers: vec![
+            (
+                HARNESS_HEADER.to_string(),
+                harness_header_value(declared).to_string(),
+            ),
+            ("User-Agent".to_string(), upstream_user_agent(declared)),
+        ],
     });
 
     let mut server = Server::new();

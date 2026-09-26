@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "cd8b65933cdd82a72e1679947880359c5732f025e45f88948602b6b9c39e2adc";
+    "c07a99e6d6ac1c34334180f2b05021d29f33d896ab0918ea357ec7f4b462635b";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -1693,14 +1693,83 @@ impl ModelCatalogResponse {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+pub struct OpenRouterPricing {
+    pub completion: String,
+    pub input_cache_read: Option<String>,
+    pub prompt: String,
+}
+
+impl OpenRouterPricing {
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "expected a JSON object".to_string())?;
+        let mut result = Self::default();
+        match object.get("completion") {
+            Some(field) if !field.is_null() => {
+                result.completion = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        match object.get("input_cache_read") {
+            Some(field) if !field.is_null() => {
+                result.input_cache_read = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        match object.get("prompt") {
+            Some(field) if !field.is_null() => {
+                result.prompt = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        Ok(result)
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "completion".to_string(),
+            Value::String(self.completion.clone()),
+        );
+        if let Some(item) = &self.input_cache_read {
+            map.insert("input_cache_read".to_string(), Value::String(item.clone()));
+        }
+        map.insert("prompt".to_string(), Value::String(self.prompt.clone()));
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PublicModel {
+    pub context_length: Option<i64>,
     pub created: Option<i64>,
+    pub hugging_face_id: Option<String>,
     pub id: String,
+    pub input_modalities: Option<Vec<String>>,
     pub max_input_tokens: Option<i64>,
+    pub max_output_length: Option<i64>,
     pub max_output_tokens: Option<i64>,
     pub mode: Option<String>,
+    pub name: Option<String>,
     pub object: String,
+    pub output_modalities: Option<Vec<String>>,
     pub owned_by: String,
+    pub pricing: Option<OpenRouterPricing>,
+    pub quantization: Option<String>,
+    pub supported_features: Option<Vec<String>>,
+    pub supported_sampling_parameters: Option<Vec<String>>,
 }
 
 impl PublicModel {
@@ -1709,12 +1778,33 @@ impl PublicModel {
             .as_object()
             .ok_or_else(|| "expected a JSON object".to_string())?;
         let mut result = Self::default();
+        match object.get("context_length") {
+            Some(field) if !field.is_null() => {
+                result.context_length = Some(
+                    field
+                        .as_i64()
+                        .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
         match object.get("created") {
             Some(field) if !field.is_null() => {
                 result.created = Some(
                     field
                         .as_i64()
                         .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
+        match object.get("hugging_face_id") {
+            Some(field) if !field.is_null() => {
+                result.hugging_face_id = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
                 );
             }
             _ => {}
@@ -1728,9 +1818,38 @@ impl PublicModel {
             }
             _ => {}
         }
+        match object.get("input_modalities") {
+            Some(field) if !field.is_null() => {
+                result.input_modalities = Some({
+                    let array = field
+                        .as_array()
+                        .ok_or_else(|| "expected an array".to_string())?;
+                    let mut items = Vec::with_capacity(array.len());
+                    for item in array {
+                        items.push(
+                            item.as_str()
+                                .ok_or_else(|| "expected a string".to_string())?
+                                .to_string(),
+                        );
+                    }
+                    items
+                });
+            }
+            _ => {}
+        }
         match object.get("max_input_tokens") {
             Some(field) if !field.is_null() => {
                 result.max_input_tokens = Some(
+                    field
+                        .as_i64()
+                        .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
+        match object.get("max_output_length") {
+            Some(field) if !field.is_null() => {
+                result.max_output_length = Some(
                     field
                         .as_i64()
                         .ok_or_else(|| "expected an integer".to_string())?,
@@ -1759,12 +1878,42 @@ impl PublicModel {
             }
             _ => {}
         }
+        match object.get("name") {
+            Some(field) if !field.is_null() => {
+                result.name = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
         match object.get("object") {
             Some(field) if !field.is_null() => {
                 result.object = field
                     .as_str()
                     .ok_or_else(|| "expected a string".to_string())?
                     .to_string();
+            }
+            _ => {}
+        }
+        match object.get("output_modalities") {
+            Some(field) if !field.is_null() => {
+                result.output_modalities = Some({
+                    let array = field
+                        .as_array()
+                        .ok_or_else(|| "expected an array".to_string())?;
+                    let mut items = Vec::with_capacity(array.len());
+                    for item in array {
+                        items.push(
+                            item.as_str()
+                                .ok_or_else(|| "expected a string".to_string())?
+                                .to_string(),
+                        );
+                    }
+                    items
+                });
             }
             _ => {}
         }
@@ -1777,17 +1926,91 @@ impl PublicModel {
             }
             _ => {}
         }
+        match object.get("pricing") {
+            Some(field) if !field.is_null() => {
+                result.pricing = Some(OpenRouterPricing::from_json(field)?);
+            }
+            _ => {}
+        }
+        match object.get("quantization") {
+            Some(field) if !field.is_null() => {
+                result.quantization = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+        match object.get("supported_features") {
+            Some(field) if !field.is_null() => {
+                result.supported_features = Some({
+                    let array = field
+                        .as_array()
+                        .ok_or_else(|| "expected an array".to_string())?;
+                    let mut items = Vec::with_capacity(array.len());
+                    for item in array {
+                        items.push(
+                            item.as_str()
+                                .ok_or_else(|| "expected a string".to_string())?
+                                .to_string(),
+                        );
+                    }
+                    items
+                });
+            }
+            _ => {}
+        }
+        match object.get("supported_sampling_parameters") {
+            Some(field) if !field.is_null() => {
+                result.supported_sampling_parameters = Some({
+                    let array = field
+                        .as_array()
+                        .ok_or_else(|| "expected an array".to_string())?;
+                    let mut items = Vec::with_capacity(array.len());
+                    for item in array {
+                        items.push(
+                            item.as_str()
+                                .ok_or_else(|| "expected a string".to_string())?
+                                .to_string(),
+                        );
+                    }
+                    items
+                });
+            }
+            _ => {}
+        }
         Ok(result)
     }
 
     pub fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
+        if let Some(item) = &self.context_length {
+            map.insert("context_length".to_string(), Value::from(*item));
+        }
         if let Some(item) = &self.created {
             map.insert("created".to_string(), Value::from(*item));
         }
+        if let Some(item) = &self.hugging_face_id {
+            map.insert("hugging_face_id".to_string(), Value::String(item.clone()));
+        }
         map.insert("id".to_string(), Value::String(self.id.clone()));
+        if let Some(item) = &self.input_modalities {
+            map.insert(
+                "input_modalities".to_string(),
+                Value::Array(
+                    item.iter()
+                        .map(|item| Value::String(item.clone()))
+                        .collect(),
+                ),
+            );
+        }
         if let Some(item) = &self.max_input_tokens {
             map.insert("max_input_tokens".to_string(), Value::from(*item));
+        }
+        if let Some(item) = &self.max_output_length {
+            map.insert("max_output_length".to_string(), Value::from(*item));
         }
         if let Some(item) = &self.max_output_tokens {
             map.insert("max_output_tokens".to_string(), Value::from(*item));
@@ -1795,8 +2018,47 @@ impl PublicModel {
         if let Some(item) = &self.mode {
             map.insert("mode".to_string(), Value::String(item.clone()));
         }
+        if let Some(item) = &self.name {
+            map.insert("name".to_string(), Value::String(item.clone()));
+        }
         map.insert("object".to_string(), Value::String(self.object.clone()));
+        if let Some(item) = &self.output_modalities {
+            map.insert(
+                "output_modalities".to_string(),
+                Value::Array(
+                    item.iter()
+                        .map(|item| Value::String(item.clone()))
+                        .collect(),
+                ),
+            );
+        }
         map.insert("owned_by".to_string(), Value::String(self.owned_by.clone()));
+        if let Some(item) = &self.pricing {
+            map.insert("pricing".to_string(), item.to_json());
+        }
+        if let Some(item) = &self.quantization {
+            map.insert("quantization".to_string(), Value::String(item.clone()));
+        }
+        if let Some(item) = &self.supported_features {
+            map.insert(
+                "supported_features".to_string(),
+                Value::Array(
+                    item.iter()
+                        .map(|item| Value::String(item.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(item) = &self.supported_sampling_parameters {
+            map.insert(
+                "supported_sampling_parameters".to_string(),
+                Value::Array(
+                    item.iter()
+                        .map(|item| Value::String(item.clone()))
+                        .collect(),
+                ),
+            );
+        }
         Value::Object(map)
     }
 }

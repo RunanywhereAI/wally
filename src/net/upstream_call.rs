@@ -44,6 +44,10 @@ pub struct WatchedCall<'a> {
     pub path: String,
     pub body: Vec<u8>,
     pub content_type: String,
+    /// Extra request headers, set as given. The bridge uses them to declare
+    /// the harness (`X-RA-Harness`) and its own User-Agent; a User-Agent here
+    /// replaces the client's default one.
+    pub headers: Vec<(String, String)>,
     /// Called with each response body chunk. Returning false means the
     /// reader is gone -- a write to it failed -- and is the usual way a
     /// leave is noticed while tokens are flowing: the next chunk fails to
@@ -82,6 +86,7 @@ impl<'a> Default for WatchedCall<'a> {
             path: String::new(),
             body: Vec::new(),
             content_type: "application/json".to_string(),
+            headers: Vec::new(),
             receiver: None,
             reader_gone: None,
             on_headers: None,
@@ -267,6 +272,7 @@ pub fn post_watched(lease: &mut UpstreamLease, call: WatchedCall<'_>) -> Watched
         path,
         body,
         content_type,
+        headers,
         mut receiver,
         reader_gone,
         mut on_headers,
@@ -281,7 +287,9 @@ pub fn post_watched(lease: &mut UpstreamLease, call: WatchedCall<'_>) -> Watched
     let request = http1::Request {
         method: "POST".to_string(),
         path,
-        headers: vec![("Content-Type".to_string(), content_type)],
+        headers: std::iter::once(("Content-Type".to_string(), content_type))
+            .chain(headers)
+            .collect(),
         body,
     };
     let has_receiver = receiver.is_some();

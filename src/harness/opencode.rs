@@ -7,6 +7,7 @@ use crate::io::json::dump;
 use crate::io::output as out;
 
 use super::catalog_models::{catalog_models_with, CatalogModel};
+use super::declared_harness::{harness_header_value, DeclaredHarness, HARNESS_HEADER};
 use super::harness::{
     model_id_is_safe, refresh_and_recheck_model, report_cloud_session_invalid,
     report_not_signed_in, verify_cloud_session,
@@ -207,7 +208,14 @@ pub fn build_open_code_config(
     let provider = json!({
         "npm": "@ai-sdk/openai-compatible",
         "name": "RunAnywhere",
-        "options": { "baseURL": base_url, "apiKey": key },
+        // `options.headers` rides on every request (checked against opencode
+        // 1.18.31); the declaration makes attribution independent of
+        // opencode's own User-Agent.
+        "options": {
+            "baseURL": base_url,
+            "apiKey": key,
+            "headers": { HARNESS_HEADER: harness_header_value(DeclaredHarness::KOpencode) },
+        },
         "models": entries,
     });
     let config = json!({

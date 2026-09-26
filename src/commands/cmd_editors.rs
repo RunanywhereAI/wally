@@ -43,6 +43,9 @@ struct Editor {
     bundle: &'static str,
     summary: &'static str,
     wiring: Wiring,
+    /// What the translator declares upstream for this tool (`X-RA-Harness`),
+    /// so the endpoint attributes the traffic to it rather than to nobody.
+    declared: harness::DeclaredHarness,
 }
 
 /// Only tools that speak the Anthropic Messages API belong here. Anything
@@ -58,6 +61,7 @@ const EDITORS: &[Editor] = &[
         bundle: "",
         summary: "Open Claude Code with a model",
         wiring: Wiring::Environment,
+        declared: harness::DeclaredHarness::KClaudeCode,
     },
     Editor {
         id: "claude-desktop",
@@ -65,6 +69,7 @@ const EDITORS: &[Editor] = &[
         bundle: "Claude.app",
         summary: "Open Claude Desktop with a model",
         wiring: Wiring::ClaudeProfile,
+        declared: harness::DeclaredHarness::KClaudeDesktop,
     },
 ];
 
@@ -320,8 +325,16 @@ fn serve(editor: &Editor, model: &str, options: &GlobalOptions) -> i32 {
     let Some(endpoint) = harness::resolve(model, options, editor.id) else {
         return 1;
     };
-    let Some(shim) = anthropic::start(&endpoint, model, options.verbose, "", &ModelAliases::new())
-    else {
+    // `--serve` is named after a tool too (`wally claude-code --serve`), so the
+    // endpoint it holds open declares that tool.
+    let Some(shim) = anthropic::start(
+        &endpoint,
+        model,
+        editor.declared,
+        options.verbose,
+        "",
+        &ModelAliases::new(),
+    ) else {
         harness::release(&endpoint);
         return 1;
     };
@@ -420,6 +433,7 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
     let Some(mut shim) = anthropic::start(
         &endpoint,
         model,
+        editor.declared,
         options.verbose,
         &advertised,
         &desktop_aliases,
