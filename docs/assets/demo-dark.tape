@@ -1,4 +1,5 @@
-# Re-record with: vhs docs/assets/demo-dark.tape
+# Re-record from this directory so the gif lands next to the tape:
+#   cd docs/assets && vhs demo-dark.tape
 # Needs vhs and the model already pulled: wally models pull qwen3
 Output demo-dark.gif
 Set Shell zsh

@@ -1,4 +1,5 @@
-# Re-record with: vhs docs/assets/demo-light.tape
+# Re-record from this directory so the gif lands next to the tape:
+#   cd docs/assets && vhs demo-light.tape
 # Needs vhs and the model already pulled: wally models pull qwen3
 Output demo-light.gif
 Set Shell zsh

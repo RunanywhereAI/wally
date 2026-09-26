@@ -1,4 +1,5 @@
-# Re-record with: vhs docs/assets/harness-light.tape
+# Re-record from this directory so the gif lands next to the tape:
+#   cd docs/assets && vhs harness-light.tape
 # Needs vhs, opencode, and a signed-in wally (wally account login).
 # The hidden setup line makes the demo project and isolates opencode's state
 # in a temp dir, so the recording does not depend on this machine.
@@ -11,7 +12,7 @@ Set Padding 24
 Set Theme {"background":"#ffffff","foreground":"#1f2328","cursor":"#1f2328"}
 Set TypingSpeed 40ms
 Hide
-Type `export XDG_STATE_HOME=$(mktemp -d) && mkdir -p demo-proj/.opencode && print -l 'def add(a, b):' '    return a - b' > demo-proj/calc.py && printf '{ "theme": "github-light" }' | tee demo-proj/tui.json > demo-proj/.opencode/tui.json && clear`
+Type `cd $(mktemp -d) && export XDG_STATE_HOME=$(mktemp -d) && mkdir -p demo-proj/.opencode && print -l 'def add(a, b):' '    return a - b' > demo-proj/calc.py && printf '{ "theme": "github-light" }' | tee demo-proj/tui.json > demo-proj/.opencode/tui.json && clear`
 Enter
 Sleep 500ms
 Show
