@@ -50,7 +50,7 @@ output, read from the console catalog. Hermes does not: it takes a
 context-window hint from exactly one place, `model.context_length` (or a
 `custom_providers` entry) in `~/.hermes/config.yaml`, and there is no
 path-override env var, no CLI flag, and no way to swap in a second config
-file without swapping in a second Hermes — `HERMES_HOME` governs the whole
+file without swapping in a second Hermes. `HERMES_HOME` governs the whole
 tree, so pointing it elsewhere for the run would cost the person their
 SOUL.md, sessions and skills to deliver one field. wally will not write to
 `~/.hermes/config.yaml` either. So it prints the real number instead: `wally
@@ -69,7 +69,7 @@ otherwise takes the state directory from the config file's own folder.
 
 The translator keeps its connections to the model endpoint open between
 requests, one per stream in flight, so a turn does not start with a new TLS
-handshake — against the hosted endpoint that handshake was measured at about
+handshake. Against the hosted endpoint that handshake was measured at about
 half a second, and an agent makes several requests per turn. A connection that
 sat idle long enough for the far side to drop it (a long build, a walk away
 from the desk) is tried once more on a fresh one, only when nothing had come
@@ -77,8 +77,8 @@ back yet; a request that has started answering is never repeated. So the first
 request after a long pause pays one handshake, and the rest of the session does
 not.
 
-When the tool stops listening part-way through an answer — Esc in Claude Code,
-the app quitting — the translator notices within a tenth of a second rather
+When the tool stops listening part-way through an answer (Esc in Claude Code,
+the app quitting), the translator notices within a tenth of a second rather
 than at the next chunk it fails to deliver, and asks the console to stop that
 request by name, so the model stops generating an answer nobody will read and
 the session stops paying for it. The name is the request id the endpoint sends
@@ -87,7 +87,7 @@ the prompt is stopped the moment that first token arrives, and nothing after it
 is passed on. When the tool quits, `wally` sends any cancel still queued before
 it returns. Each cancel is a line in `shim.log` under the state directory
 (`~/.local/state/runanywhere/`, or `$XDG_STATE_HOME/runanywhere/`; on Windows
-`%LOCALAPPDATA%\RunAnywhere\state\`) — never the tool's terminal. A local
+`%LOCALAPPDATA%\RunAnywhere\state\`), never the tool's terminal. A local
 model needs none of this: the dropped connection is enough.
 
 ## Local models
@@ -128,12 +128,14 @@ in OpenCode even when a local copy exists, use `wally opencode --cloud -m <id>`.
 
 ## Hosted models
 
-A model you have not downloaded can still answer, if the console serves it:
+A model you have not downloaded can still answer through a coding tool, if the
+console serves it. `wally run` and `wally serve` stay local.
 
 ```bash
 wally account login
 wally account whoami
-wally run gemma-4-31b-it "why is the sky blue"
+wally opencode --cloud -m glm-5.3-flash
+wally claude-code -m glm-5.3-flash
 ```
 
 `wally account login` opens the console in a browser and waits for you to
