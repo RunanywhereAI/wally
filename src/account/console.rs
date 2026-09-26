@@ -462,6 +462,49 @@ unsafe fn wide_pwstr_to_string(ptr: windows_sys::core::PWSTR) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len))
 }
 
+/// What WinHTTP's automatic proxy discovery (WPAD / a PAC script) said for a
+/// URL. `Direct` is a real answer -- the PAC script chose no proxy -- and must
+/// win over the static setting, as it does under the C++'s
+/// `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY`; only `NotConfigured` falls back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Only the Windows discovery answers `Direct`/`Proxy`; elsewhere it is always
+// `NotConfigured`, and the tests construct the rest.
+#[cfg_attr(not(windows), allow(dead_code))]
+enum AutoProxy {
+    /// Auto-detect and PAC are off, or discovery failed.
+    NotConfigured,
+    Direct,
+    Proxy(String),
+}
+
+/// `windows_autodetected_system_proxy`, asked once per origin per process.
+/// Discovery can take up to its 3 s timeout, and a sign-in polls the console
+/// every few seconds; every console request goes to the same origin.
+fn cached_autodetected_system_proxy(url: &str) -> AutoProxy {
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, AutoProxy>>,
+    > = std::sync::OnceLock::new();
+    let origin = url
+        .parse::<ureq::http::Uri>()
+        .ok()
+        .and_then(|uri| Some(format!("{}://{}", uri.scheme_str()?, uri.authority()?)))
+        .unwrap_or_else(|| url.to_string());
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&origin)
+    {
+        return hit.clone();
+    }
+    let fresh = windows_autodetected_system_proxy(url);
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(origin, fresh.clone());
+    fresh
+}
+
 /// The WPAD/PAC half of what the C++ got for free from
 /// `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY`: read whether Internet Options has
 /// "Automatically detect settings" and/or a proxy auto-config script URL
@@ -471,7 +514,7 @@ unsafe fn wide_pwstr_to_string(ptr: windows_sys::core::PWSTR) -> String {
 /// internally. Bounded by a short timeout: an unreachable WPAD server or a
 /// hung PAC script must not stall every console request.
 #[cfg(windows)]
-fn windows_autodetected_system_proxy(url: &str) -> Option<String> {
+fn windows_autodetected_system_proxy(url: &str) -> AutoProxy {
     use windows_sys::Win32::Foundation::GlobalFree;
     use windows_sys::Win32::Networking::WinHttp::{
         WinHttpCloseHandle, WinHttpGetIEProxyConfigForCurrentUser, WinHttpGetProxyForUrl,
@@ -509,7 +552,7 @@ fn windows_autodetected_system_proxy(url: &str) -> Option<String> {
     }
 
     if !auto_detect && auto_config_url.is_none() {
-        return None;
+        return AutoProxy::NotConfigured;
     }
 
     let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
@@ -541,7 +584,7 @@ fn windows_autodetected_system_proxy(url: &str) -> Option<String> {
         )
     };
     if session.is_null() {
-        return None;
+        return AutoProxy::NotConfigured;
     }
 
     const DISCOVERY_TIMEOUT_MS: i32 = 3000;
@@ -569,7 +612,7 @@ fn windows_autodetected_system_proxy(url: &str) -> Option<String> {
     }
 
     if !resolved {
-        return None;
+        return AutoProxy::NotConfigured;
     }
 
     let proxy = if !proxy_info.lpszProxy.is_null() {
@@ -589,18 +632,23 @@ fn windows_autodetected_system_proxy(url: &str) -> Option<String> {
 
     // WinHttpGetProxyForUrl can return several fallback proxies separated by
     // semicolons; ureq::Proxy only takes one, so use the first, same as the
-    // bare (unprefixed) case in `static_proxy_for_scheme`.
-    let first = proxy?.split(';').next()?.trim().to_string();
+    // bare (unprefixed) case in `static_proxy_for_scheme`. No proxy in a
+    // successful answer means the PAC script said DIRECT.
+    let first = proxy
+        .as_deref()
+        .and_then(|list| list.split(';').next())
+        .map(str::trim)
+        .unwrap_or("");
     if first.is_empty() {
-        None
+        AutoProxy::Direct
     } else {
-        Some(first)
+        AutoProxy::Proxy(first.to_string())
     }
 }
 
 #[cfg(not(windows))]
-fn windows_autodetected_system_proxy(_url: &str) -> Option<String> {
-    None
+fn windows_autodetected_system_proxy(_url: &str) -> AutoProxy {
+    AutoProxy::NotConfigured
 }
 
 /// The proxy (if any) to use for a console request, matching the C++'s
@@ -618,7 +666,7 @@ fn console_proxy_url(
     url: &str,
     is_windows: bool,
     get_env: &dyn Fn(&str) -> Option<String>,
-    autodetected_system_proxy: &dyn Fn(&str) -> Option<String>,
+    autodetected_system_proxy: &dyn Fn(&str) -> AutoProxy,
     static_system_proxy: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     if !is_windows {
@@ -627,8 +675,10 @@ fn console_proxy_url(
     if url_is_loopback(url) {
         return None;
     }
-    if let Some(proxy) = autodetected_system_proxy(url) {
-        return Some(proxy);
+    match autodetected_system_proxy(url) {
+        AutoProxy::Proxy(proxy) => return Some(proxy),
+        AutoProxy::Direct => return None,
+        AutoProxy::NotConfigured => {}
     }
     let scheme = url
         .parse::<ureq::http::Uri>()
@@ -643,7 +693,7 @@ fn resolve_console_proxy(url: &str) -> Option<ureq::Proxy> {
         url,
         cfg!(windows),
         &|name| std::env::var(name).ok(),
-        &windows_autodetected_system_proxy,
+        &cached_autodetected_system_proxy,
         &windows_static_system_proxy,
     )?;
     ureq::Proxy::new(&value).ok()
@@ -2006,8 +2056,8 @@ mod tests {
         None
     }
 
-    fn no_autodetected_proxy(_url: &str) -> Option<String> {
-        None
+    fn no_autodetected_proxy(_url: &str) -> super::AutoProxy {
+        super::AutoProxy::NotConfigured
     }
 
     #[test]
@@ -2105,11 +2155,27 @@ mod tests {
             &lookup(&env),
             &|url| {
                 assert_eq!(url, "https://console.example/v1/me");
-                Some("pac-resolved-proxy:8080".to_string())
+                super::AutoProxy::Proxy("pac-resolved-proxy:8080".to_string())
             },
             &no_static_proxy,
         );
         assert_eq!(resolved.as_deref(), Some("pac-resolved-proxy:8080"));
+    }
+
+    #[test]
+    fn windows_goes_direct_when_the_pac_script_says_direct_even_with_a_static_proxy() {
+        // WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY honours a PAC DIRECT answer; the
+        // static Internet Options proxy is only the fallback when discovery is
+        // off or fails.
+        let env = env_of(&[]);
+        let resolved = super::console_proxy_url(
+            "https://console.example/v1/me",
+            true,
+            &lookup(&env),
+            &|_url| super::AutoProxy::Direct,
+            &|scheme| Some(format!("static-{scheme}:9")),
+        );
+        assert_eq!(resolved, None);
     }
 
     #[test]
