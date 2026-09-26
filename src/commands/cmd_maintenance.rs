@@ -320,20 +320,18 @@ pub fn run_uninstall(yes: bool) -> i32 {
 
     let exe = self_executable();
     if !exe.is_empty() {
-        let exe_path = PathBuf::from(&exe);
+        // A running exe cannot be deleted on Windows. One that install.ps1
+        // put down is named for the person to remove; any other (a source
+        // build) is left alone, as the C++ build always did there.
         #[cfg(windows)]
         {
             if let Some(dir) = windows_install_directory(&exe) {
                 manual_removal = Some(dir);
-            } else {
-                targets.push(Target {
-                    label: "binary",
-                    path: exe_path,
-                });
             }
         }
         #[cfg(not(windows))]
         {
+            let exe_path = PathBuf::from(&exe);
             if let Some((lib_dir, launcher)) = install_sh_layout(&exe) {
                 if let Some(link) = launcher_target(&launcher, &lib_dir) {
                     targets.push(Target {
