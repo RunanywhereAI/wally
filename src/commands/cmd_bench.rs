@@ -33,8 +33,6 @@ const VLM_PROMPT: &str = "Describe this image in detail.";
 const TTS_SHORT: &str = "Hello, this is a test.";
 const TTS_MEDIUM: &str = "The quick brown fox jumps over the lazy dog. Machine learning models can generate speech from text with remarkable quality and natural intonation.";
 
-const DEFAULT_VLM_IMAGE: &str = "docs/gifs/npu-model-tag-screenshot.png";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Modality {
     Llm,
@@ -733,6 +731,18 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
     Ok(models)
 }
 
+/// Message for a VLM row skipped because no usable `--vlm-image` was given.
+/// wally ships no built-in sample, so an empty `path` (the flag was never
+/// passed) and a non-empty one that doesn't exist on disk get distinct
+/// wording rather than both claiming a nonexistent in-tree default.
+fn vlm_image_missing_error(path: &str) -> String {
+    if path.is_empty() {
+        "wally ships no built-in VLM sample image; pass --vlm-image <path>".to_string()
+    } else {
+        format!("VLM sample image not found: '{path}' (pass --vlm-image <path> pointing at a real file)")
+    }
+}
+
 pub fn run_bench(
     options: &GlobalOptions,
     model_ref_arg: &str,
@@ -793,20 +803,18 @@ pub fn run_bench(
         return 1;
     }
 
-    // `--vlm-image`'s default is a path inside the wally source tree
-    // (docs/gifs/...), so it silently doesn't exist for anyone benchmarking an
-    // installed binary from any other cwd. Checked once, outside the loop: the
+    // wally ships no built-in VLM sample image (there is no default path
+    // that resolves inside an installed binary), so --vlm-image is required
+    // to benchmark VLM models. Checked once, outside the loop: the
     // llama.cpp load failure it otherwise causes reports "Input is invalid"
     // with the real cause buried in the engine's own stderr lines above it.
-    let vlm_image_exists = std::path::Path::new(vlm_image).exists();
+    let vlm_image_exists = !vlm_image.is_empty() && std::path::Path::new(vlm_image).exists();
 
     let mut rows: Vec<BenchRow> = Vec::new();
     for model in &models {
         for scenario in scenarios_for(model.modality) {
             if model.modality == Modality::Vlm && !vlm_image_exists {
-                let error = format!(
-                    "VLM sample image not found: '{vlm_image}' (pass --vlm-image <path>; the built-in default only resolves from inside the wally source tree)"
-                );
+                let error = vlm_image_missing_error(vlm_image);
                 out::status_line(&format!(
                     "skipping {} {} — {}: {error}",
                     modality_label(model.modality),
@@ -941,18 +949,19 @@ pub fn register_bench(app: &mut App) {
     // range [2.22507e-308 - 1.79769e+308]". The accepted set is unchanged:
     // trials is an int, so anything above INT_MAX already failed to parse.
     .check(Validator::Range(1, i32::MAX as i64));
+    // No `default_val` here: wally ships no built-in VLM sample image, so a
+    // default that looked like a real path (previously a wally-source-tree
+    // path that doesn't exist in an installed binary) only hid that the flag
+    // is required. Its absence is now explicit -- see vlm_image_missing_error.
     cmd.add_option(
         "--vlm-image",
         ValueType::Text,
-        "Image file for VLM benchmarking",
-    )
-    .default_val(DEFAULT_VLM_IMAGE);
+        "Image file for VLM benchmarking (required to benchmark VLM models)",
+    );
     cmd.callback(|parsed, options| {
         let model = parsed.get_str("model").unwrap_or_default();
         let trials = parsed.get_i64("--trials").unwrap_or(3) as i32;
-        let vlm_image = parsed
-            .get_str("--vlm-image")
-            .unwrap_or_else(|| DEFAULT_VLM_IMAGE.to_string());
+        let vlm_image = parsed.get_str("--vlm-image").unwrap_or_default();
         let engine = parsed.get_str("--engine").unwrap_or_default();
         run_bench(options, &model, trials, &vlm_image, &engine)
     });
@@ -1023,6 +1032,34 @@ mod vlm_preload_unload_targets_tests {
         for category in [ModelCategory::Vision, ModelCategory::Multimodal] {
             assert!(vlm_preload_unload_targets(category).contains(&ModelCategory::Language));
         }
+    }
+}
+
+#[cfg(test)]
+mod vlm_image_missing_error_tests {
+    use super::vlm_image_missing_error;
+
+    #[test]
+    fn does_not_claim_an_in_tree_default_resolves() {
+        // Regression: the old message said "the built-in default only
+        // resolves from inside the wally source tree", implying a fallback
+        // that never actually existed for an installed binary.
+        for path in [
+            "",
+            "docs/gifs/npu-model-tag-screenshot.png",
+            "/no/such/file.png",
+        ] {
+            let message = vlm_image_missing_error(path);
+            assert!(
+                !message.contains("resolves from inside the wally source tree"),
+                "message still implies an in-tree default: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn says_no_built_in_sample_ships_when_flag_is_absent() {
+        assert!(vlm_image_missing_error("").contains("ships no built-in"));
     }
 }
 

@@ -27,6 +27,12 @@ list (`parse__--bogus`, `parse__-U__--json`, `parse__-u__-v`, `parse__-z`,
 `parse__account`, `parse__account__foo`). `parse__models` and
 `parse__models__foo` print only the `models` help and did not change.
 
+Three more cases were re-captured from the Rust binary when `wally bench`'s
+`--vlm-image` help text was reworded to say it's required, since wally ships
+no built-in VLM sample image (`help__bench`, `leaf__bench__bogus_flag`,
+`leaf__bench__extra_positional`). Their help text is the only thing that
+differs from the C++ capture; nothing else about them changed.
+
 Re-capture from a binary (only when behaviour changes on purpose):
 
     python3 scripts/test/golden-capture.py --binary build/wally --out tests/golden --cases tests/golden/cases.json

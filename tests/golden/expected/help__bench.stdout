@@ -10,4 +10,5 @@ Options:
   -h, --help                  Show help
       --engine TEXT           Engine hint (mlx, llamacpp, onnx, sherpa)
   -n, --trials INT            Measured trials per scenario (median reported)
-      --vlm-image TEXT        Image file for VLM benchmarking
+      --vlm-image TEXT        Image file for VLM benchmarking (required to
+                              benchmark VLM models)
