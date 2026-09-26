@@ -712,8 +712,11 @@ fn mlx_callback_bridge_all_slots() {
         assert_eq!(state.initialize_count, 5, "one initialize() per modality");
     }
     // _backend_guard's Drop calls rac_backend_mlx_unregister() here (and on
-    // any earlier panic), replacing every `rac_backend_mlx_unregister();
-    // return result;` cleanup branch the C++ version repeats by hand.
+    // any earlier panic), but only when owns_backend above was true -- i.e.
+    // only when this test's own registration call actually registered the
+    // backend, not when it found one already registered by an earlier test.
+    // Replaces every `rac_backend_mlx_unregister(); return result;` cleanup
+    // branch the C++ version repeats by hand.
 }
 
 /// Ports `test_wally_mlx_run_end_to_end`. Drives the CLI (`backends`,
