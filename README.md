@@ -7,7 +7,10 @@
 One terminal command to chat with a model. Local models stay on your device;
 hosted ones bill against your RunAnywhere credit.
 
-<img src="docs/assets/clouds.jpg" alt="" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/demo-dark.gif">
+  <img src="docs/assets/demo-light.gif" alt="wally run qwen3 answering a prompt in the terminal" width="100%">
+</picture>
 
 ## Install
 
