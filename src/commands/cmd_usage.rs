@@ -238,6 +238,7 @@ fn requests_json(report: &UsageRequestsReport) -> String {
             "response_request_id",
             row.response_request_id.as_deref(),
         );
+        field_opt_str(&mut json, "api_key_id", row.api_key_id.as_deref());
         json.field_str("model", &row.model);
         field_opt_str(&mut json, "provider", row.provider.as_deref());
         json.field_i64("status_code", row.status_code);
@@ -653,6 +654,7 @@ mod tests {
     fn the_json_document_carries_every_field_and_says_whether_more_exist() {
         let mut full = row("a");
         full.response_request_id = Some("resp-a".to_string());
+        full.api_key_id = Some("3fa85f64-5717-4562-b3fc-2c963f66afa6".to_string());
         full.provider = Some("self_hosted_sglang".to_string());
         full.error_code = Some("upstream_error".to_string());
         full.finish_reason = Some("stop".to_string());
@@ -679,6 +681,7 @@ mod tests {
 
         let first = &document["rows"][0];
         assert_eq!(first["response_request_id"], "resp-a");
+        assert_eq!(first["api_key_id"], "3fa85f64-5717-4562-b3fc-2c963f66afa6");
         assert_eq!(first["provider"], "self_hosted_sglang");
         assert_eq!(first["error_code"], "upstream_error");
         assert_eq!(first["finish_reason"], "stop");
@@ -693,6 +696,7 @@ mod tests {
         let second = &document["rows"][1];
         for absent in [
             "response_request_id",
+            "api_key_id",
             "provider",
             "error_code",
             "finish_reason",

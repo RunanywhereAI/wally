@@ -272,3 +272,186 @@ fn usage_request_query_bounds_match_the_contract() {
     assert!(account::model_id_is_valid(&"m".repeat(128)));
     assert!(!account::model_id_is_valid(&"m".repeat(129)));
 }
+
+// AGENTS.md's P0 rule: a direct HTTP call is either a generated binding or a
+// *mechanically verified* thin adapter. console.rs hand-builds every URL with
+// `format!`, so this drives the real request builder for all ten operations
+// through a capturing transport and checks each one against the artifact
+// itself -- not against a second hand-written list of what the URLs "should"
+// be, which could drift the same way the requests could. A renamed query
+// parameter, a moved path, or an operation the artifact no longer has all
+// fail here instead of as a 404/422 on somebody's terminal.
+#[test]
+fn every_console_request_matches_the_pinned_contract() {
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+    use wally::account::{
+        Authorization, ConsoleClient, HttpRequest, HttpResponse, Transport, UsageQuery,
+        UsageRequestsQuery,
+    };
+
+    let artifact: serde_json::Value =
+        serde_json::from_slice(CONTRACT_BYTES).expect("the contract is JSON");
+
+    // The template (e.g. "/v1/requests/{request_id}/cancel") and operation
+    // object whose path matches `path` segment-for-segment, a `{...}` segment
+    // standing in for anything, and whose method matches. `None` is the
+    // "operation missing from the contract" case.
+    fn find_operation<'a>(
+        artifact: &'a serde_json::Value,
+        method: &str,
+        path: &str,
+    ) -> Option<&'a serde_json::Value> {
+        let paths = artifact.get("paths")?.as_object()?;
+        let wanted: Vec<&str> = path.trim_matches('/').split('/').collect();
+        for (template, methods) in paths {
+            let candidate: Vec<&str> = template.trim_matches('/').split('/').collect();
+            if candidate.len() != wanted.len() {
+                continue;
+            }
+            let matches = candidate
+                .iter()
+                .zip(wanted.iter())
+                .all(|(t, w)| (t.starts_with('{') && t.ends_with('}')) || t == w);
+            if matches {
+                if let Some(op) = methods.get(method.to_ascii_lowercase().as_str()) {
+                    return Some(op);
+                }
+            }
+        }
+        None
+    }
+
+    // The `query` parameter names an operation names, resolving `$ref`s into
+    // `components.parameters` the way every parameter on these routes is
+    // written.
+    fn query_param_names(
+        artifact: &serde_json::Value,
+        operation: &serde_json::Value,
+    ) -> HashSet<String> {
+        let component_params = &artifact["components"]["parameters"];
+        operation
+            .get("parameters")
+            .and_then(|p| p.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|param| {
+                let resolved = match param.get("$ref").and_then(|r| r.as_str()) {
+                    Some(reference) => {
+                        let name = reference.rsplit('/').next().unwrap_or_default();
+                        component_params.get(name)?
+                    }
+                    None => param,
+                };
+                if resolved.get("in").and_then(|v| v.as_str()) == Some("query") {
+                    resolved
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn query_names_in(query: &str) -> HashSet<String> {
+        if query.is_empty() {
+            return HashSet::new();
+        }
+        query
+            .split('&')
+            .map(|pair| pair.split('=').next().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    const ORIGIN: &str = "https://console.example.test";
+
+    let requests: Arc<Mutex<Vec<HttpRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&requests);
+    let transport: Transport = Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            captured.lock().unwrap().push(request.clone());
+            Ok(HttpResponse {
+                status: 200,
+                body: "{}".to_string(),
+                headers: Default::default(),
+            })
+        },
+    );
+    let client = ConsoleClient::new(Some(transport));
+
+    // Every operation the CLI calls, driven for real. Return values are not
+    // checked here -- the fake transport's body does not satisfy every
+    // response contract -- only what was actually asked for.
+    let _ = client.begin_authorization(ORIGIN, "test-host", None);
+    let authorization = Authorization {
+        request_code: "ABCD-EFGH".to_string(),
+        poll_secret: "poll-secret".to_string(),
+        verification_url: String::new(),
+        expires_in: 300,
+        interval: 1,
+    };
+    let _ = client.poll(ORIGIN, &authorization);
+    let _ = client.refresh(ORIGIN, "refresh-token");
+    let _ = client.who_am_i(ORIGIN, "access-token");
+    let _ = client.revoke(ORIGIN, "access-token", "refresh-token");
+    let _ = client.fetch_usage(
+        ORIGIN,
+        "access-token",
+        &UsageQuery {
+            days: 7,
+            model: "glm-5.3-flash".to_string(),
+            limit: 20,
+        },
+    );
+    // Every query parameter the CLI's usage-requests query knows how to send.
+    let _ = client.fetch_usage_requests(
+        ORIGIN,
+        "access-token",
+        &UsageRequestsQuery {
+            since: "2026-09-01T00:00:00Z".to_string(),
+            until: "2026-09-02T00:00:00Z".to_string(),
+            model: Some("glm-5.3-flash".to_string()),
+            status_code: Some(500),
+            response_request_id: Some("resp-9".to_string()),
+            limit: 25,
+            cursor: Some("cursor-token".to_string()),
+        },
+    );
+    let _ = client.fetch_models(ORIGIN, "access-token");
+    let _ = client.fetch_catalog(ORIGIN, "access-token");
+    let _ = client.cancel_request(ORIGIN, "access-token", "req-123", 0);
+
+    let requests = requests.lock().unwrap();
+    assert_eq!(
+        requests.len(),
+        10,
+        "expected one request per CLI operation: {requests:#?}"
+    );
+
+    for request in requests.iter() {
+        let rest = request
+            .url
+            .strip_prefix(ORIGIN)
+            .expect("every console request is rooted at the console origin");
+        let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+
+        let operation = find_operation(&artifact, &request.method, path).unwrap_or_else(|| {
+            panic!(
+                "{} {path} is not an operation the pinned contract defines",
+                request.method
+            )
+        });
+
+        let allowed = query_param_names(&artifact, operation);
+        for sent in query_names_in(query) {
+            assert!(
+                allowed.contains(&sent),
+                "{} {path} sent query parameter {sent:?}, which the contract does not name \
+                 (contract allows {allowed:?})",
+                request.method
+            );
+        }
+    }
+}
