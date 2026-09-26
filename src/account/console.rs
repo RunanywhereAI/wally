@@ -293,26 +293,25 @@ fn total_timeout_ms(request: &HttpRequest) -> i32 {
     }
 }
 
-fn connect_timeout_ms(total_timeout_ms: i32) -> i32 {
-    std::cmp::min(CONNECT_TIMEOUT_MS, total_timeout_ms)
+fn connect_timeout_ms(total_ms: i32) -> i32 {
+    std::cmp::min(CONNECT_TIMEOUT_MS, total_ms)
 }
 
-/// What is left of `total_timeout_ms` after proxy discovery already spent
+/// What is left of `total_ms` after proxy discovery already spent
 /// `discovery_elapsed` finding out whether to use one. Without this,
 /// discovery time is on top of the request's own timeout instead of counted
 /// against it, so the first request of a process (a cache miss in
 /// `cached_autodetected_system_proxy`) could take up to 3s longer than
 /// configured. Never negative, never below `MIN_REMAINING_TOTAL_TIMEOUT_MS`,
-/// and never above `total_timeout_ms` itself -- discovery can only spend
-/// budget, never hand back more than the caller asked for, so the floor is
-/// only allowed to pull the remainder back up when discovery actually ate
-/// into it.
-fn remaining_after_discovery_ms(total_timeout_ms: i32, discovery_elapsed: Duration) -> i32 {
+/// and never above `total_ms` itself -- discovery can only spend budget,
+/// never hand back more than the caller asked for, so the floor is only
+/// allowed to pull the remainder back up when discovery actually ate into it.
+fn remaining_after_discovery_ms(total_ms: i32, discovery_elapsed: Duration) -> i32 {
     let elapsed_ms = i32::try_from(discovery_elapsed.as_millis()).unwrap_or(i32::MAX);
     std::cmp::min(
-        total_timeout_ms,
+        total_ms,
         std::cmp::max(
-            total_timeout_ms.saturating_sub(elapsed_ms),
+            total_ms.saturating_sub(elapsed_ms),
             MIN_REMAINING_TOTAL_TIMEOUT_MS,
         ),
     )
