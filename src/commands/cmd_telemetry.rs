@@ -238,6 +238,11 @@ struct EndpointStats {
 #[derive(Debug, Clone, Default)]
 struct TelemetryHttpContext {
     endpoints: BTreeMap<String, EndpointStats>,
+    /// The manager this context's callback was registered against, so
+    /// telemetry_http_callback can report the outcome back via
+    /// rac_telemetry_manager_http_complete (set by run_telemetry_session
+    /// before rac_telemetry_manager_set_http_callback).
+    manager: *mut sys::rac_telemetry_manager_t,
 }
 
 /// Accumulates one HTTP exchange's outcome into `stats`, matching C++'s
@@ -303,9 +308,32 @@ extern "C" fn telemetry_http_callback(
         };
 
         let result = net::control_plane_post(&endpoint_str, &body, requires_auth == sys::TRUE);
+        let ok = result.ok();
 
         let stats = context.endpoints.entry(endpoint_str).or_default();
         record_http_result(stats, &result);
+
+        // Tell the manager whether this batch POST succeeded so flush() can
+        // resolve it (and requeue/report on failure) instead of leaving it
+        // pending forever, matching bootstrap::wally_telemetry_http_callback.
+        if !context.manager.is_null() {
+            let body_c = (!result.body.is_empty())
+                .then(|| CString::new(result.body.clone()).unwrap_or_default());
+            let error_c = (!ok).then(|| CString::new(result.describe()).unwrap_or_default());
+            // SAFETY: `context.manager` is non-null (checked above) and stays
+            // valid for this call: run_telemetry_session owns it exclusively
+            // and destroys it only after flush() (which drives this callback)
+            // returns; body_c/error_c are valid NUL-terminated strings, or
+            // NULL, for the duration of this call.
+            unsafe {
+                sys::rac_telemetry_manager_http_complete(
+                    context.manager,
+                    if ok { sys::TRUE } else { sys::FALSE },
+                    body_c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                    error_c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                );
+            }
+        }
     });
 }
 
@@ -472,6 +500,10 @@ fn run_telemetry_session(
             c_os_version.as_ptr(),
         );
     }
+    // telemetry_http_callback needs the manager back to report each POST's
+    // outcome via rac_telemetry_manager_http_complete; set it before
+    // registering the callback below.
+    report.context.manager = manager;
     // SAFETY: `manager` is valid. `&mut report.context` is passed as the
     // opaque user_data pointer telemetry_http_callback receives back
     // verbatim on every subsequent call; `report` (owned by this function's
