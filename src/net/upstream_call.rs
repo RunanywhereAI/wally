@@ -191,8 +191,15 @@ impl Drop for EndWatch<'_, '_> {
         self.state.done.store(true, Ordering::SeqCst);
         // An empty lock/unlock, deliberately: it makes sure the watch
         // thread, which may be inside a locked wait, observes `done` before
-        // being notified.
-        drop(self.state.shared.lock().unwrap());
+        // being notified. Tolerate a poisoned mutex rather than `.unwrap()`:
+        // this Drop itself can run while unwinding from a panic inside
+        // `on_headers` (which runs under `shared`), and panicking again
+        // here on the poisoned lock would abort that unwind instead of
+        // letting it resume normally.
+        match self.state.shared.lock() {
+            Ok(guard) => drop(guard),
+            Err(poisoned) => drop(poisoned.into_inner()),
+        }
         self.state.ended.notify_all();
     }
 }
@@ -586,6 +593,43 @@ mod tests {
         assert!(
             outcome.is_err(),
             "expected the panic to propagate out of post_watched"
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn a_panicking_on_headers_does_not_double_panic_on_the_poisoned_lock() {
+        // Unlike the panicking receiver above, on_headers runs while
+        // `shared` is already locked (headers_seen/status/etc. are set
+        // immediately before it), so a panic here poisons that mutex on
+        // unwind. Before EndWatch::drop tolerated a poisoned lock, its own
+        // `.lock().unwrap()` panicked a second time on the way out, which
+        // aborts the whole process (SIGABRT) instead of catch_unwind seeing
+        // a normal Err.
+        let mut server = Server::new();
+        server.route("POST", "/chat", |_req, res, _peer| {
+            res.begin_chunked(200, &[]).unwrap();
+            let _ = res.write_chunk(b"boom");
+            let _ = res.end_chunked();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+        let pool = UpstreamPool::new(options(format!("http://127.0.0.1:{port}")));
+        let mut lease = pool.acquire("token");
+
+        let call = WatchedCall {
+            path: "/chat".to_string(),
+            body: b"{}".to_vec(),
+            on_headers: Some(Box::new(|_head: &ResponseHead| {
+                panic!("on_headers exploded")
+            })),
+            ..Default::default()
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            post_watched(&mut lease, call)
+        }));
+        assert!(
+            outcome.is_err(),
+            "expected the panic to propagate out of post_watched, not abort the process"
         );
         handle.stop();
     }
