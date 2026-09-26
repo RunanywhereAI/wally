@@ -1817,6 +1817,55 @@ fn usage_requests_refreshes_mid_follow_and_carries_on() {
     assert_eq!(account::load().expect("load").access_token, "fresh-token");
 }
 
+// A dropped connection mid-poll must not kill the login either. Two real
+// sign-ins, to production and to dev, both ended on the same network blip
+// with "could not reach Wally Cloud" while waiting for approval.
+#[test]
+fn an_unreachable_poll_keeps_waiting() {
+    let polls = Arc::new(Mutex::new(0));
+    let counter = Arc::clone(&polls);
+    let client = ConsoleClient::new(Some(Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            if !request.url.ends_with("/auth/cli/poll") {
+                return Err(String::new());
+            }
+            let mut n = counter.lock().unwrap();
+            *n += 1;
+            if *n == 1 {
+                // the connection drops on the first poll
+                return Err("connection reset".to_string());
+            }
+            Ok(HttpResponse {
+                status: 200,
+                body: json(serde_json::json!({
+                    "status": "approved",
+                    "access_token": "access-one",
+                    "refresh_token": "refresh-one",
+                    "email": "dev@example.test",
+                    "expires_in": 3600,
+                })),
+                headers: BTreeMap::new(),
+            })
+        },
+    ) as Transport));
+
+    let authorization = Authorization {
+        request_code: "ABCD-EFGH".to_string(),
+        poll_secret: "poll-secret".to_string(),
+        ..Authorization::default()
+    };
+    let first = client.poll("https://console.runanywhere.ai", &authorization);
+    assert_eq!(
+        first.result,
+        PollResult::Pending,
+        "a dropped poll must read as still-waiting, not a failed login: {}",
+        first.error
+    );
+    let second = client.poll("https://console.runanywhere.ai", &authorization);
+    assert_eq!(second.result, PollResult::Approved);
+    assert_eq!(second.grant.expect("grant").access_token, "access-one");
+}
+
 // A 429 mid-poll must not kill the login. `wally login` printed its code and
 // URL, then died on the first rate-limited poll while the person was still
 // approving in the browser (InferenceInfra#444).

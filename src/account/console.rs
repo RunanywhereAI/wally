@@ -949,7 +949,12 @@ impl ConsoleClient {
         let response = match self.send(request) {
             Ok(response) => response,
             Err(error) => {
+                // A dropped connection has not denied anything either: keep
+                // waiting, bounded by the request's expiry like a 5xx below.
+                // Failing here ended real sign-ins on one network blip while
+                // the person was still approving in the browser.
                 outcome.error = error;
+                outcome.result = PollResult::Pending;
                 return outcome;
             }
         };
