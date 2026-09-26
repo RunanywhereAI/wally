@@ -184,6 +184,17 @@ fn load_model(options: &GlobalOptions, model_id: &str, framework: v1::InferenceF
 }
 
 fn run_tool_call(options: &GlobalOptions, params: &ToolCallParams) -> i32 {
+    // Parse before bootstrap: it's a pure string match with no dependency on
+    // bootstrap/model state, so invalid input fails fast instead of triggering
+    // a model download first.
+    let choice = match parse_tool_choice(&params.tool_choice) {
+        Some(choice) => choice,
+        None => {
+            error_line("--tool-choice expects auto|required|none|specific");
+            return 2;
+        }
+    };
+
     if bootstrap::bootstrap(options).is_err() {
         return 1;
     }
@@ -241,13 +252,6 @@ fn run_tool_call(options: &GlobalOptions, params: &ToolCallParams) -> i32 {
         ..Default::default()
     });
 
-    let choice = match parse_tool_choice(&params.tool_choice) {
-        Some(choice) => choice,
-        None => {
-            error_line("--tool-choice expects auto|required|none|specific");
-            return 2;
-        }
-    };
     if !params.force_tool.is_empty() {
         tool_options.tool_choice = v1::ToolChoiceMode::Specific as i32;
         tool_options.forced_tool_name = Some(params.force_tool.clone());
