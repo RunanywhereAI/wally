@@ -69,9 +69,11 @@ impl Default for GroupedRow {
 
 // A short "how do I download one?" header for the human list. The pull id
 // differs by backend, so show one example per backend this build can run:
-// llama.cpp everywhere; on Apple also MLX. Never printed in --json.
+// llama.cpp where the kit has it (not the Windows ARM64 kit); on Apple also
+// MLX. Never printed in --json.
 fn print_pull_examples() {
     out::result_line("Download a model with `wally models pull <id>`:");
+    #[cfg(wally_has_llamacpp)]
     out::result_line("  wally models pull qwen3-4b-instruct-2507  # llama.cpp");
     #[cfg(target_os = "macos")]
     out::result_line("  wally models pull mlx-qwen3-4b-instruct-2507  # MLX (Apple GPU)");
