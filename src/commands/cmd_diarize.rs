@@ -239,7 +239,8 @@ pub fn register_diarize(app: &mut App) {
         "--threshold",
         ValueType::Float,
         "Speaker activity needed to open a segment, in [0,1] (default 0.5)",
-    );
+    )
+    .check(Validator::RangeF(0.0, 1.0));
     cmd.add_option(
         "--minimum-duration-ms,--min-duration",
         // rac_diarization_options_t::minimum_duration_ms is int64_t.
