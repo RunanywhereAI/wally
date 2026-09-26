@@ -498,6 +498,15 @@ impl Client {
         self.bearer = Some(token.to_string());
     }
 
+    /// Whether this client is still holding a live connection. `send()`
+    /// clears `conn` to `None` after a `Connection: close` response or a
+    /// close-delimited (no Content-Length/chunked) reply, so a client
+    /// popped from the idle pool with no connection is effectively fresh,
+    /// not a stale keep-alive.
+    pub fn has_connection(&self) -> bool {
+        self.conn.is_some()
+    }
+
     fn host_header(&self) -> String {
         let default_port = if self.https { 443 } else { 80 };
         if self.port == default_port {
