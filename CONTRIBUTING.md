@@ -12,7 +12,7 @@ fix belongs in the SDK, then a new kit — not a workaround here.
 
 ## Prerequisites
 
-- CMake 3.24+, a C++20 compiler (still needed: CMake resolves the kit and
+- CMake 3.27+, a C++20 compiler (still needed: CMake resolves the kit and
   links the Apple Swift host)
 - The Rust toolchain `rust-toolchain.toml` pins (`rustup` installs it
   automatically the first time you run `cargo`/`rustc` in this tree)

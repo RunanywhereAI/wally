@@ -59,14 +59,12 @@ FetchContent_Declare(cpp_httplib
 FetchContent_MakeAvailable(cpp_httplib)
 target_link_libraries(wally_link_probe PRIVATE httplib::httplib)
 
-# Ask for the codemodel reply; CMake writes it at the end of generation.
-# cmake_file_api() (3.27+) asks from inside this run. On older CMake the query
-# file only takes effect from the next configure, and build.rs says so.
-if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.27)
-    cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)
-else()
-    file(WRITE "${CMAKE_BINARY_DIR}/.cmake/api/v1/query/codemodel-v2" "")
-endif()
+# Ask for the codemodel reply; CMake writes it at the end of this same
+# generation. Requires cmake_file_api() (3.27+, enforced by the
+# cmake_minimum_required at the top of CMakeLists.txt): writing the query file
+# directly instead, as CMake < 3.27 requires, only takes effect on the next
+# configure, so the first cargo build would run before the reply exists.
+cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)
 
 set(_wally_caps "")
 foreach(_cap LLAMACPP ONNX SHERPA MLX CLOUD RAG SERVER)

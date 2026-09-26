@@ -262,8 +262,7 @@ fn probe_link_args(reply: &Path, target: &str, config: &str) -> Vec<String> {
     let mut indexes: Vec<PathBuf> = fs::read_dir(reply)
         .unwrap_or_else(|e| {
             panic!(
-                "no CMake file API reply at {}: {e}. Re-run the CMake configure (CMake older \
-                 than 3.27 writes the reply from the second configure on).",
+                "no CMake file API reply at {}: {e}. Re-run the CMake configure.",
                 reply.display()
             )
         })

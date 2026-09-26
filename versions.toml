@@ -32,7 +32,7 @@ sdk_ci_ref = "b3a2b0147d8c66190c14a53bc04286efd6a4d64a"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
-cmake_minimum = "3.24"
+cmake_minimum = "3.27"
 cxx_standard = "20"
 # The Rust toolchain; rust-toolchain.toml pins the same channel.
 rust = "1.93.1"

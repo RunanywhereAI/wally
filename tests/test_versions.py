@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 import unittest
@@ -134,6 +135,28 @@ class SdkCheckoutRefTests(unittest.TestCase):
                                 text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("versions.toml consistent", result.stdout)
+
+
+class CMakeFileApiFloorTests(unittest.TestCase):
+    """cmake_file_api(QUERY ...) in cmake/WallyRust.cmake only takes effect
+    inside the run that asks for it from CMake 3.27 on; older CMake defers the
+    reply to the next configure, so the first cargo build would run before it
+    exists. cmake_minimum_required must stay at 3.27+ so a too-old CMake fails
+    fast at configure instead of confusingly inside the first cargo build."""
+
+    def test_cmake_minimum_required_is_at_least_3_27(self):
+        found = re.search(r"cmake_minimum_required\(VERSION\s+([0-9.]+)\)", CHECK.CMAKELISTS.read_text())
+        self.assertIsNotNone(found, "no cmake_minimum_required in CMakeLists.txt")
+        self.assertGreaterEqual(
+            tuple(int(part) for part in found.group(1).split(".")),
+            (3, 27),
+            "cmake_minimum_required regressed below the CMake file API's same-run floor",
+        )
+
+    def test_wally_rust_cmake_has_no_pre_3_27_fallback_branch(self):
+        text = (CHECK.ROOT / "cmake/WallyRust.cmake").read_text()
+        self.assertIn("cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)", text)
+        self.assertNotIn("CMAKE_VERSION VERSION_GREATER_EQUAL 3.27", text)
 
 
 if __name__ == "__main__":
