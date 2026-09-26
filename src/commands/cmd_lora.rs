@@ -401,7 +401,7 @@ pub fn register_lora(app: &mut App) {
     remove_cmd.add_option(
         "adapter",
         ValueType::Text,
-        "Adapter id or path (omit to detach all)",
+        "Adapter id (omit to detach all)",
     );
     remove_cmd.callback(|p, g| run_lora_remove(g, &p.get_str("adapter").unwrap_or_default()));
 
