@@ -1083,6 +1083,9 @@ mod tests {
 
     #[test]
     fn is_removable_leftover_config_rejects_a_file_younger_than_the_max_age() {
+        // tempdir() reads TMPDIR, which the sweep test below points at a
+        // directory it deletes when it finishes.
+        let _lock = env_lock();
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("wally-agent-1.json");
         std::fs::write(&path, "{}").expect("write fixture");
@@ -1095,6 +1098,9 @@ mod tests {
 
     #[test]
     fn is_removable_leftover_config_accepts_a_file_older_than_the_max_age() {
+        // tempdir() reads TMPDIR, which the sweep test below points at a
+        // directory it deletes when it finishes.
+        let _lock = env_lock();
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("wally-agent-2.json");
         std::fs::write(&path, "{}").expect("write fixture");
@@ -1111,6 +1117,9 @@ mod tests {
 
     #[test]
     fn is_removable_leftover_config_rejects_a_directory() {
+        // tempdir() reads TMPDIR, which the sweep test below points at a
+        // directory it deletes when it finishes.
+        let _lock = env_lock();
         let dir = tempfile::tempdir().expect("temp dir");
         let sub = dir.path().join("wally-agent-3.json");
         std::fs::create_dir(&sub).expect("mkdir fixture");
@@ -1124,6 +1133,9 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn is_removable_leftover_config_rejects_a_symlink_even_when_old() {
+        // tempdir() reads TMPDIR, which the sweep test below points at a
+        // directory it deletes when it finishes.
+        let _lock = env_lock();
         let dir = tempfile::tempdir().expect("temp dir");
         let target = dir.path().join("wally-agent-4-target.json");
         std::fs::write(&target, "{}").expect("write fixture");
