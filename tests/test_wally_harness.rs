@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use wally::account::{self, ConsoleClient, Credentials, HttpRequest, HttpResponse};
 use wally::harness::{self, CatalogModel};
+use wally::net::http1::Server;
 
 use common::{env_lock, EnvGuard};
 
@@ -999,5 +1000,92 @@ fn local_models_discovers_a_symlinked_weight_file() {
     assert_eq!(
         found.bytes as u64, real_len,
         "bytes must match the symlink target: {found:?}"
+    );
+}
+
+// `launch_open_code_cloud_with` used to check the model-cache gate before
+// `verify_cloud_session` could refresh an expired access token, so a valid
+// refresh token could never unblock a newly cataloged model -- the catalog
+// check kept failing with the stale token instead. `refresh_model_cache_now`
+// (reached through that gate) always builds its own `ConsoleClient::default()`
+// rather than using an injected transport, so only a real loopback listener
+// can stand in for the console here.
+#[test]
+fn launch_open_code_cloud_with_refreshes_before_the_catalog_cache_gate() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    let temporary = tempfile::tempdir().expect("temp dir");
+    env.set("WALLY_PROFILE_DIR", temporary.path());
+
+    let mut server = Server::new();
+    server.route("GET", "/v1/me", |_req, writer, _stream| {
+        let _ = writer.send_full(
+            200,
+            &[("Content-Type", "application/json")],
+            br#"{"email":"developer@example.test"}"#,
+        );
+    });
+    server.route("GET", "/v1/models", |req, writer, _stream| {
+        // Only the refreshed token unlocks the model; the stale one this
+        // session started with must not.
+        if req.header("Authorization") != Some("Bearer refreshed-access-token") {
+            let _ = writer.send_full(401, &[], b"");
+            return;
+        }
+        let _ = writer.send_full(
+            200,
+            &[("Content-Type", "application/json")],
+            br#"{"object":"list","data":[{"id":"newly-cataloged-model","object":"model","owned_by":"runanywhere"}]}"#,
+        );
+    });
+    server.route("POST", "/auth/cli/refresh", |_req, writer, _stream| {
+        let _ = writer.send_full(
+            200,
+            &[("Content-Type", "application/json")],
+            br#"{"access_token":"refreshed-access-token","refresh_token":"refreshed-refresh-token","email":"developer@example.test","expires_in":3600}"#,
+        );
+    });
+    let (_handle, port) = server.bind_and_run("127.0.0.1").expect("bind mock console");
+    let console_url = format!("http://127.0.0.1:{port}");
+
+    account::save(&Credentials {
+        console_url: console_url.clone(),
+        email: "developer@example.test".to_string(),
+        access_token: "stale-access-token".to_string(),
+        refresh_token: "stale-refresh-token".to_string(),
+        expires_at: now_seconds() - 1,
+    })
+    .expect("seed credentials");
+
+    // A cache that has models, but not the one about to be launched -- the
+    // gate this comment fixed only engages when the cache is non-empty and
+    // misses the target model.
+    std::fs::write(
+        account::model_cache_path(),
+        format!(
+            r#"{{"fetched_at":{},"models":["some-other-model"]}}"#,
+            now_seconds()
+        ),
+    )
+    .expect("seed model cache");
+
+    let console = ConsoleClient::new(None);
+    let launched = Arc::new(AtomicBool::new(false));
+    let launched_flag = launched.clone();
+    let spawn: harness::SpawnFunction = Arc::new(move |_tool: &str, _args: &[String]| {
+        launched_flag.store(true, Ordering::SeqCst);
+        0
+    });
+
+    let code = harness::launch_open_code_cloud_with("newly-cataloged-model", &[], &console, &spawn);
+
+    assert_eq!(
+        code, 0,
+        "a valid refresh token must unblock a newly cataloged model instead of hitting \
+         'server is busy'"
+    );
+    assert!(
+        launched.load(Ordering::SeqCst),
+        "the injected spawn must have been invoked"
     );
 }

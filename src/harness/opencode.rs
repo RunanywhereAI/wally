@@ -256,16 +256,11 @@ pub fn launch_open_code_cloud_with(
         report_not_signed_in();
         return 1;
     }
-    // Refresh the catalog for next time without blocking, and reject a
-    // mistyped id from the cache. Fail open on an empty cache.
-    account::refresh_model_cache_if_stale(account::MODEL_CACHE_TTL_SECONDS);
-    if account::cache_has_models() && !account::model_is_cached(model) {
-        // Stale cache: refresh live and retry rather than reject a valid
-        // model.
-        if !refresh_and_recheck_model(&credentials, model) {
-            return 1;
-        }
-    }
+    // Before the catalog cache gate below, not after: that gate can reject a
+    // newly cataloged model outright, and a stale or expired access token
+    // must not be given the chance to fail the identity check first. Refresh
+    // here so the cache check that follows runs with a token already known
+    // good, instead of dead-ending a valid refresh token on "server is busy".
     match verify_cloud_session(console, &mut credentials) {
         Ok(_) => {}
         Err(err) => {
@@ -283,6 +278,16 @@ pub fn launch_open_code_cloud_with(
                 "could not confirm the cloud session ({}) - continuing on the stored session",
                 err.message
             ));
+        }
+    }
+    // Refresh the catalog for next time without blocking, and reject a
+    // mistyped id from the cache. Fail open on an empty cache.
+    account::refresh_model_cache_if_stale(account::MODEL_CACHE_TTL_SECONDS);
+    if account::cache_has_models() && !account::model_is_cached(model) {
+        // Stale cache: refresh live and retry rather than reject a valid
+        // model.
+        if !refresh_and_recheck_model(&credentials, model) {
+            return 1;
         }
     }
 
