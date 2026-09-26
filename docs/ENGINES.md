@@ -1,6 +1,6 @@
 # Engines and platforms
 
-Moved out of the README. What each engine runs, where it exists, and how wally picks one.
+What each engine runs, where it exists, and how wally picks one.
 
 ## Backends
 
@@ -30,10 +30,10 @@ wally run --engine qhexrt /path/to/lfm2_5_230m_HNPU "Hello"
 
 | Backend | macOS Apple Silicon | Windows x64 | Windows ARM64 | Linux x64 |
 |---|---|---|---|---|
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) | public bottle | public bottle | — | source build only |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) | public bottle | public bottle | — | public tarball |
 | [MLX](https://github.com/ml-explore/mlx) (Apple GPU) | public bottle (product `wally`, not `wally-cxx`) | — | — | — |
-| [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) | public bottle | public bottle | — | source build only |
-| [ONNX Runtime](https://onnxruntime.ai) | public bottle | public bottle | — | source build only |
+| [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) | public bottle | public bottle | — | public tarball |
+| [ONNX Runtime](https://onnxruntime.ai) | public bottle | public bottle | — | public tarball |
 | NeuRT (Apple Neural Engine; Core ML is the format) | **overlay** rebuild | — | — | — |
 | QHexRT (Qualcomm Hexagon NPU) | — | — | **overlay** rebuild | — |
 
@@ -58,6 +58,8 @@ QHexRT on device also needs QAIRT matching the Hexagon skel (`QNN_SDK_ROOT` + `A
 **macOS Apple Silicon** (public bottle): llama.cpp + MLX + Sherpa + ONNX. Pull `qwen3` (GGUF) or `mlx-qwen3` (GPU). Image generation is NeuRT (`sd15`) and only works after the private overlay is linked into product `wally`.
 
 **Windows x64** (public zip): GGUF / ONNX / Sherpa. No MLX, no NeuRT, no QHexRT.
+
+**Linux x86-64** (public tarball): llama.cpp + Sherpa + ONNX, same as Windows x64. Needs glibc 2.35 or newer.
 
 **Windows ARM64** (Snapdragon): public kit has no llama.cpp/ONNX/Sherpa. The QHexRT overlay runs Hexagon NPU models from a local `*_HNPU` tree. Do not expect `mlx-*`, GGUF, or `sd15` on that binary.
 
