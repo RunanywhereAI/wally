@@ -107,6 +107,31 @@ fn download_start_result(
     }
 }
 
+/// Whether the SIGINT cancel request itself failed, distinct from whether the
+/// download later reports Cancelled. A non-SUCCESS rc wins with the generic
+/// description, same priority as download_start_result; only when the FFI
+/// call itself succeeded does a populated `error` field on the parsed result
+/// (or a decode failure) count as a failed cancel. `None` means the request
+/// went through.
+fn cancel_request_failed(
+    rc: sys::rac_result_t,
+    parsed: &Result<v1::DownloadCancelResult, String>,
+) -> Option<String> {
+    if rc != sys::SUCCESS {
+        return Some(out::describe_result(rc));
+    }
+    match parsed {
+        Err(message) => Some(message.clone()),
+        Ok(result) => result.error.as_ref().map(|error| {
+            if error.message.is_empty() {
+                "cancel rejected".to_string()
+            } else {
+                error.message.clone()
+            }
+        }),
+    }
+}
+
 /// The "already downloaded, nothing to fetch" fast path is only safe right
 /// after a rescan that actually succeeded; a failed rescan (`refresh_ok`
 /// false) cannot rule out files deleted from disk since the registry was
@@ -336,13 +361,23 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
                 let cancel_bytes = crate::io::proto::serialize(&cancel_request);
                 let mut cancel_out = ProtoBuffer::new();
                 // SAFETY: cancel_bytes/cancel_out are valid for the duration of this call.
-                unsafe {
+                let cancel_rc = unsafe {
                     sys::rac_download_cancel_proto(
                         cancel_bytes.as_ptr(),
                         cancel_bytes.len(),
                         cancel_out.as_mut_ptr(),
                     )
                 };
+                let cancel_parsed = parse_proto_buffer::<v1::DownloadCancelResult>(cancel_out);
+                if let Some(failure) = cancel_request_failed(cancel_rc, &cancel_parsed) {
+                    // A failed cancel must not be a silent, permanent no-op: say
+                    // so, and let a later Ctrl-C retry instead of leaving the
+                    // reader waiting on a download that never got the message.
+                    out::error_line(&format!(
+                        "cancel request failed: {failure}; the download will continue in the background"
+                    ));
+                    cancel_sent = false;
+                }
                 inner = shared.inner.lock().unwrap_or_else(|e| e.into_inner());
             }
         }
@@ -524,5 +559,41 @@ mod should_report_already_downloaded_tests {
     #[test]
     fn a_successful_rescan_with_no_downloaded_status_falls_through() {
         assert!(!should_report_already_downloaded(true, None));
+    }
+}
+
+#[cfg(test)]
+mod cancel_request_failed_tests {
+    use super::*;
+
+    #[test]
+    fn non_success_rc_is_a_failure_even_with_a_clean_parse() {
+        let parsed: Result<v1::DownloadCancelResult, String> =
+            Ok(v1::DownloadCancelResult::default());
+        let failure = cancel_request_failed(sys::RAC_ERROR_NOT_INITIALIZED, &parsed);
+        assert_eq!(
+            failure,
+            Some(out::describe_result(sys::RAC_ERROR_NOT_INITIALIZED))
+        );
+    }
+
+    #[test]
+    fn success_rc_with_a_populated_error_field_is_a_failure() {
+        let parsed: Result<v1::DownloadCancelResult, String> = Ok(v1::DownloadCancelResult {
+            error: Some(v1::SdkError {
+                message: "task already finished".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let failure = cancel_request_failed(sys::SUCCESS, &parsed);
+        assert_eq!(failure, Some("task already finished".to_string()));
+    }
+
+    #[test]
+    fn success_rc_with_no_error_field_is_not_a_failure() {
+        let parsed: Result<v1::DownloadCancelResult, String> =
+            Ok(v1::DownloadCancelResult::default());
+        assert_eq!(cancel_request_failed(sys::SUCCESS, &parsed), None);
     }
 }
