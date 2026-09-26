@@ -1040,6 +1040,90 @@ mod tests {
         assert!(left["providers"].get(PROVIDER_ID).is_none());
     }
 
+    /// Runs `body` with HOME (and on Windows USERPROFILE) set as given, `None`
+    /// meaning unset, restoring both after.
+    fn with_home<T>(home: Option<&str>, profile: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let _lock = env_lock();
+        let saved = [
+            ("HOME", std::env::var_os("HOME")),
+            ("USERPROFILE", std::env::var_os("USERPROFILE")),
+        ];
+        // SAFETY: env_lock() is held for the whole set/run/restore sequence.
+        unsafe {
+            for (name, value) in [("HOME", home), ("USERPROFILE", profile)] {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        let result = body();
+        unsafe {
+            for (name, value) in saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn expand_home_follows_home() {
+        with_home(Some("/h"), None, || {
+            assert_eq!(expand_home("~"), PathBuf::from("/h"));
+            assert_eq!(expand_home("~/work"), Path::new("/h").join("work"));
+            assert_eq!(expand_home("~work"), PathBuf::from("~work"));
+            assert_eq!(expand_home("/abs"), PathBuf::from("/abs"));
+        });
+    }
+
+    // PowerShell and cmd.exe leave HOME unset, so `~` must fall back to
+    // USERPROFILE, and stay literal when that is empty too.
+    #[cfg(windows)]
+    #[test]
+    fn expand_home_falls_back_to_userprofile_on_windows() {
+        with_home(None, Some(r"C:\Users\me"), || {
+            assert_eq!(
+                expand_home("~/work"),
+                Path::new(r"C:\Users\me").join("work")
+            );
+        });
+        with_home(Some("/h"), Some(r"C:\Users\me"), || {
+            assert_eq!(expand_home("~/work"), Path::new("/h").join("work"));
+        });
+        with_home(None, Some(""), || {
+            assert_eq!(expand_home("~/work"), PathBuf::from("~/work"));
+        });
+    }
+
+    // A models.json wally cannot rewrite is warned about, not a crash, and
+    // is left as it was.
+    #[cfg(unix)]
+    #[test]
+    fn unwritable_models_json_is_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = tempfile::tempdir().unwrap();
+        let agent = state.path().join("agents").join("main").join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        let models = agent.join("models.json");
+        let original = r#"{"providers":{"runanywhere":{"apiKey":"old"}}}"#;
+        std::fs::write(&models, original).unwrap();
+        std::fs::set_permissions(&models, std::fs::Permissions::from_mode(0o444)).unwrap();
+        if std::fs::OpenOptions::new()
+            .write(true)
+            .open(&models)
+            .is_ok()
+        {
+            return; // root ignores the mode; nothing to prove here
+        }
+
+        drop_stale_open_claw_provider(state.path(), "");
+
+        assert_eq!(std::fs::read_to_string(&models).unwrap(), original);
+    }
+
     /// `setenv(name, value.c_str(), 1)` in C++ truncates silently
     /// at the first embedded NUL byte rather than failing; `set_environment`
     /// must do the same instead of refusing to set the variable at all.
