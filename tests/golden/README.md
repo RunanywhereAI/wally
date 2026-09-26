@@ -51,3 +51,10 @@ Re-capture from a binary (only when behaviour changes on purpose):
     python3 scripts/test/golden-capture.py --binary build/wally --out tests/golden --cases tests/golden/cases.json
 
 Run a subset: `WALLY_GOLDEN_FILTER=models cargo test --test cli_golden`.
+
+`local__models__list__--all` and `local__models__list__--all__--json` were
+re-captured from the Rust binary when `models list` started taking a merged
+row's size from the build its id pulls (it had shown the MLX build's size while
+`pull <id>` fetched the GGUF), and started showing `mlx-ternary-bonsai-27b-2bit`
+for the one MLX-only row whose merge key names no registered model. Those sizes
+and that id are the only differences from the C++ capture.
