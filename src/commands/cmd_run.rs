@@ -33,7 +33,7 @@
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Once};
+use std::sync::{Arc, Condvar, Mutex};
 
 use prost::Message as _;
 
@@ -202,25 +202,11 @@ fn apply_options(params: &RunParams, gen: &mut v1::LlmGenerationOptions) {
 }
 
 // ---------------------------------------------------------------------------
-// Ctrl-C handling. The `ctrlc` crate only allows one process-wide
-// `set_handler` call, unlike C++'s std::signal/restore-per-call pattern (the
-// REPL calls stream_once repeatedly). Install the handler once and reset a
-// shared flag at the top of every call instead.
+// Ctrl-C handling. Each stream_once call owns Ctrl-C for as long as it
+// streams, like C++'s std::signal/restore-per-call pattern (the REPL calls
+// stream_once repeatedly); the shared flag is reset at the top of every call.
 // ---------------------------------------------------------------------------
-static SIGINT_HANDLER_INSTALLED: Once = Once::new();
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
-
-fn ensure_sigint_handler() {
-    SIGINT_HANDLER_INSTALLED.call_once(|| {
-        // Errors are ignored, matching C++'s std::signal() return value
-        // (SIG_ERR) never being checked either: if a handler is already
-        // installed elsewhere in the process, Ctrl-C simply won't cancel a
-        // stream here.
-        let _ = ctrlc::set_handler(|| {
-            INTERRUPTED.store(true, Ordering::SeqCst);
-        });
-    });
-}
 
 // ---------------------------------------------------------------------------
 // Streaming state shared with the LLM proto callback (Triage A1: reachable
@@ -383,7 +369,8 @@ fn stream_once(options: &GlobalOptions, model_id: &str, prompt: &str, params: &R
         cv: Condvar::new(),
     });
 
-    ensure_sigint_handler();
+    let _interrupt =
+        crate::util::interrupt::on_interrupt(|| INTERRUPTED.store(true, Ordering::SeqCst));
     INTERRUPTED.store(false, Ordering::SeqCst);
 
     let started = std::time::Instant::now();

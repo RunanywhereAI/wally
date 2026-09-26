@@ -30,7 +30,10 @@ fn normalize(text: &str, home: &Path) -> String {
         .replace(home.to_str().unwrap(), "$HOME")
         .replace(&format!("wally {version} "), "wally <VERSION> ")
         .replace(&format!("wally {version}\n"), "wally <VERSION>\n")
-        .replace(&format!("\"wally\":\"{version}\""), "\"wally\":\"<VERSION>\"")
+        .replace(
+            &format!("\"wally\":\"{version}\""),
+            "\"wally\":\"<VERSION>\"",
+        )
 }
 
 fn run_case(root: &Path, case: &Case) -> Option<String> {

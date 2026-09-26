@@ -970,8 +970,10 @@ fn spawn_command_line(tool: &str, command_line: &str) -> i32 {
     }
 }
 
+/// Also `wally opencode --cloud`'s Windows launch, so an npm `opencode.cmd`
+/// shim goes through the same batch-file quoting as every other tool.
 #[cfg(windows)]
-fn spawn(tool: &str, args: &[String]) -> i32 {
+pub(crate) fn spawn(tool: &str, args: &[String]) -> i32 {
     use std::os::windows::process::CommandExt;
 
     // Checked before the spawn, not after: a failed launch on Windows still

@@ -158,12 +158,9 @@ fn run_serve(
     status_line("Ctrl-C to stop");
 
     SERVE_STOP.store(false, Ordering::SeqCst);
-    // Errors are ignored, matching C++'s std::signal() return value (SIG_ERR)
-    // never being checked either: if a handler is already installed
-    // elsewhere in the process, Ctrl-C simply won't stop the server here (it
-    // still stops on SIGTERM via ctrlc's own combined handling on Unix, and
-    // the process can still be killed).
-    let _ = ctrlc::set_handler(serve_signal_handler);
+    // Held until the server has stopped. An auto-pull before this point had
+    // Ctrl-C only while it downloaded, so this action is the one that runs.
+    let _interrupt = crate::util::interrupt::on_interrupt(serve_signal_handler);
     // ctrlc's "termination" feature (needed for SIGTERM) also installs the
     // same handler for SIGHUP on unix, but C++ only installs SIGINT/SIGTERM
     // and leaves SIGHUP at its default disposition (terminate). Restore that

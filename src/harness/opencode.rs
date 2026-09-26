@@ -87,7 +87,9 @@ impl Drop for ScopedOpenCodeConfig {
 }
 
 /// Not an error line. Nothing went wrong — the tool simply is not here yet,
-/// and the only useful thing to say is how to get it.
+/// and the only useful thing to say is how to get it. Windows gets the shared
+/// launcher's message instead.
+#[cfg(not(windows))]
 fn missing_opencode() {
     out::status_line("opencode is not installed on this machine");
     out::status_line("install it with `npm i -g opencode-ai`, then run this again");
@@ -149,30 +151,11 @@ fn spawn(executable: &str, arguments: &[String]) -> i32 {
 
 #[cfg(windows)]
 fn spawn(executable: &str, arguments: &[String]) -> i32 {
-    use std::os::windows::process::CommandExt;
-
-    // `executable` is always the fixed literal "opencode" here, which needs
-    // no quoting, so Command's own program-name handling and
-    // QuoteWindowsArg agree; only the forwarded arguments need the explicit
-    // quoting _spawnvp does not do for us.
-    let mut command = std::process::Command::new(executable);
-    for arg in arguments {
-        command.raw_arg(super::harness::quote_windows_arg(arg));
-    }
-    match command.status() {
-        // `_spawnvp(_P_WAIT, ...)` returns the child's real exit status once
-        // CreateProcess succeeded, with no 127-specific handling — 127 here
-        // is a real, legitimate exit code from a process that launched fine,
-        // not a "missing" signal. Unlike the POSIX branch (whose 127 comes
-        // from *this process's own* execvp+_exit fallback when exec fails),
-        // Windows's 127 can only ever be the child's own choice, so it must
-        // not be second-guessed here.
-        Ok(status) => status.code().unwrap_or(1),
-        Err(_) => {
-            missing_opencode();
-            127
-        }
-    }
+    // npm installs OpenCode as `opencode.cmd`, which `Command::new("opencode")`
+    // never finds (it only tries `.exe`), and a batch file needs cmd.exe's
+    // quoting rather than the MSVCRT rules (CVE-2024-24576). The shared
+    // launcher already resolves PATHEXT names and routes batch files safely.
+    super::harness::spawn(executable, arguments)
 }
 
 /// OpenCode's complete, ephemeral provider configuration for a local or

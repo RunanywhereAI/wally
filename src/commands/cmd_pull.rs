@@ -280,15 +280,14 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
 
     // Wait for terminal state; SIGINT cancels once (partial bytes preserved).
     let interrupted = Arc::new(AtomicBool::new(false));
-    {
+    // Ctrl-C belongs to this download only until the guard drops at the end
+    // of this function; `serve` and `run` pull first and then need it back.
+    let _interrupt = {
         let interrupted = interrupted.clone();
-        // ctrlc has no "restore the previous handler" concept (unlike
-        // std::signal); overwriting on every pull is the closest available
-        // equivalent, and only this process-wide flag is read below.
-        let _ = ctrlc::set_handler(move || {
+        crate::util::interrupt::on_interrupt(move || {
             interrupted.store(true, Ordering::SeqCst);
-        });
-    }
+        })
+    };
 
     let mut cancel_sent = false;
     let final_progress: v1::DownloadProgress;

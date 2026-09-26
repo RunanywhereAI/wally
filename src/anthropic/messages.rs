@@ -336,9 +336,8 @@ fn effective_model(runtime: &Runtime, request: &Value) -> String {
     runtime.model.clone()
 }
 
-/// Wraps `LivenessProbe` so `restore_blocking` -- required before the
-/// connection resumes a normal blocking read -- happens automatically, even
-/// through a panic, instead of relying on every call site to remember it.
+/// A `LivenessProbe` that treats "could not make one" as "the reader is
+/// still there", so a failed clone never abandons a live request.
 struct ReaderGoneProbe(Option<LivenessProbe>);
 
 impl ReaderGoneProbe {
@@ -351,14 +350,6 @@ impl ReaderGoneProbe {
             .as_ref()
             .map(|probe| probe.is_gone())
             .unwrap_or(false)
-    }
-}
-
-impl Drop for ReaderGoneProbe {
-    fn drop(&mut self) {
-        if let Some(probe) = self.0.as_ref() {
-            let _ = probe.restore_blocking();
-        }
     }
 }
 

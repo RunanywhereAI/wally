@@ -807,39 +807,96 @@ impl Client {
 // ---------------------------------------------------------------------
 
 /// A liveness check on a downstream connection while this thread is busy
-/// elsewhere (e.g. waiting on an upstream call): a non-blocking peek, the
-/// portable equivalent of httplib's `is_connection_closed` (MSG_PEEK).
+/// elsewhere (e.g. waiting on an upstream call): a peek that never waits, the
+/// equivalent of httplib's `is_connection_closed` (a zero-timeout `select`
+/// plus MSG_PEEK).
 ///
-/// Concurrency note: `set_nonblocking` and the read timeout are socket-level,
-/// not per-handle, so they are visible on every `try_clone`d duplicate of
-/// this fd, including the connection's main handle. That is only safe
-/// because, for as long as a probe is alive, nothing else reads this socket;
-/// callers must call `restore_blocking` before resuming a normal blocking
-/// read on the connection (writes are unaffected -- a different socket
-/// option). If that invariant should ever be violated, this is the first
-/// place to look.
+/// The peek must not change the socket's blocking mode. `try_clone` shares
+/// one open socket with the connection's `ResponseWriter`, and O_NONBLOCK /
+/// FIONBIO are properties of that socket, not of a handle: flipping them here
+/// made the writer's `write_all` fail with WouldBlock whenever a slow reader
+/// let the send buffer fill, and the reply was dropped as if the reader had
+/// gone. So each platform asks "readable, and is it EOF?" for this one call
+/// only.
 pub struct LivenessProbe(TcpStream);
 
 impl LivenessProbe {
     pub fn new(stream: &TcpStream) -> io::Result<Self> {
-        let clone = stream.try_clone()?;
-        clone.set_nonblocking(true)?;
-        Ok(LivenessProbe(clone))
+        Ok(LivenessProbe(stream.try_clone()?))
     }
 
     pub fn is_gone(&self) -> bool {
-        let mut buf = [0u8; 1];
-        match self.0.peek(&mut buf) {
-            Ok(0) => true,
-            Ok(_) => false,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
-            Err(_) => true,
-        }
+        peer_has_closed(&self.0)
     }
+}
 
-    pub fn restore_blocking(&self) -> io::Result<()> {
-        self.0.set_nonblocking(false)
+/// `true` when the peer closed or reset the connection; `false` while it is
+/// open, whether or not it has sent anything. Never blocks.
+#[cfg(unix)]
+fn peer_has_closed(stream: &TcpStream) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut buf = [0u8; 1];
+    // SAFETY: the descriptor is live for as long as `stream` is borrowed,
+    // and `buf` is a valid one-byte buffer. MSG_DONTWAIT makes only this
+    // call non-blocking; the descriptor's own flags are untouched.
+    let n = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    match n {
+        0 => true,
+        n if n > 0 => false,
+        _ => !matches!(
+            io::Error::last_os_error().kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+        ),
     }
+}
+
+#[cfg(windows)]
+fn peer_has_closed(stream: &TcpStream) -> bool {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        recv, select, FD_SET, MSG_PEEK, SOCKET, SOCKET_ERROR, TIMEVAL,
+    };
+    let socket = stream.as_raw_socket() as SOCKET;
+    let mut readable = FD_SET {
+        fd_count: 1,
+        fd_array: [0; 64],
+    };
+    readable.fd_array[0] = socket;
+    let no_wait = TIMEVAL {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    // SAFETY: `readable` holds one live socket and `no_wait` is a valid
+    // zero timeout, so select returns at once without touching the socket's
+    // mode. The first argument is ignored on Windows.
+    let ready = unsafe {
+        select(
+            0,
+            &mut readable,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &no_wait,
+        )
+    };
+    if ready == 0 {
+        // Nothing to read: the peer is still there and quiet.
+        return false;
+    }
+    if ready == SOCKET_ERROR {
+        return true;
+    }
+    let mut buf = [0u8; 1];
+    // SAFETY: select just reported the socket readable, so this peek
+    // returns at once with data, EOF (0) or the connection's error.
+    let n = unsafe { recv(socket, buf.as_mut_ptr(), buf.len() as i32, MSG_PEEK) };
+    n == 0 || n == SOCKET_ERROR
 }
 
 /// One parsed request. `path` never includes the query string.
@@ -2533,5 +2590,68 @@ mod tests {
             "a corrupt compressed body must fail the same way any other body-read error does, got {result:?}"
         );
         handle.stop();
+    }
+
+    /// A connected loopback pair: (the server's accepted side, the client).
+    fn loopback_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let client = TcpStream::connect(listener.local_addr().unwrap()).expect("connect");
+        let (server, _) = listener.accept().expect("accept");
+        (server, client)
+    }
+
+    // The shim keeps a probe alive for a whole request while it writes the
+    // reply. The probe used to switch the shared socket to non-blocking, so
+    // a reply bigger than the send buffer failed with WouldBlock the moment
+    // a reader paused, and was dropped as "reader gone".
+    #[test]
+    fn a_live_probe_does_not_break_a_large_write_to_a_slow_reader() {
+        let (mut server, mut client) = loopback_pair();
+        let probe = LivenessProbe::new(&server).expect("probe");
+        assert!(!probe.is_gone());
+
+        const TOTAL: usize = 32 * 1024 * 1024;
+        let reader = std::thread::spawn(move || {
+            // Let the send buffer fill before draining it.
+            std::thread::sleep(Duration::from_millis(300));
+            let mut received = Vec::new();
+            client.read_to_end(&mut received).expect("read");
+            received.len()
+        });
+        let payload = vec![b'x'; TOTAL];
+        server
+            .write_all(&payload)
+            .expect("a slow reader must stall the write, not fail it");
+        assert!(!probe.is_gone(), "the reader is still connected");
+        server.shutdown(Shutdown::Write).expect("shutdown");
+        drop(probe);
+        drop(server);
+        assert_eq!(reader.join().unwrap(), TOTAL);
+    }
+
+    #[test]
+    fn the_probe_tells_a_quiet_or_talking_peer_from_a_closed_one() {
+        let (server, mut client) = loopback_pair();
+        let probe = LivenessProbe::new(&server).expect("probe");
+        assert!(!probe.is_gone(), "a quiet open connection is not gone");
+
+        client.write_all(b"x").expect("write");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut buf = [0u8; 1];
+        while server.peek(&mut buf).unwrap_or(0) == 0 && Instant::now() < deadline {}
+        assert!(!probe.is_gone(), "pending bytes do not mean the peer left");
+
+        drop(client);
+        // The close queues behind the unread byte, so it only shows once
+        // that byte is read, as the server would read it.
+        let mut drain = [0u8; 1];
+        (&server)
+            .read_exact(&mut drain)
+            .expect("read the pending byte");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !probe.is_gone() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(probe.is_gone(), "a closed peer must read as gone");
     }
 }
