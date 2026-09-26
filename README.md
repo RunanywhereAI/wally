@@ -1,6 +1,4 @@
-<table border="0">
-<tr>
-<td valign="top">
+<img src="docs/assets/wally.gif" alt="Wally, the RunAnywhere mascot" width="120">
 
 # Wally
 
@@ -9,12 +7,7 @@
 One terminal command to chat with a model. Local models stay on your device;
 hosted ones bill against your RunAnywhere credit.
 
-</td>
-<td valign="top" width="180">
-<img src="docs/assets/wally.gif" alt="Wally, the RunAnywhere mascot" width="160">
-</td>
-</tr>
-</table>
+<img src="docs/assets/clouds.jpg" alt="" width="100%">
 
 ## Install
 
