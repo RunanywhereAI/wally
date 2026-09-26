@@ -532,6 +532,17 @@ struct BenchRow {
     med: Metrics,
 }
 
+// `wally bench` reports per-row success/error but, until this, always
+// returned 0 -- a CI step piping bench into a pass/fail gate saw every run as
+// green even when every row failed. Non-zero iff at least one row failed.
+fn bench_exit_code(rows: &[BenchRow]) -> i32 {
+    if rows.iter().any(|r| !r.success) {
+        1
+    } else {
+        0
+    }
+}
+
 type TrialFn = fn(&TrialCtx, &mut Metrics) -> Result<(), String>;
 
 fn aggregate(
@@ -852,7 +863,7 @@ pub fn run_bench(
         }
         json.end_array().end_object();
         out::result_line(json.str());
-        return 0;
+        return bench_exit_code(&rows);
     }
 
     out::result_line("");
@@ -887,7 +898,7 @@ pub fn run_bench(
             write_bench_row(&line);
         }
     }
-    0
+    bench_exit_code(&rows)
 }
 
 pub fn register_bench(app: &mut App) {
@@ -974,5 +985,34 @@ mod ljust_bytes_tests {
         let truncated = ljust_bytes("café", 4);
         assert_eq!(truncated, vec![b'c', b'a', b'f', 0xC3]);
         assert!(std::str::from_utf8(&truncated).is_err());
+    }
+}
+
+#[cfg(test)]
+mod bench_exit_code_tests {
+    use super::{bench_exit_code, BenchRow, Metrics, Modality};
+
+    fn row(success: bool) -> BenchRow {
+        BenchRow {
+            model_id: "m".to_string(),
+            modality: Modality::Llm,
+            scenario: "s".to_string(),
+            success,
+            error: String::new(),
+            trials: 1,
+            med: Metrics::default(),
+        }
+    }
+
+    #[test]
+    fn nonzero_when_any_row_failed() {
+        let rows = vec![row(true), row(false)];
+        assert_eq!(bench_exit_code(&rows), 1);
+    }
+
+    #[test]
+    fn zero_when_every_row_succeeded() {
+        let rows = vec![row(true), row(true)];
+        assert_eq!(bench_exit_code(&rows), 0);
     }
 }
