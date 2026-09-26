@@ -73,6 +73,8 @@ jobs:
         run: |
           python3 tests/test_versions.py
           python3 scripts/ci/check-versions.py
+      - name: WallyRust.cmake rejects multi-config generators
+        run: python3 tests/test_wally_rust_cmake_guard.py
       - name: No retired model ids in user-facing text
         run: |
           set -euo pipefail
