@@ -193,6 +193,18 @@ class FakeUpstream {
         return arrivals_;
     }
 
+    /// The attribution headers each chat completion arrived with, in order.
+    struct Seen {
+        bool declared = false;   // X-RA-Harness was present at all
+        std::string harness;     // its value
+        std::string user_agent;
+        bool streaming = false;
+    };
+    std::vector<Seen> seen() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return seen_;
+    }
+
    private:
     bool Drip(httplib::DataSink& sink) {
         const std::string role =
@@ -230,6 +242,10 @@ class FakeUpstream {
     int Record(const httplib::Request& request) {
         std::lock_guard<std::mutex> lock(mutex_);
         ports_.push_back(request.remote_port);
+        seen_.push_back({request.has_header("X-RA-Harness"),
+                         request.get_header_value("X-RA-Harness"),
+                         request.get_header_value("User-Agent"),
+                         Json::parse(request.body).value("stream", false)});
         ++arrivals_;
         arrived_.notify_all();
         return arrivals_;
@@ -253,6 +269,7 @@ class FakeUpstream {
     std::condition_variable arrived_;
     std::vector<int> ports_;
     std::vector<Cancel> cancels_;
+    std::vector<Seen> seen_;
     std::condition_variable cancelled_;
     int arrivals_ = 0;
     std::atomic<int> hold_until_{0};

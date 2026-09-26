@@ -89,6 +89,9 @@ WatchedResult PostWatched(UpstreamLease& lease, const WatchedCall& call) {
     request.method = "POST";
     request.path = call.path;
     request.body = call.body;
+    for (const auto& [name, value] : call.headers) {
+        request.set_header(name, value);
+    }
     request.set_header("Content-Type", call.content_type);
 
     request.response_handler = [&](const httplib::Response& response) {

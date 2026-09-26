@@ -22,6 +22,7 @@
 
 #include "account/credentials.h"
 #include "account/model_cache.h"
+#include "harness/declared_harness.h"
 #include "io/output.h"
 
 namespace wally::harness {
@@ -181,10 +182,18 @@ std::string BuildOpenCodeConfig(const std::string& primary, const std::string& b
         }
         entries[model.id] = std::move(entry);
     }
+    // `options.headers` goes to the AI SDK provider as-is and rides on every
+    // request (checked against opencode 1.18.31). opencode's own User-Agent
+    // already names it; the declaration makes the attribution not depend on
+    // that agent string staying the same.
     const Json provider = {
         {"npm", "@ai-sdk/openai-compatible"},
         {"name", "RunAnywhere"},
-        {"options", {{"baseURL", base_url}, {"apiKey", access_token.empty() ? "local" : access_token}}},
+        {"options",
+         {{"baseURL", base_url},
+          {"apiKey", access_token.empty() ? "local" : access_token},
+          {"headers",
+           {{kHarnessHeader, HarnessHeaderValue(DeclaredHarness::kOpencode)}}}}},
         {"models", std::move(entries)},
     };
     return Json{{"provider", {{"runanywhere", provider}}}, {"model", "runanywhere/" + primary}}

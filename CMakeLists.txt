@@ -80,6 +80,7 @@ set(WALLY_SOURCES
     src/harness/opencode.cpp
     src/harness/agents.cpp
     src/harness/catalog_models.cpp
+    src/harness/declared_harness.cpp
     src/harness/local_models.cpp
     src/commands/engine_options.cpp
     src/commands/model_setup.cpp

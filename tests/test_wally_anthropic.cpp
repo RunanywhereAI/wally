@@ -35,12 +35,14 @@ class RunningShim {
     /// the fake upstream serves the cancel route on its own origin, so tests
     /// pass its base without the `/v1`. Empty means a local server -- no
     /// cancel is ever sent.
-    explicit RunningShim(const std::string& upstream_base_url, std::string console_url = {}) {
+    explicit RunningShim(const std::string& upstream_base_url, std::string console_url = {},
+                         wally::harness::DeclaredHarness declared =
+                             wally::harness::DeclaredHarness::kClaudeCode) {
         wally::harness::Endpoint endpoint;
         endpoint.base_url = upstream_base_url;
         endpoint.api_key = "test-upstream-key";
         endpoint.console_url = std::move(console_url);
-        started_ = wally::anthropic::Start(endpoint, "glm-5.3", &shim_);
+        started_ = wally::anthropic::Start(endpoint, "glm-5.3", declared, &shim_);
     }
     /// Stops the translator now (what the wrapper does when the editor exits)
     /// and returns how long that took.
@@ -164,7 +166,8 @@ TestResult test_overload_headers_survive_streaming() {
     endpoint.base_url = "http://127.0.0.1:" + std::to_string(port) + "/v1";
     endpoint.api_key = "test-upstream-key";
     wally::anthropic::Shim shim;
-    const bool started = wally::anthropic::Start(endpoint, "test-model", &shim);
+    const bool started = wally::anthropic::Start(
+        endpoint, "test-model", wally::harness::DeclaredHarness::kClaudeCode, &shim);
     bool okay = started;
     if (started) {
         httplib::Client client(shim.base_url);
@@ -194,6 +197,64 @@ TestResult test_overload_headers_survive_streaming() {
     result.expected =
         "stream/nonstream preserve 429/503 and numeric/date Retry-After; authenticated once each";
     return result;
+}
+
+// The bridge declares the harness it serves on every upstream request, on the
+// buffered and the streaming path alike: `X-RA-Harness` with the contract's
+// name, and a User-Agent of wally's own that carries the hyphenated needle
+// harness.py's User-Agent table matches. Before this, the endpoint saw
+// httplib's default agent ("cpp-httplib/...") and attributed Claude Code and
+// Claude Desktop to "unknown", which with RA_REASONING_ALLOWANCE_HARNESS_ONLY
+// on would cut their reasoning allowance.
+TestResult CheckBridgeDeclares(const char* name, wally::harness::DeclaredHarness declared,
+                               const std::string& value, const std::string& needle) {
+    TestResult result;
+    result.test_name = name;
+    FakeUpstream upstream;
+    RunningShim shim(upstream.base_url(), {}, declared);
+    if (!shim.started()) {
+        result.details = "translator did not start";
+        return result;
+    }
+    const int buffered = shim.Send(false);
+    const int streamed = shim.Send(true);
+    if (buffered != 200 || streamed != 200) {
+        result.details = "statuses " + std::to_string(buffered) + "/" + std::to_string(streamed);
+        return result;
+    }
+    const std::vector<FakeUpstream::Seen> seen = upstream.seen();
+    if (seen.size() != 2 || seen[0].streaming || !seen[1].streaming) {
+        result.details = "expected one buffered then one streaming request, got " +
+                         std::to_string(seen.size());
+        return result;
+    }
+    for (const FakeUpstream::Seen& request : seen) {
+        const std::string path = request.streaming ? "streaming" : "buffered";
+        if (!request.declared || request.harness != value) {
+            result.details = path + " X-RA-Harness: '" + request.harness + "'";
+            result.expected = value;
+            return result;
+        }
+        if (request.user_agent.rfind("wally/", 0) != 0 ||
+            request.user_agent.find(needle) == std::string::npos) {
+            result.details = path + " User-Agent: '" + request.user_agent + "'";
+            return result;
+        }
+    }
+    result.passed = true;
+    return result;
+}
+
+TestResult test_bridge_declares_claude_code() {
+    return CheckBridgeDeclares("bridge_declares_claude_code",
+                               wally::harness::DeclaredHarness::kClaudeCode, "claude_code",
+                               "(claude-code)");
+}
+
+TestResult test_bridge_declares_claude_desktop() {
+    return CheckBridgeDeclares("bridge_declares_claude_desktop",
+                               wally::harness::DeclaredHarness::kClaudeDesktop, "claude_desktop",
+                               "(claude-desktop)");
 }
 
 // Test A. Two requests, one after the other, must arrive at the upstream on
@@ -737,6 +798,8 @@ TestResult test_stopping_during_prefill_does_not_wait_for_the_first_token() {
 int main(int argc, char** argv) {
     TestSuite suite("wally_anthropic");
     suite.add("overload_headers_survive_streaming", test_overload_headers_survive_streaming);
+    suite.add("bridge_declares_claude_code", test_bridge_declares_claude_code);
+    suite.add("bridge_declares_claude_desktop", test_bridge_declares_claude_desktop);
     suite.add("prefill_sends_keepalive_comments", test_prefill_sends_keepalive_comments);
     suite.add("sequential_requests_reuse_the_upstream_connection",
               test_sequential_requests_reuse_the_upstream_connection);

@@ -17,7 +17,7 @@
 namespace wally::account::contract {
 
 // SHA-256 of contracts/wally-cli-v1.openapi.json this header was built from.
-inline constexpr char kContractSha256[] = "ad7f5877b97ab1032c7314f4341a74e035a1f069c78f4dee446044df4faefcf2";
+inline constexpr char kContractSha256[] = "66e32c5f41366ee121f8287595c00fb083f1a596af0f30fccc83434111d2dc10";
 
 enum class ApiErrorCode {
     kInvalidRequest,
@@ -1095,31 +1095,94 @@ inline void to_json(nlohmann::json& j, const ModelCatalogResponse& value) {
     j["pricing_version"] = value.pricing_version;
 }
 
+struct OpenRouterPricing {
+    std::string completion;
+    std::optional<std::string> input_cache_read;
+    std::string prompt;
+};
+
+inline void from_json(const nlohmann::json& j, OpenRouterPricing& value) {
+    if (j.contains("completion") && !j.at("completion").is_null()) {
+        value.completion = j.at("completion").get<std::string>();
+    } else {
+        value.completion = std::string{};
+    }
+    if (j.contains("input_cache_read") && !j.at("input_cache_read").is_null()) {
+        value.input_cache_read = j.at("input_cache_read").get<std::string>();
+    } else {
+        value.input_cache_read = std::nullopt;
+    }
+    if (j.contains("prompt") && !j.at("prompt").is_null()) {
+        value.prompt = j.at("prompt").get<std::string>();
+    } else {
+        value.prompt = std::string{};
+    }
+}
+
+inline void to_json(nlohmann::json& j, const OpenRouterPricing& value) {
+    j = nlohmann::json::object();
+    j["completion"] = value.completion;
+    if (value.input_cache_read.has_value()) {
+        j["input_cache_read"] = *value.input_cache_read;
+    }
+    j["prompt"] = value.prompt;
+}
+
 struct PublicModel {
+    std::optional<std::int64_t> context_length;
     std::optional<std::int64_t> created;
+    std::optional<std::string> hugging_face_id;
     std::string id;
+    std::optional<std::vector<std::string>> input_modalities;
     std::optional<std::int64_t> max_input_tokens;
+    std::optional<std::int64_t> max_output_length;
     std::optional<std::int64_t> max_output_tokens;
     std::optional<std::string> mode;
+    std::optional<std::string> name;
     std::string object;
+    std::optional<std::vector<std::string>> output_modalities;
     std::string owned_by;
+    std::optional<OpenRouterPricing> pricing;
+    std::optional<std::string> quantization;
+    std::optional<std::vector<std::string>> supported_features;
+    std::optional<std::vector<std::string>> supported_sampling_parameters;
 };
 
 inline void from_json(const nlohmann::json& j, PublicModel& value) {
+    if (j.contains("context_length") && !j.at("context_length").is_null()) {
+        value.context_length = j.at("context_length").get<std::int64_t>();
+    } else {
+        value.context_length = std::nullopt;
+    }
     if (j.contains("created") && !j.at("created").is_null()) {
         value.created = j.at("created").get<std::int64_t>();
     } else {
         value.created = std::nullopt;
+    }
+    if (j.contains("hugging_face_id") && !j.at("hugging_face_id").is_null()) {
+        value.hugging_face_id = j.at("hugging_face_id").get<std::string>();
+    } else {
+        value.hugging_face_id = std::nullopt;
     }
     if (j.contains("id") && !j.at("id").is_null()) {
         value.id = j.at("id").get<std::string>();
     } else {
         value.id = std::string{};
     }
+    if (j.contains("input_modalities") && !j.at("input_modalities").is_null()) {
+        value.input_modalities = j.at("input_modalities").get<std::vector<std::string>>();
+    } else {
+        value.input_modalities = std::nullopt;
+    }
     if (j.contains("max_input_tokens") && !j.at("max_input_tokens").is_null()) {
         value.max_input_tokens = j.at("max_input_tokens").get<std::int64_t>();
     } else {
         value.max_input_tokens = std::nullopt;
+    }
+    if (j.contains("max_output_length") && !j.at("max_output_length").is_null()) {
+        value.max_output_length = j.at("max_output_length").get<std::int64_t>();
+    } else {
+        value.max_output_length = std::nullopt;
     }
     if (j.contains("max_output_tokens") && !j.at("max_output_tokens").is_null()) {
         value.max_output_tokens = j.at("max_output_tokens").get<std::int64_t>();
@@ -1131,26 +1194,68 @@ inline void from_json(const nlohmann::json& j, PublicModel& value) {
     } else {
         value.mode = std::nullopt;
     }
+    if (j.contains("name") && !j.at("name").is_null()) {
+        value.name = j.at("name").get<std::string>();
+    } else {
+        value.name = std::nullopt;
+    }
     if (j.contains("object") && !j.at("object").is_null()) {
         value.object = j.at("object").get<std::string>();
     } else {
         value.object = std::string{};
+    }
+    if (j.contains("output_modalities") && !j.at("output_modalities").is_null()) {
+        value.output_modalities = j.at("output_modalities").get<std::vector<std::string>>();
+    } else {
+        value.output_modalities = std::nullopt;
     }
     if (j.contains("owned_by") && !j.at("owned_by").is_null()) {
         value.owned_by = j.at("owned_by").get<std::string>();
     } else {
         value.owned_by = std::string{};
     }
+    if (j.contains("pricing") && !j.at("pricing").is_null()) {
+        value.pricing = j.at("pricing").get<OpenRouterPricing>();
+    } else {
+        value.pricing = std::nullopt;
+    }
+    if (j.contains("quantization") && !j.at("quantization").is_null()) {
+        value.quantization = j.at("quantization").get<std::string>();
+    } else {
+        value.quantization = std::nullopt;
+    }
+    if (j.contains("supported_features") && !j.at("supported_features").is_null()) {
+        value.supported_features = j.at("supported_features").get<std::vector<std::string>>();
+    } else {
+        value.supported_features = std::nullopt;
+    }
+    if (j.contains("supported_sampling_parameters") && !j.at("supported_sampling_parameters").is_null()) {
+        value.supported_sampling_parameters = j.at("supported_sampling_parameters").get<std::vector<std::string>>();
+    } else {
+        value.supported_sampling_parameters = std::nullopt;
+    }
 }
 
 inline void to_json(nlohmann::json& j, const PublicModel& value) {
     j = nlohmann::json::object();
+    if (value.context_length.has_value()) {
+        j["context_length"] = *value.context_length;
+    }
     if (value.created.has_value()) {
         j["created"] = *value.created;
     }
+    if (value.hugging_face_id.has_value()) {
+        j["hugging_face_id"] = *value.hugging_face_id;
+    }
     j["id"] = value.id;
+    if (value.input_modalities.has_value()) {
+        j["input_modalities"] = *value.input_modalities;
+    }
     if (value.max_input_tokens.has_value()) {
         j["max_input_tokens"] = *value.max_input_tokens;
+    }
+    if (value.max_output_length.has_value()) {
+        j["max_output_length"] = *value.max_output_length;
     }
     if (value.max_output_tokens.has_value()) {
         j["max_output_tokens"] = *value.max_output_tokens;
@@ -1158,8 +1263,26 @@ inline void to_json(nlohmann::json& j, const PublicModel& value) {
     if (value.mode.has_value()) {
         j["mode"] = *value.mode;
     }
+    if (value.name.has_value()) {
+        j["name"] = *value.name;
+    }
     j["object"] = value.object;
+    if (value.output_modalities.has_value()) {
+        j["output_modalities"] = *value.output_modalities;
+    }
     j["owned_by"] = value.owned_by;
+    if (value.pricing.has_value()) {
+        j["pricing"] = *value.pricing;
+    }
+    if (value.quantization.has_value()) {
+        j["quantization"] = *value.quantization;
+    }
+    if (value.supported_features.has_value()) {
+        j["supported_features"] = *value.supported_features;
+    }
+    if (value.supported_sampling_parameters.has_value()) {
+        j["supported_sampling_parameters"] = *value.supported_sampling_parameters;
+    }
 }
 
 struct ModelList {

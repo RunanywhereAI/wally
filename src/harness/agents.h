@@ -31,6 +31,14 @@ struct Agent {
         /// `HERMES_INFERENCE_MODEL` rather than `--model`, because the
         /// top-level flag is consumed only by `-z/--oneshot` and `--tui` and
         /// falls through as None on a plain interactive run.
+        ///
+        /// The one handoff that declares no harness (`X-RA-Harness`). Hermes
+        /// takes extra request headers only from `config.yaml`
+        /// (`model.default_headers`, a custom provider's `extra_headers`),
+        /// never from the environment, and the reasons `HermesContextHint`
+        /// gives for not writing that file apply unchanged. Its requests go
+        /// out with the OpenAI SDK's own User-Agent and attribute to
+        /// "unknown" until Hermes grows an environment lever for headers.
         CustomEndpointEnvironment,
         /// A complete config written for the child's lifetime and named by
         /// `OPENCLAW_CONFIG_PATH`. OpenClaw has no base-URL variable: a custom
