@@ -196,14 +196,11 @@ fn settle_row_id_and_size(row: &mut GroupedRow) {
             None => return,
         },
     };
-    if let Some((id, rank, size)) = row
-        .variants
-        .iter()
-        .find(|(id, _, size)| *id == pulled && *size > 0)
-    {
+    if let Some((id, rank, size)) = row.variants.iter().find(|(id, _, _)| *id == pulled) {
+        // An unknown size shows as `-`, not as another backend's size.
         row.size_bytes = *size;
-        row.size_rank = *rank;
-        row.size_id = id.clone();
+        row.size_rank = if *size > 0 { *rank } else { i32::MAX };
+        row.size_id = if *size > 0 { id.clone() } else { String::new() };
     }
 }
 
@@ -432,5 +429,15 @@ mod tests {
         assert_eq!(order, vec!["ternary-bonsai-27b".to_string()]);
         assert_eq!(row.id, "mlx-ternary-bonsai-27b-2bit");
         assert_eq!(row.size_bytes, 8_480_000_000);
+    }
+
+    #[test]
+    fn unknown_size_of_the_pulled_build_is_not_filled_from_another() {
+        let mut gguf = llamacpp_variant("");
+        gguf.download_size_bytes = 0;
+        let models = vec![gguf, mlx_variant("")];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (_, groups) = group_models(&models, &downloaded, true);
+        assert_eq!(groups["qwen3-4b-instruct-2507"].size_bytes, 0);
     }
 }

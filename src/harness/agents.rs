@@ -462,14 +462,22 @@ fn drop_stale_open_claw_provider(state: &Path, config: &str) {
             .and_then(|providers| providers.remove(PROVIDER_ID))
             .is_some();
         if removed {
-            let _ = std::fs::write(&path, dump_pretty(&document, 2));
+            if let Err(error) = std::fs::write(&path, dump_pretty(&document, 2)) {
+                out::status_line(&format!(
+                    "warning: could not update {} ({error}); openclaw may reuse an old key or endpoint",
+                    path.display()
+                ));
+            }
         }
     }
 }
 
-/// `~` and `~/…` against HOME, as OpenClaw's `resolveUserPath` does.
+/// `~` and `~/…` against HOME, as OpenClaw's `resolveUserPath` does, falling
+/// back to USERPROFILE on Windows the way `open_claw_state_directory` does.
 fn expand_home(path: &str) -> PathBuf {
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+    #[cfg(windows)]
+    let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()));
     match (path, home) {
         ("~", Some(home)) => PathBuf::from(home),
         (_, Some(home)) if path.starts_with("~/") => Path::new(&home).join(&path[2..]),
