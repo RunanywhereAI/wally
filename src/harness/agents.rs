@@ -1040,15 +1040,33 @@ mod tests {
         assert!(left["providers"].get(PROVIDER_ID).is_none());
     }
 
+    /// Puts HOME and USERPROFILE back on drop, so a failed assertion in a
+    /// test body cannot leak them into the tests after it.
+    struct RestoreHome([(&'static str, Option<std::ffi::OsString>); 2]);
+
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                // SAFETY: dropped before the env_lock() guard it sits beside.
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
     /// Runs `body` with HOME (and on Windows USERPROFILE) set as given, `None`
-    /// meaning unset, restoring both after.
+    /// meaning unset, restoring both after, even if `body` panics.
     fn with_home<T>(home: Option<&str>, profile: Option<&str>, body: impl FnOnce() -> T) -> T {
         let _lock = env_lock();
-        let saved = [
+        let _restore = RestoreHome([
             ("HOME", std::env::var_os("HOME")),
             ("USERPROFILE", std::env::var_os("USERPROFILE")),
-        ];
-        // SAFETY: env_lock() is held for the whole set/run/restore sequence.
+        ]);
+        // SAFETY: env_lock() is held until after `_restore` has run.
         unsafe {
             for (name, value) in [("HOME", home), ("USERPROFILE", profile)] {
                 match value {
@@ -1057,16 +1075,7 @@ mod tests {
                 }
             }
         }
-        let result = body();
-        unsafe {
-            for (name, value) in saved {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-        result
+        body()
     }
 
     #[test]
