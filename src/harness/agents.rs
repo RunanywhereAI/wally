@@ -413,6 +413,35 @@ fn open_claw_state_directory() -> PathBuf {
     PathBuf::new()
 }
 
+/// Drop our provider from every agent's generated `models.json`, so OpenClaw
+/// rebuilds it from this run's config. In its default `merge` mode OpenClaw
+/// keeps an existing provider's `apiKey` and `baseUrl` over the config's, so
+/// the first run's key and endpoint would otherwise stick: a new login, a
+/// local server on a fresh port, or a switch to hosted all failed auth. Other
+/// providers in the file are left as they are.
+fn drop_stale_open_claw_provider(state: &Path) {
+    let Ok(agents) = std::fs::read_dir(state.join("agents")) else {
+        return;
+    };
+    for agent in agents.flatten() {
+        let path = agent.path().join("agent").join("models.json");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut document) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let removed = document
+            .get_mut("providers")
+            .and_then(Value::as_object_mut)
+            .and_then(|providers| providers.remove(PROVIDER_ID))
+            .is_some();
+        if removed {
+            let _ = std::fs::write(&path, dump(&document));
+        }
+    }
+}
+
 /// What the console says this model costs and how much it can hold.
 ///
 /// A local server has no catalog entry and no price: it is served with the
@@ -842,6 +871,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                 release(&endpoint);
                 return 1;
             }
+            drop_stale_open_claw_provider(&state);
             // Pinned before the config path, because OpenClaw derives the
             // state directory from the config file's folder when this is
             // unset.
@@ -933,6 +963,25 @@ mod tests {
     //! temp-directory lookup, each as the C++ behaved.
     use super::*;
     use crate::util::env_lock::lock as env_lock;
+
+    #[test]
+    fn stale_runanywhere_provider_is_dropped_and_others_kept() {
+        let state = tempfile::tempdir().unwrap();
+        let agent = state.path().join("agents").join("main").join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        let models = agent.join("models.json");
+        std::fs::write(
+            &models,
+            r#"{"providers":{"runanywhere":{"baseUrl":"https://old/v1","apiKey":"old"},"openai":{"apiKey":"theirs"}}}"#,
+        )
+        .unwrap();
+
+        drop_stale_open_claw_provider(state.path());
+
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&models).unwrap()).unwrap();
+        assert!(left["providers"].get(PROVIDER_ID).is_none());
+        assert_eq!(left["providers"]["openai"]["apiKey"], "theirs");
+    }
 
     /// `setenv(name, value.c_str(), 1)` in C++ truncates silently
     /// at the first embedded NUL byte rather than failing; `set_environment`
