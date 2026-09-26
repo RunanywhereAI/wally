@@ -132,6 +132,19 @@ fn cancel_request_failed(
     }
 }
 
+/// Consumes one SIGINT "edge" for the cancel-retry gate: true only when the
+/// signal handler has fired since the last time this was called and no
+/// cancel is already in flight. The atomic is reset to false as part of the
+/// same check, not left latched true, so a failed cancel (which resets
+/// `cancel_sent`) waits for a genuine second Ctrl-C instead of re-tripping on
+/// the wait loop's next automatic 200ms poll tick.
+fn take_cancel_trigger(interrupted: &AtomicBool, cancel_sent: bool) -> bool {
+    if cancel_sent {
+        return false;
+    }
+    interrupted.swap(false, Ordering::SeqCst)
+}
+
 /// The "already downloaded, nothing to fetch" fast path is only safe right
 /// after a rescan that actually succeeded; a failed rescan (`refresh_ok`
 /// false) cannot rule out files deleted from disk since the registry was
@@ -348,7 +361,7 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
             if inner.got_progress && !inner.terminal {
                 renderer.update(&inner.last);
             }
-            if interrupted.load(Ordering::SeqCst) && !cancel_sent {
+            if take_cancel_trigger(&interrupted, cancel_sent) {
                 cancel_sent = true;
                 drop(inner);
                 renderer.finish();
@@ -604,5 +617,44 @@ mod cancel_request_failed_tests {
         let parsed: Result<v1::DownloadCancelResult, String> =
             Ok(v1::DownloadCancelResult::default());
         assert_eq!(cancel_request_failed(sys::SUCCESS, &parsed), None);
+    }
+}
+
+#[cfg(test)]
+mod take_cancel_trigger_tests {
+    use super::*;
+
+    #[test]
+    fn a_pending_interrupt_fires_once_and_clears_itself() {
+        let interrupted = AtomicBool::new(true);
+        assert!(take_cancel_trigger(&interrupted, false));
+        // The edge is consumed: the same signal cannot fire the gate twice.
+        assert!(!interrupted.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_failed_cancel_does_not_self_retry_on_the_next_poll_tick() {
+        // Regression for the case where `interrupted` stayed latched true
+        // forever: once a cancel fails, `cancel_sent` resets to false so a
+        // fresh Ctrl-C can retry, but without also clearing `interrupted`
+        // the *same* SIGINT kept re-tripping the gate on every 200ms wait
+        // loop wake-up instead of waiting for a real second signal.
+        let interrupted = AtomicBool::new(true);
+        assert!(take_cancel_trigger(&interrupted, false));
+        // Simulate the cancel failing: cancel_sent goes back to false, but
+        // no new SIGINT has arrived, so this must not fire again.
+        assert!(!take_cancel_trigger(&interrupted, false));
+    }
+
+    #[test]
+    fn no_interrupt_never_fires() {
+        let interrupted = AtomicBool::new(false);
+        assert!(!take_cancel_trigger(&interrupted, false));
+    }
+
+    #[test]
+    fn an_in_flight_cancel_suppresses_a_new_interrupt() {
+        let interrupted = AtomicBool::new(true);
+        assert!(!take_cancel_trigger(&interrupted, true));
     }
 }
