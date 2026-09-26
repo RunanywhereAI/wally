@@ -305,10 +305,7 @@ fn credentials_round_trip_through_a_non_ascii_profile_path() {
     let home = TempHome::new();
     let profile_dir = home.join("café-\u{4F60}\u{597D}");
     let mut env = EnvGuard::new();
-    env.set(
-        "WALLY_PROFILE_DIR",
-        profile_dir.to_string_lossy().as_ref(),
-    );
+    env.set("WALLY_PROFILE_DIR", profile_dir.to_string_lossy().as_ref());
     env.unset("WALLY_CONSOLE_URL");
 
     let saved = Credentials {
