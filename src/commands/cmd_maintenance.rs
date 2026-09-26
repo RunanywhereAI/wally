@@ -104,15 +104,16 @@ fn platform_base() -> String {
 }
 
 // The on-device model store, matching harness/local_models.rs: {base}/Models
-// or {base}/RunAnywhere/Models. Every base it can derive is checked -- the env
-// override, the kit's answer, and the platform default -- and the first store
-// that actually exists wins, so a missing bootstrap cannot hide it.
-fn models_directory() -> String {
+// or {base}/RunAnywhere/Models. Every base it can derive is checked -- the
+// global --home override, the env override, the kit's answer, and the
+// platform default -- and the first store that actually exists wins, so a
+// missing bootstrap cannot hide it.
+fn models_directory(home_override: &str) -> String {
     let mut bases: Vec<String> = Vec::new();
     if let Some(env) = getenv("RUNANYWHERE_HOME") {
         bases.push(env);
     }
-    let home = cli_paths::resolve_home("");
+    let home = cli_paths::resolve_home(home_override);
     if !home.is_empty() {
         bases.push(home);
     }
@@ -320,7 +321,10 @@ fn unix_exe_targets(exe: &str) -> Vec<Target> {
 }
 
 /// Shared by `wally uninstall` and the whole-argv `-U/--uninstall` shortcut.
-pub fn run_uninstall(yes: bool) -> i32 {
+/// `home_override` is the global `--home` flag, so uninstall removes the same
+/// model store the other model commands are pointed at, not just the default
+/// one.
+pub fn run_uninstall(yes: bool, home_override: &str) -> i32 {
     let mut targets: Vec<Target> = Vec::new();
     // Windows cannot delete the program file backing its own running
     // process (unlike a Unix inode, which stays live under an unlinked
@@ -329,7 +333,7 @@ pub fn run_uninstall(yes: bool) -> i32 {
     #[cfg(windows)]
     let mut manual_removal: Option<PathBuf> = None;
 
-    let models = models_directory();
+    let models = models_directory(home_override);
     if !models.is_empty() {
         targets.push(Target {
             label: "models",
@@ -540,7 +544,7 @@ pub fn register_help(app: &mut App) -> Rc<RefCell<Option<App>>> {
 pub fn register_uninstall(app: &mut App) {
     let cmd = app.add_subcommand("uninstall", "Remove wally, its models and its config");
     cmd.add_flag("-y,--yes", "Skip the confirmation prompt");
-    cmd.callback(|parsed, _options| run_uninstall(parsed.flag("--yes")));
+    cmd.callback(|parsed, options| run_uninstall(parsed.flag("--yes"), &options.home_override));
 }
 
 #[cfg(test)]
@@ -625,6 +629,34 @@ mod tests {
         LOCK.get_or_init(|| std::sync::Mutex::new(()))
             .lock()
             .unwrap()
+    }
+
+    // `wally uninstall` used to ignore the global `--home` override and
+    // always resolve against HOME/RUNANYWHERE_HOME, so it could remove a
+    // different model store than the one `wally models` was just pointed at.
+    #[test]
+    #[cfg(unix)]
+    fn models_directory_prefers_the_home_override_over_home() {
+        let _lock = env_lock();
+        let home_a = tempfile::tempdir().expect("tempdir A");
+        let home_b = tempfile::tempdir().expect("tempdir B");
+        std::fs::create_dir_all(home_b.path().join("Models")).expect("mkdir B/Models");
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe {
+            std::env::set_var("HOME", home_a.path());
+            std::env::remove_var("RUNANYWHERE_HOME");
+        }
+
+        let result = models_directory(&home_b.path().to_string_lossy());
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+
+        assert!(
+            result.starts_with(home_b.path().to_str().expect("utf8 path")),
+            "models_directory({home_b:?}) must resolve against the override, not HOME \
+             ({home_a:?}): got {result}"
+        );
     }
 
     // A real install.sh tree in a temp HOME: LIB_DIR with a `bin/wally`

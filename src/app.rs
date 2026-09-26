@@ -299,7 +299,10 @@ pub fn run(args: &[String]) -> i32 {
             return code;
         }
         if only_arg == "-U" || only_arg == "--uninstall" {
-            let code = crate::commands::run_uninstall(false);
+            // This shortcut is exactly one bare arg (args.len() == 2 above),
+            // so it can never carry a `--home` override; an empty string
+            // preserves the shortcut's existing default-home behavior.
+            let code = crate::commands::run_uninstall(false, "");
             bootstrap::shutdown();
             return code;
         }
