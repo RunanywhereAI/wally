@@ -33,6 +33,11 @@ no built-in VLM sample image (`help__bench`, `leaf__bench__bogus_flag`,
 `leaf__bench__extra_positional`). Their help text is the only thing that
 differs from the C++ capture; nothing else about them changed.
 
+The same three cases were re-captured again when `wally bench`'s `model`
+help text was reworded to say a model must already be downloaded, naming
+`wally models pull <ref>`; their help text differs from the C++ capture in
+the same way, nothing else changed.
+
 Re-capture from a binary (only when behaviour changes on purpose):
 
     python3 scripts/test/golden-capture.py --binary build/wally --out tests/golden --cases tests/golden/cases.json

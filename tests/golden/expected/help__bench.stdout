@@ -3,8 +3,9 @@ Measure throughput and load time of downloaded models
 Usage: wally bench [OPTIONS] [model]
 
 Arguments:
-  model                       Model id, local bundle path, hf.co/... or URL
-                              (default: all downloaded)
+  model                       Model id, local bundle path, hf.co/... or URL;
+                              must already be downloaded (`wally models pull
+                              <ref>` first) -- default: all downloaded
 
 Options:
   -h, --help                  Show help

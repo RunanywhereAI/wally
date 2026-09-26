@@ -735,6 +735,14 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
 /// wally ships no built-in sample, so an empty `path` (the flag was never
 /// passed) and a non-empty one that doesn't exist on disk get distinct
 /// wording rather than both claiming a nonexistent in-tree default.
+/// Message for a resolved model that isn't in the downloaded registry.
+/// Names the fix with the ref the caller actually typed (`model_ref_arg`),
+/// which `wally models pull` accepts directly, rather than only reporting
+/// the resolved registry id (`only_model`) as unrecognized.
+fn model_not_downloaded_error(only_model: &str, model_ref_arg: &str) -> String {
+    format!("model '{only_model}' is not downloaded; pull it first with `wally models pull {model_ref_arg}`")
+}
+
 fn vlm_image_missing_error(path: &str) -> String {
     if path.is_empty() {
         "wally ships no built-in VLM sample image; pass --vlm-image <path>".to_string()
@@ -794,10 +802,14 @@ pub fn run_bench(
         }
     };
     if models.is_empty() {
+        // collect_models only ever scans already-downloaded registry
+        // entries, so a resolved-but-not-yet-pulled local/HF/URL ref lands
+        // here too. wally does not auto-pull it for a benchmark run; name
+        // the fix instead of just reporting the ref as unrecognized.
         let message = if only_model.is_empty() {
             "no downloaded models to benchmark (pull one with `wally models pull`)".to_string()
         } else {
-            format!("model '{only_model}' is not a downloaded benchmarkable model")
+            model_not_downloaded_error(&only_model, model_ref_arg)
         };
         out::error_line(&message);
         return 1;
@@ -928,7 +940,8 @@ pub fn register_bench(app: &mut App) {
     cmd.add_option(
         "model",
         ValueType::Text,
-        "Model id, local bundle path, hf.co/... or URL (default: all downloaded)",
+        "Model id, local bundle path, hf.co/... or URL; must already be \
+         downloaded (`wally models pull <ref>` first) -- default: all downloaded",
     );
     // engine_choices() is computed eagerly, at registration time, matching the
     // C++ (`std::string("Engine hint (") + engine_choices() + ")"` was itself
@@ -1032,6 +1045,21 @@ mod vlm_preload_unload_targets_tests {
         for category in [ModelCategory::Vision, ModelCategory::Multimodal] {
             assert!(vlm_preload_unload_targets(category).contains(&ModelCategory::Language));
         }
+    }
+}
+
+#[cfg(test)]
+mod model_not_downloaded_error_tests {
+    use super::model_not_downloaded_error;
+
+    #[test]
+    fn names_wally_models_pull_with_the_ref_the_caller_typed() {
+        // The caller's own ref (an hf.co/URL/local-path form) is what
+        // `wally models pull` accepts, not necessarily the resolved
+        // registry id, so the message must echo the former.
+        let message = model_not_downloaded_error("resolved-id", "hf.co/org/repo");
+        assert!(message.contains("wally models pull hf.co/org/repo"));
+        assert!(message.contains("resolved-id"));
     }
 }
 
