@@ -677,6 +677,9 @@ mod framework_override_tests {
 
     #[test]
     fn absent_engine_defers_to_the_catalog() {
-        assert_eq!(framework_override(v1::InferenceFramework::Unspecified), None);
+        assert_eq!(
+            framework_override(v1::InferenceFramework::Unspecified),
+            None
+        );
     }
 }
