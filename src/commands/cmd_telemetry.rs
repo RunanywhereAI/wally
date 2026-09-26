@@ -452,8 +452,20 @@ fn run_telemetry_session(
     // SAFETY: rac_env_auth_expected accepts a null or NUL-terminated pointer
     // for api_key; api_key_ptr is exactly that.
     if unsafe { sys::rac_env_auth_expected(sdk_env, api_key_ptr) } {
-        if let Err((_, error)) = net::login() {
-            out::error_line(&error);
+        let summary = match net::login() {
+            Ok(summary) => summary,
+            Err((_, error)) => {
+                out::error_line(&error);
+                return false;
+            }
+        };
+        // login() can return Ok with phase 2 (auth/device registration)
+        // incomplete; flushing anyway would POST unauthenticated and only
+        // fail later. Mirrors the same check in cmd_auth.rs::run_auth_login.
+        if !summary.has_completed_http_setup {
+            out::error_line(
+                "login did not finish HTTP/auth setup; refusing to flush telemetry unauthenticated",
+            );
             return false;
         }
     }
