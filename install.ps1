@@ -12,6 +12,18 @@ $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\wally'
 # Invoke-WebRequest spends most of a large download redrawing its progress bar.
 $ProgressPreference = 'SilentlyContinue'
 
+# A file:// mirror (WALLY_INSTALL_BASE_URL in release tests) is copied rather
+# than fetched: PowerShell 7's Invoke-WebRequest refuses the file scheme,
+# which Windows PowerShell 5.1 accepted.
+function Save-Url([string]$Url, [string]$OutFile) {
+    $Uri = [Uri]$Url
+    if ($Uri.IsFile) {
+        Copy-Item -LiteralPath $Uri.LocalPath -Destination $OutFile -ErrorAction Stop
+    } else {
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile
+    }
+}
+
 function Write-Info([string]$Message) {
     Write-Host '==> ' -ForegroundColor Blue -NoNewline
     Write-Host $Message
@@ -116,7 +128,7 @@ try {
     $Zip = Join-Path $Temp $AssetName
     Write-Info "Downloading $AssetName..."
     try {
-        Invoke-WebRequest -Uri $AssetUrl -OutFile $Zip
+        Save-Url $AssetUrl $Zip
     } catch {
         Fail "Could not download $AssetUrl"
     }
@@ -124,7 +136,7 @@ try {
     # Through a file rather than straight into a variable: the asset is served
     # as octet-stream and the web cmdlets hand back bytes rather than text.
     $ShaFile = Join-Path $Temp $ShaAssetName
-    Invoke-WebRequest -Uri $ShaUrl -OutFile $ShaFile
+    Save-Url $ShaUrl $ShaFile
     $ShaLine = (Get-Content -Raw -LiteralPath $ShaFile).Trim()
     if ($ShaLine -notmatch '^([0-9A-Fa-f]{64})\s+\*?([^\r\n]+)$') {
         Fail "$ShaAssetName is not a valid SHA-256 sidecar."
