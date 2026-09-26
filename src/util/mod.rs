@@ -22,18 +22,20 @@ pub fn getenv_or_empty(name: &str) -> String {
     getenv(name).unwrap_or_default()
 }
 
-/// One process-wide lock for every unit test in this crate that touches a
-/// real environment variable another test also touches (HOME,
+/// One lock for every unit test in this library that touches a real
+/// environment variable another unit test also touches (HOME,
 /// XDG_STATE_HOME, LOCALAPPDATA, USERPROFILE, WALLY_*, RUNANYWHERE_HOME,
-/// HOMEBREW_PREFIX, PATH, TMPDIR/TMP/TEMP/TEMPDIR, ...). `cargo test` runs
-/// every test in the crate as a thread of one process: both `[[bin]]`
-/// targets in Cargo.toml set `test = false`, so the `[lib]` target's
-/// `#[cfg(test)]` modules are the only tests that exist, all compiled into
-/// one binary. A lock declared inside a single module only serializes the
-/// tests in that module — a test in a different file that sets the same
-/// variable can still interleave with it and observe (or clobber) a value
-/// meant only for the test that set it. Declared once here, crate-visible,
-/// so every env-touching test shares the same lock instead.
+/// HOMEBREW_PREFIX, PATH, TMPDIR/TMP/TEMP/TEMPDIR, ...). All of the `[lib]`
+/// target's `#[cfg(test)]` modules compile into one test binary and run as
+/// threads of one process, so a lock declared inside a single module only
+/// serializes the tests in that module — a test in a different file that
+/// sets the same variable can still interleave with it and observe (or
+/// clobber) a value meant only for the test that set it. Declared once here,
+/// crate-visible, so every env-touching unit test shares the same lock.
+///
+/// Its reach is that one binary. Each integration test under `tests/` is its
+/// own binary and process, with its own locks, and every `[[bin]]` target in
+/// Cargo.toml sets `test = false`, so none has unit tests to share it with.
 #[cfg(test)]
 pub(crate) mod env_lock {
     use std::sync::{Mutex, MutexGuard, OnceLock};
