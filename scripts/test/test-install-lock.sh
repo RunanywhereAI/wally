@@ -2,8 +2,11 @@
 # Proves install.sh's install lock (acquire_install_lock / release_install_lock)
 # holds under contention: exactly one of many concurrent runs acquires it, a
 # stale lock from a dead pid is
-# recovered, a live holder is never treated as stale, and a run only ever
-# removes the lock it created itself.
+# recovered, a live holder is never treated as stale, a run only ever
+# removes the lock it created itself, and the stale-lock takeover itself is a
+# real mutex -- many runs racing the same stale lock still produce exactly
+# one winner, and a takeover directory left behind by a crash is cleared and
+# retried rather than wedging every later install.
 #
 # Drives the real install.sh through its --hold-install-lock=<seconds> debug
 # seam (acquire, print "acquired", sleep, release, exit) against a throwaway
@@ -107,6 +110,67 @@ printf '999999999\n' >"$(lock_path "$scratch5")"
 wait "$apid"
 check "release leaves a lock behind once its content no longer names this run" \
     "$([ -e "$(lock_path "$scratch5")" ] && [ "$(cat "$(lock_path "$scratch5")")" = "999999999" ] && echo 1 || echo 0)"
+
+# --- many contenders race the same stale lock; exactly one ever wins ---
+# Every contender here sees the same dead-pid lock and would race the same
+# rm+ln pair without the takeover mutex; repeat the trial several times
+# because that race, if it existed, would flake rather than fail every time.
+# Hold, like the plain-contention case above, rather than release
+# immediately: a holder that lets go right away lets many contenders win in
+# turn (fine -- the lock is meant to be reusable) with no window for a
+# straggler to steal it, which would pass whether or not the theft the
+# takeover mutex closes is actually closed. A held winner gives every
+# straggler its full sub-second race a real target to try to steal from.
+stale_race_trials=5
+stale_race_count=10
+for trial in $(seq 1 "$stale_race_trials"); do
+    scratch="$WORK/stale-race-$trial"; mkdir -p "$scratch/.local/lib"
+    ( : ) & deadpid=$!
+    wait "$deadpid" 2>/dev/null || true
+    printf '%s\n' "$deadpid" >"$(lock_path "$scratch")"
+    outdir="$WORK/stale-race-$trial-out"; mkdir -p "$outdir"
+    barrier="$WORK/stale-race-$trial-go"
+    for i in $(seq 1 "$stale_race_count"); do
+        (
+            while [ ! -e "$barrier" ]; do :; done
+            status=0
+            HOME="$scratch" "$INSTALL_SH" "$INSTALL" --hold-install-lock=1 \
+                >"$outdir/$i.out" 2>"$outdir/$i.err" || status=$?
+            echo "$status" >"$outdir/$i.exit"
+        ) &
+    done
+    sleep 0.2
+    touch "$barrier"
+    wait
+    won=0
+    for i in $(seq 1 "$stale_race_count"); do
+        code="$(cat "$outdir/$i.exit")"
+        [ "$code" = "0" ] && grep -q "acquired" "$outdir/$i.out" && won=$((won + 1))
+    done
+    check "trial ${trial}: exactly one of ${stale_race_count} contenders racing one stale lock wins" \
+        "$([ "$won" -eq 1 ] && echo 1 || echo 0)"
+    check "trial ${trial}: no takeover directory is left behind once the race settles" \
+        "$([ ! -e "$(lock_path "$scratch").takeover" ] && echo 1 || echo 0)"
+done
+
+# --- a takeover directory left behind by a crash is cleared and retried ---
+scratch6="$WORK/takeover-stale"; mkdir -p "$scratch6/.local/lib"
+( : ) & deadpid=$!
+wait "$deadpid" 2>/dev/null || true
+printf '%s\n' "$deadpid" >"$(lock_path "$scratch6")"
+takeover_dir="$(lock_path "$scratch6").takeover"
+mkdir "$takeover_dir"
+# A fixed, long-past timestamp rather than "N minutes ago": both BSD and GNU
+# touch accept -t in this form, so the test doesn't need OS-specific date math
+# to make the directory look older than the ~60s takeover is ever held for.
+touch -t 202001010000.00 "$takeover_dir"
+takeover_status=0
+HOME="$scratch6" "$INSTALL_SH" "$INSTALL" --hold-install-lock=0 \
+    >"$WORK/takeover.out" 2>"$WORK/takeover.err" || takeover_status=$?
+check "a takeover directory stale enough to be a crash is cleared and retried" \
+    "$([ "$takeover_status" -eq 0 ] && grep -q acquired "$WORK/takeover.out" && echo 1 || echo 0)"
+check "the stale takeover directory does not survive the retry" \
+    "$([ ! -e "$takeover_dir" ] && echo 1 || echo 0)"
 
 [ "$fails" -eq 0 ] || { printf '%d test(s) failed\n' "$fails" >&2; exit 1; }
 printf 'all install-lock cases pass\n'
