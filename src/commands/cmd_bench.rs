@@ -496,9 +496,18 @@ fn tts_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
     Ok(())
 }
 
+/// Categories to clear before loading a VLM trial's model: its own category
+/// (Multimodal or Vision) plus Language, which a multimodal model may also
+/// occupy. Pulled out as a pure function so the pairing is testable without
+/// the unload FFI call itself.
+fn vlm_preload_unload_targets(category: v1::ModelCategory) -> [v1::ModelCategory; 2] {
+    [category, v1::ModelCategory::Language]
+}
+
 fn vlm_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
-    unload_category(v1::ModelCategory::Multimodal);
-    unload_category(v1::ModelCategory::Language);
+    for category in vlm_preload_unload_targets(c.category) {
+        unload_category(category);
+    }
     let mem_before = available_ram_bytes();
     m.load_ms = load_model_timed(&c.model_id, c.category, c.framework)?;
 
@@ -987,6 +996,33 @@ mod ljust_bytes_tests {
         let truncated = ljust_bytes("café", 4);
         assert_eq!(truncated, vec![b'c', b'a', b'f', 0xC3]);
         assert!(std::str::from_utf8(&truncated).is_err());
+    }
+}
+
+#[cfg(test)]
+mod vlm_preload_unload_targets_tests {
+    use super::vlm_preload_unload_targets;
+    use crate::io::proto::v1::ModelCategory;
+
+    #[test]
+    fn unloads_vision_when_trial_category_is_vision() {
+        // Before the fix this hardcoded Multimodal, so a Vision-categorized
+        // model's own slot was never cleared before reloading into it.
+        let targets = vlm_preload_unload_targets(ModelCategory::Vision);
+        assert!(targets.contains(&ModelCategory::Vision));
+    }
+
+    #[test]
+    fn still_unloads_multimodal_when_trial_category_is_multimodal() {
+        let targets = vlm_preload_unload_targets(ModelCategory::Multimodal);
+        assert!(targets.contains(&ModelCategory::Multimodal));
+    }
+
+    #[test]
+    fn always_unloads_language_too() {
+        for category in [ModelCategory::Vision, ModelCategory::Multimodal] {
+            assert!(vlm_preload_unload_targets(category).contains(&ModelCategory::Language));
+        }
     }
 }
 
