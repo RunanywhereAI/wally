@@ -58,7 +58,10 @@ fn rebase_approval_url(url: &str, console_url: &str) -> String {
     let Some(scheme) = url.find("://") else {
         return url.to_string();
     };
-    match url[scheme + 3..].find('/') {
+    // The first of '/', '?', or '#' -- not just '/' -- so a server-sent URL
+    // with a query but no path (an origin-only approval link plus `?code=...`)
+    // still keeps its request code instead of being rebased to a bare origin.
+    match url[scheme + 3..].find(['/', '?', '#']) {
         Some(offset) => origin + &url[scheme + 3 + offset..],
         None => origin,
     }
@@ -489,7 +492,7 @@ pub fn register_account(app: &mut App) {
 mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    use super::open_browser;
+    use super::{open_browser, rebase_approval_url};
 
     fn env_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -570,5 +573,31 @@ mod tests {
             "open_browser must stay silent on a missing opener binary, like C++; got: {:?}",
             String::from_utf8_lossy(&buffer)
         );
+    }
+
+    // An origin-level approval URL with a query but no path (e.g. Railway's
+    // preview host) must keep its `?code=...` suffix, or the browser opens a
+    // console with no sign-in request and login times out waiting for a poll
+    // that never arrives.
+    #[test]
+    fn rebase_approval_url_preserves_a_query_only_suffix() {
+        let _lock = env_lock();
+        let saved = std::env::var_os("WALLY_CONSOLE_WEB_URL");
+        // SAFETY: `_lock` serializes every test in this process that touches
+        // WALLY_CONSOLE_WEB_URL.
+        unsafe { std::env::set_var("WALLY_CONSOLE_WEB_URL", "https://console.runanywhere.ai") };
+
+        let result = rebase_approval_url(
+            "https://runanywhere-frontend-production.up.railway.app?code=abc",
+            "https://inference.runanywhere.ai",
+        );
+
+        match saved {
+            // SAFETY: still under `_lock`.
+            Some(value) => unsafe { std::env::set_var("WALLY_CONSOLE_WEB_URL", value) },
+            None => unsafe { std::env::remove_var("WALLY_CONSOLE_WEB_URL") },
+        }
+
+        assert_eq!(result, "https://console.runanywhere.ai?code=abc");
     }
 }
