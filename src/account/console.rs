@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::console_contract as contract;
 use super::{
@@ -276,6 +276,14 @@ const CONNECT_TIMEOUT_MS: i32 = 10_000;
 const TOTAL_TIMEOUT_MS: i32 = 30_000;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
+// Proxy discovery (WPAD/PAC auto-detection on Windows, see
+// windows_autodetected_system_proxy) runs before a request's own timeout
+// starts and is bounded to 3s of its own. Once discovery has spent any of
+// that against the request, never leave less than this much of the budget
+// for the request itself -- a slow-but-successful discovery should still
+// give the request a chance to run instead of failing it outright.
+const MIN_REMAINING_TOTAL_TIMEOUT_MS: i32 = 1_000;
+
 fn total_timeout_ms(request: &HttpRequest) -> i32 {
     if request.timeout_ms > 0 {
         request.timeout_ms
@@ -284,8 +292,23 @@ fn total_timeout_ms(request: &HttpRequest) -> i32 {
     }
 }
 
-fn connect_timeout_ms(request: &HttpRequest) -> i32 {
-    std::cmp::min(CONNECT_TIMEOUT_MS, total_timeout_ms(request))
+fn connect_timeout_ms(total_timeout_ms: i32) -> i32 {
+    std::cmp::min(CONNECT_TIMEOUT_MS, total_timeout_ms)
+}
+
+/// What is left of `total_timeout_ms` after proxy discovery already spent
+/// `discovery_elapsed` finding out whether to use one. Without this,
+/// discovery time is on top of the request's own timeout instead of counted
+/// against it, so the first request of a process (a cache miss in
+/// `cached_autodetected_system_proxy`) could take up to 3s longer than
+/// configured. Never negative, and never below
+/// `MIN_REMAINING_TOTAL_TIMEOUT_MS`.
+fn remaining_after_discovery_ms(total_timeout_ms: i32, discovery_elapsed: Duration) -> i32 {
+    let elapsed_ms = i32::try_from(discovery_elapsed.as_millis()).unwrap_or(i32::MAX);
+    std::cmp::max(
+        total_timeout_ms.saturating_sub(elapsed_ms),
+        MIN_REMAINING_TOTAL_TIMEOUT_MS,
+    )
 }
 
 fn url_is_loopback(url: &str) -> bool {
@@ -733,12 +756,16 @@ fn real_transport(request: &HttpRequest) -> Result<HttpResponse, String> {
     }
 
     let total = total_timeout_ms(request);
-    let connect = connect_timeout_ms(request);
     // CURLOPT_NOPROXY "localhost,127.0.0.1,::1": a request to the loopback
     // (dev consoles, tests) never goes through an env-configured proxy, and
     // that list replaces NO_PROXY rather than adding to it -- see
-    // resolve_proxy_url and proxy_env_value.
+    // resolve_proxy_url and proxy_env_value. Timed because on Windows a cache
+    // miss runs WPAD/PAC discovery here, before the request below starts --
+    // see remaining_after_discovery_ms.
+    let discovery_start = Instant::now();
     let proxy = resolve_console_proxy(&request.url);
+    let total = remaining_after_discovery_ms(total, discovery_start.elapsed());
+    let connect = connect_timeout_ms(total);
 
     let config = ureq::Agent::config_builder()
         .http_status_as_error(false)
@@ -1902,6 +1929,7 @@ pub fn who_am_i(console_url: &str, token: &str) -> Result<Identity, String> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::time::Duration;
 
     #[test]
     fn console_tls_uses_the_platform_stack_and_trust_store() {
@@ -1911,6 +1939,34 @@ mod tests {
             tls.root_certs(),
             ureq::tls::RootCerts::PlatformVerifier
         ));
+    }
+
+    // remaining_after_discovery_ms: the request timeout budget left after
+    // proxy discovery (WPAD/PAC on Windows) already spent part of it. Pure
+    // and platform-independent, so it is covered here even though the
+    // Windows-only discovery it protects cannot run on this host.
+
+    #[test]
+    fn remaining_after_discovery_ms_is_unchanged_when_discovery_was_instant() {
+        let remaining = super::remaining_after_discovery_ms(30_000, Duration::ZERO);
+        assert_eq!(remaining, 30_000);
+    }
+
+    #[test]
+    fn remaining_after_discovery_ms_subtracts_what_discovery_spent() {
+        // Discovery's own 3s bound consumed against the request's 30s
+        // default -- without this the request would still get the full 30s
+        // on top, per cubic review comment #66.
+        let remaining = super::remaining_after_discovery_ms(30_000, Duration::from_millis(3_000));
+        assert_eq!(remaining, 27_000);
+    }
+
+    #[test]
+    fn remaining_after_discovery_ms_never_drops_below_the_floor() {
+        // A short request timeout plus a slow discovery must not leave the
+        // request with zero or negative time to run.
+        let remaining = super::remaining_after_discovery_ms(2_000, Duration::from_millis(5_000));
+        assert_eq!(remaining, super::MIN_REMAINING_TOTAL_TIMEOUT_MS);
     }
 
     // resolve_proxy_url / proxy_env_value: libcurl proxy-selection parity.
