@@ -14,6 +14,10 @@ fix belongs in the SDK, then a new kit — not a workaround here.
 
 - CMake 3.27+, a C++20 compiler (still needed: CMake resolves the kit and
   links the Apple Swift host)
+- Ninja: `cmake/WallyRust.cmake` rejects multi-config generators (Visual
+  Studio, Xcode, Ninja Multi-Config) because it picks the Cargo profile from
+  `CMAKE_BUILD_TYPE` at configure time, so the `Build` command below passes
+  `-G Ninja`
 - The Rust toolchain `rust-toolchain.toml` pins (`rustup` installs it
   automatically the first time you run `cargo`/`rustc` in this tree)
 - A staged kit matching `cmake/sdk-pin.cmake` (`WALLY_PINNED_SDK_VERSION`)
@@ -32,7 +36,7 @@ The prefix is `dist/cpp-desktop-macos-arm64` in that checkout.
 ## Build
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release \
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=/path/to/cpp-desktop-macos-arm64
 cmake --build build -j "$(sysctl -n hw.logicalcpu)"
 ./build/wally version
