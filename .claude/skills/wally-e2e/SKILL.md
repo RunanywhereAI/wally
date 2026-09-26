@@ -82,8 +82,8 @@ GitHub Windows: `GITHUB_WORKSPACE` is `D:\a\...`; msys `tar -C` needs
 ## Apple MLX host link
 
 `cmake/WallyRust.cmake` gets the kit's link line without hand-parsing Ninja: it
-queries the CMake file API (`cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)`,
-or the raw query file pre-3.27) against `wally_link_probe`, a target configured
+queries the CMake file API (`cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)`)
+against `wally_link_probe`, a target configured
 but never built that carries the same kit closure the old C++ `wally`
 executable had. `build.rs` (`link_native`/`probe_link_args`) reads that reply,
 drops compile-only fragments (`-D`/`-I`/`-O`/…), hands the rest to `cargo` as
