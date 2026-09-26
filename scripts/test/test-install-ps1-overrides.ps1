@@ -32,11 +32,14 @@ function Check([string]$Name, [bool]$Ok) {
 }
 
 # A stub wally.exe that answers --version, built without depending on the
-# build tree's compiler setup -- Add-Type's C# compiler is part of every
-# PowerShell 5.1+ install.
+# build tree's compiler setup. Only Windows PowerShell 5.1's Add-Type can
+# emit an .exe (PowerShell 7 refuses ConsoleApplication), and CI runs this
+# under pwsh, so the compile is handed to powershell.exe, which ships with
+# every Windows install.
 function New-StubWally([string]$Path) {
     New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force | Out-Null
-    Add-Type -OutputType ConsoleApplication -OutputAssembly $Path -TypeDefinition @'
+    $Source = Join-Path $Work 'StubWally.cs'
+    Set-Content -LiteralPath $Source -Encoding ascii -Value @'
 using System;
 class StubWally {
     static int Main(string[] args) {
@@ -49,6 +52,10 @@ class StubWally {
     }
 }
 '@
+    $Compile = "Add-Type -OutputType ConsoleApplication -OutputAssembly '$Path' " +
+        "-TypeDefinition (Get-Content -Raw -LiteralPath '$Source')"
+    powershell.exe -NoProfile -NonInteractive -Command $Compile
+    if (-not (Test-Path -LiteralPath $Path)) { throw "could not build the stub wally.exe at $Path" }
 }
 
 # Same arch resolution install.ps1 itself uses, so the fixture's asset name
