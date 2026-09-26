@@ -77,16 +77,33 @@ wally account usage         # remaining credit
 
 ## Commands you'll use
 
-| Command | What it does |
+| Chat | |
 |---|---|
-| `wally run` | chat, or one answer with a prompt |
-| `wally models pull` / `wally models rm` | download or delete a model |
-| `wally models list` | models on this machine |
-| `wally serve` | OpenAI-compatible API |
-| `wally account login` / `wally account usage` | sign in, check credit |
-| `wally account usage --requests` | settled requests in a window (`--follow` walks up to 100 pages) |
-| `wally opencode` / `wally claude-code` | start a coding agent on a model |
-| `wally update` | update wally to the latest release |
+| `wally run <model> [prompt]` | chat, or one answer and exit |
+| `wally serve <model>` | OpenAI-compatible API on :8080 |
+
+| Models | |
+|---|---|
+| `wally models list [--all]` | models on this machine, or the whole catalog |
+| `wally models pull` / `rm` | download or delete a model |
+| `wally models show` | size, context window, files |
+| `wally models default` | the model coding tools open with |
+
+| Coding tools | |
+|---|---|
+| `wally opencode` / `claude-code` / `claude-desktop` | open the tool on a model with `-m`, hosted with `--cloud` |
+| `wally hermes` / `openclaw` / `deepseek` | same |
+
+| Account | |
+|---|---|
+| `wally account login` / `logout` / `whoami` | browser sign-in and session |
+| `wally account usage` | credit left and recent spend |
+
+| Wally | |
+|---|---|
+| `wally about` | versions, backends, paths |
+| `wally update` | latest release |
+| `wally uninstall` | remove wally, its models and its config |
 
 `wally --help` and `wally <command> --help` cover the rest.
 
