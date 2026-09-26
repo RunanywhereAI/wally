@@ -224,17 +224,7 @@ pub const MODEL_CACHE_TTL_SECONDS: i64 = 24 * 60 * 60;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
-    // Serializes every test in this module that touches WALLY_PROFILE_DIR, the
-    // same pattern src/commands/cmd_account.rs and src/commands/cmd_update.rs
-    // use for cargo test's shared-process env.
-    fn env_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+    use crate::util::env_lock::lock as env_lock;
 
     fn with_profile_dir<T>(run: impl FnOnce(&std::path::Path) -> T) -> T {
         let _lock = env_lock();

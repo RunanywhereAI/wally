@@ -338,18 +338,9 @@ mod tests {
     //! `std::getenv`), not `var` (which drops a non-UTF-8 value entirely).
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use super::*;
-
-    /// Environment variables are process-global; hold this for the whole
-    /// body of any test that reads or writes them.
-    fn env_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+    use crate::util::env_lock::lock as env_lock;
 
     #[test]
     fn scoped_config_restores_non_utf8_previous_value_on_drop() {

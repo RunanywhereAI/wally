@@ -641,16 +641,7 @@ pub fn register_editors(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Serializes every test below that touches the state-dir env vars --
-    // the same pattern src/harness/agents.rs uses for its own env-touching
-    // tests.
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap()
-    }
+    use crate::util::env_lock::lock as env_lock;
 
     // With no usable HOME or XDG state dir, `prepare_claude_config_dir` used
     // to build the root-level "/claude" and export it, so Claude Code

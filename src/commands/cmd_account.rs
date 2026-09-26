@@ -490,16 +490,8 @@ pub fn register_account(app: &mut App) {
 
 #[cfg(all(test, not(windows)))]
 mod tests {
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
     use super::{open_browser, rebase_approval_url};
-
-    fn env_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+    use crate::util::env_lock::lock as env_lock;
 
     // C++'s OpenBrowser only prints the fallback line when fork() itself
     // fails; the parent never inspects the child's exec outcome. A missing

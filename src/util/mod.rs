@@ -22,6 +22,34 @@ pub fn getenv_or_empty(name: &str) -> String {
     getenv(name).unwrap_or_default()
 }
 
+/// One process-wide lock for every unit test in this crate that touches a
+/// real environment variable another test also touches (HOME,
+/// XDG_STATE_HOME, LOCALAPPDATA, USERPROFILE, WALLY_*, RUNANYWHERE_HOME,
+/// HOMEBREW_PREFIX, PATH, TMPDIR/TMP/TEMP/TEMPDIR, ...). `cargo test` runs
+/// every test in the crate as a thread of one process: both `[[bin]]`
+/// targets in Cargo.toml set `test = false`, so the `[lib]` target's
+/// `#[cfg(test)]` modules are the only tests that exist, all compiled into
+/// one binary. A lock declared inside a single module only serializes the
+/// tests in that module — a test in a different file that sets the same
+/// variable can still interleave with it and observe (or clobber) a value
+/// meant only for the test that set it. Declared once here, crate-visible,
+/// so every env-touching test shares the same lock instead.
+#[cfg(test)]
+pub(crate) mod env_lock {
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// Hold this for the whole body of any test that reads or writes a real
+    /// environment variable. Recovers from a poisoned lock — one earlier env
+    /// test panicking while it held this — instead of poisoning every later
+    /// env test in the crate.
+    pub(crate) fn lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
 /// Howard Hinnant's `civil_from_days` (public domain): the proleptic Gregorian
 /// calendar date for `z` days since 1970-01-01, in UTC. Used instead of
 /// gmtime_r/gmtime_s so formatting a timestamp has no platform-specific
@@ -124,5 +152,58 @@ mod tests {
         for seconds in [i64::MAX, i64::MIN, i64::MAX - 1, i64::MIN + 1] {
             assert!(format_utc(seconds).ends_with('Z'), "{seconds}");
         }
+    }
+
+    // The whole point of env_lock is that every env-touching test in the
+    // crate serializes on the *same* mutex, not just the tests in its own
+    // module. This does not exercise another module's test, but it does
+    // pin down the primitive they all now share: two threads racing to set
+    // "the same variable" must never both be inside the critical section at
+    // once.
+    #[test]
+    fn env_lock_serializes_concurrent_callers() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let busy = Arc::new(AtomicBool::new(false));
+        let overlapped = Arc::new(AtomicBool::new(false));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let busy = Arc::clone(&busy);
+                let overlapped = Arc::clone(&overlapped);
+                std::thread::spawn(move || {
+                    let _lock = env_lock::lock();
+                    if busy.swap(true, Ordering::SeqCst) {
+                        overlapped.store(true, Ordering::SeqCst);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    busy.store(false, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("thread should not panic");
+        }
+        assert!(
+            !overlapped.load(Ordering::SeqCst),
+            "env_lock() let two callers into the critical section at once"
+        );
+    }
+
+    // A test elsewhere in the crate that panics while holding env_lock must
+    // not take every later env-touching test down with it -- the crate has
+    // dozens of them, spread across modules that no longer know about each
+    // other's lock at all. Without `unwrap_or_else(|e| e.into_inner())` this
+    // panics on the second call instead of recovering.
+    #[test]
+    fn env_lock_recovers_from_a_poisoned_guard() {
+        let poisoned = std::panic::catch_unwind(|| {
+            let _lock = env_lock::lock();
+            panic!("simulated panic while holding env_lock");
+        });
+        assert!(poisoned.is_err());
+
+        // Must return a guard, not panic or deadlock.
+        let _lock = env_lock::lock();
     }
 }

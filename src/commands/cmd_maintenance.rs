@@ -550,6 +550,7 @@ pub fn register_uninstall(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::env_lock::lock as env_lock;
 
     // Dir_size (uninstall's pre-delete size preview) must follow a
     // symlink to a regular file, matching C++'s is_regular_file(ec)/
@@ -620,16 +621,6 @@ mod tests {
     // register_help's registration time, before bench/backends/telemetry
     // exist) lives in tests/test_wally_help_routing.rs, which drives the real
     // built binary through app::run's non-shortcut parse path.
-
-    // Serializes every test below that sets HOME -- the same pattern
-    // src/harness/agents.rs uses for its own env-touching tests.
-    #[cfg(unix)]
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap()
-    }
 
     // `wally uninstall` used to ignore the global `--home` override and
     // always resolve against HOME/RUNANYWHERE_HOME, so it could remove a
@@ -838,24 +829,13 @@ mod tests {
         assert_eq!(launcher_target(&dangling, &lib_dir), None);
     }
 
-    // Serializes every test below that sets LOCALAPPDATA -- same pattern as
-    // the Unix env_lock() above, kept separate since it guards a different
-    // variable and only ever runs on Windows.
-    #[cfg(windows)]
-    fn windows_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap()
-    }
-
     #[test]
     #[cfg(windows)]
     fn windows_install_directory_finds_the_directory_from_the_running_exe() {
-        let _lock = windows_env_lock();
+        let _lock = env_lock();
         let temp = tempfile::tempdir().expect("tempdir");
         let local_app_data = temp.path();
-        // SAFETY: windows_env_lock() is held for this whole test body.
+        // SAFETY: env_lock() is held for this whole test body.
         unsafe { std::env::set_var("LOCALAPPDATA", local_app_data) };
 
         let install_dir = local_app_data.join("Programs").join("wally");
@@ -875,24 +855,24 @@ mod tests {
             "a verbatim exe path must match too"
         );
 
-        // SAFETY: still holding windows_env_lock().
+        // SAFETY: still holding env_lock().
         unsafe { std::env::remove_var("LOCALAPPDATA") };
     }
 
     #[test]
     #[cfg(windows)]
     fn windows_install_directory_rejects_a_binary_outside_the_programs_tree() {
-        let _lock = windows_env_lock();
+        let _lock = env_lock();
         let temp = tempfile::tempdir().expect("tempdir");
         let local_app_data = temp.path();
-        // SAFETY: windows_env_lock() is held for this whole test body.
+        // SAFETY: env_lock() is held for this whole test body.
         unsafe { std::env::set_var("LOCALAPPDATA", local_app_data) };
 
         let elsewhere = local_app_data.join("elsewhere-wally.exe");
         std::fs::write(&elsewhere, b"stub").expect("write elsewhere");
         assert!(windows_install_directory(&elsewhere.to_string_lossy()).is_none());
 
-        // SAFETY: still holding windows_env_lock().
+        // SAFETY: still holding env_lock().
         unsafe { std::env::remove_var("LOCALAPPDATA") };
     }
 }

@@ -931,18 +931,8 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
 mod tests {
     //! OpenClaw's non-UTF-8 environment, setenv's NUL truncation, and the
     //! temp-directory lookup, each as the C++ behaved.
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
     use super::*;
-
-    /// Environment variables are process-global; hold this for the whole
-    /// body of any test that reads or writes them.
-    fn env_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+    use crate::util::env_lock::lock as env_lock;
 
     /// `setenv(name, value.c_str(), 1)` in C++ truncates silently
     /// at the first embedded NUL byte rather than failing; `set_environment`

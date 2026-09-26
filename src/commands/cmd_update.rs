@@ -109,15 +109,7 @@ pub fn run_update(nightly: bool) -> i32 {
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
-    // Serializes every test in this module that touches HOMEBREW_PREFIX, the
-    // same pattern src/harness/agents.rs and src/commands/cmd_account.rs use
-    // for `cargo test`'s shared-process env.
-    fn env_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
+    use crate::util::env_lock::lock as env_lock;
 
     #[test]
     fn is_homebrew_managed_matches_the_apple_silicon_prefix() {
