@@ -9,11 +9,39 @@
 
 use crate::cli::App;
 use crate::io::output as out;
+use crate::util::getenv;
 
 // The same script the install line in the README pipes to a shell. Kept as one
 // constant so the update path and the documented install path cannot drift.
 #[cfg(not(windows))]
 const INSTALL_URL: &str = "https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.sh";
+
+// Homebrew's own prefixes, plus whatever `$HOMEBREW_PREFIX` names (set by
+// `brew shellenv` and by every formula's build environment). A binary
+// resolved (symlinks followed) into one of these came from `brew install`,
+// not install.sh -- piping install.sh at it would lay a second copy under
+// ~/.local that `brew upgrade`/`brew uninstall` never sees again.
+#[cfg(not(windows))]
+const HOMEBREW_PREFIXES: [&str; 3] = [
+    "/opt/homebrew",
+    "/usr/local/Cellar",
+    "/home/linuxbrew/.linuxbrew",
+];
+
+#[cfg(not(windows))]
+fn is_homebrew_managed(exe: &str) -> bool {
+    if exe.is_empty() {
+        return false;
+    }
+    if let Some(prefix) = getenv("HOMEBREW_PREFIX") {
+        if !prefix.is_empty() && exe.starts_with(&prefix) {
+            return true;
+        }
+    }
+    HOMEBREW_PREFIXES
+        .iter()
+        .any(|prefix| exe.starts_with(prefix))
+}
 
 pub fn register_update(app: &mut App) {
     let cmd = app.add_subcommand("update", "Update wally to the latest release");
@@ -39,6 +67,17 @@ pub fn run_update(nightly: bool) -> i32 {
 /// Shared by `wally update` and the whole-argv `-u/--update` shortcut.
 #[cfg(not(windows))]
 pub fn run_update(nightly: bool) -> i32 {
+    let exe = crate::commands::cmd_maintenance::self_executable();
+    if is_homebrew_managed(&exe) {
+        // Not a failure: the command's job -- get the person to the newest
+        // release -- is done by pointing them at the manager that actually
+        // owns this binary. install.sh would "succeed" too, but by writing a
+        // second, unmanaged copy under ~/.local that outlives every future
+        // `brew upgrade`, which is a worse outcome than doing nothing here.
+        out::status_line("wally was installed with Homebrew; run `brew upgrade wally` to update.");
+        return 0;
+    }
+
     // WALLY_VERSION is a compile-time constant and the flag is a fixed token,
     // so the command line carries nothing a caller could inject.
     let mut command = format!("curl -fsSL {INSTALL_URL} | sh -s --");
@@ -61,5 +100,68 @@ pub fn run_update(nightly: bool) -> i32 {
         0
     } else {
         1
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    // Serializes every test in this module that touches HOMEBREW_PREFIX, the
+    // same pattern src/harness/agents.rs and src/commands/cmd_account.rs use
+    // for `cargo test`'s shared-process env.
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn is_homebrew_managed_matches_the_apple_silicon_prefix() {
+        let _lock = env_lock();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::remove_var("HOMEBREW_PREFIX") };
+        assert!(is_homebrew_managed(
+            "/opt/homebrew/Cellar/wally/0.5.10/bin/wally"
+        ));
+    }
+
+    #[test]
+    fn is_homebrew_managed_matches_the_intel_cellar_prefix() {
+        let _lock = env_lock();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::remove_var("HOMEBREW_PREFIX") };
+        assert!(is_homebrew_managed(
+            "/usr/local/Cellar/wally/0.5.10/bin/wally"
+        ));
+    }
+
+    #[test]
+    fn is_homebrew_managed_matches_a_custom_homebrew_prefix() {
+        let _lock = env_lock();
+        // SAFETY: env_lock() is held for this whole test body; `set_var`'s
+        // only panic case is a name containing '=' or NUL, and this literal
+        // has neither.
+        unsafe { std::env::set_var("HOMEBREW_PREFIX", "/custom/brew") };
+        let result = is_homebrew_managed("/custom/brew/Cellar/wally/0.5.10/bin/wally");
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOMEBREW_PREFIX") };
+        assert!(result);
+    }
+
+    #[test]
+    fn is_homebrew_managed_rejects_an_install_sh_path() {
+        let _lock = env_lock();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::remove_var("HOMEBREW_PREFIX") };
+        assert!(!is_homebrew_managed("/home/user/.local/lib/wally/bin/wally"));
+    }
+
+    #[test]
+    fn is_homebrew_managed_rejects_an_empty_path() {
+        let _lock = env_lock();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::remove_var("HOMEBREW_PREFIX") };
+        assert!(!is_homebrew_managed(""));
     }
 }
