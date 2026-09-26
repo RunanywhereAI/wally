@@ -282,10 +282,15 @@ fn windows_install_directory(exe: &str) -> Option<PathBuf> {
         return None;
     }
     let expected = Path::new(&local_app_data).join("Programs").join("wally");
-    let canonical_expected = std::fs::canonicalize(&expected).unwrap_or(expected);
-    Path::new(exe)
+    // Both sides canonical: on Windows `canonicalize` returns the verbatim
+    // `\\?\C:\...` form and `current_exe()` does not, so comparing one of
+    // each never matched and uninstall tried to delete its own running exe.
+    // The plain path is what the person is told to delete.
+    let canonical_exe = std::fs::canonicalize(exe).unwrap_or_else(|_| PathBuf::from(exe));
+    let canonical_expected = std::fs::canonicalize(&expected).ok()?;
+    canonical_exe
         .starts_with(&canonical_expected)
-        .then_some(canonical_expected)
+        .then_some(expected)
 }
 
 /// Shared by `wally uninstall` and the whole-argv `-U/--uninstall` shortcut.
@@ -756,12 +761,16 @@ mod tests {
         let exe = install_dir.join("wally.exe");
         std::fs::write(&exe, b"stub").expect("write exe");
 
-        let canonical_exe = std::fs::canonicalize(&exe).expect("canonicalize exe");
-        let resolved = windows_install_directory(&canonical_exe.to_string_lossy())
+        // The plain path, as `current_exe()` reports it -- not canonicalized,
+        // which on Windows would add the `\\?\` prefix and hide the mismatch.
+        let resolved = windows_install_directory(&exe.to_string_lossy())
             .expect("windows install directory should be recognised");
+        assert_eq!(resolved, install_dir);
+        let verbatim_exe = std::fs::canonicalize(&exe).expect("canonicalize exe");
         assert_eq!(
-            resolved,
-            std::fs::canonicalize(&install_dir).expect("canonicalize install dir")
+            windows_install_directory(&verbatim_exe.to_string_lossy()),
+            Some(install_dir.clone()),
+            "a verbatim exe path must match too"
         );
 
         // SAFETY: still holding windows_env_lock().
