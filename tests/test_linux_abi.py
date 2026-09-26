@@ -135,11 +135,18 @@ class LinuxAbiTests(unittest.TestCase):
                     },
                 ),
                 "wally-linux-x86_64/lib/libgomp.so.1": elf(
-                    ["libc.so.6"], {"libc.so.6": ["GLIBC_2.34"]}
+                    ["libc.so.6"], {"libc.so.6": ["GLIBC_2.34"]}, interp=None
                 ),
                 "wally-linux-x86_64/README.md": b"not an ELF",
             }
         )
+        # libgomp.so.1 is a .so, never exec'd, so it must have no PT_INTERP --
+        # the same rationale test_a_shared_library_without_pt_interp_is_normal
+        # spells out; a fixture with the default interp would contradict it.
+        _, _, lib_interp = ABI.read_elf(
+            root["wally-linux-x86_64/lib/libgomp.so.1"], "libgomp.so.1"
+        )
+        self.assertIsNone(lib_interp)
         self.assertEqual(ABI.check_files(root, POLICY), [])
 
     def test_a_symbol_version_past_the_floor_fails(self) -> None:
