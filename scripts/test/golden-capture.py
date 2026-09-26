@@ -7,10 +7,12 @@ The committed corpus was captured from the C++ build of d1e9c0b; see
 tests/golden/README.md. tests/cli_golden.rs must use the same environment.
 
 Every case runs in a fresh, isolated home (HOME, RUNANYWHERE_HOME,
-WALLY_PROFILE_DIR, XDG_*), with stdin closed, no colour, a dead local base URL
-so no telemetry leaves the machine, and a PATH that cannot find any coding
-tool. Only invocations that fail to parse or only read local state are listed:
-nothing here updates, uninstalls, serves, downloads or launches a tool.
+WALLY_PROFILE_DIR, XDG_*) that is discarded once the case finishes, with
+stdin closed, no colour, a dead local base URL so no telemetry leaves the
+machine, and a PATH that cannot find any coding tool. Only invocations that
+fail to parse or touch nothing outside that throwaway home are listed:
+nothing here updates, uninstalls, serves, downloads or launches a tool
+outside it.
 
 Output: <out>/cases.json (the case list) and <out>/expected/<name>.{stdout,
 stderr,code}. The temporary home path is replaced by the literal `$HOME` so the
@@ -181,7 +183,9 @@ def build_cases(binary):
                 add(f'leaf__{stem}__{tag}__missing_value', base + [lng])
             if o['required']:
                 add(f'leaf__{stem}__{tag}__required_missing', path + req)
-    # Local, read-only commands that succeed or fail on local state only.
+    # Local commands that succeed or fail on local state only; most only read
+    # it, but the `models default --clear`/`some-id` cases write preferences
+    # into the throwaway home set up by run_case, and nowhere else.
     for args in (['models', 'list'], ['models', 'list', '--json'], ['--json', 'models', 'list'],
                  ['models', 'ls'], ['models', 'list', '--all'], ['models', 'list', '--all', '--json'],
                  ['models', 'show', 'qwen3-0.6b'], ['models', 'show', 'qwen3-0.6b', '--json'],

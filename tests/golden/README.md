@@ -6,10 +6,11 @@ release line) on macOS arm64 with kit 0.20.37. `tests/cli_golden.rs` replays
 every case against the Rust binary in the same isolated environment and fails
 on any difference — this is the proof that the port kept the CLI surface:
 help for every command path, CLI11's parse errors and exit codes, `--json`
-documents, and local read-only commands.
+documents, and local commands that touch only the case's own throwaway home.
 
-Only cases that fail to parse or only read local state are listed: nothing
-here updates, uninstalls, serves, downloads or launches a tool.
+Only cases that fail to parse or touch nothing outside their own throwaway
+home are listed: nothing here updates, uninstalls, serves, downloads or
+launches a tool outside that home.
 
 - `cases.json` — the case list (`name`, `args`; `$HOME` means the isolated home)
 - `expected/<name>.{stdout,stderr,code}`
