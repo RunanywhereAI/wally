@@ -15,7 +15,7 @@ Kit must contain `include/rac/**`, `lib/librac_commons.a` (or equivalent), `lib/
 ## Wally (this repo)
 
 ```bash
-cmake -B build -DCMAKE_PREFIX_PATH=<kit> -DCMAKE_BUILD_TYPE=Release
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH=<kit> -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j "$(sysctl -n hw.logicalcpu)"
 # Apple product binary is build/wally (Swift MLX host). Windows: build/wally.exe
 ```
