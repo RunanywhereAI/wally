@@ -76,4 +76,14 @@ fn state_dir() {
             .set("LOCALAPPDATA", "C:/wally-local");
         assert_eq!(paths::state_dir(), "C:/wally-local/RunAnywhere/state");
     }
+    {
+        // With every input unset there is nowhere to resolve state under, so
+        // callers (e.g. cmd_editors's prepare_claude_config_dir) must see the
+        // empty string rather than a plausible-looking but bogus path.
+        let mut env = EnvGuard::new();
+        env.unset("XDG_STATE_HOME").unset("HOME");
+        #[cfg(windows)]
+        env.unset("LOCALAPPDATA").unset("USERPROFILE");
+        assert_eq!(paths::state_dir(), "");
+    }
 }
