@@ -127,6 +127,18 @@ fn run_register(options: &GlobalOptions, reference: &str, engine: &str) -> i32 {
     0
 }
 
+/// The `ModelLoadRequest.framework` an explicit `--engine` asks for, or `None`
+/// to leave the SDK falling back to the ref's own declared framework. Pulled
+/// out of run_load so the "an explicit engine always wins, even for a catalog
+/// ref" rule is provable under `cargo test` without bootstrap()/the SDK.
+fn framework_override(engine: v1::InferenceFramework) -> Option<i32> {
+    if engine != v1::InferenceFramework::Unspecified {
+        Some(engine as i32)
+    } else {
+        None
+    }
+}
+
 fn run_load(options: &GlobalOptions, reference: &str, engine: &str, category_name: &str) -> i32 {
     let Ok(_env) = bootstrap(options) else {
         return 1;
@@ -174,8 +186,14 @@ fn run_load(options: &GlobalOptions, reference: &str, engine: &str, category_nam
     if category != v1::ModelCategory::Unspecified {
         request.category = Some(category as i32);
     }
-    if !resolved.from_catalog && engine_hint.framework != v1::InferenceFramework::Unspecified {
-        request.framework = Some(engine_hint.framework as i32);
+    // An explicit --engine is honoured whatever the ref resolved to. Gating this
+    // on `!resolved.from_catalog` silently DISCARDED the flag for catalog
+    // entries — the SDK never saw the requested pin. When the flag is absent
+    // engine_hint.framework is UNSPECIFIED, so catalog entries still fall back
+    // to their own declared framework exactly as before. Mirrors cmd_run.rs /
+    // cmd_embed.rs.
+    if let Some(framework) = framework_override(engine_hint.framework) {
+        request.framework = Some(framework);
     }
 
     let bytes = crate::io::proto::serialize(&request);
@@ -637,5 +655,28 @@ mod recursive_file_size_tests {
         std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("dangling"))
             .expect("symlink");
         assert_eq!(recursive_file_size(dir.path()), 0);
+    }
+}
+
+#[cfg(test)]
+mod framework_override_tests {
+    use super::framework_override;
+    use crate::io::proto::v1;
+
+    // The helper takes only the engine, on purpose: the bug was gating an
+    // explicit --engine on `!resolved.from_catalog`, so a signature that
+    // cannot see `from_catalog` at all proves it can no longer suppress the
+    // override.
+    #[test]
+    fn explicit_engine_is_returned() {
+        assert_eq!(
+            framework_override(v1::InferenceFramework::Mlx),
+            Some(v1::InferenceFramework::Mlx as i32)
+        );
+    }
+
+    #[test]
+    fn absent_engine_defers_to_the_catalog() {
+        assert_eq!(framework_override(v1::InferenceFramework::Unspecified), None);
     }
 }
