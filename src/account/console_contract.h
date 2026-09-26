@@ -17,7 +17,7 @@
 namespace wally::account::contract {
 
 // SHA-256 of contracts/wally-cli-v1.openapi.json this header was built from.
-inline constexpr char kContractSha256[] = "4d33e9e91de8e2aa2e178ba70de26d8946d89b41c6c1870d615d4c81ee8c9c1f";
+inline constexpr char kContractSha256[] = "66e32c5f41366ee121f8287595c00fb083f1a596af0f30fccc83434111d2dc10";
 
 enum class ApiErrorCode {
     kInvalidRequest,
@@ -55,6 +55,7 @@ enum class ApiErrorCode {
     kGatewayOperationPending,
     kReconciliationUnverified,
     kRetentionManagedByRunanywhere,
+    kCardRequired,
 };
 
 inline void from_json(const nlohmann::json& j, ApiErrorCode& value) {
@@ -94,6 +95,7 @@ inline void from_json(const nlohmann::json& j, ApiErrorCode& value) {
     if (raw == "gateway_operation_pending") { value = ApiErrorCode::kGatewayOperationPending; return; }
     if (raw == "reconciliation_unverified") { value = ApiErrorCode::kReconciliationUnverified; return; }
     if (raw == "retention_managed_by_runanywhere") { value = ApiErrorCode::kRetentionManagedByRunanywhere; return; }
+    if (raw == "card_required") { value = ApiErrorCode::kCardRequired; return; }
     throw nlohmann::json::type_error::create(302, "unknown ApiErrorCode: " + raw, &j);
 }
 
@@ -134,6 +136,7 @@ inline void to_json(nlohmann::json& j, const ApiErrorCode& value) {
         case ApiErrorCode::kGatewayOperationPending: j = "gateway_operation_pending"; return;
         case ApiErrorCode::kReconciliationUnverified: j = "reconciliation_unverified"; return;
         case ApiErrorCode::kRetentionManagedByRunanywhere: j = "retention_managed_by_runanywhere"; return;
+        case ApiErrorCode::kCardRequired: j = "card_required"; return;
     }
 }
 
