@@ -256,6 +256,10 @@ impl UsageRequestsQuery {
 pub struct UsageRequestRow {
     pub request_id: String,
     pub response_request_id: Option<String>,
+    /// The key that made the call, when the account uses more than one. A
+    /// UUID from the contract; `None` on an account that never named its
+    /// keys.
+    pub api_key_id: Option<String>,
     pub model: String,
     /// The contract's provider text, or whatever newer provider a console
     /// names that this build does not know yet.

@@ -555,6 +555,93 @@ fn console_errors_do_not_echo_secrets() {
     assert_eq!(error, "console returned malformed JSON");
 }
 
+// A 401 means the session itself is bad, so "sign in again" is the right and
+// only actionable advice.
+#[test]
+fn a_401_still_says_the_session_is_no_longer_valid() {
+    let client = ConsoleClient::new(Some(Arc::new(
+        move |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 401,
+                body: "{}".to_string(),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let error = client
+        .revoke(
+            "https://console.runanywhere.ai",
+            "access-token",
+            "refresh-token",
+        )
+        .expect_err("a 401 must not look like a successful revoke");
+    assert!(
+        error.contains("no longer valid") && error.contains("wally account login"),
+        "{error}"
+    );
+}
+
+// A 403 is the console refusing this particular request (a plan without
+// access, a route this session may never call), not the session being bad --
+// signing in again would not change the answer, so the message must not send
+// anyone back to `wally account login`. The contract's ApiError names this
+// `forbidden` and carries a message worth showing.
+#[test]
+fn a_403_is_reported_as_a_refusal_not_a_stale_session() {
+    let client = ConsoleClient::new(Some(Arc::new(
+        move |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: json(serde_json::json!({
+                    "code": "forbidden",
+                    "message": "this session may not cancel another session's requests",
+                })),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let error = client
+        .revoke(
+            "https://console.runanywhere.ai",
+            "access-token",
+            "refresh-token",
+        )
+        .expect_err("a 403 must not look like a successful revoke");
+    assert!(
+        error.contains("refused the revoke")
+            && error.contains("this session may not cancel another session's requests"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("no longer valid") && !error.contains("wally account login"),
+        "a 403 must never send someone back to `wally account login`: {error}"
+    );
+
+    // No ApiError body (or one this binding cannot parse) still refuses,
+    // plainly, rather than falling back to the stale-session message.
+    let no_body = ConsoleClient::new(Some(Arc::new(
+        move |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: "not json".to_string(),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let error = no_body
+        .revoke(
+            "https://console.runanywhere.ai",
+            "access-token",
+            "refresh-token",
+        )
+        .expect_err("a 403 must not look like a successful revoke");
+    assert!(error.contains("refused the revoke"), "{error}");
+    assert!(
+        !error.contains("no longer valid") && !error.contains("wally account login"),
+        "{error}"
+    );
+}
+
 // #90: the start call used to clip any Retry-After to five seconds and retry
 // anyway, so a console asking for 30 got three requests inside 15 seconds and
 // the login failed before the delay it asked for had passed. A delay we will not
@@ -1250,6 +1337,37 @@ fn usage_requests_reads_a_provider_it_does_not_know() {
     );
     assert_eq!(status, IdentityResult::Failed);
     assert!(error.contains("did not match the contract"), "{error}");
+}
+
+// `api_key_id` is nullable in the contract (an account that never named its
+// keys), and the row mapping must carry either shape through rather than
+// dropping the field.
+#[test]
+fn usage_requests_carries_the_api_key_id() {
+    let mut named = export_record("vertex_ai");
+    named["api_key_id"] = serde_json::json!("3fa85f64-5717-4562-b3fc-2c963f66afa6");
+    let unnamed = export_record("vertex_ai");
+    assert!(unnamed.get("api_key_id").is_none());
+
+    let (status, page, error) = requests_console(
+        200,
+        serde_json::json!({
+            "as_of": "2026-09-25T08:34:18Z", "totals": {},
+            "requests": [named, unnamed],
+            "next_cursor": null,
+        }),
+    )
+    .fetch_usage_requests(
+        "https://console.example.test",
+        "a-token",
+        &requests_window(),
+    );
+    assert_eq!(status, IdentityResult::Ok, "{error}");
+    assert_eq!(
+        page.requests[0].api_key_id.as_deref(),
+        Some("3fa85f64-5717-4562-b3fc-2c963f66afa6")
+    );
+    assert_eq!(page.requests[1].api_key_id, None);
 }
 
 // `next_cursor` is required: `null` is the last page, and a page that leaves

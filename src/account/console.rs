@@ -579,11 +579,46 @@ fn real_transport(request: &HttpRequest) -> Result<HttpResponse, String> {
     })
 }
 
+/// How much of a console's refusal is shown. The contract allows 2048
+/// characters; a terminal line needs the sentence, not the essay.
+const REFUSAL_MAX_CHARS: usize = 240;
+
+/// The console's own `ApiError.message` from a refusal body, when the body
+/// has one, it is printable text, and it does not carry the caller's own
+/// access token back at them (a hostile or buggy console must not get the
+/// terminal to echo the session it was just handed). `access_token` empty
+/// (no session was in play yet, e.g. `/auth/cli/start`) skips that filter.
+fn console_refusal_message(response: &HttpResponse, access_token: &str) -> Option<String> {
+    parse_object(response)
+        .ok()
+        .and_then(|object| contract::ApiError::from_json(&object).ok())
+        .map(|error| error.message)
+        .filter(|message| display_text_is_safe(message, 2048))
+        .filter(|message| access_token.is_empty() || !message.contains(access_token))
+}
+
+/// `message` cut to one terminal line, attributed to `operation`.
+fn format_refusal(operation: &str, message: &str) -> String {
+    if message.len() > REFUSAL_MAX_CHARS {
+        format!(
+            "Wally Cloud refused the {operation}: {}...",
+            &message[..REFUSAL_MAX_CHARS]
+        )
+    } else {
+        format!("Wally Cloud refused the {operation}: {message}")
+    }
+}
+
 /// Every console failure in this file is phrased here, so this is the one
 /// place that decides what a person reads when the cloud says no. It is
 /// written for them, not for us: a status line and an internal endpoint tells
 /// somebody trying to start a coding agent nothing they can act on.
-fn http_error(operation: &str, origin: &str, response: &HttpResponse) -> String {
+fn http_error(
+    operation: &str,
+    origin: &str,
+    response: &HttpResponse,
+    access_token: &str,
+) -> String {
     let status = response.status;
     let mut message = if status == 429 {
         // Not a broken request - overload. Say how long the server itself
@@ -594,8 +629,19 @@ fn http_error(operation: &str, origin: &str, response: &HttpResponse) -> String 
         } else {
             "Wally Cloud is busy - try again in a moment".to_string()
         }
-    } else if status == 401 || status == 403 {
+    } else if status == 401 {
         "your cloud session is no longer valid - run `wally account login`".to_string()
+    } else if status == 403 {
+        // Unlike a 401, a 403 is the console refusing this request outright --
+        // a plan without access, a route this session may never call -- and
+        // the session itself is still good, so this must never send someone
+        // back to `wally account login` (the contract's ApiError names this
+        // `forbidden` and carries a message a person can act on, e.g. "model
+        // not entitled"; show it when the body has one).
+        match console_refusal_message(response, access_token) {
+            Some(message) => format_refusal(operation, &message),
+            None => format!("Wally Cloud refused the {operation}"),
+        }
     } else if status == 404 {
         "Wally Cloud has no such endpoint".to_string()
     } else if status >= 500 {
@@ -616,10 +662,6 @@ fn http_error(operation: &str, origin: &str, response: &HttpResponse) -> String 
     message
 }
 
-/// How much of a console's refusal is shown. The contract allows 2048
-/// characters; a terminal line needs the sentence, not the essay.
-const REFUSAL_MAX_CHARS: usize = 240;
-
 /// A 400 or 422 is the console refusing what was asked, and its `ApiError`
 /// message says what to change ("the window may span at most 31 days"). That
 /// sentence is shown, cut to a line, when it is printable text that does not
@@ -631,19 +673,9 @@ fn refusal_error(
     response: &HttpResponse,
     access_token: &str,
 ) -> String {
-    let message = parse_object(response)
-        .ok()
-        .and_then(|object| contract::ApiError::from_json(&object).ok())
-        .map(|error| error.message)
-        .filter(|message| display_text_is_safe(message, 2048))
-        .filter(|message| access_token.is_empty() || !message.contains(access_token));
-    match message {
-        Some(message) if message.len() > REFUSAL_MAX_CHARS => format!(
-            "Wally Cloud refused the {operation}: {}...",
-            &message[..REFUSAL_MAX_CHARS]
-        ),
-        Some(message) => format!("Wally Cloud refused the {operation}: {message}"),
-        None => http_error(operation, origin, response),
+    match console_refusal_message(response, access_token) {
+        Some(message) => format_refusal(operation, &message),
+        None => http_error(operation, origin, response, access_token),
     }
 }
 
@@ -859,7 +891,7 @@ impl ConsoleClient {
             if wait > LOGIN_MAX_WAIT_SECONDS {
                 // Retrying before this elapses would only be refused again.
                 // Say what the server asked for and let the person decide.
-                return Err(http_error("authorization", &origin, &response));
+                return Err(http_error("authorization", &origin, &response, ""));
             }
             if let Some(callback) = on_retry {
                 callback();
@@ -868,7 +900,7 @@ impl ConsoleClient {
             attempt += 1;
         }
         if response.status != 200 {
-            return Err(http_error("authorization", &origin, &response));
+            return Err(http_error("authorization", &origin, &response, ""));
         }
 
         let object = parse_object(&response)?;
@@ -922,7 +954,7 @@ impl ConsoleClient {
             }
         };
         if response.status != 200 {
-            outcome.error = http_error("poll", &origin, &response);
+            outcome.error = http_error("poll", &origin, &response, "");
             // A busy or briefly unavailable console has not denied anything,
             // and the person may still be approving in the browser. Treat it
             // as "still waiting" so the poll loop keeps going at its normal
@@ -1018,7 +1050,7 @@ impl ConsoleClient {
             .send(request)
             .map_err(|message| unavailable_err(message, true))?;
         if response.status != 200 {
-            let message = http_error("refresh", &origin, &response);
+            let message = http_error("refresh", &origin, &response, "");
             // Same distinction as WhoAmI: a busy console has not told us this
             // session is bad, only that it could not answer (InferenceInfra#444).
             let unavailable = response.status == 429 || response.status >= 500;
@@ -1080,7 +1112,7 @@ impl ConsoleClient {
             );
         }
         if response.status != 200 {
-            let message = http_error("identity request", &origin, &response);
+            let message = http_error("identity request", &origin, &response, access_token);
             // A 429 or a 5xx says "not right now", not "this session is bad".
             // Treating them as a bad session locked a signed-in person out of
             // their own harness while a load test was running (InferenceInfra#444).
@@ -1151,7 +1183,7 @@ impl ConsoleClient {
         };
         let response = self.send(request)?;
         if response.status != 200 && response.status != 204 {
-            return Err(http_error("revoke", &origin, &response));
+            return Err(http_error("revoke", &origin, &response, access_token));
         }
         Ok(())
     }
@@ -1205,7 +1237,7 @@ impl ConsoleClient {
             return (
                 IdentityResult::Failed,
                 usage,
-                http_error("usage request", &origin, &response),
+                http_error("usage request", &origin, &response, access_token),
             );
         }
         let object = match parse_object(&response) {
@@ -1341,7 +1373,7 @@ impl ConsoleClient {
             ));
         }
         if response.status != 200 {
-            return failed(http_error("usage export", &origin, &response));
+            return failed(http_error("usage export", &origin, &response, access_token));
         }
         let mut object = match parse_object(&response) {
             Ok(object) => object,
@@ -1390,6 +1422,9 @@ impl ConsoleClient {
             .map(|(index, record)| UsageRequestRow {
                 request_id: display_safe(&record.request_id, 128),
                 response_request_id: optional(&record.response_request_id, 128),
+                // A UUID string ("8-4-4-4-12", 36 characters); the contract's
+                // own bound for this field.
+                api_key_id: optional(&record.api_key_id, 36),
                 model: display_safe(&record.model, 128),
                 provider: match record.provider {
                     Some(provider) => Some(provider.as_str().to_string()),
@@ -1476,7 +1511,7 @@ impl ConsoleClient {
             return (
                 IdentityResult::Failed,
                 Vec::new(),
-                http_error("models request", &origin, &response),
+                http_error("models request", &origin, &response, access_token),
             );
         }
         let object = match parse_object(&response) {
@@ -1543,7 +1578,7 @@ impl ConsoleClient {
             return (
                 IdentityResult::Failed,
                 Vec::new(),
-                http_error("model catalog request", &origin, &response),
+                http_error("model catalog request", &origin, &response, access_token),
             );
         }
         let object = match parse_object(&response) {
@@ -1620,7 +1655,7 @@ impl ConsoleClient {
         }
         (
             CancelOutcome::Failed,
-            http_error("cancel request", &origin, &response),
+            http_error("cancel request", &origin, &response, access_token),
         )
     }
 }
