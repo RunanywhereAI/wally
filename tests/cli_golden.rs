@@ -20,10 +20,17 @@ struct Case {
     args: Vec<String>,
 }
 
+/// The product version moves with every release (versions.toml, mirrored in
+/// Cargo.toml), so `--version` and `version --json` name it as `<VERSION>`;
+/// scripts/test/golden-capture.py writes the same placeholder.
 fn normalize(text: &str, home: &Path) -> String {
     let real = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    let version = env!("CARGO_PKG_VERSION");
     text.replace(real.to_str().unwrap(), "$HOME")
         .replace(home.to_str().unwrap(), "$HOME")
+        .replace(&format!("wally {version} "), "wally <VERSION> ")
+        .replace(&format!("wally {version}\n"), "wally <VERSION>\n")
+        .replace(&format!("\"wally\":\"{version}\""), "\"wally\":\"<VERSION>\"")
 }
 
 fn run_case(root: &Path, case: &Case) -> Option<String> {

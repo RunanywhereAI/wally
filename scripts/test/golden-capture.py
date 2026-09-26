@@ -14,7 +14,8 @@ nothing here updates, uninstalls, serves, downloads or launches a tool.
 
 Output: <out>/cases.json (the case list) and <out>/expected/<name>.{stdout,
 stderr,code}. The temporary home path is replaced by the literal `$HOME` so the
-files are stable across runs; tests/cli_golden.rs applies the same rewrite.
+files are stable across runs, and the product version by `<VERSION>` so a
+release bump leaves them valid; tests/cli_golden.rs applies the same rewrites.
 """
 import argparse, json, os, re, shutil, subprocess, sys, tempfile
 
@@ -51,7 +52,12 @@ def run_case(binary, args, timeout=60):
                                stdin=subprocess.DEVNULL, timeout=timeout)
         except subprocess.TimeoutExpired:
             return None, '', ''
-        norm = lambda b: b.decode('utf-8', 'replace').replace(os.path.realpath(home), '$HOME').replace(home, '$HOME')
+        def norm(b):
+            text = b.decode('utf-8', 'replace').replace(os.path.realpath(home), '$HOME').replace(home, '$HOME')
+            # The product version moves with every release; tests/cli_golden.rs
+            # writes the same placeholder.
+            text = re.sub(r'\bwally \d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?(?=[ \n])', 'wally <VERSION>', text)
+            return re.sub(r'"wally":"\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?"', '"wally":"<VERSION>"', text)
         return p.returncode, norm(p.stdout), norm(p.stderr)
     finally:
         shutil.rmtree(home, ignore_errors=True)
