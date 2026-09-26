@@ -283,8 +283,8 @@ fn mlx_callback_bridge_all_slots() {
         fakes::install_fake_mlx_callbacks(),
         "install fake MLX callbacks"
     );
-    fakes::register_mlx_backend_or_fail().expect("register MLX backend");
-    let _backend_guard = fakes::MlxBackendGuard;
+    let owns_backend = fakes::register_mlx_backend_or_fail().expect("register MLX backend");
+    let _backend_guard = fakes::MlxBackendGuard::new(owns_backend);
 
     // SAFETY: "mlx" is a 'static NUL-terminated engine name; the FFI call has
     // no other preconditions.

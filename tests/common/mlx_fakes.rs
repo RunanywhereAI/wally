@@ -643,27 +643,46 @@ pub fn install_fake_mlx_callbacks() -> bool {
 
 /// Registers the MLX backend, tolerating "already registered" from an
 /// earlier test in this binary (test_wally_mlx_e2e.cpp's
-/// register_mlx_backend_or_fail).
-pub fn register_mlx_backend_or_fail() -> Result<(), String> {
+/// register_mlx_backend_or_fail). `Ok(true)` means this call performed the
+/// registration; `Ok(false)` means some other owner already holds it, so
+/// this caller must not be the one to unregister it later.
+pub fn register_mlx_backend_or_fail() -> Result<bool, String> {
     // SAFETY: FFI call with no arguments; always sound to call.
     let rc = unsafe { sys::rac_backend_mlx_register() };
-    if rc == sys::SUCCESS || rc == sys::RAC_ERROR_MODULE_ALREADY_REGISTERED {
-        Ok(())
+    if rc == sys::SUCCESS {
+        Ok(true)
+    } else if rc == sys::RAC_ERROR_MODULE_ALREADY_REGISTERED {
+        Ok(false)
     } else {
         Err(format!("rac_backend_mlx_register: {rc}"))
     }
 }
 
 /// Runs rac_backend_mlx_unregister() on drop, even if a test assertion
-/// panics mid-body. RAII replacement for the C++ file's repeated
+/// panics mid-body -- but only when `owns` says this guard is the one that
+/// actually registered the backend. A guard built from an "already
+/// registered" result must stay hands-off: the earlier owner still expects
+/// it registered, and unregistering it out from under them would fail their
+/// cleanup (or a still-running assertion) rather than this guard's own.
+/// RAII replacement for the C++ file's repeated
 /// `rac_backend_mlx_unregister(); return result;` cleanup branches ahead of
 /// every early return.
-pub struct MlxBackendGuard;
+pub struct MlxBackendGuard {
+    owns: bool,
+}
+
+impl MlxBackendGuard {
+    pub fn new(owns: bool) -> Self {
+        MlxBackendGuard { owns }
+    }
+}
 
 impl Drop for MlxBackendGuard {
     fn drop(&mut self) {
-        // SAFETY: FFI call with no arguments; always sound to call, even if
-        // the backend was never successfully registered.
+        if !self.owns {
+            return;
+        }
+        // SAFETY: FFI call with no arguments; always sound to call.
         unsafe {
             sys::rac_backend_mlx_unregister();
         }
@@ -755,4 +774,60 @@ pub unsafe extern "C" fn count_tts_chunk_callback(
             *total += audio_size;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Whether the "mlx" engine currently resolves for text generation --
+    /// this kit's actual own registration state, not a return code. Probing
+    /// showed `rac_backend_mlx_register()` itself answers SUCCESS every
+    /// time it is called in this process, even back-to-back with no
+    /// intervening unregister, so a return-code check can never tell a
+    /// non-owning guard's drop apart from an owning one here -- looking the
+    /// engine up is what actually distinguishes "still registered" from
+    /// "unregistered".
+    fn mlx_llm_engine_is_registered() -> bool {
+        // SAFETY: "mlx" is a 'static NUL-terminated engine name; the FFI call
+        // has no other preconditions.
+        let vt = unsafe {
+            sys::rac_plugin_find_for_engine(
+                sys::RAC_PRIMITIVE_GENERATE_TEXT as sys::rac_primitive_t,
+                c"mlx".as_ptr(),
+            )
+        };
+        !vt.is_null()
+    }
+
+    #[test]
+    fn a_non_owning_guard_does_not_unregister_the_backend() {
+        let _lock = mlx_lock();
+        assert!(install_fake_mlx_callbacks(), "install fake MLX callbacks");
+        // SAFETY: FFI call with no arguments; always sound to call.
+        let rc = unsafe { sys::rac_backend_mlx_register() };
+        assert_eq!(rc, sys::SUCCESS, "registering the backend for this test");
+        assert!(
+            mlx_llm_engine_is_registered(),
+            "sanity: the engine must resolve once registered"
+        );
+
+        // The bug this guards against: a guard built from `owns: false` (an
+        // already-registered result, in production) must not tear down a
+        // registration it did not perform.
+        drop(MlxBackendGuard::new(false));
+        assert!(
+            mlx_llm_engine_is_registered(),
+            "a non-owning guard's drop must leave the backend registered"
+        );
+
+        // Contrast case, same registration: a guard built from `owns: true`
+        // does unregister on drop -- proving the assertion above is
+        // actually exercising the gate, not a `Drop` that never fires.
+        drop(MlxBackendGuard::new(true));
+        assert!(
+            !mlx_llm_engine_is_registered(),
+            "an owning guard's drop must unregister the backend"
+        );
+    }
 }
