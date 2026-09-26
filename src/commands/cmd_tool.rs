@@ -183,6 +183,27 @@ fn load_model(options: &GlobalOptions, model_id: &str, framework: v1::InferenceF
     true
 }
 
+/// Builds the `--json` document for a `ToolCallingResult`. Split out of
+/// run_tool_call so the error_code/error_message inclusion can be unit
+/// tested without going through the real FFI call.
+fn tool_call_result_json(result: &v1::ToolCallingResult) -> String {
+    let mut json = JsonWriter::new();
+    json.begin_object()
+        .field_str("text", &result.text)
+        .field_bool("is_complete", result.is_complete)
+        .field_i64("iterations", result.iterations_used as i64)
+        .field_i64("tool_calls", result.tool_calls.len() as i64);
+    if result.error_code != 0 {
+        json.field_i64("error_code", result.error_code as i64)
+            .field_str(
+                "error_message",
+                result.error_message.as_deref().unwrap_or(""),
+            );
+    }
+    json.end_object();
+    json.str().to_string()
+}
+
 fn run_tool_call(options: &GlobalOptions, params: &ToolCallParams) -> i32 {
     // Parse before bootstrap: it's a pure string match with no dependency on
     // bootstrap/model state, so invalid input fails fast instead of triggering
@@ -300,14 +321,7 @@ fn run_tool_call(options: &GlobalOptions, params: &ToolCallParams) -> i32 {
     };
 
     if options.json {
-        let mut json = JsonWriter::new();
-        json.begin_object()
-            .field_str("text", &result.text)
-            .field_bool("is_complete", result.is_complete)
-            .field_i64("iterations", result.iterations_used as i64)
-            .field_i64("tool_calls", result.tool_calls.len() as i64)
-            .end_object();
-        result_line(json.str());
+        result_line(&tool_call_result_json(&result));
         return if result.is_complete { 0 } else { 1 };
     }
 
@@ -397,4 +411,36 @@ pub fn register_tool(app: &mut App) {
                 ),
             ])),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_call_result_json_includes_error_fields_on_failure() {
+        let result = v1::ToolCallingResult {
+            text: "partial".to_string(),
+            is_complete: false,
+            error_code: 5,
+            error_message: Some("boom".to_string()),
+            ..Default::default()
+        };
+        let json = tool_call_result_json(&result);
+        assert!(json.contains("\"error_code\":5"), "{json}");
+        assert!(json.contains("\"error_message\":\"boom\""), "{json}");
+    }
+
+    #[test]
+    fn tool_call_result_json_omits_error_fields_on_success() {
+        let result = v1::ToolCallingResult {
+            text: "done".to_string(),
+            is_complete: true,
+            error_code: 0,
+            ..Default::default()
+        };
+        let json = tool_call_result_json(&result);
+        assert!(!json.contains("error_code"), "{json}");
+        assert!(!json.contains("error_message"), "{json}");
+    }
 }
