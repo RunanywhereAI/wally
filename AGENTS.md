@@ -255,7 +255,7 @@ own `MIN_GLIBC` and library list; `check-versions.py` holds them to
 ## Build
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release \
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=/path/to/cpp-desktop-<os>-<arch>
 cmake --build build -j "$(sysctl -n hw.logicalcpu)"
 ctest --test-dir build --output-on-failure

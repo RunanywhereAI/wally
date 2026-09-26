@@ -23,6 +23,23 @@
 # Swift MLX host (scripts/build/build-mlx.sh), linked against this crate's
 # static library; the cargo binary is the `wally-cxx` intermediate.
 
+# A multi-config generator (Xcode, Visual Studio) leaves CMAKE_BUILD_TYPE empty
+# at configure time -- the config is only chosen at build time, per `--config`.
+# The cargo profile and wally_link_probe's LINK_PROBE_CONFIG below are both
+# picked once, here, from CMAKE_BUILD_TYPE, so a multi-config generator would
+# silently build cargo in release while `cmake --build --config Debug` links
+# against a probe configured for no config at all. Every CI/release job already
+# pins a single-config generator (Ninja); fail fast instead of shipping that
+# mismatch.
+get_property(_wally_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_wally_multi_config)
+    message(FATAL_ERROR
+        "wally's Cargo/CMake bridge requires a single-config generator "
+        "(e.g. -G Ninja); ${CMAKE_GENERATOR} is multi-config and "
+        "CMAKE_BUILD_TYPE has no effect on the Cargo profile or link-probe "
+        "configuration chosen here.")
+endif()
+
 find_program(WALLY_CARGO NAMES cargo HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin"
              "$ENV{USERPROFILE}/.cargo/bin")
 if(NOT WALLY_CARGO)
