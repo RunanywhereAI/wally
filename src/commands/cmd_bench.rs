@@ -689,7 +689,17 @@ struct BenchModel {
     modality: Modality,
 }
 
-fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
+/// `collect_models`'s outcome for the requested (or every) downloaded model:
+/// `models` is what's benchmarkable, `only_model_unsupported` is true when
+/// `only_model` was non-empty and did match a downloaded registry entry, but
+/// that entry got filtered out below (builtin framework or a category bench
+/// doesn't cover) rather than never having been downloaded at all.
+struct CollectedModels {
+    models: Vec<BenchModel>,
+    only_model_unsupported: bool,
+}
+
+fn collect_models(only_model: &str) -> Result<CollectedModels, String> {
     let mut buf = proto::ProtoBuffer::new();
     // SAFETY: rac_get_model_registry returns a process-lifetime handle; `buf`
     // is a freshly initialised, writable out-parameter for the call's duration.
@@ -705,6 +715,7 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
     let list: v1::ModelInfoList = proto::parse_proto_buffer(buf)?;
 
     let mut models = Vec::new();
+    let mut only_model_unsupported = false;
     for m in list.models {
         if !only_model.is_empty() && m.id != only_model {
             continue;
@@ -714,12 +725,15 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
         if framework == v1::InferenceFramework::FoundationModels
             || framework == v1::InferenceFramework::SystemTts
         {
-            continue; // builtin
+            only_model_unsupported = true; // downloaded, but builtin
+            continue;
         }
         let Ok(category) = v1::ModelCategory::try_from(m.category) else {
+            only_model_unsupported = true; // downloaded, but unrecognized category
             continue;
         };
         let Some(modality) = modality_of(category) else {
+            only_model_unsupported = true; // downloaded, but not a benchmarked modality
             continue;
         };
         models.push(BenchModel {
@@ -728,7 +742,10 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
             modality,
         });
     }
-    Ok(models)
+    Ok(CollectedModels {
+        models,
+        only_model_unsupported,
+    })
 }
 
 /// Message for a resolved model that isn't in the downloaded registry.
@@ -737,6 +754,33 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
 /// the resolved registry id (`only_model`) as unrecognized.
 fn model_not_downloaded_error(only_model: &str, model_ref_arg: &str) -> String {
     format!("model '{only_model}' is not downloaded; pull it first with `wally models pull {model_ref_arg}`")
+}
+
+/// Message for a model that *is* downloaded but that `collect_models`
+/// filtered out (a builtin framework, or a category bench doesn't cover —
+/// vad, embedding, image-generation). Distinct from
+/// `model_not_downloaded_error`: telling someone to `models pull` a model
+/// they already have just sends them in a circle.
+fn model_not_benchmarkable_error(only_model: &str) -> String {
+    format!("model '{only_model}' is downloaded but not benchmarkable (unsupported category or built-in engine)")
+}
+
+/// Picks the right diagnostic when `collect_models` came back empty: no
+/// models at all, a specific ref that was never downloaded, or (the case
+/// `collect_models.only_model_unsupported` exists for) a specific model
+/// that *is* downloaded but isn't one bench can run.
+fn no_models_to_bench_error(
+    only_model: &str,
+    model_ref_arg: &str,
+    only_model_unsupported: bool,
+) -> String {
+    if only_model.is_empty() {
+        "no downloaded models to benchmark (pull one with `wally models pull`)".to_string()
+    } else if only_model_unsupported {
+        model_not_benchmarkable_error(only_model)
+    } else {
+        model_not_downloaded_error(only_model, model_ref_arg)
+    }
 }
 
 /// Message for a VLM row skipped because no usable `--vlm-image` was given.
@@ -794,23 +838,25 @@ pub fn run_bench(
         }
     }
 
-    let models = match collect_models(&only_model) {
-        Ok(models) => models,
+    let collected = match collect_models(&only_model) {
+        Ok(collected) => collected,
         Err(error) => {
             out::error_line(&error);
             return 1;
         }
     };
+    let models = collected.models;
     if models.is_empty() {
         // collect_models only ever scans already-downloaded registry
         // entries, so a resolved-but-not-yet-pulled local/HF/URL ref lands
         // here too. wally does not auto-pull it for a benchmark run; name
-        // the fix instead of just reporting the ref as unrecognized.
-        let message = if only_model.is_empty() {
-            "no downloaded models to benchmark (pull one with `wally models pull`)".to_string()
-        } else {
-            model_not_downloaded_error(&only_model, model_ref_arg)
-        };
+        // the fix instead of just reporting the ref as unrecognized. But a
+        // model that *is* downloaded and simply isn't benchmarkable (builtin
+        // framework, or a category bench doesn't cover) gets its own
+        // diagnostic instead of a `models pull` hint that would just send
+        // the caller in a circle.
+        let message =
+            no_models_to_bench_error(&only_model, model_ref_arg, collected.only_model_unsupported);
         out::error_line(&message);
         return 1;
     }
@@ -1050,7 +1096,7 @@ mod vlm_preload_unload_targets_tests {
 
 #[cfg(test)]
 mod model_not_downloaded_error_tests {
-    use super::model_not_downloaded_error;
+    use super::{model_not_benchmarkable_error, model_not_downloaded_error};
 
     #[test]
     fn names_wally_models_pull_with_the_ref_the_caller_typed() {
@@ -1060,6 +1106,47 @@ mod model_not_downloaded_error_tests {
         let message = model_not_downloaded_error("resolved-id", "hf.co/org/repo");
         assert!(message.contains("wally models pull hf.co/org/repo"));
         assert!(message.contains("resolved-id"));
+    }
+
+    #[test]
+    fn benchmarkable_error_does_not_suggest_pulling_an_already_downloaded_model() {
+        // Regression for cubic #65: a present-but-filtered model (builtin
+        // framework, or a category bench doesn't cover) must not tell the
+        // caller to `models pull` something they already have.
+        let message = model_not_benchmarkable_error("resolved-id");
+        assert!(!message.contains("models pull"));
+        assert!(message.contains("resolved-id"));
+    }
+}
+
+#[cfg(test)]
+mod no_models_to_bench_error_tests {
+    use super::no_models_to_bench_error;
+
+    #[test]
+    fn empty_only_model_reports_nothing_downloaded_at_all() {
+        let message = no_models_to_bench_error("", "", false);
+        assert!(message.contains("no downloaded models to benchmark"));
+    }
+
+    #[test]
+    fn unsupported_downloaded_model_gets_the_benchmarkability_diagnostic_not_a_pull_hint() {
+        // The bug cubic flagged: before this, any empty `collect_models`
+        // result with a non-empty `only_model` always got the "pull it
+        // first" message, even when the model was downloaded and simply
+        // filtered out as not benchmarkable.
+        let message = no_models_to_bench_error("resolved-id", "hf.co/org/repo", true);
+        assert!(
+            !message.contains("models pull"),
+            "should not send an already-downloaded model back through `models pull`: {message}"
+        );
+        assert!(message.contains("resolved-id"));
+    }
+
+    #[test]
+    fn truly_missing_model_still_gets_the_pull_hint() {
+        let message = no_models_to_bench_error("resolved-id", "hf.co/org/repo", false);
+        assert!(message.contains("wally models pull hf.co/org/repo"));
     }
 }
 
