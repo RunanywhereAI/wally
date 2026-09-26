@@ -656,11 +656,23 @@ fn read_document(path: &str) -> Result<Option<Vec<u8>>, String> {
 fn write_document(path: &str, document: &str) -> Result<(), String> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileA, DeleteFileA, FlushFileBuffers, MoveFileExA, WriteFile, FILE_ATTRIBUTE_HIDDEN,
+        CreateFileW, DeleteFileW, FlushFileBuffers, MoveFileExW, WriteFile, FILE_ATTRIBUTE_HIDDEN,
         FILE_ATTRIBUTE_NOT_CONTENT_INDEXED, FILE_GENERIC_WRITE, MOVEFILE_REPLACE_EXISTING,
         MOVEFILE_WRITE_THROUGH,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+
+    // Null-terminated UTF-16, rejecting an embedded NUL the same way
+    // `CString::new` did -- the wide (*W) Win32 file APIs below need this
+    // instead of an ANSI CString, or a non-ASCII profile path (a Windows
+    // username with an accented or CJK character) cannot round-trip through
+    // the active ANSI code page and credentials silently fail to save.
+    fn to_wide(s: &str) -> Option<Vec<u16>> {
+        if s.contains('\0') {
+            return None;
+        }
+        Some(s.encode_utf16().chain(std::iter::once(0)).collect())
+    }
 
     let protected = dpapi::protect(document.as_bytes())?;
 
@@ -671,14 +683,14 @@ fn write_document(path: &str, document: &str) -> Result<(), String> {
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let temporary = format!("{path}.tmp.{pid}.{tick}");
-    let Ok(temporary_c) = std::ffi::CString::new(temporary.clone()) else {
+    let Some(temporary_w) = to_wide(&temporary) else {
         return Err("could not create the protected cloud session".to_string());
     };
-    // SAFETY: `temporary_c` is a valid NUL-terminated C string; CreateFileA
+    // SAFETY: `temporary_w` is a valid NUL-terminated UTF-16 string; CreateFileW
     // does not retain the pointer past the call.
     let handle = unsafe {
-        CreateFileA(
-            temporary_c.as_ptr() as *const u8,
+        CreateFileW(
+            temporary_w.as_ptr(),
             FILE_GENERIC_WRITE,
             0,
             std::ptr::null_mut(),
@@ -704,28 +716,28 @@ fn write_document(path: &str, document: &str) -> Result<(), String> {
             && written as usize == protected.len()
             && FlushFileBuffers(handle) != 0
     };
-    // SAFETY: `handle` was returned by CreateFileA above and is closed
+    // SAFETY: `handle` was returned by CreateFileW above and is closed
     // exactly once.
     unsafe { CloseHandle(handle) };
-    let Ok(path_c) = std::ffi::CString::new(path) else {
-        // SAFETY: `temporary_c` names the file just created; deleting it on
+    let Some(path_w) = to_wide(path) else {
+        // SAFETY: `temporary_w` names the file just created; deleting it on
         // this failure path is best-effort cleanup.
-        unsafe { DeleteFileA(temporary_c.as_ptr() as *const u8) };
+        unsafe { DeleteFileW(temporary_w.as_ptr()) };
         return Err("could not store the protected cloud session".to_string());
     };
-    // SAFETY: both C strings are valid and outlive the call.
+    // SAFETY: both wide strings are valid and outlive the call.
     let moved = wrote
         && unsafe {
-            MoveFileExA(
-                temporary_c.as_ptr() as *const u8,
-                path_c.as_ptr() as *const u8,
+            MoveFileExW(
+                temporary_w.as_ptr(),
+                path_w.as_ptr(),
                 MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
             ) != 0
         };
     if !moved {
-        // SAFETY: `temporary_c` names the file just created; deleting it on
+        // SAFETY: `temporary_w` names the file just created; deleting it on
         // this failure path is best-effort cleanup.
-        unsafe { DeleteFileA(temporary_c.as_ptr() as *const u8) };
+        unsafe { DeleteFileW(temporary_w.as_ptr()) };
         return Err("could not store the protected cloud session".to_string());
     }
     Ok(())

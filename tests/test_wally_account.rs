@@ -293,6 +293,40 @@ fn profile_directory_uses_one_separator_style() {
     );
 }
 
+// #133 comment 10: write_document used to build a UTF-8 CString and call the
+// ANSI (*A) Win32 file APIs, which round-trip a path only through the active
+// ANSI code page. A profile directory with a non-ASCII component (a Windows
+// username with an accented or CJK character) could not be represented there,
+// so the save silently failed. The wide (*W) APIs round-trip any path.
+#[cfg(windows)]
+#[test]
+fn credentials_round_trip_through_a_non_ascii_profile_path() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let profile_dir = home.join("café-\u{4F60}\u{597D}");
+    let mut env = EnvGuard::new();
+    env.set(
+        "WALLY_PROFILE_DIR",
+        profile_dir.to_string_lossy().as_ref(),
+    );
+    env.unset("WALLY_CONSOLE_URL");
+
+    let saved = Credentials {
+        console_url: "https://inference.runanywhere.ai".to_string(),
+        email: "dev@example.test".to_string(),
+        access_token: "a-token".to_string(),
+        refresh_token: "r-token".to_string(),
+        expires_at: 123,
+    };
+    account::save(&saved).expect("save into a non-ASCII profile directory");
+
+    let loaded = account::load().expect("load back what was just saved");
+    assert_eq!(
+        loaded, saved,
+        "a non-ASCII profile path must round-trip the session, not silently lose it"
+    );
+}
+
 // A group/world-readable credentials.json is tightened to 0600 silently
 // today; load() must say so rather than leave the reader unaware their
 // bearer token was ever exposed.
