@@ -2802,11 +2802,29 @@
   ]
  },
  {
+  "name": "local__models__default__some-id__--json",
+  "args": [
+   "models",
+   "default",
+   "some-id",
+   "--json"
+  ]
+ },
+ {
   "name": "local__models__default__--clear",
   "args": [
    "models",
    "default",
    "--clear"
+  ]
+ },
+ {
+  "name": "local__models__default__--clear__--json",
+  "args": [
+   "models",
+   "default",
+   "--clear",
+   "--json"
   ]
  },
  {

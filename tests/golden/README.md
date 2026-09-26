@@ -1,6 +1,6 @@
 # Golden CLI corpus
 
-Byte-exact stdout, stderr and exit code for 361 invocations of `wally`,
+Byte-exact stdout, stderr and exit code for 363 invocations of `wally`,
 captured from the C++ build of `origin/main` at `d1e9c0b` (the last C++
 release line) on macOS arm64 with kit 0.20.37. `tests/cli_golden.rs` replays
 every case against the Rust binary in the same isolated environment and fails
@@ -37,6 +37,13 @@ The same three cases were re-captured again when `wally bench`'s `model`
 help text was reworded to say a model must already be downloaded, naming
 `wally models pull <ref>`; their help text differs from the C++ capture in
 the same way, nothing else changed.
+
+`wally models default` gained `--json` support (the C++ original, and the
+Rust port until now, silently accepted the flag and printed the plain-text
+form): `local__models__default__--json` was re-captured from the Rust
+binary, and `local__models__default__some-id__--json` /
+`local__models__default__--clear__--json` are new cases covering the set and
+clear paths.
 
 Re-capture from a binary (only when behaviour changes on purpose):
 
