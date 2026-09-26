@@ -121,7 +121,7 @@ has the full catalog.
 
 | Coding tools | |
 |---|---|
-| `wally opencode` / `claude-code` / `claude-desktop` | open the tool on a model with `-m`, hosted with `--cloud` |
+| `wally opencode` / `claude-code` / `claude-desktop` | open the tool on a model, local or hosted, with `-m` |
 | `wally hermes` / `openclaw` / `deepseek` | same |
 
 | Account | |

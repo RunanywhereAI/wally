@@ -53,7 +53,7 @@ MLX registers with a one-line `-811` then Swift callbacks install it — that wa
 QHexRT on device also needs QAIRT matching the Hexagon skel (`QNN_SDK_ROOT` + `ADSP_LIBRARY_PATH=…\lib\hexagon-v81\unsigned` on v81). Overlay 2.47 DLLs vs a 2.41/2.48 device skel will fail to instantiate graphs. Pass the `*_HNPU` directory, not a GGUF. GGUF files cannot run on the ARM64 overlay binary (no llama.cpp).
 
 
-## macOS vs Windows
+## Platforms
 
 **macOS Apple Silicon** (public bottle): llama.cpp + MLX + Sherpa + ONNX. Pull `qwen3` (GGUF) or `mlx-qwen3` (GPU). Image generation is NeuRT (`sd15`) and only works after the private overlay is linked into product `wally`.
 

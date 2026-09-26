@@ -1,3 +1,5 @@
+# Re-record with: vhs docs/assets/demo-light.tape
+# Needs vhs and the model already pulled: wally models pull qwen3
 Output demo-light.gif
 Set Shell zsh
 Set FontSize 15
@@ -9,4 +11,4 @@ Set TypingSpeed 40ms
 Type "wally run qwen3 --hide-thinking 'Give me three short reasons to run a model locally, one line each.'"
 Sleep 600ms
 Enter
-Sleep 6s
+Sleep 10s
