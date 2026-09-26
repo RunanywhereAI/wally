@@ -294,11 +294,19 @@ fn login(requested_console: &str, open: bool) -> i32 {
                 }
                 let remaining = deadline - now;
                 if wait > remaining {
-                    // The console will still be refusing when this request
-                    // expires. Sleeping until then would look like a hang and
-                    // end in the same failure, so say the number and stop.
-                    out::error_line(&format!("Wally Cloud is busy - try again in {delay}s"));
-                    return 1;
+                    if outcome.retry_after > 0 {
+                        // The console will still be refusing when this
+                        // request expires. Sleeping until then would look
+                        // like a hang and end in the same failure, so say
+                        // the number and stop.
+                        out::error_line(&format!("Wally Cloud is busy - try again in {delay}s"));
+                        return 1;
+                    }
+                    // Only our own poll cadence overshoots the deadline: the
+                    // request is simply running out. Blaming a busy console
+                    // here sent people looking for an outage.
+                    std::thread::sleep(remaining);
+                    continue;
                 }
                 // A wait the console asked for is longer than the cadence the
                 // person was told about, so it is worth naming.

@@ -118,6 +118,7 @@ EXPORT_PAGES = {
 
 
 class ConsoleHandler(BaseHTTPRequestHandler):
+    login_expiring = False
     requests = []
     console_origin = ""
     # False stands in for every console deployed before windowed totals, which
@@ -180,10 +181,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     "request_code": "ABCD-EFGH",
                     "poll_secret": "poll-secret",
                     "verification_url": self.console_origin + "/device?code=ABCD-EFGH",
-                    "expires_in": 60,
-                    "interval": 1,
+                    # 30 s is the shortest expiry the CLI accepts; polling
+                    # every 29 s makes its second wait overshoot the deadline
+                    # with no Retry-After, as a real unapproved sign-in does.
+                    "expires_in": 30 if ConsoleHandler.login_expiring else 60,
+                    "interval": 29 if ConsoleHandler.login_expiring else 1,
                 },
             )
+        elif self.path == "/auth/cli/poll" and ConsoleHandler.login_expiring:
+            self.reply(200, {"status": "pending"})
         elif self.path == "/auth/cli/poll":
             self.reply(
                 200,
@@ -380,6 +386,25 @@ def main():
             if "ABCD-EFGH" not in login or ConsoleHandler.console_origin not in login:
                 raise AssertionError("login did not print the approval code and URL")
 
+            # A sign-in nobody approves runs out. The CLI used to report that
+            # as "Wally Cloud is busy" whenever its next poll fell past the
+            # deadline, though the console never asked it to wait.
+            with tempfile.TemporaryDirectory(prefix="wally-account-expiry-") as other:
+                ConsoleHandler.login_expiring = True
+                try:
+                    expired = subprocess.run(
+                        [binary, "account", "login", "--no-browser"],
+                        env=dict(environment, WALLY_PROFILE_DIR=other),
+                        capture_output=True, text=True, timeout=60, check=False,
+                    )
+                finally:
+                    ConsoleHandler.login_expiring = False
+                said = expired.stdout + expired.stderr
+                if expired.returncode == 0 or "timed out waiting for approval" not in said:
+                    raise AssertionError(f"an expired sign-in was not reported as such:\n{said}")
+                if "busy" in said:
+                    raise AssertionError(f"an expired sign-in blamed a busy console:\n{said}")
+
             files = list(pathlib.Path(profile).iterdir())
             # login also primes models.json (a non-secret cache); the credential
             # is the secret one whose mode must be 0600.
@@ -463,6 +488,10 @@ def main():
             ("POST", "/auth/cli/start", None),
             ("POST", "/auth/cli/poll", None),
             ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
+            # The sign-in left to expire: two polls 29 s apart, then it stops.
+            ("POST", "/auth/cli/start", None),
+            ("POST", "/auth/cli/poll", None),
+            ("POST", "/auth/cli/poll", None),
             ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),
             # One read per invocation. The windows are totalled server-side, so
             # `days` and `limit` are held at the minimum the route accepts —
