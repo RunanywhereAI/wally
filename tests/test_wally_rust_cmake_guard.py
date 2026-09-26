@@ -47,6 +47,7 @@ class WallyRustMultiConfigGuardTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("requires a single-config generator", result.stdout + result.stderr)
 
+    @unittest.skipUnless(shutil.which("ninja"), "ninja not installed")
     def test_single_config_generator_is_not_rejected_by_the_guard(self) -> None:
         # Ninja is single-config, so the guard must not fire; the fixture still
         # fails past it (it never includes the modules that define
@@ -55,6 +56,7 @@ class WallyRustMultiConfigGuardTests(unittest.TestCase):
         result = self.configure("Ninja")
         self.assertNotIn("requires a single-config generator", result.stdout + result.stderr)
 
+    @unittest.skipUnless(shutil.which("ninja"), "ninja not installed")
     def test_repo_root_with_backslashes_does_not_corrupt_the_fixture(self) -> None:
         # GitHub Actions on Windows checks out to a path like D:\a\wally\wally.
         # Interpolating that via str() leaves a literal "\a" inside the quoted
