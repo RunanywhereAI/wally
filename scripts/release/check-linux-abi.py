@@ -38,6 +38,7 @@ SHT_NOBITS = 8
 SHT_GNU_VERNEED = 0x6FFFFFFE
 DT_NULL = 0
 DT_NEEDED = 1
+PT_INTERP = 3
 
 # The symbol-version families whose ceiling is checked. Anything else a
 # library versions (OPENSSL_3.0.0, CURL_OPENSSL_4, a bundled library's own
@@ -83,7 +84,7 @@ def read_linux_abi_policy(path: pathlib.Path = VERSIONS) -> dict[str, object]:
             section[key] = re.findall(r'"([^"]+)"', value)
         else:
             section[key] = value.strip('"')
-    missing = [k for k in (*FAMILIES.values(), "system_libraries") if k not in section]
+    missing = [k for k in (*FAMILIES.values(), "system_libraries", "interpreters") if k not in section]
     if missing:
         raise AbiError(f"versions.toml [linux_abi] is missing {missing}")
     return section
@@ -94,8 +95,32 @@ def _cstring(blob: bytes, offset: int) -> str:
     return blob[offset:end].decode("ascii", "replace")
 
 
-def read_elf(data: bytes, name: str) -> tuple[set[str], set[str]]:
-    """(needed sonames, required symbol versions) of one 64-bit little-endian ELF.
+def read_interp(data: bytes, name: str) -> str | None:
+    """PT_INTERP's path, or None if this ELF has no program header table.
+
+    This is the loader the kernel execs before any DT_NEEDED library is even
+    tried, so a missing or nonstandard one fails earlier than the DT_NEEDED
+    checks below can ever see.
+    """
+    phoff = struct.unpack_from("<Q", data, 0x20)[0]
+    phentsize, phnum = struct.unpack_from("<HH", data, 0x36)
+    if phoff == 0 or phnum == 0:
+        return None
+    for index in range(phnum):
+        pos = phoff + index * phentsize
+        if pos + 16 > len(data):
+            raise AbiError(f"{name}: program header {index} runs past the end of the file")
+        p_type, _p_flags, p_offset = struct.unpack_from("<IIQ", data, pos)
+        if p_type == PT_INTERP:
+            if p_offset >= len(data):
+                raise AbiError(f"{name}: PT_INTERP offset runs past the end of the file")
+            return _cstring(data, p_offset)
+    return None
+
+
+def read_elf(data: bytes, name: str) -> tuple[set[str], set[str], str | None]:
+    """(needed sonames, required symbol versions, PT_INTERP path) of one
+    64-bit little-endian ELF.
 
     A file that cannot be walked is an error, never an empty answer: an empty
     answer would read as "needs nothing" and pass.
@@ -106,7 +131,7 @@ def read_elf(data: bytes, name: str) -> tuple[set[str], set[str]]:
         raise AbiError(f"{name}: malformed ELF ({exc})") from exc
 
 
-def _read_elf(data: bytes, name: str) -> tuple[set[str], set[str]]:
+def _read_elf(data: bytes, name: str) -> tuple[set[str], set[str], str | None]:
     if data[:4] != ELF_MAGIC:
         raise AbiError(f"{name}: not an ELF file")
     if data[4] != ELFCLASS64 or data[5] != ELFDATA2LSB:
@@ -154,7 +179,7 @@ def _read_elf(data: bytes, name: str) -> tuple[set[str], set[str]]:
                     versions.add(_cstring(strings, vna_name))
                     aux += vna_next
                 pos += vn_next
-    return needed, versions
+    return needed, versions, read_interp(data, name)
 
 
 def archive_files(archive: pathlib.Path) -> dict[str, bytes]:
@@ -177,6 +202,7 @@ def check_files(files: dict[str, bytes], policy: dict[str, object]) -> list[str]
     """Every problem in a bottle's files, one line each; empty when it passes."""
     ceilings = {family: str(policy[key]) for family, key in FAMILIES.items()}
     system = set(policy["system_libraries"])  # type: ignore[arg-type]
+    interpreters = set(policy["interpreters"])  # type: ignore[arg-type]
     elves = {name: data for name, data in sorted(files.items()) if data[:4] == ELF_MAGIC}
     if not elves:
         return ["no ELF files found; this is not a Linux bottle"]
@@ -184,7 +210,24 @@ def check_files(files: dict[str, bytes], policy: dict[str, object]) -> list[str]
 
     problems: list[str] = []
     for relative, data in elves.items():
-        needed, versions = read_elf(data, relative)
+        needed, versions, interp = read_elf(data, relative)
+        # PT_INTERP is only meaningful on the file the kernel execs directly
+        # (package-wally.sh always stages that at <platform>/bin/<name>);
+        # every shared library under lib/ is dynamically linked too but is
+        # never handed to a loader itself, so it correctly has none. Where an
+        # interpreter is present, though -- on bin/wally or otherwise -- it
+        # must resolve to a loader this bottle can actually rely on.
+        if interp is not None:
+            if interp not in interpreters:
+                problems.append(
+                    f"{relative}: PT_INTERP is {interp!r}, not one of the allowed "
+                    f"loaders {sorted(interpreters)}"
+                )
+        elif needed and pathlib.PurePosixPath(relative).parent.name == "bin":
+            problems.append(
+                f"{relative}: is a shipped executable but has no PT_INTERP; it would "
+                "fail to start before any DT_NEEDED library is even tried"
+            )
         for tag in sorted(versions):
             match = VERSION_TAG.match(tag)
             if match:

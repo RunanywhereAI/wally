@@ -64,3 +64,6 @@ system_libraries = [
     "libpthread.so.0", "librt.so.1", "libgcc_s.so.1", "libstdc++.so.6",
     "libssl.so.3", "libcrypto.so.3", "libcurl.so.4",
 ]
+# PT_INTERP of the shipped executable (bin/wally): the loader the kernel execs
+# before any DT_NEEDED library above is even tried. x86-64 glibc's own name.
+interpreters = ["/lib64/ld-linux-x86-64.so.2"]

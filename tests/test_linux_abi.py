@@ -29,11 +29,20 @@ POLICY = {
     "glibcxx_max": "3.4.30",
     "cxxabi_max": "1.3.13",
     "system_libraries": ["libc.so.6", "libstdc++.so.6", "libm.so.6"],
+    "interpreters": ["/lib64/ld-linux-x86-64.so.2"],
 }
 
 
-def elf(needed: list[str], versions: dict[str, list[str]]) -> bytes:
-    """A 64-bit little-endian ELF with DT_NEEDED entries and a verneed table.
+def elf(
+    needed: list[str],
+    versions: dict[str, list[str]],
+    interp: str | None = "/lib64/ld-linux-x86-64.so.2",
+) -> bytes:
+    """A 64-bit little-endian ELF with DT_NEEDED entries, a verneed table, and
+    (unless `interp` is None) a one-entry PT_INTERP program header -- the real
+    allowed loader by default, so every existing fixture stays a realistic
+    dynamically-linked executable; pass `interp=None` or a bogus path to
+    exercise the PT_INTERP checks themselves.
 
     `versions` maps a library file name to the version tags required from it.
     """
@@ -57,13 +66,32 @@ def elf(needed: list[str], versions: dict[str, list[str]]) -> bytes:
             next_aux = 16 if position < len(tags) - 1 else 0
             verneed += struct.pack("<IHHII", 0, 0, 0, intern(tag), next_aux)
 
+    interp_bytes = interp.encode("ascii") + b"\0" if interp is not None else b""
+
     header_size = 64
-    blobs = [bytes(strtab), dynamic, bytes(verneed)]
+    blobs = [bytes(strtab), dynamic, bytes(verneed), interp_bytes]
     offsets = []
     cursor = header_size
     for blob in blobs:
         offsets.append(cursor)
         cursor += len(blob)
+
+    # A single PT_INTERP entry, placed between the data blobs and the section
+    # table so the section table -- what the truncation tests below corrupt --
+    # stays the last thing in the file, same as before this had one.
+    if interp is not None:
+        phoff = cursor
+        phentsize = 56
+        phnum = 1
+        phdr = struct.pack(
+            "<IIQQQQQQ", ABI.PT_INTERP, 4, offsets[3], 0, 0, len(interp_bytes), len(interp_bytes), 1
+        )
+        cursor += len(phdr)
+    else:
+        phoff = 0
+        phentsize = 0
+        phnum = 0
+        phdr = b""
     shoff = cursor
 
     sections = [struct.pack("<IIQQQQIIQQ", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)]
@@ -77,10 +105,10 @@ def elf(needed: list[str], versions: dict[str, list[str]]) -> bytes:
 
     ident = b"\x7fELF" + bytes([2, 1, 1]) + bytes(9)
     header = ident + struct.pack(
-        "<HHIQQQIHHHHHH", 3, 62, 1, 0, 0, shoff, 0, 64, 0, 0, 64, len(sections), 0
+        "<HHIQQQIHHHHHH", 3, 62, 1, 0, phoff, shoff, 0, 64, phentsize, phnum, 64, len(sections), 0
     )
     assert len(header) == header_size
-    return header + b"".join(blobs) + b"".join(sections)
+    return header + b"".join(blobs) + phdr + b"".join(sections)
 
 
 class LinuxAbiTests(unittest.TestCase):
@@ -88,12 +116,13 @@ class LinuxAbiTests(unittest.TestCase):
         return files
 
     def test_reads_needed_libraries_and_symbol_versions(self) -> None:
-        needed, versions = ABI.read_elf(
+        needed, versions, interp = ABI.read_elf(
             elf(["libc.so.6", "libfoo.so.1"], {"libc.so.6": ["GLIBC_2.34", "GLIBC_2.2.5"]}),
             "wally",
         )
         self.assertEqual(needed, {"libc.so.6", "libfoo.so.1"})
         self.assertEqual(versions, {"GLIBC_2.34", "GLIBC_2.2.5"})
+        self.assertEqual(interp, "/lib64/ld-linux-x86-64.so.2")
 
     def test_a_bottle_within_the_floor_passes(self) -> None:
         root = self.tree(
@@ -189,6 +218,43 @@ class LinuxAbiTests(unittest.TestCase):
         )
         self.assertEqual(ABI.check_files(root, POLICY), [])
 
+    def test_the_shipped_executables_standard_interpreter_passes(self) -> None:
+        # elf()'s default interp is the real x86-64 loader, so this is just
+        # the same shape as every other passing test above, spelled out.
+        root = self.tree(
+            {"b/bin/wally": elf(["libc.so.6"], {}, interp="/lib64/ld-linux-x86-64.so.2")}
+        )
+        self.assertEqual(ABI.check_files(root, POLICY), [])
+
+    def test_a_nonstandard_interpreter_fails(self) -> None:
+        # A dynamic loader path off the allow-list would fail before any
+        # DT_NEEDED library above is even tried; check_linux_abi must catch
+        # it rather than only checking what loads after the loader.
+        root = self.tree(
+            {"b/bin/wally": elf(["libc.so.6"], {}, interp="/opt/custom/ld.so")}
+        )
+        problems = ABI.check_files(root, POLICY)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("/opt/custom/ld.so", problems[0])
+
+    def test_a_shipped_executable_missing_pt_interp_fails(self) -> None:
+        root = self.tree({"b/bin/wally": elf(["libc.so.6"], {}, interp=None)})
+        problems = ABI.check_files(root, POLICY)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("no PT_INTERP", problems[0])
+
+    def test_a_shared_library_without_pt_interp_is_normal(self) -> None:
+        # Every real .so this bottle ships is dynamically linked (has
+        # DT_NEEDED) but is never exec'd directly, so it correctly has no
+        # PT_INTERP; only the file under bin/ must have one.
+        root = self.tree(
+            {
+                "b/bin/wally": elf(["libc.so.6", "libgomp.so.1"], {}),
+                "b/lib/libgomp.so.1": elf(["libc.so.6"], {}, interp=None),
+            }
+        )
+        self.assertEqual(ABI.check_files(root, POLICY), [])
+
     def test_an_archive_with_no_elf_is_not_a_bottle(self) -> None:
         root = self.tree({"b/README.md": b"hello"})
         self.assertEqual(len(ABI.check_files(root, POLICY)), 1)
@@ -225,6 +291,7 @@ class LinuxAbiTests(unittest.TestCase):
         policy = ABI.read_linux_abi_policy()
         self.assertIn("libc.so.6", policy["system_libraries"])
         self.assertNotIn("libgomp.so.1", policy["system_libraries"])
+        self.assertIn("/lib64/ld-linux-x86-64.so.2", policy["interpreters"])
         for key in ("glibc_max", "glibcxx_max", "cxxabi_max"):
             ABI.version_key(str(policy[key]))
 
