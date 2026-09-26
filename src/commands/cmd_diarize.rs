@@ -4,7 +4,7 @@
 //!
 //! Audio loading mirrors cmd_stt (16-bit PCM WAV → mono 16 kHz float). The
 //! model lifecycle is the standard service handle sequence the C ABI exposes:
-//!   rac_diarization_create(model_path)  → route to the ONNX Sortformer provider
+//!   rac_diarization_create(model_id)  → route to the ONNX Sortformer provider
 //!     → rac_diarization_initialize(model_path)  → load the ONNX graph
 //!     → rac_diarization_diarize(samples, …, &result)  → typed segments
 //!     → rac_diarization_result_free / rac_diarization_cleanup / rac_diarization_destroy
@@ -146,6 +146,7 @@ fn run_diarize(
         Ok(m) => m,
         Err(code) => return code,
     };
+    let model_id = model.model_id;
     let model_path = model.primary_path;
 
     let audio_path = p.get_str("audio").unwrap_or_default();
@@ -167,11 +168,12 @@ fn run_diarize(
         return 1;
     }
 
+    let model_id_c = to_cstring(&model_id);
     let model_path_c = to_cstring(&model_path);
     let mut handle: sys::rac_handle_t = std::ptr::null_mut();
-    // SAFETY: model_path_c is kept alive for the call; out_handle is a valid
+    // SAFETY: model_id_c is kept alive for the call; out_handle is a valid
     // pointer to a local variable.
-    let rc = unsafe { sys::rac_diarization_create(model_path_c.as_ptr(), &mut handle) };
+    let rc = unsafe { sys::rac_diarization_create(model_id_c.as_ptr(), &mut handle) };
     if rc != sys::SUCCESS || handle.is_null() {
         out::error_line(&format!(
             "failed to create diarization service: {}",
