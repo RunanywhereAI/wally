@@ -48,6 +48,7 @@ jobs:
           dash -n install.sh
           shellcheck -s sh install.sh
           WALLY_INSTALL_SH=dash bash scripts/test/test-install-skill-dirs.sh
+          WALLY_INSTALL_SH=dash bash scripts/test/test-install-lock.sh
       - name: install.sh output is byte-identical under bash, dash and sh
         # Runs the real install.sh under all three with a stubbed curl/uname
         # and a fixture release -- no network -- across the happy path, an
