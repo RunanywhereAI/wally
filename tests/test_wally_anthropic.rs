@@ -368,23 +368,40 @@ fn concurrent_requests_use_separate_connections() {
     );
 }
 
-// The pool on its own, no translator in front of it.
+// The pool on its own, no translator in front of it. Needs a real listener
+// (unlike the other pool-bookkeeping tests below, which never call send()):
+// since the pool.rs fix for comment #55, `reused()` reports whether the
+// idle client's connection is actually still live, so a client that never
+// connected at all -- which is all `http://127.0.0.1:9` (nothing listening)
+// would ever produce -- would never register as reused either, and this
+// test would stop meaning anything.
 #[test]
 fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
     let _shim_guard = shim_lock::shim_lock();
+    let mut server = Server::new();
+    server.route("GET", "/ping", |_req, res, _peer| {
+        res.send_full(200, &[], b"pong").unwrap();
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
     let pool = UpstreamPool::new(UpstreamOptions {
-        origin: "http://127.0.0.1:9".to_string(),
+        origin: format!("http://127.0.0.1:{port}"),
         idle_limit: 2,
         ..Default::default()
     });
     {
-        let first = pool.acquire("k");
+        let mut first = pool.acquire("k");
         assert!(!first.reused(), "a fresh lease from an empty pool");
         assert_eq!(
             pool.idle(),
             0,
             "no idle client while the fresh lease is out"
         );
+        // Establishes the connection this lease's client keeps once it goes
+        // back to idle -- without this, `second` below would have nothing
+        // live to reuse.
+        let reply = first.client().send(&Request::get("/ping"), None, None);
+        assert_eq!(reply.unwrap().status, 200);
     }
     assert_eq!(pool.idle(), 1, "1 idle client after a clean lease ends");
     {
@@ -400,6 +417,7 @@ fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
         let _c = pool.acquire("k");
     }
     assert_eq!(pool.idle(), 2, "idle capped at 2");
+    handle.stop();
 }
 
 // A pool outlives its leases: dropping the last Arc while a lease is out
