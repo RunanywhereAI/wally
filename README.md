@@ -70,7 +70,10 @@ wally opencode --cloud -m glm-5.3-flash
 wally account usage         # remaining credit
 ```
 
-<img src="docs/assets/harness-dark.gif" alt="OpenCode on the hosted GLM model fixing a bug through wally" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/harness-dark.gif">
+  <img src="docs/assets/harness-light.gif" alt="OpenCode on the hosted GLM model fixing a bug through wally" width="100%">
+</picture>
 
 ## Commands you'll use
 
