@@ -17,7 +17,7 @@
 namespace wally::account::contract {
 
 // SHA-256 of contracts/wally-cli-v1.openapi.json this header was built from.
-inline constexpr char kContractSha256[] = "5e5431b0fb4ceaec7dbf803f2a70be58ba2c074a8f2da573fb4b1fed33a348ef";
+inline constexpr char kContractSha256[] = "4d33e9e91de8e2aa2e178ba70de26d8946d89b41c6c1870d615d4c81ee8c9c1f";
 
 enum class ApiErrorCode {
     kInvalidRequest,
@@ -398,197 +398,6 @@ inline void to_json(nlohmann::json& j, const Harness& value) {
         case Harness::kLangchain: j = "langchain"; return;
         case Harness::kLlamaindex: j = "llamaindex"; return;
         case Harness::kCurl: j = "curl"; return;
-    }
-}
-
-enum class OpenRouterFeature {
-    kTools,
-    kJsonMode,
-    kStructuredOutputs,
-    kLogprobs,
-    kWebSearch,
-    kReasoning,
-};
-
-inline void from_json(const nlohmann::json& j, OpenRouterFeature& value) {
-    const std::string raw = j.get<std::string>();
-    if (raw == "tools") { value = OpenRouterFeature::kTools; return; }
-    if (raw == "json_mode") { value = OpenRouterFeature::kJsonMode; return; }
-    if (raw == "structured_outputs") { value = OpenRouterFeature::kStructuredOutputs; return; }
-    if (raw == "logprobs") { value = OpenRouterFeature::kLogprobs; return; }
-    if (raw == "web_search") { value = OpenRouterFeature::kWebSearch; return; }
-    if (raw == "reasoning") { value = OpenRouterFeature::kReasoning; return; }
-    throw nlohmann::json::type_error::create(302, "unknown OpenRouterFeature: " + raw, &j);
-}
-
-inline void to_json(nlohmann::json& j, const OpenRouterFeature& value) {
-    switch (value) {
-        case OpenRouterFeature::kTools: j = "tools"; return;
-        case OpenRouterFeature::kJsonMode: j = "json_mode"; return;
-        case OpenRouterFeature::kStructuredOutputs: j = "structured_outputs"; return;
-        case OpenRouterFeature::kLogprobs: j = "logprobs"; return;
-        case OpenRouterFeature::kWebSearch: j = "web_search"; return;
-        case OpenRouterFeature::kReasoning: j = "reasoning"; return;
-    }
-}
-
-enum class OpenRouterInputModality {
-    kText,
-    kImage,
-    kFile,
-    kAudio,
-    kVideo,
-};
-
-inline void from_json(const nlohmann::json& j, OpenRouterInputModality& value) {
-    const std::string raw = j.get<std::string>();
-    if (raw == "text") { value = OpenRouterInputModality::kText; return; }
-    if (raw == "image") { value = OpenRouterInputModality::kImage; return; }
-    if (raw == "file") { value = OpenRouterInputModality::kFile; return; }
-    if (raw == "audio") { value = OpenRouterInputModality::kAudio; return; }
-    if (raw == "video") { value = OpenRouterInputModality::kVideo; return; }
-    throw nlohmann::json::type_error::create(302, "unknown OpenRouterInputModality: " + raw, &j);
-}
-
-inline void to_json(nlohmann::json& j, const OpenRouterInputModality& value) {
-    switch (value) {
-        case OpenRouterInputModality::kText: j = "text"; return;
-        case OpenRouterInputModality::kImage: j = "image"; return;
-        case OpenRouterInputModality::kFile: j = "file"; return;
-        case OpenRouterInputModality::kAudio: j = "audio"; return;
-        case OpenRouterInputModality::kVideo: j = "video"; return;
-    }
-}
-
-enum class OpenRouterOutputModality {
-    kText,
-    kImage,
-    kEmbeddings,
-    kAudio,
-    kVideo,
-    kRerank,
-    kSpeech,
-    kTranscription,
-};
-
-inline void from_json(const nlohmann::json& j, OpenRouterOutputModality& value) {
-    const std::string raw = j.get<std::string>();
-    if (raw == "text") { value = OpenRouterOutputModality::kText; return; }
-    if (raw == "image") { value = OpenRouterOutputModality::kImage; return; }
-    if (raw == "embeddings") { value = OpenRouterOutputModality::kEmbeddings; return; }
-    if (raw == "audio") { value = OpenRouterOutputModality::kAudio; return; }
-    if (raw == "video") { value = OpenRouterOutputModality::kVideo; return; }
-    if (raw == "rerank") { value = OpenRouterOutputModality::kRerank; return; }
-    if (raw == "speech") { value = OpenRouterOutputModality::kSpeech; return; }
-    if (raw == "transcription") { value = OpenRouterOutputModality::kTranscription; return; }
-    throw nlohmann::json::type_error::create(302, "unknown OpenRouterOutputModality: " + raw, &j);
-}
-
-inline void to_json(nlohmann::json& j, const OpenRouterOutputModality& value) {
-    switch (value) {
-        case OpenRouterOutputModality::kText: j = "text"; return;
-        case OpenRouterOutputModality::kImage: j = "image"; return;
-        case OpenRouterOutputModality::kEmbeddings: j = "embeddings"; return;
-        case OpenRouterOutputModality::kAudio: j = "audio"; return;
-        case OpenRouterOutputModality::kVideo: j = "video"; return;
-        case OpenRouterOutputModality::kRerank: j = "rerank"; return;
-        case OpenRouterOutputModality::kSpeech: j = "speech"; return;
-        case OpenRouterOutputModality::kTranscription: j = "transcription"; return;
-    }
-}
-
-enum class OpenRouterQuantization {
-    kInt4,
-    kInt8,
-    kFp4,
-    kMxfp4,
-    kNvfp4,
-    kFp6,
-    kFp8,
-    kMxfp8,
-    kFp16,
-    kBf16,
-    kFp32,
-};
-
-inline void from_json(const nlohmann::json& j, OpenRouterQuantization& value) {
-    const std::string raw = j.get<std::string>();
-    if (raw == "int4") { value = OpenRouterQuantization::kInt4; return; }
-    if (raw == "int8") { value = OpenRouterQuantization::kInt8; return; }
-    if (raw == "fp4") { value = OpenRouterQuantization::kFp4; return; }
-    if (raw == "mxfp4") { value = OpenRouterQuantization::kMxfp4; return; }
-    if (raw == "nvfp4") { value = OpenRouterQuantization::kNvfp4; return; }
-    if (raw == "fp6") { value = OpenRouterQuantization::kFp6; return; }
-    if (raw == "fp8") { value = OpenRouterQuantization::kFp8; return; }
-    if (raw == "mxfp8") { value = OpenRouterQuantization::kMxfp8; return; }
-    if (raw == "fp16") { value = OpenRouterQuantization::kFp16; return; }
-    if (raw == "bf16") { value = OpenRouterQuantization::kBf16; return; }
-    if (raw == "fp32") { value = OpenRouterQuantization::kFp32; return; }
-    throw nlohmann::json::type_error::create(302, "unknown OpenRouterQuantization: " + raw, &j);
-}
-
-inline void to_json(nlohmann::json& j, const OpenRouterQuantization& value) {
-    switch (value) {
-        case OpenRouterQuantization::kInt4: j = "int4"; return;
-        case OpenRouterQuantization::kInt8: j = "int8"; return;
-        case OpenRouterQuantization::kFp4: j = "fp4"; return;
-        case OpenRouterQuantization::kMxfp4: j = "mxfp4"; return;
-        case OpenRouterQuantization::kNvfp4: j = "nvfp4"; return;
-        case OpenRouterQuantization::kFp6: j = "fp6"; return;
-        case OpenRouterQuantization::kFp8: j = "fp8"; return;
-        case OpenRouterQuantization::kMxfp8: j = "mxfp8"; return;
-        case OpenRouterQuantization::kFp16: j = "fp16"; return;
-        case OpenRouterQuantization::kBf16: j = "bf16"; return;
-        case OpenRouterQuantization::kFp32: j = "fp32"; return;
-    }
-}
-
-enum class OpenRouterSamplingParameter {
-    kTemperature,
-    kTopP,
-    kTopK,
-    kMinP,
-    kTopA,
-    kFrequencyPenalty,
-    kPresencePenalty,
-    kRepetitionPenalty,
-    kStop,
-    kSeed,
-    kMaxTokens,
-    kLogitBias,
-};
-
-inline void from_json(const nlohmann::json& j, OpenRouterSamplingParameter& value) {
-    const std::string raw = j.get<std::string>();
-    if (raw == "temperature") { value = OpenRouterSamplingParameter::kTemperature; return; }
-    if (raw == "top_p") { value = OpenRouterSamplingParameter::kTopP; return; }
-    if (raw == "top_k") { value = OpenRouterSamplingParameter::kTopK; return; }
-    if (raw == "min_p") { value = OpenRouterSamplingParameter::kMinP; return; }
-    if (raw == "top_a") { value = OpenRouterSamplingParameter::kTopA; return; }
-    if (raw == "frequency_penalty") { value = OpenRouterSamplingParameter::kFrequencyPenalty; return; }
-    if (raw == "presence_penalty") { value = OpenRouterSamplingParameter::kPresencePenalty; return; }
-    if (raw == "repetition_penalty") { value = OpenRouterSamplingParameter::kRepetitionPenalty; return; }
-    if (raw == "stop") { value = OpenRouterSamplingParameter::kStop; return; }
-    if (raw == "seed") { value = OpenRouterSamplingParameter::kSeed; return; }
-    if (raw == "max_tokens") { value = OpenRouterSamplingParameter::kMaxTokens; return; }
-    if (raw == "logit_bias") { value = OpenRouterSamplingParameter::kLogitBias; return; }
-    throw nlohmann::json::type_error::create(302, "unknown OpenRouterSamplingParameter: " + raw, &j);
-}
-
-inline void to_json(nlohmann::json& j, const OpenRouterSamplingParameter& value) {
-    switch (value) {
-        case OpenRouterSamplingParameter::kTemperature: j = "temperature"; return;
-        case OpenRouterSamplingParameter::kTopP: j = "top_p"; return;
-        case OpenRouterSamplingParameter::kTopK: j = "top_k"; return;
-        case OpenRouterSamplingParameter::kMinP: j = "min_p"; return;
-        case OpenRouterSamplingParameter::kTopA: j = "top_a"; return;
-        case OpenRouterSamplingParameter::kFrequencyPenalty: j = "frequency_penalty"; return;
-        case OpenRouterSamplingParameter::kPresencePenalty: j = "presence_penalty"; return;
-        case OpenRouterSamplingParameter::kRepetitionPenalty: j = "repetition_penalty"; return;
-        case OpenRouterSamplingParameter::kStop: j = "stop"; return;
-        case OpenRouterSamplingParameter::kSeed: j = "seed"; return;
-        case OpenRouterSamplingParameter::kMaxTokens: j = "max_tokens"; return;
-        case OpenRouterSamplingParameter::kLogitBias: j = "logit_bias"; return;
     }
 }
 
@@ -1321,19 +1130,19 @@ struct PublicModel {
     std::optional<std::int64_t> created;
     std::optional<std::string> hugging_face_id;
     std::string id;
-    std::optional<std::vector<OpenRouterInputModality>> input_modalities;
+    std::optional<std::vector<std::string>> input_modalities;
     std::optional<std::int64_t> max_input_tokens;
     std::optional<std::int64_t> max_output_length;
     std::optional<std::int64_t> max_output_tokens;
     std::optional<std::string> mode;
     std::optional<std::string> name;
     std::string object;
-    std::optional<std::vector<OpenRouterOutputModality>> output_modalities;
+    std::optional<std::vector<std::string>> output_modalities;
     std::string owned_by;
     std::optional<OpenRouterPricing> pricing;
-    std::optional<OpenRouterQuantization> quantization;
-    std::optional<std::vector<OpenRouterFeature>> supported_features;
-    std::optional<std::vector<OpenRouterSamplingParameter>> supported_sampling_parameters;
+    std::optional<std::string> quantization;
+    std::optional<std::vector<std::string>> supported_features;
+    std::optional<std::vector<std::string>> supported_sampling_parameters;
 };
 
 inline void from_json(const nlohmann::json& j, PublicModel& value) {
@@ -1358,7 +1167,7 @@ inline void from_json(const nlohmann::json& j, PublicModel& value) {
         value.id = std::string{};
     }
     if (j.contains("input_modalities") && !j.at("input_modalities").is_null()) {
-        value.input_modalities = j.at("input_modalities").get<std::vector<OpenRouterInputModality>>();
+        value.input_modalities = j.at("input_modalities").get<std::vector<std::string>>();
     } else {
         value.input_modalities = std::nullopt;
     }
@@ -1393,7 +1202,7 @@ inline void from_json(const nlohmann::json& j, PublicModel& value) {
         value.object = std::string{};
     }
     if (j.contains("output_modalities") && !j.at("output_modalities").is_null()) {
-        value.output_modalities = j.at("output_modalities").get<std::vector<OpenRouterOutputModality>>();
+        value.output_modalities = j.at("output_modalities").get<std::vector<std::string>>();
     } else {
         value.output_modalities = std::nullopt;
     }
@@ -1408,17 +1217,17 @@ inline void from_json(const nlohmann::json& j, PublicModel& value) {
         value.pricing = std::nullopt;
     }
     if (j.contains("quantization") && !j.at("quantization").is_null()) {
-        value.quantization = j.at("quantization").get<OpenRouterQuantization>();
+        value.quantization = j.at("quantization").get<std::string>();
     } else {
         value.quantization = std::nullopt;
     }
     if (j.contains("supported_features") && !j.at("supported_features").is_null()) {
-        value.supported_features = j.at("supported_features").get<std::vector<OpenRouterFeature>>();
+        value.supported_features = j.at("supported_features").get<std::vector<std::string>>();
     } else {
         value.supported_features = std::nullopt;
     }
     if (j.contains("supported_sampling_parameters") && !j.at("supported_sampling_parameters").is_null()) {
-        value.supported_sampling_parameters = j.at("supported_sampling_parameters").get<std::vector<OpenRouterSamplingParameter>>();
+        value.supported_sampling_parameters = j.at("supported_sampling_parameters").get<std::vector<std::string>>();
     } else {
         value.supported_sampling_parameters = std::nullopt;
     }

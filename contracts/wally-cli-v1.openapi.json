@@ -995,40 +995,21 @@
         "type": "object"
       },
       "OpenRouterFeature": {
-        "description": "One request feature in OpenRouter's closed vocabulary.",
-        "enum": [
-          "tools",
-          "json_mode",
-          "structured_outputs",
-          "logprobs",
-          "web_search",
-          "reasoning"
-        ],
+        "description": "One request feature, as OpenRouter names it (for example tools, reasoning). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
         "type": "string"
       },
       "OpenRouterInputModality": {
-        "description": "One input modality in OpenRouter's closed vocabulary.",
-        "enum": [
-          "text",
-          "image",
-          "file",
-          "audio",
-          "video"
-        ],
+        "description": "One input modality, as OpenRouter names it (for example text, image). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
         "type": "string"
       },
       "OpenRouterOutputModality": {
-        "description": "One output modality in OpenRouter's closed vocabulary.",
-        "enum": [
-          "text",
-          "image",
-          "embeddings",
-          "audio",
-          "video",
-          "rerank",
-          "speech",
-          "transcription"
-        ],
+        "description": "One output modality, as OpenRouter names it (for example text). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
         "type": "string"
       },
       "OpenRouterPricing": {
@@ -1052,38 +1033,15 @@
         "type": "object"
       },
       "OpenRouterQuantization": {
-        "description": "A weight precision in OpenRouter's closed vocabulary.",
-        "enum": [
-          "int4",
-          "int8",
-          "fp4",
-          "mxfp4",
-          "nvfp4",
-          "fp6",
-          "fp8",
-          "mxfp8",
-          "fp16",
-          "bf16",
-          "fp32"
-        ],
+        "description": "A weight precision, as OpenRouter names it (for example fp8, nvfp4). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
         "type": "string"
       },
       "OpenRouterSamplingParameter": {
-        "description": "One sampling parameter in OpenRouter's closed vocabulary.",
-        "enum": [
-          "temperature",
-          "top_p",
-          "top_k",
-          "min_p",
-          "top_a",
-          "frequency_penalty",
-          "presence_penalty",
-          "repetition_penalty",
-          "stop",
-          "seed",
-          "max_tokens",
-          "logit_bias"
-        ],
+        "description": "One sampling parameter, as OpenRouter names it (for example temperature, top_p). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
         "type": "string"
       },
       "PollResponse": {
@@ -1257,7 +1215,7 @@
           },
           "quantization": {
             "$ref": "#/components/schemas/OpenRouterQuantization",
-            "description": "The served weights' precision, in OpenRouter's closed vocabulary. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it."
+            "description": "The served weights' precision, as OpenRouter names it. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it."
           },
           "supported_features": {
             "description": "The request features this model honours, each measured live; an absent name is unsupported. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
@@ -1808,7 +1766,7 @@
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
     "branch": "openrouter/readiness-consolidated",
-    "commit": "7c5f159354f4bda89d3dbd83fd7ce50a7400decd",
+    "commit": "e00c6013f3733faa4a9fe7081ef2bfd077a746cc",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
