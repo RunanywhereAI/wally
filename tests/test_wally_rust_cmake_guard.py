@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -34,7 +35,7 @@ class WallyRustMultiConfigGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source = pathlib.Path(tmp) / "src"
             source.mkdir()
-            (source / "CMakeLists.txt").write_text(_FIXTURE.format(repo_root=ROOT), encoding="utf-8")
+            (source / "CMakeLists.txt").write_text(_FIXTURE.format(repo_root=ROOT.as_posix()), encoding="utf-8")
             return subprocess.run(
                 ["cmake", "-S", str(source), "-B", str(pathlib.Path(tmp) / "build"), "-G", generator],
                 text=True, capture_output=True, check=False,
@@ -53,6 +54,17 @@ class WallyRustMultiConfigGuardTests(unittest.TestCase):
         # -- only the multi-config message must be absent.
         result = self.configure("Ninja")
         self.assertNotIn("requires a single-config generator", result.stdout + result.stderr)
+
+    def test_repo_root_with_backslashes_does_not_corrupt_the_fixture(self) -> None:
+        # GitHub Actions on Windows checks out to a path like D:\a\wally\wally.
+        # Interpolating that via str() leaves a literal "\a" inside the quoted
+        # CMAKE_MODULE_PATH argument, which cmake's language parser rejects as
+        # an invalid character escape -- reproducible on any host, since it is
+        # cmake's argument lexer, not the OS, that does the parsing.
+        fake_root = pathlib.PureWindowsPath(r"D:\a\wally\wally")
+        with mock.patch(f"{__name__}.ROOT", fake_root):
+            result = self.configure("Ninja")
+        self.assertNotIn("Invalid character escape", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":
