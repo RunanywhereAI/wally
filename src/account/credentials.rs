@@ -284,6 +284,179 @@ fn home_directory() -> String {
     getenv("USERPROFILE").unwrap_or_default()
 }
 
+// The old C++ build had two, inconsistent env-reading helpers: `getenv_utf8`
+// in cli_paths.cpp (reads the wide env value, converts with CP_UTF8) and this
+// file's own `Env`, which just called `std::getenv` -- ANSI-codepage decoding
+// on Windows, per the standard library. `Env` is the one `HomeDirectory` and
+// `ProfileDirectory` used, and the narrow path it produced then went straight
+// into `fs::path`/`CreateFileA`, both of which widen a narrow string back out
+// through that same ANSI code page. For a username entirely inside the active
+// code page this round-trips losslessly; for one that is not (Cyrillic on a
+// Western-European code page, for example), `WideCharToMultiByte` substitutes
+// a fallback character, so the C++ build wrote credentials.dat/preferences.json
+// under a "mojibake" directory that never matches the correct, Unicode
+// directory `getenv` (this file, via `var_os`) resolves. This module
+// reproduces that exact narrow round trip so a one-time migration can find a
+// file the old build may have left there and move it to the correct path --
+// never overwriting a file already at the correct path.
+#[cfg(windows)]
+mod legacy_ansi {
+    use windows_sys::Win32::Globalization::{MultiByteToWideChar, WideCharToMultiByte, CP_ACP};
+
+    /// `value`, run through `WideCharToMultiByte(CP_ACP, ...)` and back
+    /// through `MultiByteToWideChar(CP_ACP, ...)` -- the same code path
+    /// `std::getenv` plus a narrow `fs::path`/`CreateFileA` put a Unicode
+    /// value through on Windows. Returns the round-tripped string and whether
+    /// the first, narrowing half reported information loss
+    /// (`lpUsedDefaultChar`): a character with no representation in the
+    /// active ANSI code page was replaced by a fallback glyph. A "best fit"
+    /// substitution to a different-but-representable character does not
+    /// always set that flag -- the same limitation Win32 documents for it --
+    /// so this is a lower bound on loss, not an exact count.
+    pub(super) fn round_trip(value: &str) -> (String, bool) {
+        if value.is_empty() {
+            return (String::new(), false);
+        }
+        let wide: Vec<u16> = value.encode_utf16().collect();
+
+        // SAFETY: `wide` and its length are consistent; passing null
+        // buffer/zero length first is the documented way to ask
+        // WideCharToMultiByte for the required output size, and the second
+        // call's buffer is sized from exactly that return value.
+        let narrow_len = unsafe {
+            WideCharToMultiByte(
+                CP_ACP,
+                0,
+                wide.as_ptr(),
+                wide.len() as i32,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+        };
+        if narrow_len <= 0 {
+            return (value.to_string(), false);
+        }
+        let mut narrow = vec![0u8; narrow_len as usize];
+        let mut used_default_char: i32 = 0;
+        // SAFETY: `narrow` is sized exactly `narrow_len`, matching `cbmultibyte`.
+        let written = unsafe {
+            WideCharToMultiByte(
+                CP_ACP,
+                0,
+                wide.as_ptr(),
+                wide.len() as i32,
+                narrow.as_mut_ptr(),
+                narrow_len,
+                std::ptr::null(),
+                &mut used_default_char,
+            )
+        };
+        if written <= 0 {
+            return (value.to_string(), false);
+        }
+        narrow.truncate(written as usize);
+
+        // SAFETY: same null-buffer-first sizing call as above, over `narrow`.
+        let wide_len = unsafe {
+            MultiByteToWideChar(
+                CP_ACP,
+                0,
+                narrow.as_ptr(),
+                narrow.len() as i32,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if wide_len <= 0 {
+            return (value.to_string(), used_default_char != 0);
+        }
+        let mut reconstructed = vec![0u16; wide_len as usize];
+        // SAFETY: `reconstructed` is sized exactly `wide_len`.
+        let reconstructed_len = unsafe {
+            MultiByteToWideChar(
+                CP_ACP,
+                0,
+                narrow.as_ptr(),
+                narrow.len() as i32,
+                reconstructed.as_mut_ptr(),
+                wide_len,
+            )
+        };
+        reconstructed.truncate(reconstructed_len.max(0) as usize);
+        (
+            String::from_utf16_lossy(&reconstructed),
+            used_default_char != 0,
+        )
+    }
+
+    /// `home_directory`'s lookup (LOCALAPPDATA, else USERPROFILE), but run
+    /// through the narrow round trip -- the directory the old C++ build
+    /// would have resolved for the same environment. `None` when neither
+    /// variable is set, or when the round trip lost nothing (nothing for a
+    /// migration to find that `home_directory` would not already resolve).
+    pub(super) fn home_directory() -> Option<String> {
+        let value = super::getenv("LOCALAPPDATA").or_else(|| super::getenv("USERPROFILE"))?;
+        let (legacy, lossy) = round_trip(&value);
+        lossy.then_some(legacy)
+    }
+}
+
+/// The profile directory the old C++ build would have resolved on Windows,
+/// only when that differs from the correct one -- i.e. only when there is
+/// somewhere new for a migration to look.
+#[cfg(windows)]
+fn legacy_ansi_profile_directory(correct_directory: &str) -> Option<String> {
+    let home = normalize_dir(&legacy_ansi::home_directory()?);
+    if home.is_empty() {
+        return None;
+    }
+    let legacy_directory = format!("{home}/RunAnywhere/Wally");
+    (legacy_directory != correct_directory).then_some(legacy_directory)
+}
+
+/// Moves credentials.dat/preferences.json from the legacy ANSI-mojibake
+/// directory to `correct_directory`, once. Best-effort throughout: no file at
+/// the legacy path, no permission, or a file already at the correct path (never
+/// overwritten) are all silently skipped -- this is opportunistic recovery for
+/// an edge case, never something that can fail a normal launch. Runs at most
+/// once per process.
+#[cfg(windows)]
+fn migrate_legacy_ansi_profile(correct_directory: &str) {
+    static MIGRATED: std::sync::Once = std::sync::Once::new();
+    MIGRATED.call_once(|| {
+        if let Some(legacy_directory) = legacy_ansi_profile_directory(correct_directory) {
+            move_profile_files(&legacy_directory, correct_directory);
+        }
+    });
+}
+
+/// Moves credentials.dat and preferences.json from `legacy_directory` to
+/// `correct_directory`, one file at a time, skipping any file for which
+/// `correct_directory` already has one -- a migration never overwrites a
+/// file already at the right place. Best-effort: no file at the legacy path,
+/// no permission, or a `correct_directory` that cannot be created are all
+/// silently skipped. Split out from `migrate_legacy_ansi_profile` so this
+/// part -- the only part that touches real files -- is testable without the
+/// real Windows ANSI code page.
+#[cfg(windows)]
+fn move_profile_files(legacy_directory: &str, correct_directory: &str) {
+    // preferences.json's own name lives in config/preferences.rs
+    // (crate::config::preferences::FILE_NAME); duplicated here as a literal
+    // the same way this file already keeps its own FILE_NAME rather than
+    // importing one from elsewhere.
+    for file_name in [FILE_NAME, "preferences.json"] {
+        let legacy_path = format!("{legacy_directory}/{file_name}");
+        let correct_path = format!("{correct_directory}/{file_name}");
+        if std::path::Path::new(&correct_path).exists() {
+            continue;
+        }
+        let _ = std::fs::create_dir_all(correct_directory);
+        let _ = std::fs::rename(&legacy_path, &correct_path);
+    }
+}
+
 #[cfg(not(windows))]
 fn home_directory() -> String {
     if let Some(home) = getenv("HOME") {
@@ -812,7 +985,9 @@ pub fn profile_directory() -> String {
         if home.is_empty() {
             String::new()
         } else {
-            format!("{home}/RunAnywhere/Wally")
+            let directory = format!("{home}/RunAnywhere/Wally");
+            migrate_legacy_ansi_profile(&directory);
+            directory
         }
     }
     #[cfg(not(windows))]
@@ -975,5 +1150,117 @@ mod tests {
             temp_file_pattern("/home/user/.config/wally/credentials.json"),
             "/home/user/.config/wally/credentials.json.tmp.XXXXXX"
         );
+    }
+}
+
+// Only meaningful on Windows -- the ANSI code page this whole module exists
+// to route around only ever affects `std::getenv`/narrow Win32 file APIs on
+// that platform -- so these only run on Windows CI. `cargo clippy --target
+// x86_64-pc-windows-msvc --all-targets` type-checks them everywhere else, the
+// same way tests/test_wally_account.rs's own `#[cfg(windows)]` tests do.
+#[cfg(all(test, windows))]
+mod windows_ansi_migration_tests {
+    use super::*;
+
+    #[test]
+    fn round_trip_of_an_empty_value_is_empty_and_not_lossy() {
+        assert_eq!(legacy_ansi::round_trip(""), (String::new(), false));
+    }
+
+    #[test]
+    fn round_trip_is_a_no_op_for_pure_ascii() {
+        let (result, lossy) = legacy_ansi::round_trip("C:/Users/alice/AppData/Local");
+        assert_eq!(result, "C:/Users/alice/AppData/Local");
+        assert!(
+            !lossy,
+            "pure ASCII is representable in every ANSI code page"
+        );
+    }
+
+    // Codepage-independent: whatever a first pass produces (lossy or not),
+    // that result is entirely made of characters the active code page can
+    // already represent, so a second pass must reproduce it exactly. This is
+    // what lets `legacy_ansi_profile_directory` compare its result to the
+    // correct directory and trust a mismatch means real, not repeated, loss.
+    #[test]
+    fn round_trip_stabilizes_after_one_pass() {
+        let (once, _) = legacy_ansi::round_trip("Ivan-\u{418}\u{432}\u{430}\u{43D}-profile");
+        let (twice, lossy_again) = legacy_ansi::round_trip(&once);
+        assert_eq!(
+            twice, once,
+            "a value already inside the ANSI code page must round-trip unchanged"
+        );
+        assert!(
+            !lossy_again,
+            "the fallback character itself is always representable in its own code page"
+        );
+    }
+
+    #[test]
+    fn move_profile_files_moves_both_known_files_to_the_correct_directory() {
+        let legacy = tempfile::tempdir().expect("legacy tempdir");
+        let correct = tempfile::tempdir().expect("correct tempdir");
+        std::fs::write(legacy.path().join(FILE_NAME), b"legacy credentials")
+            .expect("write legacy credentials");
+        std::fs::write(legacy.path().join("preferences.json"), b"legacy prefs")
+            .expect("write legacy prefs");
+
+        move_profile_files(
+            &legacy.path().to_string_lossy(),
+            &correct.path().to_string_lossy(),
+        );
+
+        assert!(!legacy.path().join(FILE_NAME).exists());
+        assert!(!legacy.path().join("preferences.json").exists());
+        assert_eq!(
+            std::fs::read(correct.path().join(FILE_NAME)).unwrap(),
+            b"legacy credentials"
+        );
+        assert_eq!(
+            std::fs::read(correct.path().join("preferences.json")).unwrap(),
+            b"legacy prefs"
+        );
+    }
+
+    #[test]
+    fn move_profile_files_never_overwrites_a_file_already_at_the_correct_path() {
+        let legacy = tempfile::tempdir().expect("legacy tempdir");
+        let correct = tempfile::tempdir().expect("correct tempdir");
+        std::fs::write(legacy.path().join(FILE_NAME), b"legacy credentials")
+            .expect("write legacy credentials");
+        std::fs::write(
+            correct.path().join(FILE_NAME),
+            b"already current credentials",
+        )
+        .expect("write correct credentials");
+
+        move_profile_files(
+            &legacy.path().to_string_lossy(),
+            &correct.path().to_string_lossy(),
+        );
+
+        assert_eq!(
+            std::fs::read(correct.path().join(FILE_NAME)).unwrap(),
+            b"already current credentials",
+            "an existing file at the correct path must never be overwritten"
+        );
+        assert!(
+            legacy.path().join(FILE_NAME).exists(),
+            "when the destination already has a file, the legacy source is left alone"
+        );
+    }
+
+    #[test]
+    fn move_profile_files_is_a_no_op_when_nothing_is_at_the_legacy_path() {
+        let legacy = tempfile::tempdir().expect("legacy tempdir");
+        let correct = tempfile::tempdir().expect("correct tempdir");
+
+        move_profile_files(
+            &legacy.path().to_string_lossy(),
+            &correct.path().to_string_lossy(),
+        );
+
+        assert!(!correct.path().join(FILE_NAME).exists());
+        assert!(!correct.path().join("preferences.json").exists());
     }
 }
