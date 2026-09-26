@@ -517,7 +517,7 @@ mod tests {
         }
 
         let accepted = UsageRequestsQuery {
-            model: Some("org/glm-5.3:fp8_v1".to_string()),
+            model: Some("org/qwen3-4b-instruct:fp8_v1".to_string()),
             status_code: Some(500),
             response_request_id: Some("r".repeat(128)),
             limit: 200,
