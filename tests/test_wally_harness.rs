@@ -575,14 +575,14 @@ fn hermes_context_hint_surfaces_the_real_window() {
     );
 }
 
-// dsh reads our provider out of a settings document it is pointed at, so the
-// document is the contract. A missing apiKeyEnv fails every turn with "No API
+// dsh reads our provider from the `llm-pi-ai` row config, so that config is
+// the contract. A missing apiKeyEnv fails every turn with "No API
 // key for provider: runanywhere" (dsh 0.1.5), on a loopback route as much as
 // an upstream one, so the reference is always present and the launcher puts a
 // placeholder in the variable for a local server.
 #[test]
 fn deepseek_settings_carry_the_route() {
-    let upstream: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    let upstream: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         "https://inference.runanywhere.ai/api-dev/v1",
         "RUNANYWHERE_API_KEY",
         &[CatalogModel {
@@ -592,8 +592,8 @@ fn deepseek_settings_carry_the_route() {
             ..Default::default()
         }],
     ))
-    .expect("parse settings");
-    let provider = &upstream["llm-pi-ai"]["providers"]["runanywhere"];
+    .expect("parse llm config");
+    let provider = &upstream["providers"]["runanywhere"];
     assert_eq!(provider["api"], json!("openai-completions"));
     assert_eq!(
         provider["baseURL"],
@@ -609,10 +609,10 @@ fn deepseek_settings_carry_the_route() {
     assert_eq!(
         provider["models"][0]["maxTokens"],
         json!(32768),
-        "the catalog's real limits must reach the settings document"
+        "the catalog's real limits must reach the llm config"
     );
 
-    let local: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    let local: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         "http://127.0.0.1:52431/v1",
         "RUNANYWHERE_API_KEY",
         &[CatalogModel {
@@ -621,15 +621,15 @@ fn deepseek_settings_carry_the_route() {
             ..Default::default()
         }],
     ))
-    .expect("parse settings");
+    .expect("parse llm config");
     assert_eq!(
-        local["llm-pi-ai"]["providers"]["runanywhere"]["apiKeyEnv"],
+        local["providers"]["runanywhere"]["apiKeyEnv"],
         json!("RUNANYWHERE_API_KEY"),
         "a local route must still name the key reference, or dsh refuses the turn"
     );
 
     // The whole catalog reaches dsh's settings, not just the launched model.
-    let many: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    let many: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         "https://inference.runanywhere.ai/api-dev/v1",
         "RUNANYWHERE_API_KEY",
         &[
@@ -647,27 +647,26 @@ fn deepseek_settings_carry_the_route() {
             },
         ],
     ))
-    .expect("parse settings");
+    .expect("parse llm config");
     assert_eq!(
-        many["llm-pi-ai"]["providers"]["runanywhere"]["models"]
+        many["providers"]["runanywhere"]["models"]
             .as_array()
             .expect("models array")
             .len(),
         3,
-        "every catalog model must reach the dsh settings document"
+        "every catalog model must reach the dsh llm config"
     );
 }
 
-// The overlay is the only thing that reaches dsh: it repoints the settings
-// row at our document and names our provider for a fresh agent. Getting
-// either row id wrong is reported on stderr as an unmatched target and
-// otherwise ignored.
+// The overlay is the only thing that reaches dsh: it puts our provider on
+// the llm-pi-ai row and names it for a fresh agent. Getting either row id
+// wrong is reported on stderr as an unmatched target and otherwise ignored.
 #[test]
 fn deepseek_patch_targets_both_rows() {
-    let patch = harness::build_deep_seek_patch("/tmp/x.json", "glm-5.3-flash");
+    let patch = harness::build_deep_seek_patch(r#"{"providers":{}}"#, "glm-5.3-flash");
     assert!(
-        patch.contains("- id: settings\n") && patch.contains("path: '/tmp/x.json'"),
-        "the settings row must be repointed at our document: {patch}"
+        patch.contains("- id: llm-pi-ai\n  config: {\"providers\":{}}\n"),
+        "our provider must go on the llm-pi-ai row: {patch}"
     );
     assert!(
         patch.contains("- id: agent-default-model\n")
@@ -845,12 +844,12 @@ fn local_endpoint_limits_reach_every_harness() {
         &catalog,
     ))
     .expect("build_open_claw_config must emit valid JSON");
-    let deepseek: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    let deepseek: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         &endpoint.base_url,
         "TEST_KEY",
         &catalog,
     ))
-    .expect("build_deep_seek_settings must emit valid JSON");
+    .expect("build_deep_seek_llm_config must emit valid JSON");
 
     assert_eq!(catalog.len(), 1, "an alias still resolves to one entry");
     assert_eq!(catalog[0].context_window, 32768);
@@ -864,7 +863,7 @@ fn local_endpoint_limits_reach_every_harness() {
         4096
     );
     assert_eq!(
-        deepseek["llm-pi-ai"]["providers"]["runanywhere"]["models"][0]["maxTokens"],
+        deepseek["providers"]["runanywhere"]["models"][0]["maxTokens"],
         4096
     );
 

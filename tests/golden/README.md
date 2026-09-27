@@ -1,6 +1,6 @@
 # Golden CLI corpus
 
-Byte-exact stdout, stderr and exit code for 363 invocations of `wally`,
+Byte-exact stdout, stderr and exit code for 365 invocations of `wally`,
 captured from the C++ build of `origin/main` at `d1e9c0b` (the last C++
 release line) on macOS arm64 with kit 0.20.37. `tests/cli_golden.rs` replays
 every case against the Rust binary in the same isolated environment and fails
@@ -45,6 +45,13 @@ form): `local__models__default__--json` was re-captured from the Rust
 binary, and `local__models__default__some-id__--json` /
 `local__models__default__--clear__--json` are new cases covering the set and
 clear paths.
+
+`wally prime-agent` added a line to every command list, so the 31 cases that
+print one were re-captured from the Rust binary: `help__ROOT`, `help__help`,
+the four `alt_help__*`, `version__bare`, every `unknown__*` case, and
+`parse__--bogus`, `parse__-U__--json`, `parse__-u__-v`, `parse__-z`. That line
+is the only difference in each. `help__prime-agent` and
+`help__help__prime-agent` are new cases, mirroring OpenClaw's.
 
 Re-capture from a binary (only when behaviour changes on purpose):
 

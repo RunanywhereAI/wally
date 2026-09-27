@@ -142,27 +142,24 @@ fn run() -> Result<i32, String> {
             index += 1;
         }
         let text = fs::read_to_string(&patch).map_err(|_| "DeepSeek patch missing".to_string())?;
-        let marker = "    path: '";
+        let marker = "- id: llm-pi-ai\n  config: ";
         let begin = text
             .find(marker)
-            .ok_or_else(|| "DeepSeek settings path missing".to_string())?;
-        let begin_content = begin + marker.len();
-        let end = text[begin_content..]
-            .find("'\n")
-            .map(|offset| begin_content + offset)
-            .ok_or_else(|| "DeepSeek settings path missing".to_string())?;
-        let settings_path = text[begin_content..end].to_string();
-        let settings = read_json(&settings_path)?;
-        let provider = field(
-            field(field(&settings, "llm-pi-ai")?, "providers")?,
-            "runanywhere",
-        )?;
+            .ok_or_else(|| "DeepSeek llm-pi-ai row missing".to_string())?
+            + marker.len();
+        let end = text[begin..]
+            .find('\n')
+            .map(|offset| begin + offset)
+            .ok_or_else(|| "DeepSeek llm-pi-ai row missing".to_string())?;
+        let llm_config: Value = serde_json::from_str(&text[begin..end])
+            .map_err(|_| "DeepSeek llm-pi-ai config is not JSON".to_string())?;
+        let provider = field(field(&llm_config, "providers")?, "runanywhere")?;
         url = text_field(provider, "baseURL")?;
         let first_model = nth(field(provider, "models")?, 0)?;
         model = text_field(first_model, "id")?;
         let key = text_field(provider, "apiKeyEnv")?;
         require(env_str(&key) == "local", "DeepSeek placeholder missing")?;
-        report["temporary_files"] = json!([patch, settings_path]);
+        report["temporary_files"] = json!([patch]);
         report["limits"] = json!({
             "context": field(first_model, "contextWindow")?,
             "output": field(first_model, "maxTokens")?,

@@ -53,7 +53,7 @@ wally opencode -m qwen3-4b-instruct-2507
 wally claude-code -m qwen3-4b-instruct-2507
 ```
 
-`claude-desktop`, `deepseek`, `hermes` and `openclaw` are wired the same way.
+`claude-desktop`, `deepseek`, `hermes`, `openclaw` and `prime-agent` are wired the same way.
 Other local models are not certified for coding harnesses and are rejected.
 
 ## Commands you'll use

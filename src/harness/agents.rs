@@ -18,6 +18,9 @@ pub enum Handoff {
     CustomEndpointEnvironment,
     ConfigFile,
     PatchOverlay,
+    /// A temp extension, loaded with `-e`, that registers our provider for
+    /// the one run. Nothing is written into the person's own agent directory.
+    Extension,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +57,13 @@ pub fn agents() -> &'static [Agent] {
             command: "dsh",
             summary: "Open DeepSeek Harness with a model",
             handoff: Handoff::PatchOverlay,
+            default_args: "",
+        },
+        Agent {
+            id: "prime-agent",
+            command: "prime-agent",
+            summary: "Open Prime Agent with a model",
+            handoff: Handoff::Extension,
             default_args: "",
         },
     ];
@@ -182,11 +192,11 @@ fn temp_directory_path() -> Option<PathBuf> {
 const LEFTOVER_CONFIG_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// `true` for exactly the names `TemporaryConfig::write` creates:
-/// `wally-agent-<digits>.json` or `wally-agent-<digits>.yaml`. Nothing else
-/// in the temp directory matches, including a name we wrote ourselves for a
-/// different purpose.
+/// `wally-agent-<digits>` with a `.json`, `.yaml` or `.js` extension. Nothing
+/// else in the temp directory matches, including a name we wrote ourselves
+/// for a different purpose.
 fn is_leftover_config_name(name: &str) -> bool {
-    for extension in [".json", ".yaml"] {
+    for extension in [".json", ".yaml", ".js"] {
         if let Some(digits) = name
             .strip_prefix("wally-agent-")
             .and_then(|rest| rest.strip_suffix(extension))
@@ -352,10 +362,11 @@ impl Drop for TemporaryConfig {
 
 const PROVIDER_ID: &str = "runanywhere";
 
-/// The environment variable the dsh provider's `apiKeyEnv` points at. Fixed
-/// rather than host-derived: dsh resolves the reference itself and puts no
-/// host rule on the name.
-const DEEP_SEEK_KEY_VARIABLE: &str = "RUNANYWHERE_API_KEY";
+/// The environment variable the dsh and Prime Agent providers read the key
+/// from. Fixed rather than host-derived: both resolve the reference
+/// themselves and put no host rule on the name. It also keeps the key out of
+/// the files they read.
+const KEY_VARIABLE: &str = "RUNANYWHERE_API_KEY";
 
 /// `agent.default_args` split on spaces, or `args` when the person passed
 /// any.
@@ -741,11 +752,10 @@ pub fn deep_seek_wants_headless(args: &[String]) -> bool {
         .unwrap_or(false)
 }
 
-/// The settings document dsh reads our provider out of. JSON on purpose: the
-/// settings file's extension picks the format, which keeps a hand-written
-/// YAML document out of this. Built through `io::json::dump`, as the C++
-/// `.dump()`'d it.
-pub fn build_deep_seek_settings(
+/// The `llm-pi-ai` config that registers our provider with dsh. JSON, which
+/// the YAML patch embeds as a flow mapping, so every value is escaped by the
+/// serializer rather than by hand.
+pub fn build_deep_seek_llm_config(
     base_url: &str,
     key_variable: &str,
     models: &[CatalogModel],
@@ -777,10 +787,74 @@ pub fn build_deep_seek_settings(
         // the Authorization header anyway.
         "apiKeyEnv": key_variable,
     });
-    let settings = json!({
-        "llm-pi-ai": { "providers": { PROVIDER_ID: provider } },
+    dump(&json!({ "providers": { PROVIDER_ID: provider } }))
+}
+
+/// The Prime Agent extension that registers our provider. The provider is a
+/// JSON literal, which is also a valid JavaScript expression, so every value
+/// is escaped by the serializer rather than by hand. `apiKey` names the
+/// variable holding the key, not the key.
+pub fn build_prime_agent_extension(
+    base_url: &str,
+    key_variable: &str,
+    models: &[CatalogModel],
+) -> String {
+    let mut entries: Vec<Value> = Vec::new();
+    for model in models {
+        let mut entry = json!({
+            "id": model.id,
+            "name": model.id,
+            "input": ["text"],
+            // The capabilities checked against this gateway, as for OpenClaw.
+            "compat": {
+                "supportsUsageInStreaming": true,
+                "maxTokensField": "max_tokens",
+            },
+        });
+        if model.context_window > 0 {
+            entry["contextWindow"] = json!(model.context_window);
+            let max_tokens = if model.max_output > 0 {
+                model.max_output
+            } else {
+                model.context_window.min(65536)
+            };
+            entry["maxTokens"] = json!(max_tokens);
+        }
+        if model.input_per_mtok > 0 || model.output_per_mtok > 0 {
+            const PER_MICRO: f64 = 1.0 / 1_000_000.0;
+            entry["cost"] = json!({
+                "input": model.input_per_mtok as f64 * PER_MICRO,
+                "output": model.output_per_mtok as f64 * PER_MICRO,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+            });
+        }
+        entries.push(entry);
+    }
+    let provider = json!({
+        "name": "RunAnywhere",
+        "baseUrl": base_url,
+        "apiKey": key_variable,
+        "api": "openai-completions",
+        "models": entries,
     });
-    dump(&settings)
+    format!(
+        "export default function (pi) {{\n  pi.registerProvider({}, {});\n}}\n",
+        dump(&json!(PROVIDER_ID)),
+        dump(&provider)
+    )
+}
+
+/// `-e <extension> --model runanywhere/<model>`, then their own arguments.
+pub fn prime_agent_argv(extension: &str, model: &str, child_args: &[String]) -> Vec<String> {
+    let mut argv = vec![
+        "-e".to_string(),
+        extension.to_string(),
+        "--model".to_string(),
+        format!("{PROVIDER_ID}/{model}"),
+    ];
+    argv.extend(child_args.iter().cloned());
+    argv
 }
 
 /// A YAML single-quoted scalar: the value wrapped in `'...'` with every
@@ -800,15 +874,13 @@ fn yaml_single_quoted(value: &str) -> String {
     escaped
 }
 
-/// The `--patch` overlay pointing dsh's settings row at `settings_path` and
-/// selecting `model` on our provider for a fresh agent. YAML because a
-/// cordis patch is YAML, and safe to build by hand because every value in it
-/// is either a fixed string or a path wally just created — not run through
-/// `io::json::dump`, since the C++ built this one by hand too.
-pub fn build_deep_seek_patch(settings_path: &str, model: &str) -> String {
+/// The `--patch` overlay that registers our provider on dsh's `llm-pi-ai`
+/// row and selects `model` on it for a fresh agent. The provider goes on the
+/// row itself: dsh 0.1.7 stopped reading a settings document named by the
+/// `settings` row, and the row config works on 0.1.5 as well.
+pub fn build_deep_seek_patch(llm_config: &str, model: &str) -> String {
     format!(
-        "- id: settings\n  config:\n    path: {}\n- id: agent-default-model\n  config:\n    provider: {PROVIDER_ID}\n    model: {}\n",
-        yaml_single_quoted(settings_path),
+        "- id: llm-pi-ai\n  config: {llm_config}\n- id: agent-default-model\n  config:\n    provider: {PROVIDER_ID}\n    model: {}\n",
         yaml_single_quoted(model),
     )
 }
@@ -830,9 +902,6 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
     let child_args = effective_args(agent, args);
 
     let mut config = TemporaryConfig::new();
-    // The second document the dsh overlay needs; unused by the other
-    // handoffs and removed with the first.
-    let mut settings = TemporaryConfig::new();
     let status = match agent.handoff {
         Handoff::CustomEndpointEnvironment => {
             let base = ScopedEnv::new("CUSTOM_BASE_URL", &endpoint.base_url);
@@ -939,14 +1008,10 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                     catalog[0].context_window
                 ));
             }
-            let settings_built =
-                build_deep_seek_settings(&endpoint.base_url, DEEP_SEEK_KEY_VARIABLE, &catalog);
-            let write_failure = settings.write(&settings_built, ".json").err().or_else(|| {
-                config
-                    .write(&build_deep_seek_patch(&settings.path(), model), ".yml")
-                    .err()
-            });
-            if let Some(failure) = write_failure {
+            let llm_config = build_deep_seek_llm_config(&endpoint.base_url, KEY_VARIABLE, &catalog);
+            // `.yaml`, not `.yml`: the leftover sweep only knows `.yaml`.
+            if let Err(failure) = config.write(&build_deep_seek_patch(&llm_config, model), ".yaml")
+            {
                 out::error_line(&failure);
                 release(&endpoint);
                 return 1;
@@ -960,7 +1025,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
             } else {
                 &endpoint.api_key
             };
-            let key = ScopedEnv::new(DEEP_SEEK_KEY_VARIABLE, key_value);
+            let key = ScopedEnv::new(KEY_VARIABLE, key_value);
             if !key.applied() {
                 out::error_line(&format!("could not set the endpoint for {}", agent.id));
                 release(&endpoint);
@@ -993,6 +1058,37 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                 agent.id, endpoint.base_url
             ));
             launch(agent.command, "", &launch_args, options)
+        }
+        Handoff::Extension => {
+            let catalog = catalog_models_for(&endpoint, model);
+            if catalog[0].context_window > 0 {
+                out::status_line(&format!(
+                    "context window: {} tokens",
+                    catalog[0].context_window
+                ));
+            }
+            let built = build_prime_agent_extension(&endpoint.base_url, KEY_VARIABLE, &catalog);
+            if let Err(failure) = config.write(&built, ".js") {
+                out::error_line(&failure);
+                release(&endpoint);
+                return 1;
+            }
+            let key = ScopedEnv::new(KEY_VARIABLE, key_or_placeholder(&endpoint.api_key));
+            if !key.applied() {
+                out::error_line(&format!("could not set the endpoint for {}", agent.id));
+                release(&endpoint);
+                return 1;
+            }
+            out::status_line(&format!(
+                "{} will talk to {model} through {}",
+                agent.id, endpoint.base_url
+            ));
+            launch(
+                agent.command,
+                "",
+                &prime_agent_argv(&config.path(), model, &child_args),
+                options,
+            )
         }
     };
 
@@ -1246,6 +1342,7 @@ mod tests {
     fn is_leftover_config_name_matches_only_temporary_configs_own_naming() {
         assert!(is_leftover_config_name("wally-agent-12345.json"));
         assert!(is_leftover_config_name("wally-agent-0.yaml"));
+        assert!(is_leftover_config_name("wally-agent-7.js"));
         // No digits at all is not a name `TemporaryConfig::write` ever produced.
         assert!(!is_leftover_config_name("wally-agent-.json"));
         assert!(!is_leftover_config_name("wally-agent-.yaml"));
@@ -1397,5 +1494,47 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn prime_agent_extension_registers_our_provider_without_the_key() {
+        let models = [CatalogModel {
+            id: "glm-5.3-flash".to_string(),
+            context_window: 200_000,
+            max_output: 16_384,
+            input_per_mtok: 0,
+            output_per_mtok: 0,
+        }];
+        let built = build_prime_agent_extension("https://example.test/v1", KEY_VARIABLE, &models);
+        let json = built
+            .strip_prefix("export default function (pi) {\n  pi.registerProvider(\"runanywhere\", ")
+            .and_then(|rest| rest.strip_suffix(");\n}\n"))
+            .expect("the extension wraps one registerProvider call");
+        let provider: Value = serde_json::from_str(json).unwrap();
+        assert_eq!(provider["baseUrl"], "https://example.test/v1");
+        assert_eq!(provider["apiKey"], "RUNANYWHERE_API_KEY");
+        assert_eq!(provider["api"], "openai-completions");
+        assert_eq!(provider["models"][0]["id"], "glm-5.3-flash");
+        assert_eq!(provider["models"][0]["contextWindow"], 200_000);
+        assert_eq!(provider["models"][0]["maxTokens"], 16_384);
+    }
+
+    #[test]
+    fn prime_agent_argv_names_the_extension_and_model_before_theirs() {
+        let argv = prime_agent_argv(
+            "/tmp/wally-agent-1.js",
+            "glm-5.3-flash",
+            &["-c".to_string()],
+        );
+        assert_eq!(
+            argv,
+            [
+                "-e",
+                "/tmp/wally-agent-1.js",
+                "--model",
+                "runanywhere/glm-5.3-flash",
+                "-c"
+            ]
+        );
     }
 }
