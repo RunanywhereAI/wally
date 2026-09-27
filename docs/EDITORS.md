@@ -46,7 +46,7 @@ exits; its own `$DSH_HOME` is never written to, and the API key never enters
 the file, because the provider names
 an environment variable and dsh resolves it per request.
 
-OpenClaw and DeepSeek also get told the model's real context window and max
+OpenClaw, DeepSeek and Prime Agent also get told the model's real context window and max
 output, read from the console catalog. Hermes does not: it takes a
 context-window hint from exactly one place, `model.context_length` (or a
 `custom_providers` entry) in `~/.hermes/config.yaml`, and there is no

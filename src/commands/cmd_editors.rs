@@ -621,7 +621,9 @@ pub fn register_editors(app: &mut App) {
                             && harness::confirm("Open the download page? [y/N] ")
                         {
                             crate::commands::cmd_account::open_browser(DOWNLOAD);
-                            out::status_line("install it, then run this again");
+                            out::status_line(&format!(
+                                "install it from {DOWNLOAD}, then run this again"
+                            ));
                         } else {
                             out::status_line(&format!(
                                 "download it from {DOWNLOAD}, then run this again"

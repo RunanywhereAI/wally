@@ -773,9 +773,12 @@ fn offer_install(tool: &str) -> InstallOffer {
     let status = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", installer.command])
         .status();
+    // pipefail, so a failed download fails the install: without it the
+    // pipeline's status is the receiving shell's, which reads an empty script
+    // and exits 0.
     #[cfg(not(windows))]
-    let status = std::process::Command::new("sh")
-        .args(["-c", installer.command])
+    let status = std::process::Command::new("bash")
+        .args(["-c", &format!("set -o pipefail; {}", installer.command)])
         .status();
     if !status.is_ok_and(|status| status.success()) {
         out::error_line(&format!("the {tool} installer did not finish"));

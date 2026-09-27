@@ -1,6 +1,6 @@
 # Golden CLI corpus
 
-Byte-exact stdout, stderr and exit code for 363 invocations of `wally`,
+Byte-exact stdout, stderr and exit code for 365 invocations of `wally`,
 captured from the C++ build of `origin/main` at `d1e9c0b` (the last C++
 release line) on macOS arm64 with kit 0.20.37. `tests/cli_golden.rs` replays
 every case against the Rust binary in the same isolated environment and fails
