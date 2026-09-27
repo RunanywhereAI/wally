@@ -112,7 +112,7 @@ fn hostname() -> String {
     "unknown".to_string()
 }
 
-fn open_browser(url: &str) {
+pub(crate) fn open_browser(url: &str) {
     #[cfg(windows)]
     {
         let spawned = Command::new("rundll32")
