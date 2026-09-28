@@ -142,12 +142,17 @@ fn group_models(
             || catalog_entry
                 .map(|entry| entry.harness_compatible)
                 .unwrap_or(false);
-        if is_downloaded && rank < row.path_rank {
-            row.path_rank = rank;
+        // Show the id of a variant actually on disk, not a merge key that
+        // names nothing downloaded, so copying it inspects/pulls the same
+        // backend that's there rather than falling back to catalog defaults.
+        // When the variant registered under the merge key itself is on disk,
+        // it wins over a better-ranked backend: that id is downloaded too, and
+        // it is the one the C++ list showed, so a second downloaded backend
+        // must not make it vanish from the list.
+        let id_rank = if model.id == key { i32::MIN } else { rank };
+        if is_downloaded && id_rank < row.path_rank {
+            row.path_rank = id_rank;
             row.local_path = model.local_path.clone();
-            // Show the id of the variant actually on disk, not the merge
-            // key, so copying it inspects/pulls the same backend that's
-            // downloaded rather than falling back to catalog defaults.
             row.id = model.id.clone();
         }
         if rank < row.name_rank {
@@ -374,6 +379,28 @@ mod tests {
         let row = &groups["qwen3-4b-instruct-2507"];
         assert_eq!(row.id, "mlx-qwen3-4b-instruct-2507-4bit");
         assert_eq!(row.local_path, "/models/mlx-qwen3-4b-instruct-2507-4bit");
+    }
+
+    #[test]
+    fn merge_key_variant_keeps_its_id_when_both_backends_are_downloaded() {
+        // Both variants downloaded. The merge key is itself a downloaded id,
+        // so the row keeps it (as the C++ list did) instead of switching to
+        // the better-ranked MLX variant and hiding the llama.cpp one.
+        let models = vec![
+            llamacpp_variant("/models/qwen3-4b-instruct-2507-q8_0.gguf"),
+            mlx_variant("/models/mlx-qwen3-4b-instruct-2507-4bit"),
+        ];
+        let downloaded: std::collections::HashSet<String> = [
+            "qwen3-4b-instruct-2507".to_string(),
+            "mlx-qwen3-4b-instruct-2507-4bit".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let (_, groups) = group_models(&models, &downloaded, false);
+        let row = &groups["qwen3-4b-instruct-2507"];
+        assert_eq!(row.id, "qwen3-4b-instruct-2507");
+        assert_eq!(row.local_path, "/models/qwen3-4b-instruct-2507-q8_0.gguf");
+        assert!(row.downloaded);
     }
 
     #[test]
