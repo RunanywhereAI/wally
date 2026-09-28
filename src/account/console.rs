@@ -207,6 +207,7 @@ pub enum PollResult {
     Denied,
     Expired,
     Failed,
+    CardRequired,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1204,6 +1205,21 @@ impl ConsoleClient {
             }
         };
         if response.status != 200 {
+            if response.status == 403 {
+                if let Ok(object) = parse_object(&response) {
+                    if let Ok(api_error) = contract::ApiError::from_json(&object) {
+                        if api_error.code == contract::ApiErrorCode::KCardRequired {
+                            outcome.result = PollResult::CardRequired;
+                            outcome.error = if !api_error.message.is_empty() {
+                                api_error.message
+                            } else {
+                                "card required".to_string()
+                            };
+                            return outcome;
+                        }
+                    }
+                }
+            }
             outcome.error = http_error("poll", &origin, &response, "");
             // A busy or briefly unavailable console has not denied anything,
             // and the person may still be approving in the browser. Treat it
