@@ -119,6 +119,8 @@ EXPORT_PAGES = {
 
 class ConsoleHandler(BaseHTTPRequestHandler):
     login_expiring = False
+    # How many polls answer 403 card_required before the sign-in is approved.
+    card_required_polls = 0
     requests = []
     console_origin = ""
     # False stands in for every console deployed before windowed totals, which
@@ -190,6 +192,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             )
         elif self.path == "/auth/cli/poll" and ConsoleHandler.login_expiring:
             self.reply(200, {"status": "pending"})
+        elif self.path == "/auth/cli/poll" and ConsoleHandler.card_required_polls > 0:
+            ConsoleHandler.card_required_polls -= 1
+            self.reply(403, {"code": "card_required",
+                             "message": "Add a card to sign in from the terminal."})
         elif self.path == "/auth/cli/poll":
             self.reply(
                 200,
@@ -405,6 +411,31 @@ def main():
                 if "busy" in said:
                     raise AssertionError(f"an expired sign-in blamed a busy console:\n{said}")
 
+            # A card_required poll must not end the sign-in. The console tells
+            # the person on the approval page that this terminal keeps waiting,
+            # so it names the billing page once and keeps polling until the
+            # request is approved.
+            with tempfile.TemporaryDirectory(prefix="wally-account-card-") as other:
+                ConsoleHandler.card_required_polls = 2
+                try:
+                    carded = subprocess.run(
+                        [binary, "account", "login", "--no-browser"],
+                        env=dict(environment, WALLY_PROFILE_DIR=other),
+                        capture_output=True, text=True, timeout=60, check=False,
+                    )
+                finally:
+                    ConsoleHandler.card_required_polls = 0
+                said = carded.stdout + carded.stderr
+                billing = ConsoleHandler.console_origin + "/cloud/billing"
+                if carded.returncode != 0 or "signed in as" not in said:
+                    raise AssertionError(f"a card_required poll ended the sign-in:\n{said}")
+                if said.count("account needs a card on file") != 1:
+                    raise AssertionError(f"the card line was not printed exactly once:\n{said}")
+                if f"add one at {billing}" not in carded.stderr:
+                    raise AssertionError(f"the card line did not name {billing}:\n{said}")
+                if f"waiting for approval — add a card at {billing} if asked" not in carded.stderr:
+                    raise AssertionError(f"the waiting line did not name {billing}:\n{said}")
+
             files = list(pathlib.Path(profile).iterdir())
             # login also primes models.json (a non-secret cache); the credential
             # is the secret one whose mode must be 0600.
@@ -492,6 +523,13 @@ def main():
             ("POST", "/auth/cli/start", None),
             ("POST", "/auth/cli/poll", None),
             ("POST", "/auth/cli/poll", None),
+            # The sign-in that needed a card: two card_required polls, then
+            # approved, then the model cache is primed as usual.
+            ("POST", "/auth/cli/start", None),
+            ("POST", "/auth/cli/poll", None),
+            ("POST", "/auth/cli/poll", None),
+            ("POST", "/auth/cli/poll", None),
+            ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),
             # One read per invocation. The windows are totalled server-side, so
             # `days` and `limit` are held at the minimum the route accepts —
