@@ -279,11 +279,10 @@ fn login(requested_console: &str, open: bool) -> i32 {
     if open {
         open_browser(&approval_url);
     }
-    // The poll below cannot tell whether this particular account needs a
-    // card -- the console never says so there (#137's facts): it is the
-    // approval page that tells the person, after they submit the code above.
-    // Naming the billing page here too means the terminal still says
-    // something useful if that page goes unread.
+    // The poll below cannot tell whether this account needs a card: the
+    // console refuses at the approval page, not on the poll, and the page
+    // tells the person there. Naming the billing page here as well means the
+    // terminal says something useful even if that page goes unread.
     let billing_url = account::console_billing_url(&console_url);
     out::status_line(&format!(
         "waiting for approval — add a card at {billing_url} if asked"
@@ -297,14 +296,27 @@ fn login(requested_console: &str, open: bool) -> i32 {
         }
         let outcome = client.poll(&console_url, &authorization);
         match outcome.result {
-            PollResult::Pending => {
+            // A card_required poll keeps waiting like a pending one. The
+            // console does not send it on this endpoint today (it refuses at
+            // the approval page and on refresh), but if it ever does, the
+            // person may already be adding the card in the browser, and the
+            // approval page promises that this terminal keeps waiting.
+            PollResult::Pending | PollResult::CardRequired => {
+                if outcome.result == PollResult::CardRequired {
+                    if !card_required_shown {
+                        card_required_shown = true;
+                        out::status_line(&format!(
+                            "account needs a card on file — add one at {billing_url}; still waiting"
+                        ));
+                    }
+                } else if !outcome.error.is_empty() && outcome.retry_after <= authorization.interval
+                {
+                    out::status_line("server busy, retrying");
+                }
                 // A console that asked for a delay gets it. Polling at the
                 // authorization's own interval through a 30-second backoff is
                 // just refusing to hear the answer (#90). The grant's expiry
                 // still bounds the wait, so this cannot outlive the login.
-                if !outcome.error.is_empty() && outcome.retry_after <= authorization.interval {
-                    out::status_line("server busy, retrying");
-                }
                 let delay =
                     account::next_poll_delay_seconds(authorization.interval, outcome.retry_after);
                 let wait = Duration::from_secs(delay.max(0) as u64);
@@ -349,30 +361,6 @@ fn login(requested_console: &str, open: bool) -> i32 {
             PollResult::Failed => {
                 out::error_line(&outcome.error);
                 return 1;
-            }
-            PollResult::CardRequired => {
-                // The facts behind #137: the real poll endpoint never actually
-                // sends this today -- card_required comes from the approval
-                // page and from refresh, both handled elsewhere. Handling it
-                // here too costs little and keeps this correct if that ever
-                // changes: say it once and keep waiting, like Pending, rather
-                // than failing a login the person may already be finishing in
-                // the browser.
-                if !card_required_shown {
-                    card_required_shown = true;
-                    out::status_line(&format!(
-                        "account needs a card on file — add one at {billing_url}; still waiting"
-                    ));
-                }
-                let delay =
-                    account::next_poll_delay_seconds(authorization.interval, outcome.retry_after);
-                let now = Instant::now();
-                if now >= deadline {
-                    break;
-                }
-                let wait = Duration::from_secs(delay.max(0) as u64).min(deadline - now);
-                std::thread::sleep(wait);
-                continue;
             }
             PollResult::Approved => {
                 let Some(grant) = outcome.grant else {

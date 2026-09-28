@@ -1321,8 +1321,9 @@ impl ConsoleClient {
             .send(request)
             .map_err(|message| unavailable_err(message, true))?;
         if response.status != 200 {
-            // Same 403 card_required signal poll() reads above -- the facts
-            // behind #137 say refresh is the endpoint that actually sends it.
+            // The same 403 card_required poll() reads above. Refresh is where
+            // the console really sends it (the other place is the approval
+            // page, which the browser shows).
             if response.status == 403 {
                 if let Ok(object) = parse_object(&response) {
                     if let Ok(api_error) = contract::ApiError::from_json(&object) {
