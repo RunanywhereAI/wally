@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "c07a99e6d6ac1c34334180f2b05021d29f33d896ab0918ea357ec7f4b462635b";
+    "6c8f557028c04a8bec148be6298d31e7f6a636a91c1732bfd01b1e81343ef254";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -1693,6 +1693,39 @@ impl ModelCatalogResponse {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+pub struct OpenRouterDatacenter {
+    pub country_code: String,
+}
+
+impl OpenRouterDatacenter {
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "expected a JSON object".to_string())?;
+        let mut result = Self::default();
+        match object.get("country_code") {
+            Some(field) if !field.is_null() => {
+                result.country_code = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        Ok(result)
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "country_code".to_string(),
+            Value::String(self.country_code.clone()),
+        );
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct OpenRouterPricing {
     pub completion: String,
     pub input_cache_read: Option<String>,
@@ -1755,6 +1788,8 @@ impl OpenRouterPricing {
 pub struct PublicModel {
     pub context_length: Option<i64>,
     pub created: Option<i64>,
+    pub datacenters: Option<Vec<OpenRouterDatacenter>>,
+    pub description: Option<String>,
     pub hugging_face_id: Option<String>,
     pub id: String,
     pub input_modalities: Option<Vec<String>>,
@@ -1794,6 +1829,32 @@ impl PublicModel {
                     field
                         .as_i64()
                         .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
+        match object.get("datacenters") {
+            Some(field) if !field.is_null() => {
+                result.datacenters = Some({
+                    let array = field
+                        .as_array()
+                        .ok_or_else(|| "expected an array".to_string())?;
+                    let mut items = Vec::with_capacity(array.len());
+                    for item in array {
+                        items.push(OpenRouterDatacenter::from_json(item)?);
+                    }
+                    items
+                });
+            }
+            _ => {}
+        }
+        match object.get("description") {
+            Some(field) if !field.is_null() => {
+                result.description = Some(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?
+                        .to_string(),
                 );
             }
             _ => {}
@@ -1991,6 +2052,15 @@ impl PublicModel {
         }
         if let Some(item) = &self.created {
             map.insert("created".to_string(), Value::from(*item));
+        }
+        if let Some(item) = &self.datacenters {
+            map.insert(
+                "datacenters".to_string(),
+                Value::Array(item.iter().map(|item| item.to_json()).collect()),
+            );
+        }
+        if let Some(item) = &self.description {
+            map.insert("description".to_string(), Value::String(item.clone()));
         }
         if let Some(item) = &self.hugging_face_id {
             map.insert("hugging_face_id".to_string(), Value::String(item.clone()));

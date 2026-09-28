@@ -727,6 +727,11 @@
         "title": "CliUsageWindowLabel",
         "type": "string"
       },
+      "CountryCode": {
+        "description": "An ISO 3166-1 alpha-2 country code.",
+        "pattern": "^[A-Z]{2}$",
+        "type": "string"
+      },
       "CreditResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1176,6 +1181,19 @@
         ],
         "type": "object"
       },
+      "OpenRouterDatacenter": {
+        "additionalProperties": false,
+        "description": "One place a model is served from, as OpenRouter's legacy format names it: the country only.",
+        "properties": {
+          "country_code": {
+            "$ref": "#/components/schemas/CountryCode"
+          }
+        },
+        "required": [
+          "country_code"
+        ],
+        "type": "object"
+      },
       "OpenRouterFeature": {
         "description": "One request feature, as OpenRouter names it (for example tools, reasoning). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
         "maxLength": 64,
@@ -1324,6 +1342,21 @@
             "description": "OpenAI-shaped creation timestamp (unix seconds) the gateway reports; informational.",
             "minimum": 0,
             "type": "integer"
+          },
+          "datacenters": {
+            "description": "Where the model is served from: one entry per country its serving nodes are in. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterDatacenter"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": {
+            "description": "One line of public prose about the model as served: what the other fields alone cannot say. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
           },
           "hugging_face_id": {
             "description": "The Hugging Face repository OpenRouter groups this model's providers by (org/repo), or empty when the model is not on Hugging Face. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
@@ -2354,8 +2387,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "development",
-    "commit": "deeec19d12df6fd601a906b3d1a7bb59ec2dcc4e",
+    "branch": "feat/openrouter-listing-complete",
+    "commit": "fced93708d8e1ae13a621fb9dd9d52cf84fa1759",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
