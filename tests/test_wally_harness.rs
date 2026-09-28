@@ -1197,14 +1197,16 @@ fn openclaw_config_declares_the_harness() {
 
 #[test]
 fn deepseek_settings_declare_the_harness() {
-    let settings: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    // dsh reads the provider from the `llm-pi-ai` row's own config, which
+    // build_deep_seek_llm_config returns with `providers` at its top level.
+    let settings: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         "https://inference.runanywhere.ai/v1",
         "RUNANYWHERE_API_KEY",
         &declare_catalog(),
     ))
     .unwrap();
     assert_eq!(
-        settings["llm-pi-ai"]["providers"]["runanywhere"]["headers"],
+        settings["providers"]["runanywhere"]["headers"],
         serde_json::json!({"X-RA-Harness": "deepseek"})
     );
 }
