@@ -114,14 +114,16 @@ impl CancelWorker {
     /// depth times `timeout_ms`; typically one call. Returns how many cancels
     /// were sent while stopping.
     pub fn stop(&self) -> i32 {
-        let drained;
+        // Only the caller that flips `stopping` reports a non-zero drained
+        // count; every other caller falls through to the same join below
+        // instead of racing back with a stale "already stopped" answer.
+        let mut drained = 0;
         {
             let mut state = self.shared.state.lock().unwrap();
-            if state.stopping {
-                return 0;
+            if !state.stopping {
+                state.stopping = true;
+                drained = state.queue.len() as i32;
             }
-            state.stopping = true;
-            drained = state.queue.len() as i32;
         }
         self.shared.wake.notify_all();
         if let Some(handle) = self.thread.lock().unwrap().take() {

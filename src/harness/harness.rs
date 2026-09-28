@@ -178,8 +178,8 @@ fn free_port() -> u16 {
 /// `std::getline(std::cin, answer) && !answer.empty() && ...` exactly: an
 /// immediate EOF (`read_line` returns 0) and a bare newline (trims to empty)
 /// both answer "no".
-fn confirm_model_pull(model: &str) -> bool {
-    eprint!("{model} is not installed. Download it now? [y/N] ");
+pub(crate) fn confirm(prompt: &str) -> bool {
+    eprint!("{prompt}");
     let _ = std::io::stderr().flush();
     let mut answer = String::new();
     let read = std::io::stdin().read_line(&mut answer).unwrap_or(0);
@@ -429,7 +429,9 @@ pub fn resolve(model: &str, options: &GlobalOptions, harness_command: &str) -> O
                 ));
                 return None;
             }
-            if !confirm_model_pull(model) {
+            if !confirm(&format!(
+                "{model} is not installed. Download it now? [y/N] "
+            )) {
                 out::status_line(&format!(
                     "download cancelled; run `wally models pull {model}` when ready"
                 ));
@@ -668,55 +670,146 @@ fn prepend_to_path(dir: &Path) {
     }
 }
 
-/// How you get a harness we do not ship. Kept beside the spawn so a missing
-/// tool answers the only question the person actually has. Verified against
-/// each tool's own docs: opencode-ai and @deepseek-ai/dsh are npm packages;
-/// Claude Code and Hermes ship a native install script (npm for Claude Code
-/// is deprecated); OpenClaw's npm package is openclaw@latest.
+/// How a harness we do not ship gets installed: one command per OS, from
+/// each tool's own docs, or None where the tool publishes none. opencode-ai,
+/// openclaw and @deepseek-ai/dsh are npm packages; Claude Code, Hermes and
+/// Prime Agent ship a native install script (npm for Claude Code is
+/// deprecated). Each script runs with its setup prompts off: they read
+/// /dev/tty even when piped, so they would otherwise stop inside ours. The
+/// hint and the install prompt both read this, so the command shown is
+/// always the command run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Installer {
+    /// Run through `sh -c`, or PowerShell on Windows.
+    command: &'static str,
+    needs_npm: bool,
+}
+
+fn installer(tool: &str) -> Option<Installer> {
+    let (posix, windows, needs_npm) = match tool {
+        "opencode" => ("npm i -g opencode-ai", "npm i -g opencode-ai", true),
+        "openclaw" => ("npm i -g openclaw@latest", "npm i -g openclaw@latest", true),
+        "dsh" => ("npm i -g @deepseek-ai/dsh", "npm i -g @deepseek-ai/dsh", true),
+        "claude" => (
+            "curl -fsSL https://claude.ai/install.sh | bash",
+            "irm https://claude.ai/install.ps1 | iex",
+            false,
+        ),
+        "hermes" => (
+            "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive",
+            "& ([scriptblock]::Create((irm https://hermes-agent.nousresearch.com/install.ps1))) -NonInteractive",
+            false,
+        ),
+        // No Windows installer is published; it needs bash there anyway. The
+        // Python runtime is prepared now rather than asked about, since the
+        // agent's only tool needs it.
+        "prime-agent" => (
+            "curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | PRIME_AGENT_INSTALLER_NONINTERACTIVE=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=1 sh",
+            "",
+            false,
+        ),
+        _ => return None,
+    };
+    let command = if cfg!(windows) { windows } else { posix };
+    (!command.is_empty()).then_some(Installer { command, needs_npm })
+}
+
 fn install_hint(tool: &str) -> String {
-    match tool {
-        "opencode" => "install it with `npm i -g opencode-ai`, then run this again".to_string(),
-        "openclaw" => "install it with `npm i -g openclaw@latest`, then run this again".to_string(),
-        "dsh" => "install it with `npm i -g @deepseek-ai/dsh`, then run this again".to_string(),
-        "claude" => {
-            if cfg!(windows) {
-                "install it with `irm https://claude.ai/install.ps1 | iex` in PowerShell, then run this again".to_string()
-            } else {
-                "install it with `curl -fsSL https://claude.ai/install.sh | bash`, then run this again".to_string()
-            }
+    match installer(tool) {
+        Some(installer) if cfg!(windows) && !installer.needs_npm => format!(
+            "install it with `{}` in PowerShell, then run this again",
+            installer.command
+        ),
+        Some(installer) => format!("install it with `{}`, then run this again", installer.command),
+        None if tool == "prime-agent" => {
+            "prime-agent has no Windows installer; see https://github.com/PrimeIntellect-ai/prime-agent"
+                .to_string()
         }
-        "hermes" => {
-            if cfg!(windows) {
-                "install it with `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)` in PowerShell, then run this again".to_string()
-            } else {
-                "install it with `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup`, then run this again".to_string()
-            }
-        }
-        other => format!("install {other} and put it on PATH, then run this again"),
+        None => format!("install {tool} and put it on PATH, then run this again"),
     }
 }
 
-/// True when the CLI `tool` is on PATH. When it is not, prints the clean
-/// "not installed" message and its accurate install command, then returns
-/// false — so a caller can stop before resolving a model or printing
-/// anything else, which is the only thing a person without the tool needs to
-/// see.
-pub fn ensure_installed(tool: &str) -> bool {
+/// Whether `tool` can be launched now: on PATH, or in a well-known bin the
+/// shell has not picked up yet (a just-run `npm i -g`, or a Windows AppData
+/// shim), in which case that directory goes on PATH for this run.
+fn found(tool: &str) -> bool {
     if on_path(tool) {
         return true;
     }
-    // Not on PATH, but a fresh install often sits in a well-known bin the
-    // shell has not picked up yet (a just-run `npm i -g`, or a Windows
-    // AppData shim). If it does, put that directory on PATH for this run so
-    // the launch can exec it, rather than telling the person to install what
-    // is already there.
     if let Some(dir) = locate_off_path(tool) {
         prepend_to_path(&dir);
         return true;
     }
-    out::error_line(&format!("{tool} is not installed on this machine"));
-    out::status_line(&install_hint(tool));
     false
+}
+
+enum InstallOffer {
+    NotOffered,
+    Installed,
+    /// Failed, or installed somewhere not yet on PATH; already reported.
+    Stopped,
+}
+
+/// Offers to run the tool's installer, but only to a person at the terminal:
+/// a pipe or CI gets the hint, as before. The default is no.
+fn offer_install(tool: &str) -> InstallOffer {
+    let Some(installer) = installer(tool) else {
+        return InstallOffer::NotOffered;
+    };
+    if !term::stdin_is_tty() || !term::stderr_is_tty() {
+        return InstallOffer::NotOffered;
+    }
+    if installer.needs_npm && !on_path("npm") {
+        out::status_line("it installs with npm, which comes with Node.js: https://nodejs.org");
+        return InstallOffer::NotOffered;
+    }
+    if !confirm(&format!(
+        "Install it now with `{}`? [y/N] ",
+        installer.command
+    )) {
+        return InstallOffer::NotOffered;
+    }
+    #[cfg(windows)]
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", installer.command])
+        .status();
+    // pipefail, so a failed download fails the install: without it the
+    // pipeline's status is the receiving shell's, which reads an empty script
+    // and exits 0.
+    #[cfg(not(windows))]
+    let status = std::process::Command::new("bash")
+        .args(["-c", &format!("set -o pipefail; {}", installer.command)])
+        .status();
+    if !status.is_ok_and(|status| status.success()) {
+        out::error_line(&format!("the {tool} installer did not finish"));
+        return InstallOffer::Stopped;
+    }
+    if found(tool) {
+        return InstallOffer::Installed;
+    }
+    out::status_line(&format!(
+        "{tool} is installed but not on PATH yet; open a new terminal and run this again"
+    ));
+    InstallOffer::Stopped
+}
+
+/// True when the CLI `tool` can be launched. When it cannot, says so and
+/// offers to install it, or prints the install command, then returns false —
+/// so a caller can stop before resolving a model or printing anything else,
+/// which is the only thing a person without the tool needs to see.
+pub fn ensure_installed(tool: &str) -> bool {
+    if found(tool) {
+        return true;
+    }
+    out::error_line(&format!("{tool} is not installed on this machine"));
+    match offer_install(tool) {
+        InstallOffer::Installed => true,
+        InstallOffer::Stopped => false,
+        InstallOffer::NotOffered => {
+            out::status_line(&install_hint(tool));
+            false
+        }
+    }
 }
 
 /// Quotes one argument so a Windows child re-parses it as a single token; the
@@ -1120,4 +1213,47 @@ pub fn launch(tool: &str, model: &str, args: &[String], options: &GlobalOptions)
     }
     release(&endpoint);
     status
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn npm_tools_install_the_same_way_everywhere() {
+        let opencode = installer("opencode").unwrap();
+        assert_eq!(opencode.command, "npm i -g opencode-ai");
+        assert!(opencode.needs_npm);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn prime_agent_installs_with_its_script() {
+        assert_eq!(
+            installer("prime-agent").unwrap().command,
+            "curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | PRIME_AGENT_INSTALLER_NONINTERACTIVE=1 PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=1 sh"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn prime_agent_has_no_windows_installer() {
+        assert_eq!(installer("prime-agent"), None);
+        assert!(install_hint("prime-agent").contains("no Windows installer"));
+    }
+
+    #[test]
+    fn hint_shows_the_command_the_prompt_would_run() {
+        let installer = installer("claude").unwrap();
+        assert!(install_hint("claude").contains(&format!("`{}`", installer.command)));
+    }
+
+    #[test]
+    fn unknown_tool_has_no_installer() {
+        assert_eq!(installer("nope"), None);
+        assert_eq!(
+            install_hint("nope"),
+            "install nope and put it on PATH, then run this again"
+        );
+    }
 }

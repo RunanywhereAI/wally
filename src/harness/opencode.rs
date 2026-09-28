@@ -7,6 +7,7 @@ use crate::io::json::dump;
 use crate::io::output as out;
 
 use super::catalog_models::{catalog_models_with, CatalogModel};
+use super::declared_harness::{harness_header_value, DeclaredHarness, HARNESS_HEADER};
 use super::harness::{
     model_id_is_safe, refresh_and_recheck_model, report_cloud_session_invalid,
     report_not_signed_in, verify_cloud_session,
@@ -207,7 +208,14 @@ pub fn build_open_code_config(
     let provider = json!({
         "npm": "@ai-sdk/openai-compatible",
         "name": "RunAnywhere",
-        "options": { "baseURL": base_url, "apiKey": key },
+        // `options.headers` rides on every request (checked against opencode
+        // 1.18.31); the declaration makes attribution independent of
+        // opencode's own User-Agent.
+        "options": {
+            "baseURL": base_url,
+            "apiKey": key,
+            "headers": { HARNESS_HEADER: harness_header_value(DeclaredHarness::KOpencode) },
+        },
         "models": entries,
     });
     let config = json!({
@@ -256,16 +264,11 @@ pub fn launch_open_code_cloud_with(
         report_not_signed_in();
         return 1;
     }
-    // Refresh the catalog for next time without blocking, and reject a
-    // mistyped id from the cache. Fail open on an empty cache.
-    account::refresh_model_cache_if_stale(account::MODEL_CACHE_TTL_SECONDS);
-    if account::cache_has_models() && !account::model_is_cached(model) {
-        // Stale cache: refresh live and retry rather than reject a valid
-        // model.
-        if !refresh_and_recheck_model(&credentials, model) {
-            return 1;
-        }
-    }
+    // Before the catalog cache gate below, not after: that gate can reject a
+    // newly cataloged model outright, and a stale or expired access token
+    // must not be given the chance to fail the identity check first. Refresh
+    // here so the cache check that follows runs with a token already known
+    // good, instead of dead-ending a valid refresh token on "server is busy".
     match verify_cloud_session(console, &mut credentials) {
         Ok(_) => {}
         Err(err) => {
@@ -283,6 +286,16 @@ pub fn launch_open_code_cloud_with(
                 "could not confirm the cloud session ({}) - continuing on the stored session",
                 err.message
             ));
+        }
+    }
+    // Refresh the catalog for next time without blocking, and reject a
+    // mistyped id from the cache. Fail open on an empty cache.
+    account::refresh_model_cache_if_stale(account::MODEL_CACHE_TTL_SECONDS);
+    if account::cache_has_models() && !account::model_is_cached(model) {
+        // Stale cache: refresh live and retry rather than reject a valid
+        // model.
+        if !refresh_and_recheck_model(&credentials, model) {
+            return 1;
         }
     }
 
@@ -333,18 +346,9 @@ mod tests {
     //! `std::getenv`), not `var` (which drops a non-UTF-8 value entirely).
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use super::*;
-
-    /// Environment variables are process-global; hold this for the whole
-    /// body of any test that reads or writes them.
-    fn env_lock() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+    use crate::util::env_lock::lock as env_lock;
 
     #[test]
     fn scoped_config_restores_non_utf8_previous_value_on_drop() {

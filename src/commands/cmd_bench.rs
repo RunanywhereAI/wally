@@ -33,8 +33,6 @@ const VLM_PROMPT: &str = "Describe this image in detail.";
 const TTS_SHORT: &str = "Hello, this is a test.";
 const TTS_MEDIUM: &str = "The quick brown fox jumps over the lazy dog. Machine learning models can generate speech from text with remarkable quality and natural intonation.";
 
-const DEFAULT_VLM_IMAGE: &str = "docs/gifs/npu-model-tag-screenshot.png";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Modality {
     Llm,
@@ -457,16 +455,18 @@ fn stt_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
     let _ = stt_transcribe(&make_pcm16(0.5, false)); // warmup, errors ignored
 
     let t0 = now_ms();
-    let r = stt_transcribe(&make_pcm16(c.scenario.seconds, c.scenario.sine)).inspect_err(|_| {
+    // The transcript text itself isn't reported (RTF is commons-owned, not
+    // derived here) -- only that transcription succeeded. An empty
+    // transcript is a valid, successful result for the `Silent 2s` scenario
+    // on any engine that correctly suppresses silence, so it must not be
+    // rejected as a failed trial; it keeps the timing/memory metrics below.
+    stt_transcribe(&make_pcm16(c.scenario.seconds, c.scenario.sine)).inspect_err(|_| {
         unload_category(c.category);
     })?;
     m.end_to_end_ms = (now_ms() - t0) as f64;
     m.memory_delta_bytes = mem_before - available_ram_bytes();
     unload_category(c.category);
 
-    if r.text.is_empty() {
-        return Err("no transcript".to_string());
-    }
     // RTF is commons-owned; do not derive from wall / scenario / duration.
     m.real_time_factor = 0.0;
     Ok(())
@@ -494,9 +494,18 @@ fn tts_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
     Ok(())
 }
 
+/// Categories to clear before loading a VLM trial's model: its own category
+/// (Multimodal or Vision) plus Language, which a multimodal model may also
+/// occupy. Pulled out as a pure function so the pairing is testable without
+/// the unload FFI call itself.
+fn vlm_preload_unload_targets(category: v1::ModelCategory) -> [v1::ModelCategory; 2] {
+    [category, v1::ModelCategory::Language]
+}
+
 fn vlm_trial(c: &TrialCtx, m: &mut Metrics) -> Result<(), String> {
-    unload_category(v1::ModelCategory::Multimodal);
-    unload_category(v1::ModelCategory::Language);
+    for category in vlm_preload_unload_targets(c.category) {
+        unload_category(category);
+    }
     let mem_before = available_ram_bytes();
     m.load_ms = load_model_timed(&c.model_id, c.category, c.framework)?;
 
@@ -530,6 +539,17 @@ struct BenchRow {
     error: String,
     trials: i32,
     med: Metrics,
+}
+
+// `wally bench` reports per-row success/error but, until this, always
+// returned 0 -- a CI step piping bench into a pass/fail gate saw every run as
+// green even when every row failed. Non-zero iff at least one row failed.
+fn bench_exit_code(rows: &[BenchRow]) -> i32 {
+    if rows.iter().any(|r| !r.success) {
+        1
+    } else {
+        0
+    }
 }
 
 type TrialFn = fn(&TrialCtx, &mut Metrics) -> Result<(), String>;
@@ -669,7 +689,19 @@ struct BenchModel {
     modality: Modality,
 }
 
-fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
+/// `collect_models`'s outcome for the requested (or every) downloaded model:
+/// `models` is what's benchmarkable, `only_model_unsupported` is true when a
+/// downloaded registry entry passed the `only_model` filter but was then
+/// dropped below (builtin framework or a category bench doesn't cover). It
+/// is only consulted when `only_model` is non-empty, where that entry can
+/// only be the requested model -- so it tells "downloaded but not
+/// benchmarkable" apart from "never downloaded at all".
+struct CollectedModels {
+    models: Vec<BenchModel>,
+    only_model_unsupported: bool,
+}
+
+fn collect_models(only_model: &str) -> Result<CollectedModels, String> {
     let mut buf = proto::ProtoBuffer::new();
     // SAFETY: rac_get_model_registry returns a process-lifetime handle; `buf`
     // is a freshly initialised, writable out-parameter for the call's duration.
@@ -685,6 +717,7 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
     let list: v1::ModelInfoList = proto::parse_proto_buffer(buf)?;
 
     let mut models = Vec::new();
+    let mut only_model_unsupported = false;
     for m in list.models {
         if !only_model.is_empty() && m.id != only_model {
             continue;
@@ -694,12 +727,15 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
         if framework == v1::InferenceFramework::FoundationModels
             || framework == v1::InferenceFramework::SystemTts
         {
-            continue; // builtin
+            only_model_unsupported = true; // downloaded, but builtin
+            continue;
         }
         let Ok(category) = v1::ModelCategory::try_from(m.category) else {
+            only_model_unsupported = true; // downloaded, but unrecognized category
             continue;
         };
         let Some(modality) = modality_of(category) else {
+            only_model_unsupported = true; // downloaded, but not a benchmarked modality
             continue;
         };
         models.push(BenchModel {
@@ -708,7 +744,57 @@ fn collect_models(only_model: &str) -> Result<Vec<BenchModel>, String> {
             modality,
         });
     }
-    Ok(models)
+    Ok(CollectedModels {
+        models,
+        only_model_unsupported,
+    })
+}
+
+/// Message for a resolved model that isn't in the downloaded registry.
+/// Names the fix with the ref the caller actually typed (`model_ref_arg`),
+/// which `wally models pull` accepts directly, rather than only reporting
+/// the resolved registry id (`only_model`) as unrecognized.
+fn model_not_downloaded_error(only_model: &str, model_ref_arg: &str) -> String {
+    format!("model '{only_model}' is not downloaded; pull it first with `wally models pull {model_ref_arg}`")
+}
+
+/// Message for a model that *is* downloaded but that `collect_models`
+/// filtered out (a builtin framework, or a category bench doesn't cover —
+/// vad, embedding, image-generation). Distinct from
+/// `model_not_downloaded_error`: telling someone to `models pull` a model
+/// they already have just sends them in a circle.
+fn model_not_benchmarkable_error(only_model: &str) -> String {
+    format!("model '{only_model}' is downloaded but not benchmarkable (unsupported category or built-in engine)")
+}
+
+/// Picks the right diagnostic when `collect_models` came back empty: no
+/// models at all, a specific ref that was never downloaded, or (the case
+/// `collect_models.only_model_unsupported` exists for) a specific model
+/// that *is* downloaded but isn't one bench can run.
+fn no_models_to_bench_error(
+    only_model: &str,
+    model_ref_arg: &str,
+    only_model_unsupported: bool,
+) -> String {
+    if only_model.is_empty() {
+        "no downloaded models to benchmark (pull one with `wally models pull`)".to_string()
+    } else if only_model_unsupported {
+        model_not_benchmarkable_error(only_model)
+    } else {
+        model_not_downloaded_error(only_model, model_ref_arg)
+    }
+}
+
+/// Message for a VLM row skipped because no usable `--vlm-image` was given.
+/// wally ships no built-in sample, so an empty `path` (the flag was never
+/// passed) and a non-empty one that doesn't exist on disk get distinct
+/// wording rather than both claiming a nonexistent in-tree default.
+fn vlm_image_missing_error(path: &str) -> String {
+    if path.is_empty() {
+        "wally ships no built-in VLM sample image; pass --vlm-image <path>".to_string()
+    } else {
+        format!("VLM sample image not found: '{path}' (pass --vlm-image <path> pointing at a real file)")
+    }
 }
 
 pub fn run_bench(
@@ -754,37 +840,41 @@ pub fn run_bench(
         }
     }
 
-    let models = match collect_models(&only_model) {
-        Ok(models) => models,
+    let collected = match collect_models(&only_model) {
+        Ok(collected) => collected,
         Err(error) => {
             out::error_line(&error);
             return 1;
         }
     };
+    let models = collected.models;
     if models.is_empty() {
-        let message = if only_model.is_empty() {
-            "no downloaded models to benchmark (pull one with `wally models pull`)".to_string()
-        } else {
-            format!("model '{only_model}' is not a downloaded benchmarkable model")
-        };
+        // collect_models only ever scans already-downloaded registry
+        // entries, so a resolved-but-not-yet-pulled local/HF/URL ref lands
+        // here too. wally does not auto-pull it for a benchmark run; name
+        // the fix instead of just reporting the ref as unrecognized. But a
+        // model that *is* downloaded and simply isn't benchmarkable (builtin
+        // framework, or a category bench doesn't cover) gets its own
+        // diagnostic instead of a `models pull` hint that would just send
+        // the caller in a circle.
+        let message =
+            no_models_to_bench_error(&only_model, model_ref_arg, collected.only_model_unsupported);
         out::error_line(&message);
         return 1;
     }
 
-    // `--vlm-image`'s default is a path inside the wally source tree
-    // (docs/gifs/...), so it silently doesn't exist for anyone benchmarking an
-    // installed binary from any other cwd. Checked once, outside the loop: the
+    // wally ships no built-in VLM sample image (there is no default path
+    // that resolves inside an installed binary), so --vlm-image is required
+    // to benchmark VLM models. Checked once, outside the loop: the
     // llama.cpp load failure it otherwise causes reports "Input is invalid"
     // with the real cause buried in the engine's own stderr lines above it.
-    let vlm_image_exists = std::path::Path::new(vlm_image).exists();
+    let vlm_image_exists = !vlm_image.is_empty() && std::path::Path::new(vlm_image).exists();
 
     let mut rows: Vec<BenchRow> = Vec::new();
     for model in &models {
         for scenario in scenarios_for(model.modality) {
             if model.modality == Modality::Vlm && !vlm_image_exists {
-                let error = format!(
-                    "VLM sample image not found: '{vlm_image}' (pass --vlm-image <path>; the built-in default only resolves from inside the wally source tree)"
-                );
+                let error = vlm_image_missing_error(vlm_image);
                 out::status_line(&format!(
                     "skipping {} {} — {}: {error}",
                     modality_label(model.modality),
@@ -852,7 +942,7 @@ pub fn run_bench(
         }
         json.end_array().end_object();
         out::result_line(json.str());
-        return 0;
+        return bench_exit_code(&rows);
     }
 
     out::result_line("");
@@ -887,7 +977,7 @@ pub fn run_bench(
             write_bench_row(&line);
         }
     }
-    0
+    bench_exit_code(&rows)
 }
 
 pub fn register_bench(app: &mut App) {
@@ -898,7 +988,8 @@ pub fn register_bench(app: &mut App) {
     cmd.add_option(
         "model",
         ValueType::Text,
-        "Model id, local bundle path, hf.co/... or URL (default: all downloaded)",
+        "Model id, local bundle path, hf.co/... or URL; must already be \
+         downloaded (`wally models pull <ref>` first) -- default: all downloaded",
     );
     // engine_choices() is computed eagerly, at registration time, matching the
     // C++ (`std::string("Engine hint (") + engine_choices() + ")"` was itself
@@ -919,18 +1010,19 @@ pub fn register_bench(app: &mut App) {
     // range [2.22507e-308 - 1.79769e+308]". The accepted set is unchanged:
     // trials is an int, so anything above INT_MAX already failed to parse.
     .check(Validator::Range(1, i32::MAX as i64));
+    // No `default_val` here: wally ships no built-in VLM sample image, so a
+    // default that looked like a real path (previously a wally-source-tree
+    // path that doesn't exist in an installed binary) only hid that the flag
+    // is required. Its absence is now explicit -- see vlm_image_missing_error.
     cmd.add_option(
         "--vlm-image",
         ValueType::Text,
-        "Image file for VLM benchmarking",
-    )
-    .default_val(DEFAULT_VLM_IMAGE);
+        "Image file for VLM benchmarking (required to benchmark VLM models)",
+    );
     cmd.callback(|parsed, options| {
         let model = parsed.get_str("model").unwrap_or_default();
         let trials = parsed.get_i64("--trials").unwrap_or(3) as i32;
-        let vlm_image = parsed
-            .get_str("--vlm-image")
-            .unwrap_or_else(|| DEFAULT_VLM_IMAGE.to_string());
+        let vlm_image = parsed.get_str("--vlm-image").unwrap_or_default();
         let engine = parsed.get_str("--engine").unwrap_or_default();
         run_bench(options, &model, trials, &vlm_image, &engine)
     });
@@ -974,5 +1066,144 @@ mod ljust_bytes_tests {
         let truncated = ljust_bytes("café", 4);
         assert_eq!(truncated, vec![b'c', b'a', b'f', 0xC3]);
         assert!(std::str::from_utf8(&truncated).is_err());
+    }
+}
+
+#[cfg(test)]
+mod vlm_preload_unload_targets_tests {
+    use super::vlm_preload_unload_targets;
+    use crate::io::proto::v1::ModelCategory;
+
+    #[test]
+    fn unloads_vision_when_trial_category_is_vision() {
+        // Before the fix this hardcoded Multimodal, so a Vision-categorized
+        // model's own slot was never cleared before reloading into it.
+        let targets = vlm_preload_unload_targets(ModelCategory::Vision);
+        assert!(targets.contains(&ModelCategory::Vision));
+    }
+
+    #[test]
+    fn still_unloads_multimodal_when_trial_category_is_multimodal() {
+        let targets = vlm_preload_unload_targets(ModelCategory::Multimodal);
+        assert!(targets.contains(&ModelCategory::Multimodal));
+    }
+
+    #[test]
+    fn always_unloads_language_too() {
+        for category in [ModelCategory::Vision, ModelCategory::Multimodal] {
+            assert!(vlm_preload_unload_targets(category).contains(&ModelCategory::Language));
+        }
+    }
+}
+
+#[cfg(test)]
+mod model_not_downloaded_error_tests {
+    use super::{model_not_benchmarkable_error, model_not_downloaded_error};
+
+    #[test]
+    fn names_wally_models_pull_with_the_ref_the_caller_typed() {
+        // The caller's own ref (an hf.co/URL/local-path form) is what
+        // `wally models pull` accepts, not necessarily the resolved
+        // registry id, so the message must echo the former.
+        let message = model_not_downloaded_error("resolved-id", "hf.co/org/repo");
+        assert!(message.contains("wally models pull hf.co/org/repo"));
+        assert!(message.contains("resolved-id"));
+    }
+
+    #[test]
+    fn benchmarkable_error_does_not_suggest_pulling_an_already_downloaded_model() {
+        // A present-but-filtered model (builtin framework, or a category
+        // bench doesn't cover) must not tell the caller to `models pull`
+        // something they already have.
+        let message = model_not_benchmarkable_error("resolved-id");
+        assert!(!message.contains("models pull"));
+        assert!(message.contains("resolved-id"));
+    }
+}
+
+#[cfg(test)]
+mod no_models_to_bench_error_tests {
+    use super::no_models_to_bench_error;
+
+    #[test]
+    fn empty_only_model_reports_nothing_downloaded_at_all() {
+        let message = no_models_to_bench_error("", "", false);
+        assert!(message.contains("no downloaded models to benchmark"));
+    }
+
+    #[test]
+    fn unsupported_downloaded_model_gets_the_benchmarkability_diagnostic_not_a_pull_hint() {
+        // Before this, any empty `collect_models` result with a non-empty
+        // `only_model` always got the "pull it first" message, even when the
+        // model was downloaded and simply filtered out as not benchmarkable.
+        let message = no_models_to_bench_error("resolved-id", "hf.co/org/repo", true);
+        assert!(
+            !message.contains("models pull"),
+            "should not send an already-downloaded model back through `models pull`: {message}"
+        );
+        assert!(message.contains("resolved-id"));
+    }
+
+    #[test]
+    fn truly_missing_model_still_gets_the_pull_hint() {
+        let message = no_models_to_bench_error("resolved-id", "hf.co/org/repo", false);
+        assert!(message.contains("wally models pull hf.co/org/repo"));
+    }
+}
+
+#[cfg(test)]
+mod vlm_image_missing_error_tests {
+    use super::vlm_image_missing_error;
+
+    #[test]
+    fn does_not_claim_an_in_tree_default_resolves() {
+        // Regression: the old message said "the built-in default only
+        // resolves from inside the wally source tree", implying a fallback
+        // that never actually existed for an installed binary.
+        for path in [
+            "",
+            "docs/gifs/npu-model-tag-screenshot.png",
+            "/no/such/file.png",
+        ] {
+            let message = vlm_image_missing_error(path);
+            assert!(
+                !message.contains("resolves from inside the wally source tree"),
+                "message still implies an in-tree default: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn says_no_built_in_sample_ships_when_flag_is_absent() {
+        assert!(vlm_image_missing_error("").contains("ships no built-in"));
+    }
+}
+
+#[cfg(test)]
+mod bench_exit_code_tests {
+    use super::{bench_exit_code, BenchRow, Metrics, Modality};
+
+    fn row(success: bool) -> BenchRow {
+        BenchRow {
+            model_id: "m".to_string(),
+            modality: Modality::Llm,
+            scenario: "s".to_string(),
+            success,
+            error: String::new(),
+            trials: 1,
+            med: Metrics::default(),
+        }
+    }
+
+    #[test]
+    fn nonzero_when_any_row_failed() {
+        let rows = vec![row(true), row(false)];
+        assert_eq!(bench_exit_code(&rows), 1);
+    }
+
+    #[test]
+    fn zero_when_every_row_succeeded() {
+        let rows = vec![row(true), row(true)];
+        assert_eq!(bench_exit_code(&rows), 0);
     }
 }

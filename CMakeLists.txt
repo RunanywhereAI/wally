@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.27)
 
 # The product version is read from versions.toml, the single source for every
 # version and pin in this repo -- never hardcoded here. Parsed before project()

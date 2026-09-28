@@ -104,15 +104,16 @@ fn platform_base() -> String {
 }
 
 // The on-device model store, matching harness/local_models.rs: {base}/Models
-// or {base}/RunAnywhere/Models. Every base it can derive is checked -- the env
-// override, the kit's answer, and the platform default -- and the first store
-// that actually exists wins, so a missing bootstrap cannot hide it.
-fn models_directory() -> String {
+// or {base}/RunAnywhere/Models. Every base it can derive is checked -- the
+// global --home override, the env override, the kit's answer, and the
+// platform default -- and the first store that actually exists wins, so a
+// missing bootstrap cannot hide it.
+fn models_directory(home_override: &str) -> String {
     let mut bases: Vec<String> = Vec::new();
     if let Some(env) = getenv("RUNANYWHERE_HOME") {
         bases.push(env);
     }
-    let home = cli_paths::resolve_home("");
+    let home = cli_paths::resolve_home(home_override);
     if !home.is_empty() {
         bases.push(home);
     }
@@ -217,6 +218,7 @@ fn confirm(question: &str) -> bool {
     matches!(line.as_bytes().first(), Some(b'y') | Some(b'Y'))
 }
 
+#[derive(Debug)]
 struct Target {
     label: &'static str,
     path: PathBuf,
@@ -293,8 +295,36 @@ fn windows_install_directory(exe: &str) -> Option<PathBuf> {
         .then_some(expected)
 }
 
+// The exe-related targets uninstall may delete: only install.sh's own tree
+// (verified by `install_sh_layout`), never a Homebrew install or a source
+// build -- uninstall cannot prove it laid either of those down, so it must
+// only report them (see the call site), never delete. A pure function so the
+// decision is unit-testable without touching the real filesystem outside a
+// fixture.
+#[cfg(not(windows))]
+fn unix_exe_targets(exe: &str) -> Vec<Target> {
+    let mut targets = Vec::new();
+    let Some((lib_dir, launcher)) = install_sh_layout(exe) else {
+        return targets;
+    };
+    if let Some(link) = launcher_target(&launcher, &lib_dir) {
+        targets.push(Target {
+            label: "launcher",
+            path: link,
+        });
+    }
+    targets.push(Target {
+        label: "install",
+        path: lib_dir,
+    });
+    targets
+}
+
 /// Shared by `wally uninstall` and the whole-argv `-U/--uninstall` shortcut.
-pub fn run_uninstall(yes: bool) -> i32 {
+/// `home_override` is the global `--home` flag, so uninstall removes the same
+/// model store the other model commands are pointed at, not just the default
+/// one.
+pub fn run_uninstall(yes: bool, home_override: &str) -> i32 {
     let mut targets: Vec<Target> = Vec::new();
     // Windows cannot delete the program file backing its own running
     // process (unlike a Unix inode, which stays live under an unlinked
@@ -303,7 +333,7 @@ pub fn run_uninstall(yes: bool) -> i32 {
     #[cfg(windows)]
     let mut manual_removal: Option<PathBuf> = None;
 
-    let models = models_directory();
+    let models = models_directory(home_override);
     if !models.is_empty() {
         targets.push(Target {
             label: "models",
@@ -331,38 +361,22 @@ pub fn run_uninstall(yes: bool) -> i32 {
         }
         #[cfg(not(windows))]
         {
-            let exe_path = PathBuf::from(&exe);
-            if let Some((lib_dir, launcher)) = install_sh_layout(&exe) {
-                if let Some(link) = launcher_target(&launcher, &lib_dir) {
-                    targets.push(Target {
-                        label: "launcher",
-                        path: link,
-                    });
-                }
-                targets.push(Target {
-                    label: "install",
-                    path: lib_dir,
-                });
-            } else {
-                targets.push(Target {
-                    label: "binary",
-                    path: exe_path.clone(),
-                });
-                // The Metal shader bundles the installer placed beside the
-                // binary. Only *.bundle next to wally, never anything else
-                // on PATH.
-                if let Some(parent) = exe_path.parent() {
-                    if let Ok(entries) = std::fs::read_dir(parent) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.extension().and_then(|e| e.to_str()) == Some("bundle") {
-                                targets.push(Target {
-                                    label: "bundle",
-                                    path,
-                                });
-                            }
-                        }
-                    }
+            targets.extend(unix_exe_targets(&exe));
+            // Only install.sh's own tree is ever deleted (unix_exe_targets
+            // above); a Homebrew install or an unverified (e.g. source-build)
+            // location is reported instead, the same way the Windows branch
+            // only reports manual_removal rather than deleting an unverified
+            // binary.
+            if install_sh_layout(&exe).is_none() {
+                if crate::commands::cmd_update::is_homebrew_managed(&exe) {
+                    out::status_line(
+                        "wally was installed with Homebrew; run `brew uninstall wally` to \
+                         remove the binary.",
+                    );
+                } else {
+                    out::status_line(&format!(
+                        "{exe} could not be verified as wally's own install; leaving it in place."
+                    ));
                 }
             }
         }
@@ -530,12 +544,13 @@ pub fn register_help(app: &mut App) -> Rc<RefCell<Option<App>>> {
 pub fn register_uninstall(app: &mut App) {
     let cmd = app.add_subcommand("uninstall", "Remove wally, its models and its config");
     cmd.add_flag("-y,--yes", "Skip the confirmation prompt");
-    cmd.callback(|parsed, _options| run_uninstall(parsed.flag("--yes")));
+    cmd.callback(|parsed, options| run_uninstall(parsed.flag("--yes"), &options.home_override));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::env_lock::lock as env_lock;
 
     // Dir_size (uninstall's pre-delete size preview) must follow a
     // symlink to a regular file, matching C++'s is_regular_file(ec)/
@@ -607,14 +622,32 @@ mod tests {
     // exist) lives in tests/test_wally_help_routing.rs, which drives the real
     // built binary through app::run's non-shortcut parse path.
 
-    // Serializes every test below that sets HOME -- the same pattern
-    // src/harness/agents.rs uses for its own env-touching tests.
+    // `wally uninstall` used to ignore the global `--home` override and
+    // always resolve against HOME/RUNANYWHERE_HOME, so it could remove a
+    // different model store than the one `wally models` was just pointed at.
+    #[test]
     #[cfg(unix)]
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap()
+    fn models_directory_prefers_the_home_override_over_home() {
+        let _lock = env_lock();
+        let home_a = tempfile::tempdir().expect("tempdir A");
+        let home_b = tempfile::tempdir().expect("tempdir B");
+        std::fs::create_dir_all(home_b.path().join("Models")).expect("mkdir B/Models");
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe {
+            std::env::set_var("HOME", home_a.path());
+            std::env::remove_var("RUNANYWHERE_HOME");
+        }
+
+        let result = models_directory(&home_b.path().to_string_lossy());
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+
+        assert!(
+            result.starts_with(home_b.path().to_str().expect("utf8 path")),
+            "models_directory({home_b:?}) must resolve against the override, not HOME \
+             ({home_a:?}): got {result}"
+        );
     }
 
     // A real install.sh tree in a temp HOME: LIB_DIR with a `bin/wally`
@@ -690,6 +723,68 @@ mod tests {
         unsafe { std::env::remove_var("HOME") };
     }
 
+    // `wally uninstall` must never delete a binary it cannot prove came from
+    // install.sh -- a Homebrew Cellar install is the case this comment fixed.
+    #[test]
+    #[cfg(unix)]
+    fn unix_exe_targets_skips_a_homebrew_binary() {
+        let _lock = env_lock();
+        let fixture = install_sh_layout_fixture();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("HOME", &fixture.home_path) };
+
+        let targets = unix_exe_targets("/opt/homebrew/Cellar/wally/0.5.10/bin/wally");
+        assert!(
+            targets.is_empty(),
+            "a Homebrew-managed binary is never install.sh's own tree, so there is nothing to \
+             delete: {targets:?}"
+        );
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+    }
+
+    // A source build (arbitrary path, no install.sh tree behind it) must be
+    // left alone too -- uninstall has no way to verify it owns the binary.
+    #[test]
+    #[cfg(unix)]
+    fn unix_exe_targets_skips_an_unverified_source_build() {
+        let _lock = env_lock();
+        let fixture = install_sh_layout_fixture();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("HOME", &fixture.home_path) };
+
+        let targets = unix_exe_targets("/home/dev/wally/target/release/wally");
+        assert!(
+            targets.is_empty(),
+            "an unverified binary location is never deleted: {targets:?}"
+        );
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+    }
+
+    // The one case that IS deleted -- install.sh's own tree -- must still
+    // produce the launcher + install targets, unaffected by the two skips
+    // above.
+    #[test]
+    #[cfg(unix)]
+    fn unix_exe_targets_still_covers_the_install_sh_layout() {
+        let _lock = env_lock();
+        let fixture = install_sh_layout_fixture();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe { std::env::set_var("HOME", &fixture.home_path) };
+
+        let resolved_exe = std::fs::canonicalize(&fixture.exe).expect("canonicalize exe");
+        let targets = unix_exe_targets(&resolved_exe.to_string_lossy());
+        let labels: Vec<&str> = targets.iter().map(|t| t.label).collect();
+        assert!(labels.contains(&"launcher"), "targets: {labels:?}");
+        assert!(labels.contains(&"install"), "targets: {labels:?}");
+
+        // SAFETY: still holding env_lock().
+        unsafe { std::env::remove_var("HOME") };
+    }
+
     #[test]
     #[cfg(unix)]
     fn launcher_target_accepts_a_symlink_that_resolves_into_lib_dir() {
@@ -734,24 +829,13 @@ mod tests {
         assert_eq!(launcher_target(&dangling, &lib_dir), None);
     }
 
-    // Serializes every test below that sets LOCALAPPDATA -- same pattern as
-    // the Unix env_lock() above, kept separate since it guards a different
-    // variable and only ever runs on Windows.
-    #[cfg(windows)]
-    fn windows_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-            .lock()
-            .unwrap()
-    }
-
     #[test]
     #[cfg(windows)]
     fn windows_install_directory_finds_the_directory_from_the_running_exe() {
-        let _lock = windows_env_lock();
+        let _lock = env_lock();
         let temp = tempfile::tempdir().expect("tempdir");
         let local_app_data = temp.path();
-        // SAFETY: windows_env_lock() is held for this whole test body.
+        // SAFETY: env_lock() is held for this whole test body.
         unsafe { std::env::set_var("LOCALAPPDATA", local_app_data) };
 
         let install_dir = local_app_data.join("Programs").join("wally");
@@ -771,24 +855,24 @@ mod tests {
             "a verbatim exe path must match too"
         );
 
-        // SAFETY: still holding windows_env_lock().
+        // SAFETY: still holding env_lock().
         unsafe { std::env::remove_var("LOCALAPPDATA") };
     }
 
     #[test]
     #[cfg(windows)]
     fn windows_install_directory_rejects_a_binary_outside_the_programs_tree() {
-        let _lock = windows_env_lock();
+        let _lock = env_lock();
         let temp = tempfile::tempdir().expect("tempdir");
         let local_app_data = temp.path();
-        // SAFETY: windows_env_lock() is held for this whole test body.
+        // SAFETY: env_lock() is held for this whole test body.
         unsafe { std::env::set_var("LOCALAPPDATA", local_app_data) };
 
         let elsewhere = local_app_data.join("elsewhere-wally.exe");
         std::fs::write(&elsewhere, b"stub").expect("write elsewhere");
         assert!(windows_install_directory(&elsewhere.to_string_lossy()).is_none());
 
-        // SAFETY: still holding windows_env_lock().
+        // SAFETY: still holding env_lock().
         unsafe { std::env::remove_var("LOCALAPPDATA") };
     }
 }

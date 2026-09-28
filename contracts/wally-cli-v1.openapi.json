@@ -1176,6 +1176,56 @@
         ],
         "type": "object"
       },
+      "OpenRouterFeature": {
+        "description": "One request feature, as OpenRouter names it (for example tools, reasoning). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenRouterInputModality": {
+        "description": "One input modality, as OpenRouter names it (for example text, image). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenRouterOutputModality": {
+        "description": "One output modality, as OpenRouter names it (for example text). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenRouterPricing": {
+        "additionalProperties": false,
+        "description": "USD per ONE token, as decimal strings so no float rounds them. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+        "properties": {
+          "completion": {
+            "$ref": "#/components/schemas/UsdPerToken"
+          },
+          "input_cache_read": {
+            "$ref": "#/components/schemas/UsdPerToken"
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/UsdPerToken"
+          }
+        },
+        "required": [
+          "prompt",
+          "completion"
+        ],
+        "type": "object"
+      },
+      "OpenRouterQuantization": {
+        "description": "A weight precision, as OpenRouter names it (for example fp8, nvfp4). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenRouterSamplingParameter": {
+        "description": "One sampling parameter, as OpenRouter names it (for example temperature, top_p). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
       "PollResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1265,13 +1315,33 @@
       "PublicModel": {
         "additionalProperties": false,
         "properties": {
+          "context_length": {
+            "description": "The whole context window in tokens, prompt and output together -- not max_input_tokens, which is the largest prompt this deployment still answers. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "minimum": 1,
+            "type": "integer"
+          },
           "created": {
             "description": "OpenAI-shaped creation timestamp (unix seconds) the gateway reports; informational.",
             "minimum": 0,
             "type": "integer"
           },
+          "hugging_face_id": {
+            "description": "The Hugging Face repository OpenRouter groups this model's providers by (org/repo), or empty when the model is not on Hugging Face. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "maxLength": 255,
+            "pattern": "^([A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)?$",
+            "type": "string"
+          },
           "id": {
             "$ref": "#/components/schemas/PublicModelId"
+          },
+          "input_modalities": {
+            "description": "What a request may carry. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterInputModality"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           },
           "max_input_tokens": {
             "description": "The advertised ceiling on input tokens for this model -- what an OpenAI-shaped coding agent reads to decide when to compact. It is the largest prompt the engine still answers with one output token, not the raw context length: a prompt longer than this is refused with 400 before it is billed. null means the deployment has not established one.",
@@ -1280,6 +1350,11 @@
               "integer",
               "null"
             ]
+          },
+          "max_output_length": {
+            "description": "The most output tokens one request can be granted. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "minimum": 1,
+            "type": "integer"
           },
           "max_output_tokens": {
             "description": "The advertised ceiling on output tokens, when the deployment declares one separately from the context window. null means this model draws output from the single budget max_input_tokens already describes.",
@@ -1296,11 +1371,49 @@
             ],
             "type": "string"
           },
+          "name": {
+            "description": "The model's display name. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
           "object": {
             "const": "model"
           },
+          "output_modalities": {
+            "description": "What a response carries. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterOutputModality"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
           "owned_by": {
             "$ref": "#/components/schemas/ModelOwner"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/OpenRouterPricing"
+          },
+          "quantization": {
+            "$ref": "#/components/schemas/OpenRouterQuantization",
+            "description": "The served weights' precision, as OpenRouter names it. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it."
+          },
+          "supported_features": {
+            "description": "The request features this model honours, each measured live; an absent name is unsupported. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterFeature"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "supported_sampling_parameters": {
+            "description": "The sampling parameters this model honours, each measured live; an absent name is unsupported. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterSamplingParameter"
+            },
+            "type": "array",
+            "uniqueItems": true
           }
         },
         "required": [
@@ -1817,6 +1930,12 @@
         ],
         "title": "UsageTotals",
         "type": "object"
+      },
+      "UsdPerToken": {
+        "description": "A non-negative USD amount per token as a plain decimal string: never exponent form, no trailing zeros.",
+        "maxLength": 64,
+        "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$",
+        "type": "string"
       }
     }
   },
@@ -2236,7 +2355,7 @@
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
     "branch": "development",
-    "commit": "98665f50093d81f95e64399aaf5937ff5fbdafbd",
+    "commit": "deeec19d12df6fd601a906b3d1a7bb59ec2dcc4e",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

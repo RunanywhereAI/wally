@@ -107,6 +107,53 @@ fn download_start_result(
     }
 }
 
+/// Whether the SIGINT cancel request itself failed, distinct from whether the
+/// download later reports Cancelled. A non-SUCCESS rc wins with the generic
+/// description, same priority as download_start_result; only when the FFI
+/// call itself succeeded does a populated `error` field on the parsed result
+/// (or a decode failure) count as a failed cancel. `None` means the request
+/// went through.
+fn cancel_request_failed(
+    rc: sys::rac_result_t,
+    parsed: &Result<v1::DownloadCancelResult, String>,
+) -> Option<String> {
+    if rc != sys::SUCCESS {
+        return Some(out::describe_result(rc));
+    }
+    match parsed {
+        Err(message) => Some(message.clone()),
+        Ok(result) => result.error.as_ref().map(|error| {
+            if error.message.is_empty() {
+                "cancel rejected".to_string()
+            } else {
+                error.message.clone()
+            }
+        }),
+    }
+}
+
+/// Consumes one SIGINT "edge" for the cancel-retry gate: true only when the
+/// signal handler has fired since the last time this was called and no
+/// cancel is already in flight. The atomic is reset to false as part of the
+/// same check, not left latched true, so a failed cancel (which resets
+/// `cancel_sent`) waits for a genuine second Ctrl-C instead of re-tripping on
+/// the wait loop's next automatic 200ms poll tick.
+fn take_cancel_trigger(interrupted: &AtomicBool, cancel_sent: bool) -> bool {
+    if cancel_sent {
+        return false;
+    }
+    interrupted.swap(false, Ordering::SeqCst)
+}
+
+/// The "already downloaded, nothing to fetch" fast path is only safe right
+/// after a rescan that actually succeeded; a failed rescan (`refresh_ok`
+/// false) cannot rule out files deleted from disk since the registry was
+/// last written, so it must fall through to plan/start instead of trusting a
+/// stale `Downloaded` status.
+fn should_report_already_downloaded(refresh_ok: bool, status: Option<i32>) -> bool {
+    refresh_ok && status == Some(v1::ModelRegistryStatus::Downloaded as i32)
+}
+
 /// Shared pull flow (plan → start → progress → terminal state) for an
 /// already-registered model id. Returns 0 / 1 / 130 (cancel).
 pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
@@ -117,12 +164,18 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
     // were deleted since, and `wally models pull` would report success without
     // fetching anything. A refresh failure is not fatal here: the download path
     // that follows is the fallback, and refusing to pull because a rescan
-    // failed would be worse than pulling something already present.
-    if let Err(refresh_error) = refresh_registry() {
-        out::status_line(&format!(
-            "could not rescan local models ({refresh_error}); continuing from the registry as it stands"
-        ));
-    }
+    // failed would be worse than pulling something already present — but it
+    // does mean a failed refresh can never be trusted to say "already
+    // downloaded" (see should_report_already_downloaded below).
+    let refresh_ok = match refresh_registry() {
+        Ok(()) => true,
+        Err(refresh_error) => {
+            out::status_line(&format!(
+                "could not rescan local models ({refresh_error}); continuing from the registry as it stands"
+            ));
+            false
+        }
+    };
 
     // The orchestrator plans from embedded metadata (it does not consult the
     // registry), so fetch the saved ModelInfo first.
@@ -158,8 +211,11 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
     // to "download" zero remaining bytes, which it reports as a download that
     // completed instantly — a progress bar animating to 100% at whatever
     // (bytes / ~0 elapsed) works out to, not a real transfer rate. Nothing to
-    // fetch, so say so and stop before any of that renders.
-    if model_info.registry_status == Some(v1::ModelRegistryStatus::Downloaded as i32) {
+    // fetch, so say so and stop before any of that renders. But only when the
+    // rescan above actually ran: a failed refresh_ok=false status is stale by
+    // construction, and falling through to plan/start below is what
+    // rediscovers files deleted from disk.
+    if should_report_already_downloaded(refresh_ok, model_info.registry_status) {
         if options.json {
             let mut json = out::JsonWriter::new();
             json.begin_object()
@@ -305,7 +361,7 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
             if inner.got_progress && !inner.terminal {
                 renderer.update(&inner.last);
             }
-            if interrupted.load(Ordering::SeqCst) && !cancel_sent {
+            if take_cancel_trigger(&interrupted, cancel_sent) {
                 cancel_sent = true;
                 drop(inner);
                 renderer.finish();
@@ -318,13 +374,23 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
                 let cancel_bytes = crate::io::proto::serialize(&cancel_request);
                 let mut cancel_out = ProtoBuffer::new();
                 // SAFETY: cancel_bytes/cancel_out are valid for the duration of this call.
-                unsafe {
+                let cancel_rc = unsafe {
                     sys::rac_download_cancel_proto(
                         cancel_bytes.as_ptr(),
                         cancel_bytes.len(),
                         cancel_out.as_mut_ptr(),
                     )
                 };
+                let cancel_parsed = parse_proto_buffer::<v1::DownloadCancelResult>(cancel_out);
+                if let Some(failure) = cancel_request_failed(cancel_rc, &cancel_parsed) {
+                    // A failed cancel must not be a silent, permanent no-op: say
+                    // so, and let a later Ctrl-C retry instead of leaving the
+                    // reader waiting on a download that never got the message.
+                    out::error_line(&format!(
+                        "cancel request failed: {failure}; the download will continue in the background"
+                    ));
+                    cancel_sent = false;
+                }
                 inner = shared.inner.lock().unwrap_or_else(|e| e.into_inner());
             }
         }
@@ -335,6 +401,15 @@ pub fn pull_model_flow(options: &GlobalOptions, model_id: &str) -> i32 {
     }
     renderer.finish();
     unwire_progress_callback();
+    // The orchestrator keeps a task-map entry alive per download so cancel /
+    // resume / progress_poll can still find it after the worker thread exits;
+    // every terminal state (completed, cancelled, or failed below) leaves one
+    // behind unless something purges it. The call is documented idempotent
+    // and safe on every terminal path, so it runs unconditionally here rather
+    // than only on success.
+    let mut purged_tasks: usize = 0;
+    // SAFETY: purged_tasks is a valid out-param for this call only.
+    unsafe { sys::rac_download_cleanup_terminal_tasks_proto(&mut purged_tasks) };
 
     match v1::DownloadState::try_from(final_progress.state) {
         Ok(v1::DownloadState::Completed) => {}
@@ -477,5 +552,109 @@ mod download_start_result_tests {
         };
         let result = download_start_result(sys::SUCCESS, Ok(start.clone()));
         assert_eq!(result, Ok(start));
+    }
+}
+
+#[cfg(test)]
+mod should_report_already_downloaded_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_rescan_never_reports_already_downloaded() {
+        // The bug: a stale Downloaded status survived a failed refresh and
+        // returned success without fetching the files a broken rescan could
+        // not see were gone.
+        assert!(!should_report_already_downloaded(
+            false,
+            Some(v1::ModelRegistryStatus::Downloaded as i32)
+        ));
+    }
+
+    #[test]
+    fn a_successful_rescan_still_reports_already_downloaded() {
+        assert!(should_report_already_downloaded(
+            true,
+            Some(v1::ModelRegistryStatus::Downloaded as i32)
+        ));
+    }
+
+    #[test]
+    fn a_successful_rescan_with_no_downloaded_status_falls_through() {
+        assert!(!should_report_already_downloaded(true, None));
+    }
+}
+
+#[cfg(test)]
+mod cancel_request_failed_tests {
+    use super::*;
+
+    #[test]
+    fn non_success_rc_is_a_failure_even_with_a_clean_parse() {
+        let parsed: Result<v1::DownloadCancelResult, String> =
+            Ok(v1::DownloadCancelResult::default());
+        let failure = cancel_request_failed(sys::RAC_ERROR_NOT_INITIALIZED, &parsed);
+        assert_eq!(
+            failure,
+            Some(out::describe_result(sys::RAC_ERROR_NOT_INITIALIZED))
+        );
+    }
+
+    #[test]
+    fn success_rc_with_a_populated_error_field_is_a_failure() {
+        let parsed: Result<v1::DownloadCancelResult, String> = Ok(v1::DownloadCancelResult {
+            error: Some(v1::SdkError {
+                message: "task already finished".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let failure = cancel_request_failed(sys::SUCCESS, &parsed);
+        assert_eq!(failure, Some("task already finished".to_string()));
+    }
+
+    #[test]
+    fn success_rc_with_no_error_field_is_not_a_failure() {
+        let parsed: Result<v1::DownloadCancelResult, String> =
+            Ok(v1::DownloadCancelResult::default());
+        assert_eq!(cancel_request_failed(sys::SUCCESS, &parsed), None);
+    }
+}
+
+#[cfg(test)]
+mod take_cancel_trigger_tests {
+    use super::*;
+
+    #[test]
+    fn a_pending_interrupt_fires_once_and_clears_itself() {
+        let interrupted = AtomicBool::new(true);
+        assert!(take_cancel_trigger(&interrupted, false));
+        // The edge is consumed: the same signal cannot fire the gate twice.
+        assert!(!interrupted.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_failed_cancel_does_not_self_retry_on_the_next_poll_tick() {
+        // Regression for the case where `interrupted` stayed latched true
+        // forever: once a cancel fails, `cancel_sent` resets to false so a
+        // fresh Ctrl-C can retry, but without also clearing `interrupted`
+        // the *same* SIGINT kept re-tripping the gate on every 200ms wait
+        // loop wake-up instead of waiting for a real second signal.
+        let interrupted = AtomicBool::new(true);
+        assert!(take_cancel_trigger(&interrupted, false));
+        // Simulate the cancel failing: cancel_sent goes back to false, but
+        // no new SIGINT has arrived, so this must not fire again.
+        assert!(!take_cancel_trigger(&interrupted, false));
+    }
+
+    #[test]
+    fn no_interrupt_never_fires() {
+        let interrupted = AtomicBool::new(false);
+        assert!(!take_cancel_trigger(&interrupted, false));
+    }
+
+    #[test]
+    fn an_in_flight_cancel_suppresses_a_new_interrupt() {
+        let interrupted = AtomicBool::new(true);
+        assert!(!take_cancel_trigger(&interrupted, true));
     }
 }

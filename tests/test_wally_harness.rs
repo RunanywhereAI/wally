@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use wally::account::{self, ConsoleClient, Credentials, HttpRequest, HttpResponse};
 use wally::harness::{self, CatalogModel};
+use wally::net::http1::Server;
 
 use common::{env_lock, EnvGuard};
 
@@ -574,14 +575,14 @@ fn hermes_context_hint_surfaces_the_real_window() {
     );
 }
 
-// dsh reads our provider out of a settings document it is pointed at, so the
-// document is the contract. A missing apiKeyEnv fails every turn with "No API
+// dsh reads our provider from the `llm-pi-ai` row config, so that config is
+// the contract. A missing apiKeyEnv fails every turn with "No API
 // key for provider: runanywhere" (dsh 0.1.5), on a loopback route as much as
 // an upstream one, so the reference is always present and the launcher puts a
 // placeholder in the variable for a local server.
 #[test]
 fn deepseek_settings_carry_the_route() {
-    let upstream: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    let upstream: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         "https://inference.runanywhere.ai/api-dev/v1",
         "RUNANYWHERE_API_KEY",
         &[CatalogModel {
@@ -591,8 +592,8 @@ fn deepseek_settings_carry_the_route() {
             ..Default::default()
         }],
     ))
-    .expect("parse settings");
-    let provider = &upstream["llm-pi-ai"]["providers"]["runanywhere"];
+    .expect("parse llm config");
+    let provider = &upstream["providers"]["runanywhere"];
     assert_eq!(provider["api"], json!("openai-completions"));
     assert_eq!(
         provider["baseURL"],
@@ -608,10 +609,10 @@ fn deepseek_settings_carry_the_route() {
     assert_eq!(
         provider["models"][0]["maxTokens"],
         json!(32768),
-        "the catalog's real limits must reach the settings document"
+        "the catalog's real limits must reach the llm config"
     );
 
-    let local: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    let local: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         "http://127.0.0.1:52431/v1",
         "RUNANYWHERE_API_KEY",
         &[CatalogModel {
@@ -620,15 +621,15 @@ fn deepseek_settings_carry_the_route() {
             ..Default::default()
         }],
     ))
-    .expect("parse settings");
+    .expect("parse llm config");
     assert_eq!(
-        local["llm-pi-ai"]["providers"]["runanywhere"]["apiKeyEnv"],
+        local["providers"]["runanywhere"]["apiKeyEnv"],
         json!("RUNANYWHERE_API_KEY"),
         "a local route must still name the key reference, or dsh refuses the turn"
     );
 
     // The whole catalog reaches dsh's settings, not just the launched model.
-    let many: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    let many: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         "https://inference.runanywhere.ai/api-dev/v1",
         "RUNANYWHERE_API_KEY",
         &[
@@ -646,27 +647,26 @@ fn deepseek_settings_carry_the_route() {
             },
         ],
     ))
-    .expect("parse settings");
+    .expect("parse llm config");
     assert_eq!(
-        many["llm-pi-ai"]["providers"]["runanywhere"]["models"]
+        many["providers"]["runanywhere"]["models"]
             .as_array()
             .expect("models array")
             .len(),
         3,
-        "every catalog model must reach the dsh settings document"
+        "every catalog model must reach the dsh llm config"
     );
 }
 
-// The overlay is the only thing that reaches dsh: it repoints the settings
-// row at our document and names our provider for a fresh agent. Getting
-// either row id wrong is reported on stderr as an unmatched target and
-// otherwise ignored.
+// The overlay is the only thing that reaches dsh: it puts our provider on
+// the llm-pi-ai row and names it for a fresh agent. Getting either row id
+// wrong is reported on stderr as an unmatched target and otherwise ignored.
 #[test]
 fn deepseek_patch_targets_both_rows() {
-    let patch = harness::build_deep_seek_patch("/tmp/x.json", "glm-5.3-flash");
+    let patch = harness::build_deep_seek_patch(r#"{"providers":{}}"#, "glm-5.3-flash");
     assert!(
-        patch.contains("- id: settings\n") && patch.contains("path: '/tmp/x.json'"),
-        "the settings row must be repointed at our document: {patch}"
+        patch.contains("- id: llm-pi-ai\n  config: {\"providers\":{}}\n"),
+        "our provider must go on the llm-pi-ai row: {patch}"
     );
     assert!(
         patch.contains("- id: agent-default-model\n")
@@ -844,12 +844,12 @@ fn local_endpoint_limits_reach_every_harness() {
         &catalog,
     ))
     .expect("build_open_claw_config must emit valid JSON");
-    let deepseek: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+    let deepseek: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
         &endpoint.base_url,
         "TEST_KEY",
         &catalog,
     ))
-    .expect("build_deep_seek_settings must emit valid JSON");
+    .expect("build_deep_seek_llm_config must emit valid JSON");
 
     assert_eq!(catalog.len(), 1, "an alias still resolves to one entry");
     assert_eq!(catalog[0].context_window, 32768);
@@ -863,7 +863,7 @@ fn local_endpoint_limits_reach_every_harness() {
         4096
     );
     assert_eq!(
-        deepseek["llm-pi-ai"]["providers"]["runanywhere"]["models"][0]["maxTokens"],
+        deepseek["providers"]["runanywhere"]["models"][0]["maxTokens"],
         4096
     );
 
@@ -958,5 +958,253 @@ fn verify_cloud_session_unreachable_refresh_is_unverified_not_bad() {
         error.unverified,
         "an unreachable console must report the session as UNVERIFIED, not as bad: {}",
         error.message
+    );
+}
+
+// A model stored through a file symlink (rather than a plain copy) must
+// still be discovered: `scan_model_dir` used to look at the link itself
+// (`file_type()`), see neither a directory nor a regular file, and skip the
+// weight file entirely -- which left the whole model directory looking empty
+// (no manifest, no weights) and omitted from the result.
+#[cfg(unix)]
+#[test]
+fn local_models_discovers_a_symlinked_weight_file() {
+    let root = tempfile::tempdir().expect("temp dir");
+
+    let store = root.path().join("store");
+    std::fs::create_dir_all(&store).expect("mkdir store");
+    let real_weights = store.join("weights.gguf");
+    std::fs::write(&real_weights, b"not a real gguf, just nonzero content")
+        .expect("write real weights");
+    let real_len = std::fs::metadata(&real_weights)
+        .expect("stat real weights")
+        .len();
+
+    let home = root.path().join("home");
+    let model_dir = home
+        .join("RunAnywhere")
+        .join("Models")
+        .join("llama-cpp")
+        .join("symlinked-model");
+    std::fs::create_dir_all(&model_dir).expect("mkdir model dir");
+    std::os::unix::fs::symlink(&real_weights, model_dir.join("weights.gguf"))
+        .expect("symlink weights into the model dir");
+
+    let models = harness::local_models(&home.to_string_lossy());
+    let found = models
+        .iter()
+        .find(|m| m.id == "symlinked-model")
+        .unwrap_or_else(|| panic!("symlinked-model missing from {models:?}"));
+    assert!(!found.path.is_empty(), "path must not be empty: {found:?}");
+    assert_eq!(
+        found.bytes as u64, real_len,
+        "bytes must match the symlink target: {found:?}"
+    );
+}
+
+// A symlinked *directory* is a different case from the symlinked *file*
+// above, and must not be followed: `scan_model_dir` keeps no visited set, so
+// a link back to the model dir itself (or any ancestor) would otherwise make
+// the walk loop forever, and a link elsewhere would pull a tree outside the
+// model folder into the byte count. The C++ original's
+// `recursive_directory_iterator` does not follow directory symlinks by
+// default; the walk must not either.
+#[cfg(unix)]
+#[test]
+fn local_models_does_not_follow_a_symlinked_directory() {
+    let root = tempfile::tempdir().expect("temp dir");
+
+    let home = root.path().join("home");
+    let model_dir = home
+        .join("RunAnywhere")
+        .join("Models")
+        .join("llama-cpp")
+        .join("looping-model");
+    std::fs::create_dir_all(&model_dir).expect("mkdir model dir");
+    let real_weights = model_dir.join("weights.gguf");
+    std::fs::write(&real_weights, b"not a real gguf, just nonzero content")
+        .expect("write real weights");
+    let real_len = std::fs::metadata(&real_weights)
+        .expect("stat real weights")
+        .len();
+
+    // A link from inside the model dir back up to `home`, one of its own
+    // ancestors. Following it re-enters the same tree (which contains this
+    // same link), so a walk that follows directory symlinks never finishes.
+    std::os::unix::fs::symlink(&home, model_dir.join("loop")).expect("symlink loop");
+
+    // Run off-thread and bound with a timeout so a regression here fails the
+    // test instead of hanging the run forever.
+    let home_for_thread = home.to_string_lossy().into_owned();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let models = harness::local_models(&home_for_thread);
+        // If the receiver already gave up (timed out below), there's no one
+        // left to send to; that's fine, the leaked thread doesn't affect the
+        // assertions.
+        let _ = tx.send(models);
+    });
+    let models = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("local_models must return promptly instead of following the directory symlink");
+
+    let found = models
+        .iter()
+        .find(|m| m.id == "looping-model")
+        .unwrap_or_else(|| panic!("looping-model missing from {models:?}"));
+    assert!(!found.path.is_empty(), "path must not be empty: {found:?}");
+    assert_eq!(
+        found.bytes as u64, real_len,
+        "bytes must count only the real weight file, not anything reached through the symlink: {found:?}"
+    );
+}
+
+// `launch_open_code_cloud_with` used to check the model-cache gate before
+// `verify_cloud_session` could refresh an expired access token, so a valid
+// refresh token could never unblock a newly cataloged model -- the catalog
+// check kept failing with the stale token instead. `refresh_model_cache_now`
+// (reached through that gate) always builds its own `ConsoleClient::default()`
+// rather than using an injected transport, so only a real loopback listener
+// can stand in for the console here.
+#[test]
+fn launch_open_code_cloud_with_refreshes_before_the_catalog_cache_gate() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    let temporary = tempfile::tempdir().expect("temp dir");
+    env.set("WALLY_PROFILE_DIR", temporary.path());
+
+    let mut server = Server::new();
+    server.route("GET", "/v1/me", |_req, writer, _stream| {
+        let _ = writer.send_full(
+            200,
+            &[("Content-Type", "application/json")],
+            br#"{"email":"developer@example.test"}"#,
+        );
+    });
+    server.route("GET", "/v1/models", |req, writer, _stream| {
+        // Only the refreshed token unlocks the model; the stale one this
+        // session started with must not.
+        if req.header("Authorization") != Some("Bearer refreshed-access-token") {
+            let _ = writer.send_full(401, &[], b"");
+            return;
+        }
+        let _ = writer.send_full(
+            200,
+            &[("Content-Type", "application/json")],
+            br#"{"object":"list","data":[{"id":"newly-cataloged-model","object":"model","owned_by":"runanywhere"}]}"#,
+        );
+    });
+    server.route("POST", "/auth/cli/refresh", |_req, writer, _stream| {
+        let _ = writer.send_full(
+            200,
+            &[("Content-Type", "application/json")],
+            br#"{"access_token":"refreshed-access-token","refresh_token":"refreshed-refresh-token","email":"developer@example.test","expires_in":3600}"#,
+        );
+    });
+    let (_handle, port) = server.bind_and_run("127.0.0.1").expect("bind mock console");
+    let console_url = format!("http://127.0.0.1:{port}");
+
+    account::save(&Credentials {
+        console_url: console_url.clone(),
+        email: "developer@example.test".to_string(),
+        access_token: "stale-access-token".to_string(),
+        refresh_token: "stale-refresh-token".to_string(),
+        expires_at: now_seconds() - 1,
+    })
+    .expect("seed credentials");
+
+    // A cache that has models, but not the one about to be launched -- the
+    // gate this comment fixed only engages when the cache is non-empty and
+    // misses the target model.
+    std::fs::write(
+        account::model_cache_path(),
+        format!(
+            r#"{{"fetched_at":{},"models":["some-other-model"]}}"#,
+            now_seconds()
+        ),
+    )
+    .expect("seed model cache");
+
+    let console = ConsoleClient::new(None);
+    let launched = Arc::new(AtomicBool::new(false));
+    let launched_flag = launched.clone();
+    let spawn: harness::SpawnFunction = Arc::new(move |_tool: &str, _args: &[String]| {
+        launched_flag.store(true, Ordering::SeqCst);
+        0
+    });
+
+    let code = harness::launch_open_code_cloud_with("newly-cataloged-model", &[], &console, &spawn);
+
+    assert_eq!(
+        code, 0,
+        "a valid refresh token must unblock a newly cataloged model instead of hitting \
+         'server is busy'"
+    );
+    assert!(
+        launched.load(Ordering::SeqCst),
+        "the injected spawn must have been invoked"
+    );
+}
+
+// wally launches these agents, so each config it writes declares which one
+// every request came from (`X-RA-Harness`), hosted and local alike.
+fn declare_catalog() -> Vec<CatalogModel> {
+    vec![CatalogModel {
+        id: "glm-5.3-flash".to_string(),
+        context_window: 0,
+        max_output: 0,
+        input_per_mtok: 0,
+        output_per_mtok: 0,
+    }]
+}
+
+#[test]
+fn openclaw_config_declares_the_harness() {
+    for base in [
+        "https://inference.runanywhere.ai/v1",
+        "http://127.0.0.1:52431/v1",
+    ] {
+        let config: Value = serde_json::from_str(&harness::build_open_claw_config(
+            "",
+            "glm-5.3-flash",
+            base,
+            "sk-live-xyz",
+            &declare_catalog(),
+        ))
+        .unwrap();
+        let headers = &config["models"]["providers"]["runanywhere"]["headers"];
+        assert_eq!(
+            headers,
+            &serde_json::json!({"X-RA-Harness": "openclaw"}),
+            "{base}"
+        );
+    }
+    // A provider of ours already in their file is replaced whole, so a stale
+    // header of theirs cannot outvote the declaration.
+    let replaced: Value = serde_json::from_str(&harness::build_open_claw_config(
+        r#"{"models":{"providers":{"runanywhere":{"headers":{"X-RA-Harness":"sdk"}}}}}"#,
+        "glm-5.3-flash",
+        "https://inference.runanywhere.ai/v1",
+        "k",
+        &declare_catalog(),
+    ))
+    .unwrap();
+    assert_eq!(
+        replaced["models"]["providers"]["runanywhere"]["headers"]["X-RA-Harness"],
+        "openclaw"
+    );
+}
+
+#[test]
+fn deepseek_settings_declare_the_harness() {
+    let settings: Value = serde_json::from_str(&harness::build_deep_seek_settings(
+        "https://inference.runanywhere.ai/v1",
+        "RUNANYWHERE_API_KEY",
+        &declare_catalog(),
+    ))
+    .unwrap();
+    assert_eq!(
+        settings["llm-pi-ai"]["providers"]["runanywhere"]["headers"],
+        serde_json::json!({"X-RA-Harness": "deepseek"})
     );
 }

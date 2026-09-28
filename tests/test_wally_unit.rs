@@ -16,6 +16,8 @@ mod diarize;
 mod harness;
 #[path = "test_wally_unit/image.rs"]
 mod image;
+#[path = "test_wally_unit/lora.rs"]
+mod lora;
 #[path = "test_wally_unit/models.rs"]
 mod models;
 #[path = "test_wally_unit/output.rs"]

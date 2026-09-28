@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use wally::anthropic::{self, ModelAliases};
-use wally::harness::Endpoint;
+use wally::harness::{DeclaredHarness, Endpoint};
 use wally::net::http1::{Client, Request, Server};
 
 struct Case {
@@ -132,8 +132,14 @@ fn stream_terminal_contract() {
             base_url: format!("http://127.0.0.1:{port}/v1"),
             ..Default::default()
         };
-        let started_shim =
-            anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+        let started_shim = anthropic::start(
+            &endpoint,
+            "test-model",
+            DeclaredHarness::KClaudeCode,
+            false,
+            "",
+            &ModelAliases::new(),
+        );
         let started_ok = started_shim.is_some();
         let reply = match &started_shim {
             Some(shim) => match Client::new(

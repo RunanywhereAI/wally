@@ -20,6 +20,7 @@ Coding tools:
   hermes                      Open Hermes with a model
   openclaw                    Open OpenClaw with a model
   deepseek                    Open DeepSeek Harness with a model
+  prime-agent                 Open Prime Agent with a model
 
 Account:
   account login               Sign in through the browser

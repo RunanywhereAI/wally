@@ -23,6 +23,23 @@
 # Swift MLX host (scripts/build/build-mlx.sh), linked against this crate's
 # static library; the cargo binary is the `wally-cxx` intermediate.
 
+# A multi-config generator (Xcode, Visual Studio) leaves CMAKE_BUILD_TYPE empty
+# at configure time -- the config is only chosen at build time, per `--config`.
+# The cargo profile and wally_link_probe's LINK_PROBE_CONFIG below are both
+# picked once, here, from CMAKE_BUILD_TYPE, so a multi-config generator would
+# silently build cargo in release while `cmake --build --config Debug` links
+# against a probe configured for no config at all. Every CI/release job already
+# pins a single-config generator (Ninja); fail fast instead of shipping that
+# mismatch.
+get_property(_wally_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_wally_multi_config)
+    message(FATAL_ERROR
+        "wally's Cargo/CMake bridge requires a single-config generator "
+        "(e.g. -G Ninja); ${CMAKE_GENERATOR} is multi-config and "
+        "CMAKE_BUILD_TYPE has no effect on the Cargo profile or link-probe "
+        "configuration chosen here.")
+endif()
+
 find_program(WALLY_CARGO NAMES cargo HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin"
              "$ENV{USERPROFILE}/.cargo/bin")
 if(NOT WALLY_CARGO)
@@ -59,14 +76,12 @@ FetchContent_Declare(cpp_httplib
 FetchContent_MakeAvailable(cpp_httplib)
 target_link_libraries(wally_link_probe PRIVATE httplib::httplib)
 
-# Ask for the codemodel reply; CMake writes it at the end of generation.
-# cmake_file_api() (3.27+) asks from inside this run. On older CMake the query
-# file only takes effect from the next configure, and build.rs says so.
-if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.27)
-    cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)
-else()
-    file(WRITE "${CMAKE_BINARY_DIR}/.cmake/api/v1/query/codemodel-v2" "")
-endif()
+# Ask for the codemodel reply; CMake writes it at the end of this same
+# generation. Requires cmake_file_api() (3.27+, enforced by the
+# cmake_minimum_required at the top of CMakeLists.txt): writing the query file
+# directly instead, as CMake < 3.27 requires, only takes effect on the next
+# configure, so the first cargo build would run before the reply exists.
+cmake_file_api(QUERY API_VERSION 1 CODEMODEL 2)
 
 set(_wally_caps "")
 foreach(_cap LLAMACPP ONNX SHERPA MLX CLOUD RAG SERVER)

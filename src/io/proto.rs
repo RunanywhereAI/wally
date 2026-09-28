@@ -22,7 +22,7 @@ pub mod v1 {
 }
 
 /// An out-buffer for a `*_proto` C ABI call, freed on drop.
-pub struct ProtoBuffer(pub sys::rac_proto_buffer_t);
+pub struct ProtoBuffer(sys::rac_proto_buffer_t);
 
 impl ProtoBuffer {
     pub fn new() -> Self {

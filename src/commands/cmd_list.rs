@@ -46,6 +46,9 @@ struct GroupedRow {
     harness_compatible: bool,
     // Distinct backends, ordered by (rank, label) so the join is stable.
     backends: std::collections::BTreeSet<(i32, &'static str)>,
+    // Every member as (id, rank, download size), so the row's size can be
+    // taken from the variant its id actually pulls once the id is settled.
+    variants: Vec<(String, i32, i64)>,
 }
 
 impl Default for GroupedRow {
@@ -63,15 +66,18 @@ impl Default for GroupedRow {
             downloaded: false,
             harness_compatible: false,
             backends: std::collections::BTreeSet::new(),
+            variants: Vec::new(),
         }
     }
 }
 
 // A short "how do I download one?" header for the human list. The pull id
 // differs by backend, so show one example per backend this build can run:
-// llama.cpp everywhere; on Apple also MLX. Never printed in --json.
+// llama.cpp where the kit has it (not the Windows ARM64 kit); on Apple also
+// MLX. Never printed in --json.
 fn print_pull_examples() {
     out::result_line("Download a model with `wally models pull <id>`:");
+    #[cfg(wally_has_llamacpp)]
     out::result_line("  wally models pull qwen3-4b-instruct-2507  # llama.cpp");
     #[cfg(target_os = "macos")]
     out::result_line("  wally models pull mlx-qwen3-4b-instruct-2507  # MLX (Apple GPU)");
@@ -89,6 +95,113 @@ fn join_backends(row: &GroupedRow) -> String {
         joined.push_str(label);
     }
     joined
+}
+
+// Collapse per-backend variants of the same model into one row, grouped by
+// the catalog merge_key (a non-catalog id groups with itself). `row.id`
+// starts out as that merge key, but a downloaded variant overrides it with
+// its own id so copying the row's id inspects/pulls the same backend that's
+// actually on disk. Backend-specific ids remain accepted by pull/show/rm, but
+// the list stays stable across macOS, Linux, and Windows. Insertion order is
+// kept so the list reads the same as the registry. Pulled out of run_list so
+// it's testable without the FFI registry call.
+fn group_models(
+    models: &[v1::ModelInfo],
+    downloaded_ids: &std::collections::HashSet<String>,
+    show_all: bool,
+) -> (Vec<String>, HashMap<String, GroupedRow>) {
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, GroupedRow> = HashMap::new();
+    for model in models {
+        let is_downloaded = downloaded_ids.contains(&model.id)
+            || model.registry_status == Some(v1::ModelRegistryStatus::Downloaded as i32);
+        if !show_all && !is_downloaded {
+            continue;
+        }
+        // LLM-only surface: a downloaded non-LLM model restored from a manifest
+        // must not reappear in the list.
+        if model.category != v1::ModelCategory::Language as i32 {
+            continue;
+        }
+        let key = crate::catalog::merge_key_for(&model.id);
+        let row = groups.entry(key.clone()).or_insert_with(|| {
+            order.push(key.clone());
+            GroupedRow {
+                id: key.clone(),
+                ..GroupedRow::default()
+            }
+        });
+        let framework = v1::InferenceFramework::try_from(model.framework)
+            .unwrap_or(v1::InferenceFramework::Unspecified);
+        let rank = backend_rank(framework);
+        row.backends
+            .insert((rank, model_labels::short_backend(framework)));
+        row.downloaded = row.downloaded || is_downloaded;
+        let catalog_entry = crate::catalog::find(&model.id);
+        row.harness_compatible = row.harness_compatible
+            || catalog_entry
+                .map(|entry| entry.harness_compatible)
+                .unwrap_or(false);
+        if is_downloaded && rank < row.path_rank {
+            row.path_rank = rank;
+            row.local_path = model.local_path.clone();
+            // Show the id of the variant actually on disk, not the merge
+            // key, so copying it inspects/pulls the same backend that's
+            // downloaded rather than falling back to catalog defaults.
+            row.id = model.id.clone();
+        }
+        if rank < row.name_rank {
+            row.name_rank = rank;
+            row.name = model.name.clone();
+            row.category = v1::ModelCategory::try_from(model.category)
+                .unwrap_or(v1::ModelCategory::Unspecified);
+        }
+        let size = model.download_size_bytes;
+        row.variants.push((model.id.clone(), rank, size));
+        if size > 0 && rank < row.size_rank {
+            row.size_rank = rank;
+            row.size_bytes = size;
+            row.size_id = model.id.clone();
+        }
+    }
+    for row in groups.values_mut() {
+        settle_row_id_and_size(row);
+    }
+    (order, groups)
+}
+
+// The merge key only resolves when a variant is registered under it or under
+// it as an alias; a model that ships a single `mlx-` build (ternary-bonsai-27b)
+// has neither, so `pull <key>` failed as an unknown model. Show the
+// best-ranked real id instead. The size then comes from the variant that id
+// pulls: the best-ranked size alone showed the MLX build while `pull <key>`
+// fetched the GGUF (2.2 GB listed, 4.0 GB pulled for qwen3-4b-instruct-2507).
+fn settle_row_id_and_size(row: &mut GroupedRow) {
+    let pulled = crate::catalog::find(&row.id)
+        .map(|entry| entry.id.to_string())
+        .filter(|id| row.variants.iter().any(|(variant, _, _)| variant == id))
+        .or_else(|| {
+            row.variants
+                .iter()
+                .find(|(variant, _, _)| *variant == row.id)
+                .map(|(variant, _, _)| variant.clone())
+        });
+    let pulled = match pulled {
+        Some(id) => id,
+        None => match row.variants.iter().min_by_key(|(_, rank, _)| *rank) {
+            Some((id, _, _)) => {
+                row.id = id.clone();
+                id.clone()
+            }
+            None => return,
+        },
+    };
+    if let Some((id, rank, size)) = row.variants.iter().find(|(id, _, _)| *id == pulled) {
+        // An unknown size shows as `-`, not as another backend's size.
+        row.size_bytes = *size;
+        row.size_rank = if *size > 0 { *rank } else { i32::MAX };
+        row.size_id = if *size > 0 { id.clone() } else { String::new() };
+    }
 }
 
 fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
@@ -141,60 +254,7 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         }
     }
 
-    // Collapse per-backend variants of the same model into one row, grouped by
-    // the catalog merge_key (a non-catalog id groups with itself). `row.id`
-    // is always that merge key. Backend-specific ids remain accepted by
-    // pull/show/rm, but the list stays stable across macOS, Linux, and Windows.
-    // Insertion order is kept so the list reads the same as the registry.
-    let mut order: Vec<String> = Vec::new();
-    let mut groups: HashMap<String, GroupedRow> = HashMap::new();
-    for model in &all_models.models {
-        let is_downloaded = downloaded_ids.contains(&model.id)
-            || model.registry_status == Some(v1::ModelRegistryStatus::Downloaded as i32);
-        if !show_all && !is_downloaded {
-            continue;
-        }
-        // LLM-only surface: a downloaded non-LLM model restored from a manifest
-        // must not reappear in the list.
-        if model.category != v1::ModelCategory::Language as i32 {
-            continue;
-        }
-        let key = crate::catalog::merge_key_for(&model.id);
-        let row = groups.entry(key.clone()).or_insert_with(|| {
-            order.push(key.clone());
-            GroupedRow {
-                id: key.clone(),
-                ..GroupedRow::default()
-            }
-        });
-        let framework = v1::InferenceFramework::try_from(model.framework)
-            .unwrap_or(v1::InferenceFramework::Unspecified);
-        let rank = backend_rank(framework);
-        row.backends
-            .insert((rank, model_labels::short_backend(framework)));
-        row.downloaded = row.downloaded || is_downloaded;
-        let catalog_entry = crate::catalog::find(&model.id);
-        row.harness_compatible = row.harness_compatible
-            || catalog_entry
-                .map(|entry| entry.harness_compatible)
-                .unwrap_or(false);
-        if is_downloaded && rank < row.path_rank {
-            row.path_rank = rank;
-            row.local_path = model.local_path.clone();
-        }
-        if rank < row.name_rank {
-            row.name_rank = rank;
-            row.name = model.name.clone();
-            row.category = v1::ModelCategory::try_from(model.category)
-                .unwrap_or(v1::ModelCategory::Unspecified);
-        }
-        let size = model.download_size_bytes;
-        if size > 0 && rank < row.size_rank {
-            row.size_rank = rank;
-            row.size_bytes = size;
-            row.size_id = model.id.clone();
-        }
-    }
+    let (order, groups) = group_models(&all_models.models, &downloaded_ids, show_all);
 
     if options.json {
         let mut json = out::JsonWriter::new();
@@ -265,4 +325,119 @@ pub fn configure_models_list(cmd: &mut App) {
         let show_all = p.flag("--all");
         run_list(g, show_all)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // "qwen3-4b-instruct-2507" (llama.cpp) and "mlx-qwen3-4b-instruct-2507-4bit"
+    // (MLX) are real catalog entries sharing merge_key "qwen3-4b-instruct-2507"
+    // (src/catalog/catalog.rs), the same pair print_pull_examples points at.
+    fn llamacpp_variant(local_path: &str) -> v1::ModelInfo {
+        v1::ModelInfo {
+            id: "qwen3-4b-instruct-2507".to_string(),
+            download_size_bytes: 4_280_000_000,
+            name: "Qwen3 4B Instruct 2507 Q8_0".to_string(),
+            category: v1::ModelCategory::Language as i32,
+            framework: v1::InferenceFramework::LlamaCpp as i32,
+            local_path: local_path.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn mlx_variant(local_path: &str) -> v1::ModelInfo {
+        v1::ModelInfo {
+            id: "mlx-qwen3-4b-instruct-2507-4bit".to_string(),
+            download_size_bytes: 2_360_000_000,
+            name: "Qwen3 4B Instruct 2507".to_string(),
+            category: v1::ModelCategory::Language as i32,
+            framework: v1::InferenceFramework::Mlx as i32,
+            local_path: local_path.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn downloaded_variant_id_wins_over_merge_key() {
+        // Only the MLX variant is downloaded. Without the fix, row.id stayed
+        // the merge key even though the merge key names no downloaded
+        // backend here, so copying it would pull/inspect the wrong id.
+        let models = vec![
+            llamacpp_variant(""),
+            mlx_variant("/models/mlx-qwen3-4b-instruct-2507-4bit"),
+        ];
+        let downloaded: std::collections::HashSet<String> =
+            std::iter::once("mlx-qwen3-4b-instruct-2507-4bit".to_string()).collect();
+        let (order, groups) = group_models(&models, &downloaded, true);
+        assert_eq!(order, vec!["qwen3-4b-instruct-2507".to_string()]);
+        let row = &groups["qwen3-4b-instruct-2507"];
+        assert_eq!(row.id, "mlx-qwen3-4b-instruct-2507-4bit");
+        assert_eq!(row.local_path, "/models/mlx-qwen3-4b-instruct-2507-4bit");
+    }
+
+    #[test]
+    fn catalog_only_row_keeps_merge_key_when_nothing_downloaded() {
+        // Neither variant downloaded: row.id stays the merge key, same as
+        // before the fix (the id-override branch only runs for a downloaded
+        // variant).
+        let models = vec![llamacpp_variant(""), mlx_variant("")];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (_, groups) = group_models(&models, &downloaded, true);
+        let row = &groups["qwen3-4b-instruct-2507"];
+        assert_eq!(row.id, "qwen3-4b-instruct-2507");
+        assert!(!row.downloaded);
+    }
+
+    #[test]
+    fn size_is_the_variant_the_row_id_pulls() {
+        let models = vec![llamacpp_variant(""), mlx_variant("")];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (_, groups) = group_models(&models, &downloaded, true);
+        let row = &groups["qwen3-4b-instruct-2507"];
+        assert_eq!(row.id, "qwen3-4b-instruct-2507");
+        assert_eq!(row.size_bytes, 4_280_000_000);
+    }
+
+    #[test]
+    fn downloaded_mlx_row_shows_the_mlx_size() {
+        let models = vec![
+            llamacpp_variant(""),
+            mlx_variant("/models/mlx-qwen3-4b-instruct-2507-4bit"),
+        ];
+        let downloaded: std::collections::HashSet<String> =
+            std::iter::once("mlx-qwen3-4b-instruct-2507-4bit".to_string()).collect();
+        let (_, groups) = group_models(&models, &downloaded, true);
+        assert_eq!(groups["qwen3-4b-instruct-2507"].size_bytes, 2_360_000_000);
+    }
+
+    #[test]
+    fn mlx_only_model_shows_a_pullable_id() {
+        // ternary-bonsai-27b ships only an mlx- build, so its merge key names
+        // no registered model.
+        let models = vec![v1::ModelInfo {
+            id: "mlx-ternary-bonsai-27b-2bit".to_string(),
+            name: "Ternary Bonsai 27B".to_string(),
+            category: v1::ModelCategory::Language as i32,
+            framework: v1::InferenceFramework::Mlx as i32,
+            download_size_bytes: 8_480_000_000,
+            ..Default::default()
+        }];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (order, groups) = group_models(&models, &downloaded, true);
+        let row = &groups[&order[0]];
+        assert_eq!(order, vec!["ternary-bonsai-27b".to_string()]);
+        assert_eq!(row.id, "mlx-ternary-bonsai-27b-2bit");
+        assert_eq!(row.size_bytes, 8_480_000_000);
+    }
+
+    #[test]
+    fn unknown_size_of_the_pulled_build_is_not_filled_from_another() {
+        let mut gguf = llamacpp_variant("");
+        gguf.download_size_bytes = 0;
+        let models = vec![gguf, mlx_variant("")];
+        let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let (_, groups) = group_models(&models, &downloaded, true);
+        assert_eq!(groups["qwen3-4b-instruct-2507"].size_bytes, 0);
+    }
 }

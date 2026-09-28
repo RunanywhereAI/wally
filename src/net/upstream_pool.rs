@@ -89,7 +89,16 @@ impl UpstreamPool {
         let (mut client, reused) = {
             let mut idle = self.inner.idle.lock().unwrap();
             match idle.pop() {
-                Some(c) => (c, true),
+                // A client pulled from the idle vector can still have had
+                // its connection cleared (`Connection: close`, or a
+                // close-delimited reply) since it was returned. Such a
+                // client is effectively fresh, not a stale keep-alive, so
+                // `retry_on_fresh_connection`'s heuristic must not see it as
+                // `reused`.
+                Some(c) => {
+                    let reused = c.has_connection();
+                    (c, reused)
+                }
                 None => (self.build(), false),
             }
         };
@@ -237,6 +246,47 @@ mod tests {
         assert!(
             lease2.reused(),
             "a second acquire must reuse the idle connection"
+        );
+        drop(lease2);
+        handle.stop();
+    }
+
+    #[test]
+    fn acquiring_a_pooled_client_whose_connection_closed_is_not_marked_reused() {
+        // `Client::send` clears `conn` to `None` after a `Connection: close`
+        // response, so a client popped from the idle vector in that state
+        // opens a fresh socket on its next request just like a brand new
+        // one would -- `retry_on_fresh_connection`'s stale-keep-alive
+        // heuristic must not treat a failure on it as one.
+        let mut server = Server::new();
+        server.route("GET", "/ping", |_req, res, _peer| {
+            res.send_full(200, &[("Connection", "close")], b"pong")
+                .unwrap();
+        });
+        let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
+        let pool = UpstreamPool::new(options(format!("http://127.0.0.1:{port}")));
+        let mut lease = pool.acquire("token-a");
+        let reply = lease
+            .client()
+            .send(&Request::get("/ping"), None, None)
+            .unwrap();
+        assert_eq!(reply.status, 200);
+        assert!(
+            !lease.client().has_connection(),
+            "Connection: close must have cleared the client's connection"
+        );
+        drop(lease);
+
+        assert_eq!(
+            pool.idle(),
+            1,
+            "a lease still goes back to idle even with its connection closed"
+        );
+        let lease2 = pool.acquire("token-b");
+        assert!(
+            !lease2.reused(),
+            "a pooled client with no live connection is effectively fresh, not reused"
         );
         drop(lease2);
         handle.stop();

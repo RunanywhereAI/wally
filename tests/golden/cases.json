@@ -272,6 +272,13 @@
   ]
  },
  {
+  "name": "help__prime-agent",
+  "args": [
+   "help",
+   "prime-agent"
+  ]
+ },
+ {
   "name": "help__deepseek",
   "args": [
    "help",
@@ -421,6 +428,14 @@
   "args": [
    "help",
    "openclaw",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__prime-agent",
+  "args": [
+   "help",
+   "prime-agent",
    "--help"
   ]
  },
@@ -2802,11 +2817,29 @@
   ]
  },
  {
+  "name": "local__models__default__some-id__--json",
+  "args": [
+   "models",
+   "default",
+   "some-id",
+   "--json"
+  ]
+ },
+ {
   "name": "local__models__default__--clear",
   "args": [
    "models",
    "default",
    "--clear"
+  ]
+ },
+ {
+  "name": "local__models__default__--clear__--json",
+  "args": [
+   "models",
+   "default",
+   "--clear",
+   "--json"
   ]
  },
  {

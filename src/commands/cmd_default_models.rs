@@ -45,7 +45,7 @@ pub fn register_default_models(app: &mut App) {
         Example::new("wally models default --clear", ""),
     ]));
 
-    cmd.callback(|p, _g| {
+    cmd.callback(|p, g| {
         let clear = p.flag("--clear");
         let model = p.get_str("model").unwrap_or_default();
 
@@ -54,7 +54,13 @@ pub fn register_default_models(app: &mut App) {
                 out::error_line(&error);
                 return 1;
             }
-            out::status_line("default model cleared");
+            if g.json {
+                let mut json = out::JsonWriter::new();
+                json.begin_object().field_bool("cleared", true).end_object();
+                out::result_line(json.str());
+            } else {
+                out::status_line("default model cleared");
+            }
             return 0;
         }
 
@@ -63,12 +69,45 @@ pub fn register_default_models(app: &mut App) {
                 out::error_line(&error);
                 return 1;
             }
-            out::status_line(&format!("default model set to {model}"));
+            if g.json {
+                let mut json = out::JsonWriter::new();
+                json.begin_object()
+                    .field_str("model", &model)
+                    .field_str("source", "file")
+                    .end_object();
+                out::result_line(json.str());
+            } else {
+                out::status_line(&format!("default model set to {model}"));
+            }
             return 0;
         }
 
         // No argument: report what is in effect and why.
         let current = preferences::effective_default_model();
+        if g.json {
+            let mut json = out::JsonWriter::new();
+            json.begin_object();
+            match current.source {
+                DefaultModelSource::None => {
+                    json.field_null("model");
+                }
+                DefaultModelSource::Environment => {
+                    json.field_str("model", &current.id)
+                        .field_str("source", "environment");
+                }
+                DefaultModelSource::File => {
+                    json.field_str("model", &current.id)
+                        .field_str("source", "file");
+                }
+                DefaultModelSource::BuiltIn => {
+                    json.field_str("model", &current.id)
+                        .field_str("source", "built-in");
+                }
+            }
+            json.end_object();
+            out::result_line(json.str());
+            return 0;
+        }
         match current.source {
             DefaultModelSource::Environment => {
                 out::result_line(&format!("{} (from WALLY_DEFAULT_MODEL)", current.id))

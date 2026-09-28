@@ -66,8 +66,8 @@ wally models pull qwen3-4b-instruct-2507
 wally opencode -m qwen3-4b-instruct-2507
 ```
 
-`claude-code`, `claude-desktop`, `hermes`, `openclaw` and `deepseek` take the
-same `-m`. [EDITORS.md](docs/EDITORS.md) says how each one is wired. Other
+`claude-code`, `claude-desktop`, `hermes`, `openclaw`, `deepseek` and
+`prime-agent` take the same `-m`. [EDITORS.md](docs/EDITORS.md) says how each one is wired. Other
 local models are refused by the coding-agent commands.
 
 ## Use a hosted model

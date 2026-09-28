@@ -227,7 +227,12 @@ pub fn read_ppm(path: &str) -> Result<RgbImage, String> {
             "PPM dimensions exceed the supported maximum (4096x4096) in {path}"
         ));
     }
-    // Exactly one whitespace byte separates the header from the pixel payload.
+    // Exactly one whitespace byte separates the header from the pixel payload;
+    // reject anything else so a malformed header cannot silently shift the
+    // pixel payload.
+    if pos >= bytes.len() || !is_ppm_space(bytes[pos]) {
+        return Err(format!("malformed PPM header in {path}"));
+    }
     pos += 1;
     let expected = width as usize * height as usize * 3;
     if pos + expected > bytes.len() {

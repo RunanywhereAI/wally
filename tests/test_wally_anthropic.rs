@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use fake_upstream::{describe, FakeUpstream, HalfOpenUpstream};
 use wally::anthropic::{self, ModelAliases, Shim};
-use wally::harness::Endpoint;
+use wally::harness::{DeclaredHarness, Endpoint};
 use wally::net::http1::{Client, Request, Server, StopHandle};
 use wally::net::upstream_pool::{retry_on_fresh_connection, UpstreamOptions, UpstreamPool};
 
@@ -29,6 +29,10 @@ impl RunningShim {
     /// base without the `/v1`. Empty means a local server -- no cancel is
     /// ever sent.
     fn new(upstream_base_url: &str, console_url: &str) -> Self {
+        Self::declaring(upstream_base_url, console_url, DeclaredHarness::KClaudeCode)
+    }
+
+    fn declaring(upstream_base_url: &str, console_url: &str, declared: DeclaredHarness) -> Self {
         let endpoint = Endpoint {
             base_url: upstream_base_url.to_string(),
             api_key: "test-upstream-key".to_string(),
@@ -37,7 +41,14 @@ impl RunningShim {
             context_window: 0,
             max_output: 0,
         };
-        match anthropic::start(&endpoint, "glm-5.3", false, "", &ModelAliases::new()) {
+        match anthropic::start(
+            &endpoint,
+            "glm-5.3",
+            declared,
+            false,
+            "",
+            &ModelAliases::new(),
+        ) {
             Some(shim) => RunningShim {
                 shim,
                 started: true,
@@ -237,7 +248,14 @@ fn overload_headers_survive_streaming() {
         context_window: 0,
         max_output: 0,
     };
-    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let started = anthropic::start(
+        &endpoint,
+        "test-model",
+        DeclaredHarness::KClaudeCode,
+        false,
+        "",
+        &ModelAliases::new(),
+    );
     let mut okay = started.is_some();
     if let Some(shim) = &started {
         let mut client = Client::new(
@@ -368,23 +386,40 @@ fn concurrent_requests_use_separate_connections() {
     );
 }
 
-// The pool on its own, no translator in front of it.
+// The pool on its own, no translator in front of it. Needs a real listener
+// (unlike the other pool-bookkeeping tests below, which never call send()):
+// since the pool.rs fix for comment #55, `reused()` reports whether the
+// idle client's connection is actually still live, so a client that never
+// connected at all -- which is all `http://127.0.0.1:9` (nothing listening)
+// would ever produce -- would never register as reused either, and this
+// test would stop meaning anything.
 #[test]
 fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
     let _shim_guard = shim_lock::shim_lock();
+    let mut server = Server::new();
+    server.route("GET", "/ping", |_req, res, _peer| {
+        res.send_full(200, &[], b"pong").unwrap();
+    });
+    let (mut handle, port) = server.bind_and_run("127.0.0.1").unwrap();
+
     let pool = UpstreamPool::new(UpstreamOptions {
-        origin: "http://127.0.0.1:9".to_string(),
+        origin: format!("http://127.0.0.1:{port}"),
         idle_limit: 2,
         ..Default::default()
     });
     {
-        let first = pool.acquire("k");
+        let mut first = pool.acquire("k");
         assert!(!first.reused(), "a fresh lease from an empty pool");
         assert_eq!(
             pool.idle(),
             0,
             "no idle client while the fresh lease is out"
         );
+        // Establishes the connection this lease's client keeps once it goes
+        // back to idle -- without this, `second` below would have nothing
+        // live to reuse.
+        let reply = first.client().send(&Request::get("/ping"), None, None);
+        assert_eq!(reply.unwrap().status, 200);
     }
     assert_eq!(pool.idle(), 1, "1 idle client after a clean lease ends");
     {
@@ -400,6 +435,7 @@ fn pool_returns_a_clean_lease_and_drops_a_discarded_one() {
         let _c = pool.acquire("k");
     }
     assert_eq!(pool.idle(), 2, "idle capped at 2");
+    handle.stop();
 }
 
 // A pool outlives its leases: dropping the last Arc while a lease is out
@@ -847,7 +883,14 @@ fn a_dead_upstream_answers_502_with_the_did_not_answer_message() {
         context_window: 0,
         max_output: 0,
     };
-    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let started = anthropic::start(
+        &endpoint,
+        "test-model",
+        DeclaredHarness::KClaudeCode,
+        false,
+        "",
+        &ModelAliases::new(),
+    );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
         &shim.base_url,
@@ -915,7 +958,14 @@ fn a_1000_byte_cut_that_splits_a_utf8_character_falls_back_to_the_generic_500() 
         context_window: 0,
         max_output: 0,
     };
-    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let started = anthropic::start(
+        &endpoint,
+        "test-model",
+        DeclaredHarness::KClaudeCode,
+        false,
+        "",
+        &ModelAliases::new(),
+    );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
         &shim.base_url,
@@ -978,7 +1028,14 @@ fn a_non_boolean_stream_field_answers_the_generic_500_not_a_silent_false() {
         context_window: 0,
         max_output: 0,
     };
-    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let started = anthropic::start(
+        &endpoint,
+        "test-model",
+        DeclaredHarness::KClaudeCode,
+        false,
+        "",
+        &ModelAliases::new(),
+    );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
         &shim.base_url,
@@ -1049,7 +1106,14 @@ fn a_non_object_top_level_body_answers_the_generic_500_and_never_reaches_upstrea
         context_window: 0,
         max_output: 0,
     };
-    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let started = anthropic::start(
+        &endpoint,
+        "test-model",
+        DeclaredHarness::KClaudeCode,
+        false,
+        "",
+        &ModelAliases::new(),
+    );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
         &shim.base_url,
@@ -1127,7 +1191,14 @@ fn an_invalid_utf8_sse_data_line_is_a_malformed_frame_not_a_silently_repaired_ch
         context_window: 0,
         max_output: 0,
     };
-    let started = anthropic::start(&endpoint, "test-model", false, "", &ModelAliases::new());
+    let started = anthropic::start(
+        &endpoint,
+        "test-model",
+        DeclaredHarness::KClaudeCode,
+        false,
+        "",
+        &ModelAliases::new(),
+    );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
         &shim.base_url,
@@ -1161,4 +1232,41 @@ fn an_invalid_utf8_sse_data_line_is_a_malformed_frame_not_a_silently_repaired_ch
     let mut shim = shim;
     anthropic::stop(&mut shim);
     handle.stop();
+}
+
+// The bridge declares the harness it serves on every upstream request, buffered
+// and streaming alike: `X-RA-Harness` with the contract's name, and a
+// User-Agent of wally's own carrying the hyphenated needle harness.py's
+// User-Agent table matches.
+fn check_bridge_declares(declared: DeclaredHarness, value: &str, needle: &str) {
+    let _shim_guard = shim_lock::shim_lock();
+    let upstream = FakeUpstream::new();
+    let shim = RunningShim::declaring(&upstream.base_url(), "", declared);
+    assert!(shim.started(), "translator did not start");
+    assert_eq!((shim.send(false), shim.send(true)), (200, 200));
+    let seen = upstream.seen();
+    assert_eq!(seen.len(), 2);
+    assert!(!seen[0].streaming && seen[1].streaming);
+    for request in &seen {
+        assert_eq!(request.harness.as_deref(), Some(value));
+        assert!(
+            request.user_agent.starts_with("wally/") && request.user_agent.contains(needle),
+            "User-Agent: {}",
+            request.user_agent
+        );
+    }
+}
+
+#[test]
+fn bridge_declares_claude_code() {
+    check_bridge_declares(DeclaredHarness::KClaudeCode, "claude_code", "(claude-code)");
+}
+
+#[test]
+fn bridge_declares_claude_desktop() {
+    check_bridge_declares(
+        DeclaredHarness::KClaudeDesktop,
+        "claude_desktop",
+        "(claude-desktop)",
+    );
 }

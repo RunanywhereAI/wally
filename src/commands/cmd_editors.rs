@@ -43,6 +43,9 @@ struct Editor {
     bundle: &'static str,
     summary: &'static str,
     wiring: Wiring,
+    /// What the translator declares upstream for this tool (`X-RA-Harness`),
+    /// so the endpoint attributes the traffic to it rather than to nobody.
+    declared: harness::DeclaredHarness,
 }
 
 /// Only tools that speak the Anthropic Messages API belong here. Anything
@@ -58,6 +61,7 @@ const EDITORS: &[Editor] = &[
         bundle: "",
         summary: "Open Claude Code with a model",
         wiring: Wiring::Environment,
+        declared: harness::DeclaredHarness::KClaudeCode,
     },
     Editor {
         id: "claude-desktop",
@@ -65,6 +69,7 @@ const EDITORS: &[Editor] = &[
         bundle: "Claude.app",
         summary: "Open Claude Desktop with a model",
         wiring: Wiring::ClaudeProfile,
+        declared: harness::DeclaredHarness::KClaudeDesktop,
     },
 ];
 
@@ -198,8 +203,17 @@ fn copy_recursive_overwrite(src: &Path, dst: &Path) {
 /// On macOS the active login is a Keychain entry keyed to the config-dir path,
 /// so even the account metadata in `~/.claude.json` is safe to bring — verified
 /// that a seeded dir still prints no warning.
-fn prepare_claude_config_dir() -> String {
-    let ours_str = format!("{}/claude", cli_paths::state_dir());
+fn prepare_claude_config_dir() -> Option<String> {
+    let state_dir = cli_paths::state_dir();
+    // An empty state_dir (no HOME, no XDG_STATE_HOME, and on Windows no
+    // LOCALAPPDATA/USERPROFILE) would build the root-level "/claude", which
+    // Claude Code cannot create and wally would export anyway. Leave
+    // CLAUDE_CONFIG_DIR unset instead, so Claude Code falls back to its own
+    // default resolution.
+    if state_dir.is_empty() {
+        return None;
+    }
+    let ours_str = format!("{state_dir}/claude");
     let ours = Path::new(&ours_str);
 
     // PowerShell and cmd.exe leave HOME unset; Claude Code's home there is the
@@ -271,7 +285,7 @@ fn prepare_claude_config_dir() -> String {
         let _ = fs::write(&claude_json, format!("{}\n", dump_pretty(&doc, 2)));
     }
 
-    ours_str
+    Some(ours_str)
 }
 
 /// The context window `/v1/models` advertises for `model`, or 0 when it can't be
@@ -311,8 +325,16 @@ fn serve(editor: &Editor, model: &str, options: &GlobalOptions) -> i32 {
     let Some(endpoint) = harness::resolve(model, options, editor.id) else {
         return 1;
     };
-    let Some(shim) = anthropic::start(&endpoint, model, options.verbose, "", &ModelAliases::new())
-    else {
+    // `--serve` is named after a tool too (`wally claude-code --serve`), so the
+    // endpoint it holds open declares that tool.
+    let Some(shim) = anthropic::start(
+        &endpoint,
+        model,
+        editor.declared,
+        options.verbose,
+        "",
+        &ModelAliases::new(),
+    ) else {
         harness::release(&endpoint);
         return 1;
     };
@@ -411,6 +433,7 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
     let Some(mut shim) = anthropic::start(
         &endpoint,
         model,
+        editor.declared,
         options.verbose,
         &advertised,
         &desktop_aliases,
@@ -480,8 +503,11 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         let _no_key = ScopedUnsetEnv::new("ANTHROPIC_API_KEY");
         // Its own config dir, seeded from the reader's ~/.claude minus the login,
         // so there is no claude.ai session to collide with (no warning) but their
-        // settings and memory still apply. See prepare_claude_config_dir.
-        let _config_dir = ScopedEnv::new("CLAUDE_CONFIG_DIR", &prepare_claude_config_dir());
+        // settings and memory still apply. See prepare_claude_config_dir. With no
+        // usable state dir (no HOME/XDG_STATE_HOME), leave CLAUDE_CONFIG_DIR
+        // unset rather than forcing Claude Code onto an unwritable root path.
+        let _config_dir =
+            prepare_claude_config_dir().map(|dir| ScopedEnv::new("CLAUDE_CONFIG_DIR", &dir));
         // Claude Code budgets against the local server's configured window, or
         // the hosted catalog when available.
         let mut _context_window = None;
@@ -600,10 +626,23 @@ pub fn register_editors(app: &mut App) {
                 #[cfg(target_os = "macos")]
                 {
                     if bundle_path(&editor).is_empty() {
+                        const DOWNLOAD: &str = "https://claude.ai/download";
                         out::error_line(&format!("{} is not installed on this machine", editor.id));
-                        out::status_line(
-                            "download it from https://claude.ai/download, then run this again",
-                        );
+                        // An app is installed by hand, so the most wally can
+                        // do is open the page; it cannot wait for the install.
+                        if crate::util::term::stdin_is_tty()
+                            && crate::util::term::stderr_is_tty()
+                            && harness::confirm("Open the download page? [y/N] ")
+                        {
+                            crate::commands::cmd_account::open_browser(DOWNLOAD);
+                            out::status_line(&format!(
+                                "install it from {DOWNLOAD}, then run this again"
+                            ));
+                        } else {
+                            out::status_line(&format!(
+                                "download it from {DOWNLOAD}, then run this again"
+                            ));
+                        }
                         return 1;
                     }
                 }
@@ -623,5 +662,51 @@ pub fn register_editors(app: &mut App) {
                 run(&editor, &effective, &p.get_strs("args"), g)
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::env_lock::lock as env_lock;
+
+    // With no usable HOME or XDG state dir, `prepare_claude_config_dir` used
+    // to build the root-level "/claude" and export it, so Claude Code
+    // couldn't create its config and wally silently lost the setup. It must
+    // return None instead, leaving CLAUDE_CONFIG_DIR unset.
+    #[test]
+    fn prepare_claude_config_dir_returns_none_with_no_state_dir() {
+        let _lock = env_lock();
+        #[cfg(windows)]
+        let names: Vec<&str> = vec!["XDG_STATE_HOME", "HOME", "LOCALAPPDATA", "USERPROFILE"];
+        #[cfg(not(windows))]
+        let names: [&str; 2] = ["XDG_STATE_HOME", "HOME"];
+        let saved: Vec<(&str, Option<std::ffi::OsString>)> = names
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        // SAFETY: env_lock() is held for this whole test body.
+        unsafe {
+            for (name, _) in &saved {
+                std::env::remove_var(name);
+            }
+        }
+
+        let result = prepare_claude_config_dir();
+
+        // SAFETY: still holding env_lock().
+        unsafe {
+            for (name, value) in &saved {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+
+        assert_eq!(
+            result, None,
+            "an unresolvable state dir must not export a root-level CLAUDE_CONFIG_DIR"
+        );
     }
 }

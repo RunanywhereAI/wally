@@ -276,6 +276,16 @@ fn read_ppm_errors() {
             bytes: with_pixels("P6\n2 2\n255\n", 6),
             expect_substr: "truncated PPM pixel data",
         },
+        Case {
+            label: "non-space byte after maxval",
+            create: true,
+            // "255X": next_ppm_uint stops at 'X' (not a digit), so maxval==255
+            // but the byte right after it is not whitespace. Without the
+            // bounds/whitespace check this byte is silently swallowed as the
+            // header/payload separator, shifting every pixel by one.
+            bytes: with_pixels("P6\n2 1\n255X", 6),
+            expect_substr: "malformed PPM header",
+        },
     ];
 
     // Note: the C++ case additionally seeds the *out* parameter with

@@ -475,6 +475,17 @@ fn stream_once(options: &GlobalOptions, model_id: &str, prompt: &str, params: &R
     exit_code
 }
 
+/// Decides one-shot generation success/failure from the parsed result, same
+/// presence-based rule as `lora_apply_outcome`: an error envelope with an
+/// empty message still fails rather than rendering empty text as a result.
+fn generation_outcome(result: &v1::LlmGenerationResult) -> Result<(), String> {
+    match &result.error {
+        None => Ok(()),
+        Some(err) if err.message.is_empty() => Err("unknown error".to_string()),
+        Some(err) => Err(err.message.clone()),
+    }
+}
+
 /// One unary generation (`llm generate`): the whole result lands at once.
 fn generate_once(options: &GlobalOptions, model_id: &str, prompt: &str, params: &RunParams) -> i32 {
     let mut request = v1::LlmGenerateRequest {
@@ -511,6 +522,11 @@ fn generate_once(options: &GlobalOptions, model_id: &str, prompt: &str, params: 
             return 1;
         }
     };
+
+    if let Err(message) = generation_outcome(&result) {
+        error_line(&format!("generation failed: {message}"));
+        return 1;
+    }
 
     let usage = result.usage.unwrap_or_default();
     if options.json {
@@ -622,6 +638,18 @@ fn load_model(
     true
 }
 
+/// Decides vlm-generation success/failure from the parsed result, same
+/// presence-based rule as `lora_apply_outcome` and `generation_outcome`: an
+/// error envelope with an empty message still fails rather than rendering
+/// empty text as a result.
+fn vlm_generation_outcome(result: &v1::VlmResult) -> Result<(), String> {
+    match &result.error {
+        None => Ok(()),
+        Some(err) if err.message.is_empty() => Err("unknown error".to_string()),
+        Some(err) => Err(err.message.clone()),
+    }
+}
+
 fn run_vlm(
     options: &GlobalOptions,
     model_id: &str,
@@ -670,11 +698,9 @@ fn run_vlm(
             return 1;
         }
     };
-    if let Some(err) = &result.error {
-        if !err.message.is_empty() {
-            error_line(&format!("vlm generation failed: {}", err.message));
-            return 1;
-        }
+    if let Err(message) = vlm_generation_outcome(&result) {
+        error_line(&format!("vlm generation failed: {message}"));
+        return 1;
     }
 
     let usage = result.usage.unwrap_or_default();
@@ -1284,6 +1310,84 @@ mod tests {
             lora_apply_outcome(&result, sys::SUCCESS),
             Err("adapter not found".to_string())
         );
+    }
+
+    #[test]
+    fn generation_error_with_empty_message_is_failure_not_success() {
+        // Present error envelope, empty message: without the fix,
+        // generate_once fell through and rendered the empty `result.text` as
+        // a successful response.
+        let result = v1::LlmGenerationResult {
+            error: Some(v1::SdkError {
+                message: String::new(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            generation_outcome(&result),
+            Err("unknown error".to_string())
+        );
+    }
+
+    #[test]
+    fn generation_error_with_message_reports_it() {
+        let result = v1::LlmGenerationResult {
+            error: Some(v1::SdkError {
+                message: "context window exceeded".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            generation_outcome(&result),
+            Err("context window exceeded".to_string())
+        );
+    }
+
+    #[test]
+    fn generation_no_error_is_success() {
+        assert_eq!(
+            generation_outcome(&v1::LlmGenerationResult::default()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn vlm_generation_error_with_empty_message_is_failure_not_success() {
+        // Same failure mode as generate_once, on the VLM result envelope:
+        // an empty message must not fall through to a 0 exit with empty text.
+        let result = v1::VlmResult {
+            error: Some(v1::SdkError {
+                message: String::new(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            vlm_generation_outcome(&result),
+            Err("unknown error".to_string())
+        );
+    }
+
+    #[test]
+    fn vlm_generation_error_with_message_reports_it() {
+        let result = v1::VlmResult {
+            error: Some(v1::SdkError {
+                message: "image decode failed".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            vlm_generation_outcome(&result),
+            Err("image decode failed".to_string())
+        );
+    }
+
+    #[test]
+    fn vlm_generation_no_error_is_success() {
+        assert_eq!(vlm_generation_outcome(&v1::VlmResult::default()), Ok(()));
     }
 
     #[test]

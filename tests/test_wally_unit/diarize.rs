@@ -75,6 +75,35 @@ fn diarize_arg_surface() {
     }
 }
 
+/// Unlike the `run_in_process`-based cases below, this registers
+/// `register_diarize()` on its own `App` (as `diarize_arg_surface` above
+/// does) rather than going through the globally registered app in
+/// src/app.rs, so it does not need `#[ignore]`: it exercises the
+/// `--threshold` `RangeF([0,1])` check directly, without ever reaching
+/// `run_diarize`'s model bootstrap.
+#[test]
+fn diarize_threshold_out_of_range_is_a_parse_error() {
+    let mut app = wally::cli::App::new("wally test app", "wally");
+    wally::commands::cmd_diarize::register_diarize(&mut app);
+
+    let audio = TempWavFile::new("threshold_range");
+    for bad in ["1.5", "-0.1"] {
+        let outcome = app.parse(&[
+            "diarize".to_string(),
+            audio.path().to_string(),
+            "--model".to_string(),
+            "x".to_string(),
+            "--threshold".to_string(),
+            bad.to_string(),
+        ]);
+        assert!(
+            matches!(outcome, wally::cli::Outcome::ParseErr { .. }),
+            "--threshold {bad} should fail the RangeF([0,1]) validator before \
+             the callback runs, got {outcome:?}"
+        );
+    }
+}
+
 // The five exit2 tests below (missing --model, missing audio, non-existent
 // audio, non-numeric option, unknown flag) each only assert `exit code == 2`.
 // With diarize not registered, `wally diarize …` is itself an unrecognized

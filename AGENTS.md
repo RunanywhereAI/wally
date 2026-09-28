@@ -255,7 +255,7 @@ own `MIN_GLIBC` and library list; `check-versions.py` holds them to
 ## Build
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release \
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=/path/to/cpp-desktop-<os>-<arch>
 cmake --build build -j "$(sysctl -n hw.logicalcpu)"
 ctest --test-dir build --output-on-failure
@@ -266,6 +266,12 @@ bash scripts/test/e2e.sh ./build/wally
 CMake resolves the kit and runs `cargo build --release` for the crate
 (`cmake/WallyRust.cmake`); `ctest` runs `cargo test`. `rustup` (reading
 `rust-toolchain.toml`) must already have the pinned toolchain installed.
+CMake 3.27+ and Ninja are also prerequisites: `cmake/WallyRust.cmake` picks
+the Cargo profile from `CMAKE_BUILD_TYPE` at configure time, so it rejects
+multi-config generators (Visual Studio, Xcode, Ninja Multi-Config) outright,
+which is why the build above passes `-G Ninja` (`Unix Makefiles` also works on
+macOS/Linux, but Windows' default generator, Visual Studio, is multi-config;
+CI uses Ninja everywhere).
 
 On Apple Silicon, `cmake --build` produces `build/wally` (Swift host wrapping
 `wally_run_main`). Users never run `wally-cxx`; that name exists only so CMake

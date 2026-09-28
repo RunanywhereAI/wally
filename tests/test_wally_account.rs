@@ -293,6 +293,37 @@ fn profile_directory_uses_one_separator_style() {
     );
 }
 
+// #133 comment 10: write_document used to build a UTF-8 CString and call the
+// ANSI (*A) Win32 file APIs, which round-trip a path only through the active
+// ANSI code page. A profile directory with a non-ASCII component (a Windows
+// username with an accented or CJK character) could not be represented there,
+// so the save silently failed. The wide (*W) APIs round-trip any path.
+#[cfg(windows)]
+#[test]
+fn credentials_round_trip_through_a_non_ascii_profile_path() {
+    let _lock = env_lock();
+    let home = TempHome::new();
+    let profile_dir = home.join("café-\u{4F60}\u{597D}");
+    let mut env = EnvGuard::new();
+    env.set("WALLY_PROFILE_DIR", profile_dir.to_string_lossy().as_ref());
+    env.unset("WALLY_CONSOLE_URL");
+
+    let saved = Credentials {
+        console_url: "https://inference.runanywhere.ai".to_string(),
+        email: "dev@example.test".to_string(),
+        access_token: "a-token".to_string(),
+        refresh_token: "r-token".to_string(),
+        expires_at: 123,
+    };
+    account::save(&saved).expect("save into a non-ASCII profile directory");
+
+    let loaded = account::load().expect("load back what was just saved");
+    assert_eq!(
+        loaded, saved,
+        "a non-ASCII profile path must round-trip the session, not silently lose it"
+    );
+}
+
 // A group/world-readable credentials.json is tightened to 0600 silently
 // today; load() must say so rather than leave the reader unaware their
 // bearer token was ever exposed.
@@ -2143,6 +2174,77 @@ fn the_cancel_worker_sends_in_order_with_the_current_bearer() {
     let reported = reported.lock().unwrap();
     assert_eq!(reported[0], "first=202");
     assert_eq!(reported[1], "second=202");
+}
+
+// Two overlapping stop() callers (e.g. a signal handler and normal shutdown)
+// must both block until the worker has actually finished. Before the fix,
+// the caller that only observes `stopping == true` returned 0 at once
+// instead of waiting on the same join as the caller that flipped the flag.
+#[test]
+fn concurrent_stop_calls_both_wait_for_the_worker_to_finish() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Barrier};
+
+    let done = Arc::new(AtomicBool::new(false));
+    let done_clone = Arc::clone(&done);
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+
+    let transport: Transport = Arc::new(
+        move |_request: &HttpRequest| -> Result<HttpResponse, String> {
+            // Held open until the test releases it, so both stop() callers are
+            // guaranteed to be inside stop() while the worker is still busy.
+            if let Some(rx) = release_rx.lock().unwrap().take() {
+                let _ = rx.recv();
+            }
+            done_clone.store(true, Ordering::SeqCst);
+            Ok(HttpResponse {
+                status: 202,
+                body: json(serde_json::json!({"request_id": "x", "status": "cancelling"})),
+                headers: BTreeMap::new(),
+            })
+        },
+    );
+
+    let worker = Arc::new(account::CancelWorker::new(
+        "https://inference.runanywhere.ai",
+        Arc::new(|| "token".to_string()),
+        3000,
+        Arc::new(|_id: &str, _outcome: CancelOutcome, _error: &str| {}),
+        Some(transport),
+    ));
+    worker.enqueue("x");
+
+    let barrier = Arc::new(Barrier::new(2));
+    let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut stoppers = Vec::new();
+    for _ in 0..2 {
+        let worker = Arc::clone(&worker);
+        let barrier = Arc::clone(&barrier);
+        let done = Arc::clone(&done);
+        let observed = Arc::clone(&observed);
+        stoppers.push(std::thread::spawn(move || {
+            barrier.wait(); // both callers enter stop() at the same instant
+            worker.stop();
+            // No sleep: if stop() returned, the worker must already be done.
+            observed.lock().unwrap().push(done.load(Ordering::SeqCst));
+        }));
+    }
+
+    // Give both threads time to be inside stop() (one joining, one waiting on
+    // the same `thread` mutex) before letting the in-flight cancel finish.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    release_tx.send(()).expect("release the in-flight cancel");
+
+    for stopper in stoppers {
+        stopper.join().expect("stopper thread panicked");
+    }
+
+    assert_eq!(
+        observed.lock().unwrap().as_slice(),
+        &[true, true],
+        "every stop() caller must observe the worker already stopped"
+    );
 }
 
 // The transport honours `timeout_ms`: a socket that accepts and never answers

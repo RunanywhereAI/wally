@@ -116,6 +116,84 @@ impl Decoder {
             Decoder::Zstd(z) => z.push(data, sink),
         }
     }
+
+    /// Finalizes decoding once the last `push()` for a body has happened,
+    /// rejecting a stream that stopped short of a real end-of-body marker.
+    /// `push()` alone never notices this: it only reports an error for bytes
+    /// that are structurally invalid, and a body that simply stops -- a
+    /// dropped connection mid-transfer on a `read_until_close` reply, for
+    /// example -- looks identical to one that ended cleanly until something
+    /// checks for the trailer each format ends with.
+    ///
+    /// Returns `Ok(false)` if a final flush handed `sink` bytes and it
+    /// canceled, the same contract `push()` already uses -- a trailer-only
+    /// finalize (nothing left to flush) never calls `sink` at all, so this
+    /// is `Ok(true)` in the common case.
+    pub fn finish(&mut self, sink: &mut Sink<'_>) -> io::Result<bool> {
+        match self {
+            Decoder::Identity => Ok(true),
+            Decoder::GzipOrZlibPending(buf) => {
+                if buf.is_empty() {
+                    Ok(true)
+                } else {
+                    // Never received the 2 bytes needed to even tell gzip
+                    // and zlib framing apart, so this is definitely
+                    // truncated, not just ambiguous.
+                    Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated gzip/deflate body (fewer than 2 bytes received)",
+                    ))
+                }
+            }
+            Decoder::Gzip(d) => {
+                let result = d.try_finish();
+                let ok = drain_finished_output(d.as_mut(), sink);
+                result?;
+                Ok(ok)
+            }
+            // flate2's ZlibDecoder has no CRC/ISIZE trailer the way
+            // GzDecoder does, so try_finish() cannot reliably distinguish a
+            // truncated deflate/zlib stream from a complete one; leave this
+            // variant's truncation undetected here rather than fail closed
+            // on legitimate streams. See the module docs on the gzip/zlib
+            // auto-detect.
+            Decoder::Zlib(_) => Ok(true),
+            Decoder::Brotli(d) => {
+                let result = d.close();
+                let ok = drain_finished_output(d.as_mut(), sink);
+                result?;
+                Ok(ok)
+            }
+            Decoder::Zstd(z) => {
+                if z.decoder.is_finished() {
+                    Ok(true)
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated zstd stream",
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Drains whatever a finalizing call (`try_finish()` / `close()`) flushed
+/// into `decoder`'s owned output buffer, same as `write_and_drain` does for
+/// an ordinary `push()`. Called regardless of whether the finalize call
+/// succeeded: a truncated stream can still have legitimate trailing bytes
+/// worth delivering before the caller sees the error. Returns `sink`'s
+/// verdict on those bytes (`true` if there was nothing to drain), which
+/// `finish()` must not drop the way it would by calling this for its
+/// side effect alone -- see `push()` reporting `sink`'s cancellation the
+/// same way for the non-final case.
+fn drain_finished_output<D: DecodingWriter>(decoder: &mut D, sink: &mut Sink<'_>) -> bool {
+    let out = std::mem::take(decoder.buffered_output());
+    if out.is_empty() {
+        true
+    } else {
+        sink(&out)
+    }
 }
 
 /// A decoding `Write` sink that buffers its output in an owned `Vec<u8>`
@@ -556,5 +634,95 @@ mod tests {
         let mut sink: Box<Sink<'_>> = Box::new(|_: &[u8]| -> bool { false });
         let ok = decoder.push(GZIP_FIXTURE, &mut *sink).unwrap();
         assert!(!ok, "a canceling sink must be reported back to the caller");
+    }
+
+    #[test]
+    fn truncated_gzip_body_fails_finish_instead_of_silently_succeeding() {
+        // The deflate stream itself decodes fine without its trailer, so
+        // push() alone never notices a body a server (or a dropped
+        // connection) cut short right before the CRC32/ISIZE trailer.
+        let mut decoder = Decoder::for_content_encoding(Some("gzip"));
+        let mut sink: Box<Sink<'_>> = Box::new(|_: &[u8]| -> bool { true });
+        let truncated = &GZIP_FIXTURE[..GZIP_FIXTURE.len() - 8];
+        decoder.push(truncated, &mut *sink).unwrap();
+        let result = decoder.finish(&mut *sink);
+        assert!(
+            result.is_err(),
+            "expected a gzip body missing its trailer to fail finish(), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn truncated_brotli_body_fails_finish_instead_of_silently_succeeding() {
+        let mut decoder = Decoder::for_content_encoding(Some("br"));
+        let mut sink: Box<Sink<'_>> = Box::new(|_: &[u8]| -> bool { true });
+        let truncated = &BROTLI_FIXTURE[..BROTLI_FIXTURE.len() - 3];
+        decoder.push(truncated, &mut *sink).unwrap();
+        let result = decoder.finish(&mut *sink);
+        assert!(
+            result.is_err(),
+            "expected a brotli body missing its final bytes to fail finish(), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn truncated_zstd_body_fails_finish_instead_of_silently_succeeding() {
+        // Drops the trailing 4-byte content checksum entirely, unlike
+        // `a_zstd_trailer_split_byte_by_byte_still_decodes_and_verifies`
+        // above, which always eventually delivers it.
+        let mut decoder = Decoder::for_content_encoding(Some("zstd"));
+        let mut sink: Box<Sink<'_>> = Box::new(|_: &[u8]| -> bool { true });
+        let truncated = &ZSTD_FIXTURE[..ZSTD_FIXTURE.len() - 4];
+        decoder.push(truncated, &mut *sink).unwrap();
+        let result = decoder.finish(&mut *sink);
+        assert!(
+            result.is_err(),
+            "expected a zstd body missing its checksum trailer to fail finish(), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_canceling_sink_stops_a_gzip_final_flush() {
+        // push() always flush()es right after every write (see
+        // write_and_drain's doc comment), so on the real body-reading path
+        // this decoder's own output buffer is already empty by the time
+        // finish() runs. Write straight to the inner GzDecoder instead,
+        // skipping that flush, to reproduce the case it normally prevents:
+        // bytes still sitting in the decoder when finish()'s try_finish()
+        // is the one that flushes them out to `sink`.
+        let mut inner = GzDecoder::new(Vec::new());
+        inner.write_all(GZIP_FIXTURE).unwrap();
+        let mut decoder = Decoder::Gzip(Box::new(inner));
+        let mut sink: Box<Sink<'_>> = Box::new(|_: &[u8]| -> bool { false });
+        let result = decoder.finish(&mut *sink);
+        assert!(
+            matches!(result, Ok(false)),
+            "a sink that rejects finish()'s final flush must be reported back to the caller, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_fully_delivered_body_still_finishes_ok() {
+        // Control case: finish() must not spuriously fail a complete
+        // stream for any of the three formats it actually validates.
+        for (label, fixture) in [
+            ("gzip", GZIP_FIXTURE),
+            ("br", BROTLI_FIXTURE),
+            ("zstd", ZSTD_FIXTURE),
+        ] {
+            let mut decoder = Decoder::for_content_encoding(Some(label));
+            let mut out = Vec::new();
+            {
+                let mut sink: Box<Sink<'_>> = Box::new(|data: &[u8]| -> bool {
+                    out.extend_from_slice(data);
+                    true
+                });
+                decoder.push(fixture, &mut *sink).unwrap();
+                decoder
+                    .finish(&mut *sink)
+                    .unwrap_or_else(|e| panic!("finish() on a complete {label} body failed: {e}"));
+            }
+            assert_eq!(out, PLAINTEXT, "{label} payload mismatch");
+        }
     }
 }

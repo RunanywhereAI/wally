@@ -32,7 +32,7 @@ sdk_ci_ref = "b3a2b0147d8c66190c14a53bc04286efd6a4d64a"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
-cmake_minimum = "3.24"
+cmake_minimum = "3.27"
 cxx_standard = "20"
 # The Rust toolchain; rust-toolchain.toml pins the same channel.
 rust = "1.93.1"
@@ -64,3 +64,6 @@ system_libraries = [
     "libpthread.so.0", "librt.so.1", "libgcc_s.so.1", "libstdc++.so.6",
     "libssl.so.3", "libcrypto.so.3", "libcurl.so.4",
 ]
+# PT_INTERP of the shipped executable (bin/wally): the loader the kernel execs
+# before any DT_NEEDED library above is even tried. x86-64 glibc's own name.
+interpreters = ["/lib64/ld-linux-x86-64.so.2"]

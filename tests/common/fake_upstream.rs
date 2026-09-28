@@ -35,7 +35,17 @@ pub struct Cancel {
     pub authorization: String,
 }
 
+/// The attribution headers one chat completion arrived with.
+#[derive(Debug, Clone)]
+pub struct Seen {
+    /// `X-RA-Harness`, or None when it was absent.
+    pub harness: Option<String>,
+    pub user_agent: String,
+    pub streaming: bool,
+}
+
 struct State {
+    seen: Vec<Seen>,
     ports: Vec<u16>,
     cancels: Vec<Cancel>,
     arrivals: i32,
@@ -151,6 +161,11 @@ fn handle_chat(
         .ok()
         .and_then(|v| v.get("stream").and_then(|s| s.as_bool()))
         .unwrap_or(false);
+    shared.state.lock().unwrap().seen.push(Seen {
+        harness: req.header("X-RA-Harness").map(str::to_string),
+        user_agent: req.header("User-Agent").unwrap_or_default().to_string(),
+        streaming,
+    });
     if !streaming {
         shared.wait_for_hold();
         let _ = writer.send_full(
@@ -247,6 +262,7 @@ impl FakeUpstream {
     pub fn new() -> Self {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
+                seen: Vec::new(),
                 ports: Vec::new(),
                 cancels: Vec::new(),
                 arrivals: 0,
@@ -292,6 +308,11 @@ impl FakeUpstream {
     /// The port alone, for building an `UpstreamOptions.origin` directly.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// The attribution headers each chat completion arrived with, in order.
+    pub fn seen(&self) -> Vec<Seen> {
+        self.shared.state.lock().unwrap().seen.clone()
     }
 
     pub fn ports(&self) -> Vec<u16> {
@@ -429,7 +450,10 @@ impl HalfOpenUpstream {
                 }
                 let peer_port = stream.peer_addr().map(|a| a.port()).unwrap_or(0);
                 let ports = loop_ports.clone();
-                let handle = thread::spawn(move || serve_half_open(stream, peer_port, ports));
+                let handler_stopping = loop_stopping.clone();
+                let handle = thread::spawn(move || {
+                    serve_half_open(stream, peer_port, ports, handler_stopping)
+                });
                 loop_handlers.lock().unwrap().push(handle);
             }
         });
@@ -482,9 +506,14 @@ impl Drop for HalfOpenUpstream {
     }
 }
 
-fn serve_half_open(mut stream: TcpStream, port: u16, ports: Arc<Mutex<Vec<u16>>>) {
+fn serve_half_open(
+    mut stream: TcpStream,
+    port: u16,
+    ports: Arc<Mutex<Vec<u16>>>,
+    stopping: Arc<AtomicBool>,
+) {
     let mut answered = 0;
-    while read_request(&mut stream) {
+    while read_request(&mut stream, &stopping) {
         ports.lock().unwrap().push(port);
         if answered > 0 {
             // The half-open moment: the request was read, nothing comes
@@ -504,19 +533,31 @@ fn serve_half_open(mut stream: TcpStream, port: u16, ports: Arc<Mutex<Vec<u16>>>
     }
 }
 
-/// Reads one HTTP request (headers, then Content-Length bytes of body).
-fn read_request(stream: &mut TcpStream) -> bool {
+/// Reads one HTTP request (headers, then Content-Length bytes of body). Polls
+/// with a short read timeout rather than blocking forever, so a connection
+/// whose peer never sends a full request and never closes either (a stalled
+/// or abandoned client) does not leave this handler thread parked in
+/// `read()` past `HalfOpenUpstream::drop`, which would otherwise hang the
+/// whole test process joining it.
+fn read_request(stream: &mut TcpStream, stopping: &Arc<AtomicBool>) -> bool {
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(20)));
     let mut buffer: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 1024];
     let header_end = loop {
         match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return false,
+            Ok(0) => return false,
             Ok(n) => {
                 buffer.extend_from_slice(&chunk[..n]);
                 if let Some(pos) = find_subslice(&buffer, b"\r\n\r\n") {
                     break pos;
                 }
             }
+            Err(e) if is_timeout(&e) => {
+                if stopping.load(Ordering::SeqCst) {
+                    return false;
+                }
+            }
+            Err(_) => return false,
         }
     };
     let head = String::from_utf8_lossy(&buffer[..header_end]);
@@ -531,11 +572,24 @@ fn read_request(stream: &mut TcpStream) -> bool {
     let mut have = buffer.len() - (header_end + 4);
     while have < content_length {
         match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return false,
+            Ok(0) => return false,
             Ok(n) => have += n,
+            Err(e) if is_timeout(&e) => {
+                if stopping.load(Ordering::SeqCst) {
+                    return false;
+                }
+            }
+            Err(_) => return false,
         }
     }
     true
+}
+
+fn is_timeout(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -557,4 +611,47 @@ pub fn describe(ports: &[u16]) -> String {
     }
     out.push(']');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn drop_completes_even_while_a_client_never_finishes_its_request() {
+        // Before the poll-with-timeout fix, the handler thread's read()
+        // blocked forever on a peer that connects and then never sends a
+        // full request and never closes -- exactly what a raw TcpStream
+        // held open like this does -- so `HalfOpenUpstream::drop` (which
+        // joins that thread) hung the whole test process along with it.
+        let upstream = HalfOpenUpstream::new();
+        assert!(upstream.ok(), "failed to bind the fake upstream");
+
+        // Connect but deliberately send nothing and never close: the
+        // handler thread is now parked wherever `read_request` blocks.
+        let addr = upstream.base_url();
+        let host_port = addr
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .unwrap();
+        let client = TcpStream::connect(host_port).expect("connect to fake upstream");
+
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::spawn(move || {
+            drop(upstream);
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("HalfOpenUpstream::drop must not hang on a stalled client");
+
+        // Keep the client alive for the whole test so the handler thread's
+        // read() genuinely had nothing to observe but a timeout -- dropping
+        // it any earlier would let the OS's own connection-reset do the job
+        // the fix is supposed to do instead.
+        drop(client);
+    }
 }

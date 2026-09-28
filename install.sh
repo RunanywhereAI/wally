@@ -214,17 +214,42 @@ acquire_install_lock() {
             rm -f "$pid_tmp"
             fail "another Wally install (pid ${owner}) is running; let it finish, then run this again."
         fi
-        # Stale: its owner is gone. Unlink it and link ours into place; a run
-        # that links first makes our `ln` fail, and we stop. Not airtight:
-        # two runs that both found the same stale lock can each unlink and
-        # link in turn. That needs a crashed install and two new ones started
-        # within the same instant, and shell has no compare-and-swap to close
-        # it without a second lock.
+        # Stale: its owner is gone. The read above and the unlink-and-relink
+        # below are not atomic with each other, so two runs that both found
+        # this same stale owner could still race each other's rm+ln instead
+        # of the lock's real owner. Close that with a second, tiny lock: a
+        # directory made with `mkdir`, which is as atomic as `ln`. Only the
+        # run that wins the `mkdir` may re-read the lock and replace it; a
+        # run that loses it fails the same way a losing `ln` already does,
+        # instead of getting a turn to delete a lock the winner has already
+        # replaced with its own live pid.
+        takeover="${lock}.takeover"
+        if ! mkdir "$takeover" 2>/dev/null; then
+            # The section this guards is a handful of lines; a takeover
+            # directory that outlives it by a minute means whatever made it
+            # crashed mid-recovery. Clear it once and retry so that crash
+            # doesn't wedge every future install on a dead mutex forever.
+            if [ -z "$(find "$takeover" -maxdepth 0 -mmin +1 2>/dev/null)" ] ||
+                ! rmdir "$takeover" 2>/dev/null || ! mkdir "$takeover" 2>/dev/null; then
+                rm -f "$pid_tmp"
+                fail "another Wally install is running or recovering a stale lock; run this again once it finishes."
+            fi
+        fi
+        # Re-read: a live run may have replaced ${lock} with its own while we
+        # were checking the now-dead owner above and winning the takeover.
+        owner="$(cat "$lock" 2>/dev/null || true)"
+        if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+            rmdir "$takeover"
+            rm -f "$pid_tmp"
+            fail "another Wally install (pid ${owner}) is running; let it finish, then run this again."
+        fi
         rm -f "$lock"
         if ! ln "$pid_tmp" "$lock" 2>/dev/null; then
+            rmdir "$takeover"
             rm -f "$pid_tmp"
             fail "another Wally install took ${lock} just now; run this again once it finishes."
         fi
+        rmdir "$takeover"
     fi
     rm -f "$pid_tmp"
     held_lock="$lock"
