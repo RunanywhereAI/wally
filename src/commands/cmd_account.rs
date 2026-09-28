@@ -636,7 +636,7 @@ mod tests {
         // The billing origin also honours the legacy RCLI_ name, so both are
         // cleared for the default to be what is tested.
         let names = ["WALLY_CONSOLE_WEB_URL", "RCLI_CONSOLE_WEB_URL"];
-        let saved: Vec<_> = names.iter().map(|name| std::env::var_os(name)).collect();
+        let saved: Vec<_> = names.iter().map(std::env::var_os).collect();
         for name in names {
             // SAFETY: `_lock` serializes every test in this process that
             // touches these variables.
