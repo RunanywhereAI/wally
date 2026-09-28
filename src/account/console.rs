@@ -859,6 +859,18 @@ fn format_refusal(operation: &str, message: &str) -> String {
     }
 }
 
+/// Whether a response is the contract's 403 `card_required` refusal. Only the
+/// code is read here: the message a person sees still goes through
+/// `http_error`, like every other refusal, so it gets the same terminal-safety
+/// filter (`console_refusal_message`).
+fn is_card_required(response: &HttpResponse) -> bool {
+    response.status == 403
+        && parse_object(response)
+            .ok()
+            .and_then(|object| contract::ApiError::from_json(&object).ok())
+            .is_some_and(|error| error.code == contract::ApiErrorCode::KCardRequired)
+}
+
 /// Every console failure in this file is phrased here, so this is the one
 /// place that decides what a person reads when the cloud says no. It is
 /// written for them, not for us: a status line and an internal endpoint tells
@@ -1209,22 +1221,11 @@ impl ConsoleClient {
             }
         };
         if response.status != 200 {
-            if response.status == 403 {
-                if let Ok(object) = parse_object(&response) {
-                    if let Ok(api_error) = contract::ApiError::from_json(&object) {
-                        if api_error.code == contract::ApiErrorCode::KCardRequired {
-                            outcome.result = PollResult::CardRequired;
-                            outcome.error = if !api_error.message.is_empty() {
-                                api_error.message
-                            } else {
-                                "card required".to_string()
-                            };
-                            return outcome;
-                        }
-                    }
-                }
-            }
             outcome.error = http_error("poll", &origin, &response, "");
+            if is_card_required(&response) {
+                outcome.result = PollResult::CardRequired;
+                return outcome;
+            }
             // A busy or briefly unavailable console has not denied anything,
             // and the person may still be approving in the browser. Treat it
             // as "still waiting" so the poll loop keeps going at its normal
@@ -1324,25 +1325,14 @@ impl ConsoleClient {
             // The same 403 card_required poll() reads above. Refresh is where
             // the console really sends it (the other place is the approval
             // page, which the browser shows).
-            if response.status == 403 {
-                if let Ok(object) = parse_object(&response) {
-                    if let Ok(api_error) = contract::ApiError::from_json(&object) {
-                        if api_error.code == contract::ApiErrorCode::KCardRequired {
-                            let message = if !api_error.message.is_empty() {
-                                api_error.message
-                            } else {
-                                "card required".to_string()
-                            };
-                            return Err(RefreshError {
-                                message,
-                                unavailable: false,
-                                card_required: true,
-                            });
-                        }
-                    }
-                }
-            }
             let message = http_error("refresh", &origin, &response, "");
+            if is_card_required(&response) {
+                return Err(RefreshError {
+                    message,
+                    unavailable: false,
+                    card_required: true,
+                });
+            }
             // Same distinction as WhoAmI: a busy console has not told us this
             // session is bad, only that it could not answer (InferenceInfra#444).
             let unavailable = response.status == 429 || response.status >= 500;

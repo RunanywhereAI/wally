@@ -844,14 +844,14 @@ fn a_poll_requiring_a_card_reports_card_required() {
     );
     assert_eq!(
         outcome.error,
-        "Add a card to sign in from the terminal. A CLI login creates an API key, and keys need a card on file."
+        "Wally Cloud refused the poll: Add a card to sign in from the terminal. A CLI login creates an API key, and keys need a card on file."
     );
 }
 
-// #137: a refresh (not just a poll) can also come back card_required -- the
-// facts behind this fix say that's the one console endpoint that actually
-// sends it. refresh_session (cmd_account.rs) turns this into a message with
-// the billing URL; this pins the typed signal it reads to build that message.
+// #137: a refresh (not just a poll) can also come back card_required -- it is
+// the one console endpoint that sends it today. refresh_session
+// (cmd_account.rs) turns this into a message with the billing URL; this pins
+// the typed signal it reads to build that message.
 #[test]
 fn a_refresh_requiring_a_card_reports_card_required() {
     let _lock = env_lock();
@@ -877,12 +877,48 @@ fn a_refresh_requiring_a_card_reports_card_required() {
         failure.card_required,
         "a card_required refresh must set RefreshError::card_required"
     );
-    assert_eq!(failure.message, "Add a card to sign in from the terminal.");
+    assert_eq!(
+        failure.message,
+        "Wally Cloud refused the refresh: Add a card to sign in from the terminal."
+    );
     assert_eq!(
         account::console_billing_url("https://inference.runanywhere.ai"),
         "https://console.runanywhere.ai/cloud/billing",
         "the billing URL refresh_session appends comes from the production API's own web origin"
     );
+}
+
+// A card_required refusal still goes through the same terminal-safety filter
+// as every other refusal: a message carrying an escape sequence or a line
+// break never reaches stderr, only the typed signal and a generic line do.
+#[test]
+fn a_card_required_message_is_filtered_like_any_refusal() {
+    let client = ConsoleClient::new(Some(Arc::new(
+        |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: json(serde_json::json!({
+                    "code": "card_required",
+                    "message": "\u{1b}[31mAdd a card\nsecond line",
+                })),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let authorization = Authorization {
+        request_code: "ABCD-EFGH".to_string(),
+        poll_secret: "poll-secret".to_string(),
+        ..Authorization::default()
+    };
+    let outcome = client.poll("https://console.runanywhere.ai", &authorization);
+    assert_eq!(outcome.result, PollResult::CardRequired);
+    assert_eq!(outcome.error, "Wally Cloud refused the poll");
+
+    let failure = client
+        .refresh("https://inference.runanywhere.ai", "refresh-token")
+        .expect_err("a card_required refresh must fail");
+    assert!(failure.card_required);
+    assert_eq!(failure.message, "Wally Cloud refused the refresh");
 }
 
 #[test]

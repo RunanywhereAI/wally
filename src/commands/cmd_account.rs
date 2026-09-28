@@ -667,7 +667,9 @@ mod tests {
         }
 
         assert!(
-            failure.starts_with("Add a card to sign in from the terminal."),
+            failure.starts_with(
+                "Wally Cloud refused the refresh: Add a card to sign in from the terminal."
+            ),
             "the console's own message must still lead: {failure}"
         );
         assert!(
