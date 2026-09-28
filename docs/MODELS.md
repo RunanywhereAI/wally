@@ -5,8 +5,8 @@
 This table groups models by publisher; the id you pull depends on the engine
 you want:
 
-- `wally models pull <id>` — the llama.cpp / GGUF build (macOS, Windows x64, Linux).
-- `wally models pull mlx-<id>` — the MLX build (Apple Silicon only).
+- `wally models pull <id>`: the llama.cpp / GGUF build (macOS, Windows x64, Linux).
+- `wally models pull mlx-<id>`: the MLX build (Apple Silicon only).
 
 MLX builds exist on Apple Silicon only; on any other platform they are hidden
 from the catalog. The short aliases (`qwen3`, `llama3.2`, `smollm2`, …) still
