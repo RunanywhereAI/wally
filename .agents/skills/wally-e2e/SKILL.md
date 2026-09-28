@@ -188,7 +188,9 @@ Mac; ARM64 MSVC + QHexRT overlay on Snapdragon).
   SDK packager for the *next* kit; do not retag 0.20.28). Wally already
   links kit `libcurl.lib` when present.
 - Published product bottles: macOS `wally-$V-macos-arm64.tar.gz`, Windows
-  **x64** zip. There is no public Windows ARM64 bottle; NPU is overlay-only.
+  **x86_64** zip, Windows **arm64** zip, and Linux **x86_64**
+  `wally-$V-linux-x86_64.tar.gz`. NPU (NeuRT/QHexRT) is overlay-only on any
+  platform.
 - **The private QHexRT overlay tarball used to ship zero skel files** (only
   `.dll`/`.lib`, no `.so`/`.cat`) — `rac-cli`'s own overlay build could not
   run `qwen3.8-27b-1bit-npu` (the Bonsai/Maple ternary decoder) out of the

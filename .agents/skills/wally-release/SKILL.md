@@ -22,9 +22,11 @@ Do this **after** the SDK GitHub Release this pin targets is **published**
   dispatches `release.yml`. Tag pushes with `GITHUB_TOKEN` do **not** trigger
   other workflows; the dispatch is required.
 - Checkout in auto-tag uses `persist-credentials: true` so the tag push works.
-- `release.yml` jobs: macos-arm64 bottle, windows-x64 zip, then GitHub Release.
-  **macos runner must be macos-26** (Xcode 26 / Swift 6.2). macos-15 is Swift
-  6.1 and cannot resolve the SDK package; macos-14 is Swift 5.10.
+- `release.yml` jobs: `macos` (macos-arm64 bottle), `windows-arm64` and
+  `windows` (windows-x86_64 zip), `linux` (linux-x86_64 bottle), then `publish`
+  assembles the GitHub Release. **macos runner must be macos-26** (Xcode 26 /
+  Swift 6.2). macos-15 is Swift 6.1 and cannot resolve the SDK package;
+  macos-14 is Swift 5.10.
 - Public bottle / zip is OSS only. NeuRT / QHexRT overlays are workflow
   artifacts or `WALLY_PRIVATE_OVERLAY`, never public release assets, never
   Homebrew bottles.
@@ -39,7 +41,7 @@ version.
 
 ## 2. Product version + label
 
-Next patch after `0.5.0` is `0.5.1`. Bump `versions.toml [product] version`,
+Next patch after `0.7.0` is `0.7.1`. Bump `versions.toml [product] version`,
 `Cargo.toml`'s `version`, and any Formula version stamp in the same commit
 (`scripts/ci/check-versions.py` fails the PR if they drift). Open/update the
 PR and apply **exactly one** `release:patch` (or minor/major).
@@ -82,9 +84,9 @@ gh release view v$PRODUCT --repo RunanywhereAI/wally --json isDraft,assets \
   --jq '{isDraft, names: [.assets[].name]}'
 ```
 
-Expect `wally-$PRODUCT-macos-arm64.tar.gz` (+ `.sha256`) and
-`wally-$PRODUCT-windows-x64.zip` (+ `.sha256`). **Must be empty** for
-`*neurt*`, `*qhexrt*`, `*private*`.
+Expect `wally-$PRODUCT-macos-arm64.tar.gz`, `wally-$PRODUCT-windows-x86_64.zip`,
+`wally-$PRODUCT-windows-arm64.zip`, and `wally-$PRODUCT-linux-x86_64.tar.gz`
+(each + `.sha256`). **Must be empty** for `*neurt*`, `*qhexrt*`, `*private*`.
 
 If `release.yml` still creates a non-draft release, that is the live product
 cut — confirm asset names before anyone bottles from it. Stamp Formula from
