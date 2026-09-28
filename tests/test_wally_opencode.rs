@@ -294,23 +294,31 @@ fn config_injects_limit_and_cost() {
     );
 }
 
+// Both builders, as the C++ case checked: the local / `wally opencode -m` path
+// and the cloud session path.
 #[test]
 fn opencode_config_declares_the_harness() {
-    let config: serde_json::Value = serde_json::from_str(&harness::build_open_code_config(
-        "glm-5.3-flash",
-        "https://inference.runanywhere.ai/v1",
-        "sk-live-xyz",
-        &[CatalogModel {
-            id: "glm-5.3-flash".to_string(),
-            context_window: 0,
-            max_output: 0,
-            input_per_mtok: 0,
-            output_per_mtok: 0,
-        }],
-    ))
-    .unwrap();
-    assert_eq!(
-        config["provider"]["runanywhere"]["options"]["headers"],
-        serde_json::json!({"X-RA-Harness": "opencode"})
-    );
+    let catalog = [CatalogModel {
+        id: "glm-5.3-flash".to_string(),
+        context_window: 0,
+        max_output: 0,
+        input_per_mtok: 0,
+        output_per_mtok: 0,
+    }];
+    let configs = [
+        harness::build_open_code_config("glm-5.3-flash", "http://127.0.0.1:52431/v1", "", &catalog),
+        harness::build_open_code_cloud_config(
+            "glm-5.3-flash",
+            "https://inference.runanywhere.ai/v1",
+            "tok",
+            &catalog,
+        ),
+    ];
+    for config in configs {
+        let config: serde_json::Value = serde_json::from_str(&config).unwrap();
+        assert_eq!(
+            config["provider"]["runanywhere"]["options"]["headers"],
+            serde_json::json!({"X-RA-Harness": "opencode"})
+        );
+    }
 }
