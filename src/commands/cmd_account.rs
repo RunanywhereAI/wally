@@ -633,10 +633,15 @@ mod tests {
     #[test]
     fn refresh_session_appends_the_billing_url_on_card_required() {
         let _lock = env_lock();
-        let saved = std::env::var_os("WALLY_CONSOLE_WEB_URL");
-        // SAFETY: `_lock` serializes every test in this process that touches
-        // WALLY_CONSOLE_WEB_URL.
-        unsafe { std::env::remove_var("WALLY_CONSOLE_WEB_URL") };
+        // The billing origin also honours the legacy RCLI_ name, so both are
+        // cleared for the default to be what is tested.
+        let names = ["WALLY_CONSOLE_WEB_URL", "RCLI_CONSOLE_WEB_URL"];
+        let saved: Vec<_> = names.iter().map(|name| std::env::var_os(name)).collect();
+        for name in names {
+            // SAFETY: `_lock` serializes every test in this process that
+            // touches these variables.
+            unsafe { std::env::remove_var(name) };
+        }
 
         let client = ConsoleClient::new(Some(Arc::new(
             |_: &HttpRequest| -> Result<HttpResponse, String> {
@@ -660,10 +665,12 @@ mod tests {
         let failure =
             refresh_session(&client, &mut credentials).expect_err("card_required must fail");
 
-        match saved {
-            // SAFETY: still under `_lock`.
-            Some(value) => unsafe { std::env::set_var("WALLY_CONSOLE_WEB_URL", value) },
-            None => unsafe { std::env::remove_var("WALLY_CONSOLE_WEB_URL") },
+        for (name, value) in names.iter().zip(saved) {
+            match value {
+                // SAFETY: still under `_lock`.
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
         }
 
         assert!(

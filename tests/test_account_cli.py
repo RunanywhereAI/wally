@@ -385,6 +385,10 @@ def main():
                 "RUNANYWHERE_API_KEY",
                 "RUNANYWHERE_API_SECRET",
                 "RUNANYWHERE_ENVIRONMENT",
+                # The approval and billing origins follow these when set, and
+                # this test asserts the fake console's own origin.
+                "WALLY_CONSOLE_WEB_URL",
+                "RCLI_CONSOLE_WEB_URL",
             ):
                 environment.pop(name, None)
 
@@ -418,10 +422,14 @@ def main():
             with tempfile.TemporaryDirectory(prefix="wally-account-card-") as other:
                 ConsoleHandler.card_required_polls = 2
                 try:
+                    # UTF-8 explicitly: the lines checked here carry an em
+                    # dash, which Windows' default locale code page would
+                    # otherwise decode into something else.
                     carded = subprocess.run(
                         [binary, "account", "login", "--no-browser"],
                         env=dict(environment, WALLY_PROFILE_DIR=other),
-                        capture_output=True, text=True, timeout=60, check=False,
+                        capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=60, check=False,
                     )
                 finally:
                     ConsoleHandler.card_required_polls = 0

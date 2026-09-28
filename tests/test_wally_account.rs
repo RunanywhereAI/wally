@@ -857,6 +857,7 @@ fn a_refresh_requiring_a_card_reports_card_required() {
     let _lock = env_lock();
     let mut env = EnvGuard::new();
     env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
 
     let client = ConsoleClient::new(Some(Arc::new(
         |_: &HttpRequest| -> Result<HttpResponse, String> {
@@ -1040,6 +1041,7 @@ fn the_api_host_and_the_browser_host_stay_apart() {
     let mut env = EnvGuard::new();
     env.unset("WALLY_CONSOLE_URL");
     env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
 
     let api = account::default_console_url();
     let browser = account::trusted_browser_origins(&api);
@@ -1093,6 +1095,7 @@ fn the_trusted_browser_origin_is_never_empty() {
     let _lock = env_lock();
     let mut env = EnvGuard::new();
     env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
 
     // An unknown console is trusted at its own origin and nowhere else, so a
     // dev or loopback console keeps working without widening what we accept.
@@ -1125,6 +1128,7 @@ fn effective_console_web_origin_follows_the_same_trust_order() {
     let _lock = env_lock();
     let mut env = EnvGuard::new();
     env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
 
     assert_eq!(
         account::effective_console_web_origin("https://inference.runanywhere.ai"),
@@ -1155,6 +1159,7 @@ fn console_billing_url_is_the_web_origins_sibling_of_cloud_cli() {
     let _lock = env_lock();
     let mut env = EnvGuard::new();
     env.unset("WALLY_CONSOLE_WEB_URL");
+    env.unset("RCLI_CONSOLE_WEB_URL");
 
     assert_eq!(
         account::console_billing_url("https://inference.runanywhere.ai"),
