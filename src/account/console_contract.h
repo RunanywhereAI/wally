@@ -17,7 +17,7 @@
 namespace wally::account::contract {
 
 // SHA-256 of contracts/wally-cli-v1.openapi.json this header was built from.
-inline constexpr char kContractSha256[] = "66e32c5f41366ee121f8287595c00fb083f1a596af0f30fccc83434111d2dc10";
+inline constexpr char kContractSha256[] = "7d6ab1326e20fb83a54078a047bc0b3a9297a299fae932ae46da084b8c18a283";
 
 enum class ApiErrorCode {
     kInvalidRequest,
@@ -1095,6 +1095,23 @@ inline void to_json(nlohmann::json& j, const ModelCatalogResponse& value) {
     j["pricing_version"] = value.pricing_version;
 }
 
+struct OpenRouterDatacenter {
+    std::string country_code;
+};
+
+inline void from_json(const nlohmann::json& j, OpenRouterDatacenter& value) {
+    if (j.contains("country_code") && !j.at("country_code").is_null()) {
+        value.country_code = j.at("country_code").get<std::string>();
+    } else {
+        value.country_code = std::string{};
+    }
+}
+
+inline void to_json(nlohmann::json& j, const OpenRouterDatacenter& value) {
+    j = nlohmann::json::object();
+    j["country_code"] = value.country_code;
+}
+
 struct OpenRouterPricing {
     std::string completion;
     std::optional<std::string> input_cache_read;
@@ -1131,6 +1148,8 @@ inline void to_json(nlohmann::json& j, const OpenRouterPricing& value) {
 struct PublicModel {
     std::optional<std::int64_t> context_length;
     std::optional<std::int64_t> created;
+    std::optional<std::vector<OpenRouterDatacenter>> datacenters;
+    std::optional<std::string> description;
     std::optional<std::string> hugging_face_id;
     std::string id;
     std::optional<std::vector<std::string>> input_modalities;
@@ -1158,6 +1177,16 @@ inline void from_json(const nlohmann::json& j, PublicModel& value) {
         value.created = j.at("created").get<std::int64_t>();
     } else {
         value.created = std::nullopt;
+    }
+    if (j.contains("datacenters") && !j.at("datacenters").is_null()) {
+        value.datacenters = j.at("datacenters").get<std::vector<OpenRouterDatacenter>>();
+    } else {
+        value.datacenters = std::nullopt;
+    }
+    if (j.contains("description") && !j.at("description").is_null()) {
+        value.description = j.at("description").get<std::string>();
+    } else {
+        value.description = std::nullopt;
     }
     if (j.contains("hugging_face_id") && !j.at("hugging_face_id").is_null()) {
         value.hugging_face_id = j.at("hugging_face_id").get<std::string>();
@@ -1243,6 +1272,12 @@ inline void to_json(nlohmann::json& j, const PublicModel& value) {
     }
     if (value.created.has_value()) {
         j["created"] = *value.created;
+    }
+    if (value.datacenters.has_value()) {
+        j["datacenters"] = *value.datacenters;
+    }
+    if (value.description.has_value()) {
+        j["description"] = *value.description;
     }
     if (value.hugging_face_id.has_value()) {
         j["hugging_face_id"] = *value.hugging_face_id;
