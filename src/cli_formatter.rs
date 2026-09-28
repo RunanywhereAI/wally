@@ -1196,6 +1196,11 @@ mod tests {
                     "Open DeepSeek Harness with a model",
                     "Coding tools",
                 ),
+                leaf(
+                    "prime-agent",
+                    "Open Prime Agent with a model",
+                    "Coding tools",
+                ),
                 namespace(
                     "account",
                     "Account",

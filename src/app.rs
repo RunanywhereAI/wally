@@ -127,6 +127,7 @@ pub fn configure_app(app: &mut App) {
                 "hermes",
                 "openclaw",
                 "deepseek",
+                "prime-agent",
             ],
         },
         Section {
@@ -168,6 +169,7 @@ fn is_passthrough_command(token: &str) -> bool {
         "hermes",
         "openclaw",
         "deepseek",
+        "prime-agent",
     ];
     NAMES.contains(&token)
 }

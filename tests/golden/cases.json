@@ -272,6 +272,13 @@
   ]
  },
  {
+  "name": "help__prime-agent",
+  "args": [
+   "help",
+   "prime-agent"
+  ]
+ },
+ {
   "name": "help__deepseek",
   "args": [
    "help",
@@ -421,6 +428,14 @@
   "args": [
    "help",
    "openclaw",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__prime-agent",
+  "args": [
+   "help",
+   "prime-agent",
    "--help"
   ]
  },

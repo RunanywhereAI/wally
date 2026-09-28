@@ -24,7 +24,8 @@ tool starts the way you already have it configured, and wally wires nothing.
 | `claude-desktop` | a gateway profile in Claude Desktop's third party mode, covering the chat and Cowork tabs |
 | `hermes` | `CUSTOM_BASE_URL`, `HERMES_INFERENCE_PROVIDER=custom`, the model in `HERMES_INFERENCE_MODEL`, and the key under the name its host gates on |
 | `openclaw` | your own `openclaw.json` plus one provider, written for the run and named by `OPENCLAW_CONFIG_PATH` |
-| `deepseek` | a `--patch` overlay on the argv, pointing dsh at a settings document wally wrote; nothing enters `$DSH_HOME` |
+| `deepseek` | a `--patch` overlay on the argv that adds the provider to dsh's `llm-pi-ai` row; nothing enters `$DSH_HOME` |
+| `prime-agent` | a temporary extension loaded with `-e` that registers the provider for the run, with the key in `RUNANYWHERE_API_KEY`; nothing enters `~/.prime/agent` |
 
 Two flags go with `-m`. `--serve` holds the endpoint open and prints it instead
 of launching anything, which is how a tool nobody has taught wally about gets
@@ -40,12 +41,12 @@ than describe them. `opencode`, `hermes` and `openclaw` speak OpenAI already, so
 they talk to the endpoint directly.
 
 Nothing wally writes for a tool outlives the run. The variables go in the child
-process. DeepSeek Harness is handed a settings document and a one-row patch in
-a temp directory, both deleted when it exits; its own `$DSH_HOME` is never
-written to, and the API key never enters either file, because the provider names
+process. DeepSeek Harness is handed a patch in a temp directory, deleted when it
+exits; its own `$DSH_HOME` is never written to, and the API key never enters
+the file, because the provider names
 an environment variable and dsh resolves it per request.
 
-OpenClaw and DeepSeek also get told the model's real context window and max
+OpenClaw, DeepSeek and Prime Agent also get told the model's real context window and max
 output, read from the console catalog. Hermes does not: it takes a
 context-window hint from exactly one place, `model.context_length` (or a
 `custom_providers` entry) in `~/.hermes/config.yaml`, and there is no

@@ -626,10 +626,23 @@ pub fn register_editors(app: &mut App) {
                 #[cfg(target_os = "macos")]
                 {
                     if bundle_path(&editor).is_empty() {
+                        const DOWNLOAD: &str = "https://claude.ai/download";
                         out::error_line(&format!("{} is not installed on this machine", editor.id));
-                        out::status_line(
-                            "download it from https://claude.ai/download, then run this again",
-                        );
+                        // An app is installed by hand, so the most wally can
+                        // do is open the page; it cannot wait for the install.
+                        if crate::util::term::stdin_is_tty()
+                            && crate::util::term::stderr_is_tty()
+                            && harness::confirm("Open the download page? [y/N] ")
+                        {
+                            crate::commands::cmd_account::open_browser(DOWNLOAD);
+                            out::status_line(&format!(
+                                "install it from {DOWNLOAD}, then run this again"
+                            ));
+                        } else {
+                            out::status_line(&format!(
+                                "download it from {DOWNLOAD}, then run this again"
+                            ));
+                        }
                         return 1;
                     }
                 }
