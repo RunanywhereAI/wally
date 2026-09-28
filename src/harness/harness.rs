@@ -687,9 +687,14 @@ struct Installer {
 
 fn installer(tool: &str) -> Option<Installer> {
     let (posix, windows, needs_npm) = match tool {
-        "opencode" => ("npm i -g opencode-ai", "npm i -g opencode-ai", true),
-        "openclaw" => ("npm i -g openclaw@latest", "npm i -g openclaw@latest", true),
-        "dsh" => ("npm i -g @deepseek-ai/dsh", "npm i -g @deepseek-ai/dsh", true),
+        // The Windows command runs through PowerShell (see offer_install),
+        // where plain `npm` resolves to npm.ps1 and the default Restricted
+        // execution policy refuses to run it. npm.cmd is the shim PowerShell
+        // and cmd.exe will both run, and it is what on_path("npm") already
+        // looks for via executable_names.
+        "opencode" => ("npm i -g opencode-ai", "npm.cmd i -g opencode-ai", true),
+        "openclaw" => ("npm i -g openclaw@latest", "npm.cmd i -g openclaw@latest", true),
+        "dsh" => ("npm i -g @deepseek-ai/dsh", "npm.cmd i -g @deepseek-ai/dsh", true),
         "claude" => (
             "curl -fsSL https://claude.ai/install.sh | bash",
             "irm https://claude.ai/install.ps1 | iex",
@@ -1219,11 +1224,28 @@ pub fn launch(tool: &str, model: &str, args: &[String], options: &GlobalOptions)
 mod tests {
     use super::*;
 
+    #[cfg(not(windows))]
     #[test]
-    fn npm_tools_install_the_same_way_everywhere() {
+    fn npm_tools_install_with_plain_npm_on_posix() {
         let opencode = installer("opencode").unwrap();
         assert_eq!(opencode.command, "npm i -g opencode-ai");
         assert!(opencode.needs_npm);
+    }
+
+    // PowerShell's default execution policy blocks npm's own npm.ps1 shim,
+    // so the offered command must be the npm.cmd shim instead.
+    #[cfg(windows)]
+    #[test]
+    fn npm_tools_install_with_npm_cmd_on_windows() {
+        for tool in ["opencode", "openclaw", "dsh"] {
+            let installer = installer(tool).unwrap();
+            assert!(
+                installer.command.starts_with("npm.cmd "),
+                "{tool} installer command was `{}`",
+                installer.command
+            );
+            assert!(installer.needs_npm);
+        }
     }
 
     #[cfg(not(windows))]
