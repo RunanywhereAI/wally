@@ -815,6 +815,39 @@ fn a_rate_limited_poll_reports_the_backoff() {
     );
 }
 
+// #137: when the account requires a card, the console answers 403 card_required.
+// The CLI reports PollResult::CardRequired so login can show the billing link.
+#[test]
+fn a_poll_requiring_a_card_reports_card_required() {
+    let client = ConsoleClient::new(Some(Arc::new(
+        |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: json(serde_json::json!({
+                    "code": "card_required",
+                    "message": "Add a card to sign in from the terminal. A CLI login creates an API key, and keys need a card on file.",
+                })),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let authorization = Authorization {
+        request_code: "ABCD-EFGH".to_string(),
+        poll_secret: "poll-secret".to_string(),
+        ..Authorization::default()
+    };
+    let outcome = client.poll("https://console.runanywhere.ai", &authorization);
+    assert_eq!(
+        outcome.result,
+        PollResult::CardRequired,
+        "a card_required error must report PollResult::CardRequired"
+    );
+    assert_eq!(
+        outcome.error,
+        "Add a card to sign in from the terminal. A CLI login creates an API key, and keys need a card on file."
+    );
+}
+
 #[test]
 fn a_rate_limit_surfaces_its_retry_after() {
     // A 429 with a numeric Retry-After: the error a caller sees should name the

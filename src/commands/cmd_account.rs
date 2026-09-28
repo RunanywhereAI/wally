@@ -219,7 +219,7 @@ fn refresh_session(client: &ConsoleClient, credentials: &mut Credentials) -> Res
     account::save(credentials)
 }
 
-fn login(requested_console: &str, open: bool) -> i32 {
+fn login(requested_console: &str, open: bool, as_json: bool) -> i32 {
     let configured = if requested_console.is_empty() {
         account::default_console_url()
     } else {
@@ -263,13 +263,20 @@ fn login(requested_console: &str, open: bool) -> i32 {
         return 1;
     }
 
-    out::status_line("approve this sign-in in your browser");
-    out::result_line(&format!("code  {}", authorization.request_code));
-    out::result_line(&format!("url   {approval_url}"));
+    if as_json {
+        out::status_line(&format!("code  {}", authorization.request_code));
+        out::status_line(&format!("url   {approval_url}"));
+    } else {
+        out::status_line("approve this sign-in in your browser");
+        out::result_line(&format!("code  {}", authorization.request_code));
+        out::result_line(&format!("url   {approval_url}"));
+    }
     if open {
         open_browser(&approval_url);
     }
-    out::status_line("waiting for approval");
+    if !as_json {
+        out::status_line("waiting for approval");
+    }
 
     let deadline = Instant::now() + Duration::from_secs(authorization.expires_in.max(0) as u64);
     loop {
@@ -331,6 +338,27 @@ fn login(requested_console: &str, open: bool) -> i32 {
                 out::error_line(&outcome.error);
                 return 1;
             }
+            PollResult::CardRequired => {
+                let origin = console_web_origin(&console_url);
+                let billing_url = if origin.is_empty() {
+                    "https://console.runanywhere.ai/cloud/billing".to_string()
+                } else {
+                    format!("{origin}/cloud/billing")
+                };
+                let message = format!("Add a card at {billing_url}, then run wally login again");
+                if as_json {
+                    let mut json = out::JsonWriter::new();
+                    json.begin_object()
+                        .field_str("code", "card_required")
+                        .field_str("message", &message)
+                        .field_str("billing_url", &billing_url)
+                        .end_object();
+                    out::result_line(json.str());
+                } else {
+                    out::error_line(&message);
+                }
+                return 1;
+            }
             PollResult::Approved => {
                 let Some(grant) = outcome.grant else {
                     out::error_line(&outcome.error);
@@ -353,6 +381,16 @@ fn login(requested_console: &str, open: bool) -> i32 {
                 } else {
                     credentials.email.clone()
                 };
+                if as_json {
+                    let mut json = out::JsonWriter::new();
+                    json.begin_object()
+                        .field_str("email", &identity)
+                        .field_str("session", "active")
+                        .field_str("console", &credentials.console_url)
+                        .end_object();
+                    out::result_line(json.str());
+                    return 0;
+                }
                 out::status_line(&format!("signed in as {identity}"));
                 out::status_line(&format!(
                     "cloud session stored in {}",
@@ -461,6 +499,7 @@ pub fn register_account(app: &mut App) {
         "--no-browser",
         "Print the sign-in URL instead of opening it",
     );
+    login_cmd.add_flag("--json", "Print as JSON");
     login_cmd.footer(&examples_footer(&[
         Example::new("wally account login", ""),
         Example::new("wally account login --no-browser", ""),
@@ -468,7 +507,7 @@ pub fn register_account(app: &mut App) {
     // The console origin is not a user-facing flag: it comes from the baked
     // default, or WALLY_CONSOLE_URL for a dev build (read directly in
     // credentials.rs). login() falls back to that when handed an empty string.
-    login_cmd.callback(|p, _g| login("", !p.flag("--no-browser")));
+    login_cmd.callback(|p, g| login("", !p.flag("--no-browser"), p.flag("--json") || g.json));
 
     let logout_cmd = account_cmd.add_subcommand("logout", "Sign out and revoke the session");
     logout_cmd.footer(&examples_footer(&[Example::new(
