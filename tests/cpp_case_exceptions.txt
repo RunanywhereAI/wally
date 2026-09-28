@@ -1,2 +1,3 @@
 # C++ test cases deliberately not ported as a same-named Rust test, one per line:
 # <C++ file> <case> — <reason>
+test_wally_opencode.cpp config_declares_the_harness — ported as opencode_config_declares_the_harness in tests/test_wally_opencode.rs

@@ -1,4 +1,5 @@
-# Every test case the C++ suites registered (PR #127 head ca01a7cb, on origin/main d1e9c0b), as <C++ file> <case>.
+# Every test case the C++ suites registered (PR #127 head ca01a7cb, on origin/main d1e9c0b,
+# plus PR #138's harness-header cases merged at 46a3e2a), as <C++ file> <case>.
 # scripts/test/test-ledger.py fails unless each has a Rust #[test] fn of the same name
 # under tests/ or src/. A case deliberately not ported is listed in
 # tests/cpp_case_exceptions.txt with the reason.
@@ -26,6 +27,8 @@ test_wally_account.cpp usage_counters_survive_beyond_thirty_two_bits
 test_wally_anthropic.cpp a_completed_stream_is_not_cancelled
 test_wally_anthropic.cpp a_local_endpoint_is_never_cancelled
 test_wally_anthropic.cpp an_abandoned_stream_is_cancelled_by_name_and_never_resent
+test_wally_anthropic.cpp bridge_declares_claude_code
+test_wally_anthropic.cpp bridge_declares_claude_desktop
 test_wally_anthropic.cpp concurrent_requests_use_separate_connections
 test_wally_anthropic.cpp leaving_during_prefill_cancels_at_the_first_token
 test_wally_anthropic.cpp leaving_while_tokens_flow_cancels_by_name
@@ -51,9 +54,11 @@ test_wally_formatter.cpp examples_are_copyable
 test_wally_formatter.cpp help_fits_standard_terminal
 test_wally_harness.cpp agent_table_rows_are_usable_subcommands
 test_wally_harness.cpp batch_command_line_quotes_and_rejects
+test_wally_harness.cpp declared_harness_values_match_the_server
 test_wally_harness.cpp deepseek_patch_targets_both_rows
 test_wally_harness.cpp deepseek_prompt_picks_headless
 test_wally_harness.cpp deepseek_settings_carry_the_route
+test_wally_harness.cpp deepseek_settings_declare_the_harness
 test_wally_harness.cpp hermes_argv_pins_provider_and_model_ahead_of_the_rest
 test_wally_harness.cpp hermes_context_hint_surfaces_the_real_window
 test_wally_harness.cpp hermes_key_variable_follows_the_host
@@ -62,6 +67,7 @@ test_wally_harness.cpp local_endpoint_limits_reach_every_harness
 test_wally_harness.cpp model_id_accepts_ordinary_ids
 test_wally_harness.cpp model_id_rejects_empty_and_control_characters
 test_wally_harness.cpp model_id_rejects_xml_and_path_structural_characters
+test_wally_harness.cpp openclaw_config_declares_the_harness
 test_wally_harness.cpp openclaw_config_lists_every_catalog_model
 test_wally_harness.cpp openclaw_config_preserves_the_existing_document
 test_wally_harness.cpp openclaw_config_selects_our_provider_and_model
@@ -84,6 +90,7 @@ test_wally_net_call.cpp an_id_that_never_comes_gives_up_after_the_wait
 test_wally_net_call.cpp reader_gone_during_prefill_cancels_at_the_headers
 test_wally_net_call.cpp reader_gone_mid_body_names_the_cancel_and_drops_the_socket
 test_wally_net_call.cpp stopping_ends_the_wait_for_an_id
+test_wally_opencode.cpp config_declares_the_harness
 test_wally_opencode.cpp config_injects_limit_and_cost
 test_wally_opencode.cpp ephemeral_config_and_passthrough
 test_wally_opencode.cpp refreshes_expired_session_without_sdk_bootstrap
