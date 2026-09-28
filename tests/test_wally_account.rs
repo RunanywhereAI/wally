@@ -848,6 +848,43 @@ fn a_poll_requiring_a_card_reports_card_required() {
     );
 }
 
+// #137: a refresh (not just a poll) can also come back card_required -- the
+// facts behind this fix say that's the one console endpoint that actually
+// sends it. refresh_session (cmd_account.rs) turns this into a message with
+// the billing URL; this pins the typed signal it reads to build that message.
+#[test]
+fn a_refresh_requiring_a_card_reports_card_required() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    env.unset("WALLY_CONSOLE_WEB_URL");
+
+    let client = ConsoleClient::new(Some(Arc::new(
+        |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: json(serde_json::json!({
+                    "code": "card_required",
+                    "message": "Add a card to sign in from the terminal.",
+                })),
+                ..Default::default()
+            })
+        },
+    ) as Transport));
+    let failure = client
+        .refresh("https://inference.runanywhere.ai", "refresh-token")
+        .expect_err("a card_required refresh must fail");
+    assert!(
+        failure.card_required,
+        "a card_required refresh must set RefreshError::card_required"
+    );
+    assert_eq!(failure.message, "Add a card to sign in from the terminal.");
+    assert_eq!(
+        account::console_billing_url("https://inference.runanywhere.ai"),
+        "https://console.runanywhere.ai/cloud/billing",
+        "the billing URL refresh_session appends comes from the production API's own web origin"
+    );
+}
+
 #[test]
 fn a_rate_limit_surfaces_its_retry_after() {
     // A 429 with a numeric Retry-After: the error a caller sees should name the
@@ -1041,6 +1078,57 @@ fn the_trusted_browser_origin_is_never_empty() {
     assert_eq!(
         overridden,
         vec!["https://console.dev.example.test".to_string()]
+    );
+}
+
+// #137: the billing link (used when a card is required to finish signing in)
+// has to land on the same web origin trusted_browser_origins already trusts
+// for that API, or a dev/custom console sends a person to production billing.
+#[test]
+fn effective_console_web_origin_follows_the_same_trust_order() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    env.unset("WALLY_CONSOLE_WEB_URL");
+
+    assert_eq!(
+        account::effective_console_web_origin("https://inference.runanywhere.ai"),
+        "https://console.runanywhere.ai",
+        "the production API's account pages live on the production web console"
+    );
+    assert_eq!(
+        account::effective_console_web_origin("http://localhost:8080"),
+        "http://localhost:8080",
+        "a custom API is its own web origin absent an override, same as trusted_browser_origins"
+    );
+    assert_eq!(
+        account::effective_console_web_origin("https://inference.runanywhere.ai/api-dev"),
+        "https://inference.runanywhere.ai/api-dev",
+        "a path-prefixed dev API is trusted at its own origin, same as trusted_browser_origins"
+    );
+
+    env.set("WALLY_CONSOLE_WEB_URL", "https://console.dev.example.test");
+    assert_eq!(
+        account::effective_console_web_origin("https://inference.runanywhere.ai"),
+        "https://console.dev.example.test",
+        "an explicit override wins even against the production API"
+    );
+}
+
+#[test]
+fn console_billing_url_is_the_web_origins_sibling_of_cloud_cli() {
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    env.unset("WALLY_CONSOLE_WEB_URL");
+
+    assert_eq!(
+        account::console_billing_url("https://inference.runanywhere.ai"),
+        "https://console.runanywhere.ai/cloud/billing"
+    );
+
+    env.set("WALLY_CONSOLE_WEB_URL", "http://localhost:9000");
+    assert_eq!(
+        account::console_billing_url("https://inference.runanywhere.ai"),
+        "http://localhost:9000/cloud/billing"
     );
 }
 

@@ -261,6 +261,10 @@ pub struct PollOutcome {
 pub struct RefreshError {
     pub message: String,
     pub unavailable: bool,
+    /// The console answered 403 `card_required` (#137): the account needs a
+    /// card on file before a refresh token is honored again. A caller with a
+    /// billing URL to offer branches on this instead of matching `message`.
+    pub card_required: bool,
 }
 
 #[derive(Clone, Default)]
@@ -1290,6 +1294,7 @@ impl ConsoleClient {
         let unavailable_err = |message: String, unavailable: bool| RefreshError {
             message,
             unavailable,
+            card_required: false,
         };
         if !super::session_token_is_safe(refresh_token) {
             return Err(unavailable_err(
@@ -1316,6 +1321,26 @@ impl ConsoleClient {
             .send(request)
             .map_err(|message| unavailable_err(message, true))?;
         if response.status != 200 {
+            // Same 403 card_required signal poll() reads above -- the facts
+            // behind #137 say refresh is the endpoint that actually sends it.
+            if response.status == 403 {
+                if let Ok(object) = parse_object(&response) {
+                    if let Ok(api_error) = contract::ApiError::from_json(&object) {
+                        if api_error.code == contract::ApiErrorCode::KCardRequired {
+                            let message = if !api_error.message.is_empty() {
+                                api_error.message
+                            } else {
+                                "card required".to_string()
+                            };
+                            return Err(RefreshError {
+                                message,
+                                unavailable: false,
+                                card_required: true,
+                            });
+                        }
+                    }
+                }
+            }
             let message = http_error("refresh", &origin, &response, "");
             // Same distinction as WhoAmI: a busy console has not told us this
             // session is bad, only that it could not answer (InferenceInfra#444).

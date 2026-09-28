@@ -945,6 +945,39 @@ pub fn trusted_browser_origins(console_url: &str) -> Vec<String> {
     vec![console_url.to_string()]
 }
 
+/// The one web origin that owns account pages (billing among them) for
+/// `console_url`. Same trust order as `trusted_browser_origins`, collapsed to
+/// its first/primary answer instead of the full list a browser redirect is
+/// allowed to land on. Never empty.
+pub fn effective_console_web_origin(console_url: &str) -> String {
+    let declared = env_with_legacy_fallback("WALLY_CONSOLE_WEB_URL", "RCLI_CONSOLE_WEB_URL");
+    if !declared.is_empty() {
+        if let Ok(normalized) = normalize_console_url(&declared) {
+            return normalized;
+        }
+    }
+    if console_url == PRODUCTION_CONSOLE_API {
+        return PRODUCTION_CONSOLE_WEB[0].to_string();
+    }
+    let baked_web = env!("WALLY_BAKED_CONSOLE_WEB_ORIGIN");
+    let baked_api = baked_console_api_url();
+    if !baked_web.is_empty() && !baked_api.is_empty() && console_url == baked_api {
+        if let Ok(normalized) = normalize_console_url(baked_web) {
+            return normalized;
+        }
+    }
+    console_url.to_string()
+}
+
+/// The billing page for `console_url`: the server's own verification URL is
+/// `{console}/cloud/cli`, and this is its sibling.
+pub fn console_billing_url(console_url: &str) -> String {
+    format!(
+        "{}/cloud/billing",
+        effective_console_web_origin(console_url)
+    )
+}
+
 pub fn browser_url_is_trusted(url: &str, origins: &[String]) -> bool {
     origins
         .iter()

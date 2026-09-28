@@ -77,6 +77,7 @@ impl ConsoleSession {
             return Err(RefreshError {
                 message: "the cloud session cannot be refreshed".to_string(),
                 unavailable: false,
+                card_required: false,
             });
         }
         let grant = self
@@ -95,6 +96,7 @@ impl ConsoleSession {
         super::save(credentials).map_err(|message| RefreshError {
             message,
             unavailable: false,
+            card_required: false,
         })
     }
 

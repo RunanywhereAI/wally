@@ -214,12 +214,22 @@ fn refresh_session(client: &ConsoleClient, credentials: &mut Credentials) -> Res
     }
     let grant = client
         .refresh(&credentials.console_url, &credentials.refresh_token)
-        .map_err(|e| e.message)?;
+        .map_err(|e| {
+            if e.card_required {
+                format!(
+                    "{}; add one at {}",
+                    e.message,
+                    account::console_billing_url(&credentials.console_url)
+                )
+            } else {
+                e.message
+            }
+        })?;
     apply_grant(&grant, credentials);
     account::save(credentials)
 }
 
-fn login(requested_console: &str, open: bool, as_json: bool) -> i32 {
+fn login(requested_console: &str, open: bool) -> i32 {
     let configured = if requested_console.is_empty() {
         account::default_console_url()
     } else {
@@ -263,21 +273,23 @@ fn login(requested_console: &str, open: bool, as_json: bool) -> i32 {
         return 1;
     }
 
-    if as_json {
-        out::status_line(&format!("code  {}", authorization.request_code));
-        out::status_line(&format!("url   {approval_url}"));
-    } else {
-        out::status_line("approve this sign-in in your browser");
-        out::result_line(&format!("code  {}", authorization.request_code));
-        out::result_line(&format!("url   {approval_url}"));
-    }
+    out::status_line("approve this sign-in in your browser");
+    out::result_line(&format!("code  {}", authorization.request_code));
+    out::result_line(&format!("url   {approval_url}"));
     if open {
         open_browser(&approval_url);
     }
-    if !as_json {
-        out::status_line("waiting for approval");
-    }
+    // The poll below cannot tell whether this particular account needs a
+    // card -- the console never says so there (#137's facts): it is the
+    // approval page that tells the person, after they submit the code above.
+    // Naming the billing page here too means the terminal still says
+    // something useful if that page goes unread.
+    let billing_url = account::console_billing_url(&console_url);
+    out::status_line(&format!(
+        "waiting for approval — add a card at {billing_url} if asked"
+    ));
 
+    let mut card_required_shown = false;
     let deadline = Instant::now() + Duration::from_secs(authorization.expires_in.max(0) as u64);
     loop {
         if Instant::now() >= deadline {
@@ -339,25 +351,28 @@ fn login(requested_console: &str, open: bool, as_json: bool) -> i32 {
                 return 1;
             }
             PollResult::CardRequired => {
-                let origin = console_web_origin(&console_url);
-                let billing_url = if origin.is_empty() {
-                    "https://console.runanywhere.ai/cloud/billing".to_string()
-                } else {
-                    format!("{origin}/cloud/billing")
-                };
-                let message = format!("Add a card at {billing_url}, then run wally login again");
-                if as_json {
-                    let mut json = out::JsonWriter::new();
-                    json.begin_object()
-                        .field_str("code", "card_required")
-                        .field_str("message", &message)
-                        .field_str("billing_url", &billing_url)
-                        .end_object();
-                    out::result_line(json.str());
-                } else {
-                    out::error_line(&message);
+                // The facts behind #137: the real poll endpoint never actually
+                // sends this today -- card_required comes from the approval
+                // page and from refresh, both handled elsewhere. Handling it
+                // here too costs little and keeps this correct if that ever
+                // changes: say it once and keep waiting, like Pending, rather
+                // than failing a login the person may already be finishing in
+                // the browser.
+                if !card_required_shown {
+                    card_required_shown = true;
+                    out::status_line(&format!(
+                        "account needs a card on file — add one at {billing_url}; still waiting"
+                    ));
                 }
-                return 1;
+                let delay =
+                    account::next_poll_delay_seconds(authorization.interval, outcome.retry_after);
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let wait = Duration::from_secs(delay.max(0) as u64).min(deadline - now);
+                std::thread::sleep(wait);
+                continue;
             }
             PollResult::Approved => {
                 let Some(grant) = outcome.grant else {
@@ -381,16 +396,6 @@ fn login(requested_console: &str, open: bool, as_json: bool) -> i32 {
                 } else {
                     credentials.email.clone()
                 };
-                if as_json {
-                    let mut json = out::JsonWriter::new();
-                    json.begin_object()
-                        .field_str("email", &identity)
-                        .field_str("session", "active")
-                        .field_str("console", &credentials.console_url)
-                        .end_object();
-                    out::result_line(json.str());
-                    return 0;
-                }
                 out::status_line(&format!("signed in as {identity}"));
                 out::status_line(&format!(
                     "cloud session stored in {}",
@@ -499,7 +504,6 @@ pub fn register_account(app: &mut App) {
         "--no-browser",
         "Print the sign-in URL instead of opening it",
     );
-    login_cmd.add_flag("--json", "Print as JSON");
     login_cmd.footer(&examples_footer(&[
         Example::new("wally account login", ""),
         Example::new("wally account login --no-browser", ""),
@@ -507,7 +511,7 @@ pub fn register_account(app: &mut App) {
     // The console origin is not a user-facing flag: it comes from the baked
     // default, or WALLY_CONSOLE_URL for a dev build (read directly in
     // credentials.rs). login() falls back to that when handed an empty string.
-    login_cmd.callback(|p, g| login("", !p.flag("--no-browser"), p.flag("--json") || g.json));
+    login_cmd.callback(|p, _g| login("", !p.flag("--no-browser")));
 
     let logout_cmd = account_cmd.add_subcommand("logout", "Sign out and revoke the session");
     logout_cmd.footer(&examples_footer(&[Example::new(
@@ -529,7 +533,10 @@ pub fn register_account(app: &mut App) {
 
 #[cfg(all(test, not(windows)))]
 mod tests {
-    use super::{open_browser, rebase_approval_url};
+    use std::sync::Arc;
+
+    use super::{open_browser, rebase_approval_url, refresh_session};
+    use crate::account::{ConsoleClient, Credentials, HttpRequest, HttpResponse, Transport};
     use crate::util::env_lock::lock as env_lock;
 
     // C++'s OpenBrowser only prints the fallback line when fork() itself
@@ -630,5 +637,54 @@ mod tests {
         }
 
         assert_eq!(result, "https://console.runanywhere.ai?code=abc");
+    }
+
+    // #137: refresh_session must not string-match the console's message to
+    // find a billing link -- it reads RefreshError::card_required (a typed
+    // field) and appends console_billing_url itself.
+    #[test]
+    fn refresh_session_appends_the_billing_url_on_card_required() {
+        let _lock = env_lock();
+        let saved = std::env::var_os("WALLY_CONSOLE_WEB_URL");
+        // SAFETY: `_lock` serializes every test in this process that touches
+        // WALLY_CONSOLE_WEB_URL.
+        unsafe { std::env::remove_var("WALLY_CONSOLE_WEB_URL") };
+
+        let client = ConsoleClient::new(Some(Arc::new(
+            |_: &HttpRequest| -> Result<HttpResponse, String> {
+                Ok(HttpResponse {
+                    status: 403,
+                    body: serde_json::json!({
+                        "code": "card_required",
+                        "message": "Add a card to sign in from the terminal.",
+                    })
+                    .to_string(),
+                    ..Default::default()
+                })
+            },
+        ) as Transport));
+        let mut credentials = Credentials {
+            console_url: "https://inference.runanywhere.ai".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            ..Credentials::default()
+        };
+
+        let failure =
+            refresh_session(&client, &mut credentials).expect_err("card_required must fail");
+
+        match saved {
+            // SAFETY: still under `_lock`.
+            Some(value) => unsafe { std::env::set_var("WALLY_CONSOLE_WEB_URL", value) },
+            None => unsafe { std::env::remove_var("WALLY_CONSOLE_WEB_URL") },
+        }
+
+        assert!(
+            failure.starts_with("Add a card to sign in from the terminal."),
+            "the console's own message must still lead: {failure}"
+        );
+        assert!(
+            failure.contains("https://console.runanywhere.ai/cloud/billing"),
+            "the refresh failure must name the billing URL: {failure}"
+        );
     }
 }
