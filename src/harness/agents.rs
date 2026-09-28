@@ -393,8 +393,12 @@ fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
 
 /// Where OpenClaw keeps its state, and the config inside it.
 ///
-/// `OPENCLAW_STATE_DIR` wins, then `OPENCLAW_HOME`, then `~/.openclaw` — the
-/// order `resolveConfigDir` uses. Naming the state directory explicitly
+/// `OPENCLAW_STATE_DIR` wins, then `<home>/.openclaw` — the order
+/// `resolveStateDir` (src/config/state-dir.ts) uses. Both go through the same
+/// home OpenClaw itself resolves against (`effective_home`: `OPENCLAW_HOME`,
+/// then the OS home) and a `~` in either is expanded the same way, so this
+/// finds the directory OpenClaw really uses even when a variable was set to a
+/// literal `~/...`. Naming the state directory explicitly
 /// matters more than it looks: OpenClaw otherwise derives it from the config
 /// file's own folder, so pointing `OPENCLAW_CONFIG_PATH` at a temp file
 /// would move their agents and sessions into the temp directory for the run.
@@ -402,31 +406,20 @@ fn open_claw_state_directory() -> PathBuf {
     // `var_os`, not `var`: `std::getenv` in C++ returns the raw bytes
     // regardless of encoding, and `std::filesystem::path` is encoding-agnostic
     // on POSIX, so a legacy-encoded HOME/OPENCLAW_* must still resolve here
-    // instead of silently looking unset.
+    // instead of silently looking unset. Only a UTF-8 value can carry a `~`
+    // to expand; anything else is used as given.
     if let Some(state) = std::env::var_os("OPENCLAW_STATE_DIR") {
         if !state.is_empty() {
-            return PathBuf::from(state);
+            return match state.to_str() {
+                Some(state) => expand_home(state),
+                None => PathBuf::from(state),
+            };
         }
     }
-    if let Some(home) = std::env::var_os("OPENCLAW_HOME") {
-        if !home.is_empty() {
-            return Path::new(&home).join(".openclaw");
-        }
+    match effective_home() {
+        Some(home) => Path::new(&home).join(".openclaw"),
+        None => PathBuf::new(),
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        if !home.is_empty() {
-            return Path::new(&home).join(".openclaw");
-        }
-    }
-    // PowerShell and cmd.exe leave HOME unset; openclaw falls back to the
-    // profile.
-    #[cfg(windows)]
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
-        if !profile.is_empty() {
-            return Path::new(&profile).join(".openclaw");
-        }
-    }
-    PathBuf::new()
 }
 
 /// Drop our provider from every agent's generated `models.json`, so OpenClaw
@@ -1281,6 +1274,54 @@ mod tests {
 
     // resolveEffectiveHomeDir (home-dir.ts lines 45-62) checks OPENCLAW_HOME
     // before falling back to the OS home.
+    // The state directory resolves against the same home, with the same `~`
+    // handling, as the agent directories cleaned inside it: OpenClaw's
+    // resolveStateDir expands OPENCLAW_STATE_DIR through resolveHomeRelativePath
+    // and otherwise uses <effective home>/.openclaw. A literal `~/...` value
+    // must not become a directory named `~` under the working directory.
+    #[test]
+    fn open_claw_state_directory_expands_home_like_openclaw() {
+        with_env(
+            &[
+                ("OPENCLAW_STATE_DIR", None),
+                ("OPENCLAW_HOME", Some("~/oc-home")),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(
+                    open_claw_state_directory(),
+                    Path::new("/h").join("oc-home").join(".openclaw")
+                );
+            },
+        );
+        with_env(
+            &[
+                ("OPENCLAW_STATE_DIR", Some("~/state")),
+                ("OPENCLAW_HOME", None),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(open_claw_state_directory(), Path::new("/h").join("state"));
+            },
+        );
+        with_env(
+            &[
+                ("OPENCLAW_STATE_DIR", None),
+                ("OPENCLAW_HOME", None),
+                ("HOME", Some("/h")),
+                ("USERPROFILE", None),
+            ],
+            || {
+                assert_eq!(
+                    open_claw_state_directory(),
+                    Path::new("/h").join(".openclaw")
+                );
+            },
+        );
+    }
+
     #[test]
     fn expand_home_prefers_openclaw_home_over_home() {
         with_env(
