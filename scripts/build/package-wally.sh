@@ -264,4 +264,7 @@ rm -f "${TARBALL}" "${TARBALL}.sha256"
 COPYFILE_DISABLE=1 tar -czf "${TARBALL}" -C "${STAGE_ROOT}" "wally-${PLATFORM}"
 (cd "${DIST}" && shasum -a 256 "$(basename "${TARBALL}")" > "$(basename "${TARBALL}").sha256")
 echo "Packaged ${TARBALL}"
-tar -tzf "${TARBALL}" | head -20
+# sed, not `head`: it reads the whole stream, so `tar` never takes SIGPIPE on a
+# bottle with more than 20 entries (the bundled arm64 one has 22), which under
+# the caller's `set -o pipefail` would fail packaging on a cosmetic listing.
+tar -tzf "${TARBALL}" | sed -n '1,20p'
