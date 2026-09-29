@@ -132,6 +132,32 @@ if [[ -n "${KIT}" && -d "${KIT}/third_party" ]]; then
         mkdir -p "${STAGE}/licenses"
         cp "${gomp_licence}" "${STAGE}/licenses/libgomp1.copyright"
       fi
+      # The aarch64 kit is built against zstd + brotli (its cpp-httplib server)
+      # and bz2 (libarchive); an x86_64 kit references none, so this bundles
+      # only where they are real. Keyed on ldd, not readelf, so libbrotlicommon
+      # -- pulled in behind libbrotli{enc,dec} rather than by wally directly --
+      # is shipped too. All three licences are permissive and travel with the
+      # library under the same $ORIGIN runpath as libgomp above.
+      declare -A comp_licence=(
+        [libzstd.so.1]=libzstd1
+        [libbz2.so.1.0]=libbz2-1.0
+        [libbrotlienc.so.1]=libbrotli1
+        [libbrotlidec.so.1]=libbrotli1
+        [libbrotlicommon.so.1]=libbrotli1
+      )
+      for soname in "${!comp_licence[@]}"; do
+        so_path="$(ldd "${BUILD}/wally" | awk -v s="${soname}" '$1 == s { print $3 }')"
+        [[ -n "${so_path}" && -f "${so_path}" ]] || continue
+        copy_kit_runtime "${so_path}"
+        pkg="${comp_licence[${soname}]}"
+        lic="/usr/share/doc/${pkg}/copyright"
+        [[ -f "${lic}" ]] || {
+          echo "error: bundling ${soname} needs its licence at ${lic}" >&2
+          exit 1
+        }
+        mkdir -p "${STAGE}/licenses"
+        cp "${lic}" "${STAGE}/licenses/${pkg}.copyright"
+      done
       ;;
   esac
 fi
@@ -181,7 +207,28 @@ case "${PLATFORM}" in
     ;;
 esac
 
-"${STAGE}/bin/wally" version >/dev/null
+# The two checks below run the freshly built binary. On a build host whose glibc
+# or libstdc++ is older than the bottle's floor they cannot: the arm64 bottle is
+# built on ubuntu-22.04-arm (glibc 2.34), but its Sherpa prebuilt needs glibc
+# 2.38, so the loader refuses to start a binary that is correct for its target.
+# That is not a packaging failure -- check-linux-abi.py enforces the floor from
+# the ELF files and the clean-distro install matrix runs the binary on a real
+# target -- so a symbol-version loader error skips both checks with a note. Any
+# other startup failure (a missing bundled library, a crash) still stops here.
+skip_runtime_checks=0
+smoke_out="$("${STAGE}/bin/wally" version 2>&1)" || smoke_rc=$?
+if [ "${smoke_rc:-0}" -ne 0 ]; then
+    if printf '%s' "${smoke_out}" | grep -qE "version .(GLIBC|GLIBCXX|CXXABI)_[0-9]"; then
+        echo "note: this build host cannot start the bottle (its floor is newer than" >&2
+        echo "      the host glibc/libstdc++); skipping the run-time smoke and channel" >&2
+        echo "      checks. check-linux-abi.py and the install matrix cover the target." >&2
+        skip_runtime_checks=1
+    else
+        echo "error: wally failed to start during packaging:" >&2
+        printf '%s\n' "${smoke_out}" >&2
+        exit 1
+    fi
+fi
 
 # The archive name says which flavour this is; the binary has to agree. A dev
 # job whose endpoint variables were unset used to produce a `-dev` archive that
@@ -190,22 +237,24 @@ esac
 # Asked in an empty profile with the runtime overrides cleared, so a signed-in
 # account or a stray WALLY_CONSOLE_URL on the build machine cannot answer for
 # the bake.
-probe_profile="$(mktemp -d)"
-about="$(env -u WALLY_CONSOLE_URL -u WALLY_CONSOLE_WEB_URL -u RCLI_CONSOLE_URL \
-    -u RCLI_CONSOLE_WEB_URL WALLY_PROFILE_DIR="${probe_profile}" \
-    "${STAGE}/bin/wally" about --json)"
-rm -rf "${probe_profile}"
-built_channel="$(printf '%s' "$about" | sed -nE 's/.*"channel":"([^"]*)".*/\1/p')"
-case "${CHANNEL}" in
-    dev)  want_channel="development" ;;
-    *)    want_channel="production" ;;
-esac
-if [ "${built_channel}" != "${want_channel}" ]; then
-    echo "error: packaging a '${CHANNEL:-prod}' archive from a '${built_channel}' binary." >&2
-    echo "       Expected channel '${want_channel}'. Set WALLY_CHANNEL and the baked" >&2
-    echo "       endpoint variables in the configure environment, or package the" >&2
-    echo "       matching build." >&2
-    exit 1
+if [ "${skip_runtime_checks}" -ne 1 ]; then
+    probe_profile="$(mktemp -d)"
+    about="$(env -u WALLY_CONSOLE_URL -u WALLY_CONSOLE_WEB_URL -u RCLI_CONSOLE_URL \
+        -u RCLI_CONSOLE_WEB_URL WALLY_PROFILE_DIR="${probe_profile}" \
+        "${STAGE}/bin/wally" about --json)"
+    rm -rf "${probe_profile}"
+    built_channel="$(printf '%s' "$about" | sed -nE 's/.*"channel":"([^"]*)".*/\1/p')"
+    case "${CHANNEL}" in
+        dev)  want_channel="development" ;;
+        *)    want_channel="production" ;;
+    esac
+    if [ "${built_channel}" != "${want_channel}" ]; then
+        echo "error: packaging a '${CHANNEL:-prod}' archive from a '${built_channel}' binary." >&2
+        echo "       Expected channel '${want_channel}'. Set WALLY_CHANNEL and the baked" >&2
+        echo "       endpoint variables in the configure environment, or package the" >&2
+        echo "       matching build." >&2
+        exit 1
+    fi
 fi
 
 mkdir -p "${DIST}"

@@ -243,7 +243,38 @@ fn link_native(build_env: &BTreeMap<String, String>) {
     // runtime implicitly. cargo links with the C driver, so name it.
     match env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("macos") | Ok("ios") => println!("cargo:rustc-link-arg=-lc++"),
-        Ok("linux") => println!("cargo:rustc-link-arg=-lstdc++"),
+        Ok("linux") => {
+            println!("cargo:rustc-link-arg=-lstdc++");
+            // aarch64 only. Two unrelated needs, both because cargo drives the
+            // link with the C compiler and consumes -lc before the kit's static
+            // C++ archives:
+            //   - those archives reference __stack_chk_guard (libc) and the
+            //     compiler's outline-atomics helpers (libgcc); name both again
+            //     after them. x86-64 reaches the stack guard through TLS and
+            //     emits no outline atomics.
+            //   - the aarch64 kit was built against zstd/brotli (its cpp-httplib
+            //     server) and bz2 (libarchive), which x86-64 kits reference
+            //     from none of their objects. Name them so the kit's symbols
+            //     resolve; package-wally.sh bundles the runtime .so. They sit
+            //     under the link's --as-needed, so a later kit built without
+            //     these backends drops them with no DT_NEEDED.
+            if env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") {
+                // The kit's arm64 Sherpa prebuilt is built against glibc 2.38 and
+                // GCC 13's libstdc++ (GLIBCXX_3.4.32), higher than the 22.04 build
+                // floor. Those symbols are present at runtime on every system the
+                // bottle supports (check-linux-abi.py [linux_abi_arm64] and
+                // install.sh both hold the 2.38 floor), so let the shared library
+                // carry its own undefined references instead of failing the link
+                // on a build host whose libc is older. This keeps wally's own code
+                // on the low floor; only the Sherpa .so asks for 2.38.
+                println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
+                for lib in ["brotlienc", "brotlidec", "zstd", "bz2"] {
+                    println!("cargo:rustc-link-arg=-l{lib}");
+                }
+                println!("cargo:rustc-link-arg=-lgcc");
+                println!("cargo:rustc-link-arg=-lc");
+            }
+        }
         _ => {}
     }
 }
