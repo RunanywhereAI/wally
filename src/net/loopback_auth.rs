@@ -15,9 +15,8 @@
 /// A fresh random secret: 32 bytes of OS CSPRNG output rendered as hex.
 pub fn generate_loopback_token() -> String {
     let mut bytes = [0u8; 32];
-    // SAFETY: getrandom::fill only writes into the provided buffer; a failure
-    // here means the OS CSPRNG is unavailable, which we treat as fatal like
-    // the C++ std::random_device would (it throws on construction failure).
+    // A failure here means the OS CSPRNG is unavailable, which we treat as fatal
+    // like the C++ std::random_device would (it throws on construction failure).
     getrandom::fill(&mut bytes).expect("OS CSPRNG unavailable");
     let mut token = String::with_capacity(64);
     for byte in bytes {

@@ -356,7 +356,6 @@ fn stream_once(options: &GlobalOptions, model_id: &str, prompt: &str, params: &R
     let mut gen_options = v1::LlmGenerationOptions::default();
     apply_options(params, &mut gen_options);
     request.options = Some(gen_options);
-    let _ = model_id; // lifecycle-owned state knows the loaded model
 
     let show_thoughts =
         params.show_thinking && !reasoning_off(params) && !options.quiet && !options.json;

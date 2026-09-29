@@ -122,10 +122,6 @@ impl UpstreamPool {
     pub fn idle(&self) -> usize {
         self.inner.idle.lock().unwrap().len()
     }
-
-    pub fn origin(&self) -> &str {
-        &self.inner.options.origin
-    }
 }
 
 /// One exclusive connection, checked out of the pool. Goes back to the idle

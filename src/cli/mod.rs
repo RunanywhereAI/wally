@@ -632,16 +632,8 @@ impl<'a> ParseState<'a> {
                 self.help_seen = true;
                 return i + 1;
             }
-            if let Some((_, version, _)) = &self.frames[level].app.version_flag {
-                if self.frames[level]
-                    .app
-                    .version_flag
-                    .as_ref()
-                    .unwrap()
-                    .0
-                    .split(',')
-                    .any(|n| n.trim() == name)
-                {
+            if let Some((flags, version, _)) = &self.frames[level].app.version_flag {
+                if flags.split(',').any(|n| n.trim() == name) {
                     // `-V`/`--version` is a normal CLI11 flag underneath its
                     // `CallForVersion` callback: a long-form `=value` still
                     // runs through `to_flag_value` + boolean `lexical_cast`

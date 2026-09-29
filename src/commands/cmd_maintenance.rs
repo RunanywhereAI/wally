@@ -452,7 +452,7 @@ pub fn run_uninstall(yes: bool, home_override: &str) -> i32 {
     let mut failures = 0;
     let mut deferred: Option<PathBuf> = None;
     for target in &present {
-        if target.label == "binary" || target.label == "install" {
+        if target.label == "install" {
             deferred = Some(target.path.clone());
             continue;
         }

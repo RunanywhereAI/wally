@@ -273,6 +273,9 @@ pub fn control_plane_post(endpoint: &str, json_body: &str, bearer_auth: bool) ->
         expected_checksum_hex: std::ptr::null(),
     };
 
+    // SAFETY: rac_http_response_t is a repr(C) POD (pointers and lengths) for
+    // which an all-zero bit pattern is a valid, empty response; the callee fills
+    // it before we read any field.
     let mut response: sys::rac_http_response_t = unsafe { std::mem::zeroed() };
     // SAFETY: `client` is a freshly created, valid handle; `request` is built
     // above with every pointer alive for this call; `response` is a
