@@ -216,8 +216,11 @@ esac
 # target -- so a symbol-version loader error skips both checks with a note. Any
 # other startup failure (a missing bundled library, a crash) still stops here.
 skip_runtime_checks=0
+# Seeded to 0: the `|| smoke_rc=$?` only runs on failure, so without this an
+# inherited nonzero smoke_rc would send a successful smoke down the failure path.
+smoke_rc=0
 smoke_out="$("${STAGE}/bin/wally" version 2>&1)" || smoke_rc=$?
-if [ "${smoke_rc:-0}" -ne 0 ]; then
+if [ "${smoke_rc}" -ne 0 ]; then
     if printf '%s' "${smoke_out}" | grep -qE "version .(GLIBC|GLIBCXX|CXXABI)_[0-9]"; then
         echo "note: this build host cannot start the bottle (its floor is newer than" >&2
         echo "      the host glibc/libstdc++); skipping the run-time smoke and channel" >&2
