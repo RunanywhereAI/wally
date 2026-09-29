@@ -6,15 +6,14 @@
 
 [![Release](https://img.shields.io/github/v/release/RunanywhereAI/wally?label=release)](https://github.com/RunanywhereAI/wally/releases/latest)
 
-**Run open models on your own machine, or hosted when the job outgrows it.**
+***Wally*** is a command-line tool that connects your coding agent to the model of your choice. With a single command, it opens a coding agent, such as OpenCode, Claude Code, Hermes, OpenClaw, DeepSeek Harness or Prime Agent, already configured for that model, and it installs the agent first if it is missing. You can use a hosted model, such as GLM 5.3 Flash, billed against your RunAnywhere credit, or download an open model and run it on your own machine without an account. Wally can also chat with a model in the terminal and serve it through an OpenAI-compatible API. It runs on macOS, Linux and Windows.
 
-One command to chat with a model, serve it as an API, or open a coding agent
-on it. Hosted models bill against your RunAnywhere credit.
-
+**Get Started with >> [official docs](https://docs.runanywhere.ai/)**
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/demo-dark.gif">
-  <img src="docs/assets/demo-light.gif" alt="wally run qwen3 answering a prompt in the terminal" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/harness-dark.gif">
+  <img src="docs/assets/harness-light.gif" alt="OpenCode on the hosted GLM model fixing a bug through wally" width="100%">
 </picture>
+
 
 ## Install
 
@@ -35,68 +34,29 @@ The installer adds wally to your PATH for new terminals. In the terminal you
 installed from, run the line it prints (`. ~/.zshrc` or similar), or open a new
 one, before your first `wally` command. On Windows, open a new terminal.
 
-## Run a model on your machine
+## Quick Start
 
-You don't need an account or a key.
+Some Instructions to Quickly Get Started.
 
-```bash
-wally models pull qwen3     # download Qwen3 0.6B
-wally run qwen3             # chat
-wally run qwen3 "Hello"     # one answer and exit
-wally serve qwen3           # OpenAI-compatible API on :8080 (macOS, Linux)
-```
-
-`wally models list --local` shows everything you can pull; `--cloud` shows the
-cloud models on your account, and `--all` shows both. Any Hugging Face GGUF
-works too, by its full path:
-
-```bash
-wally models pull hf.co/Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf
-```
-
-Models live in `~/.local/share/runanywhere` (`--home` or `$RUNANYWHERE_HOME`
-moves them). `wally models rm` frees the space.
-
-## Use a local model in your coding agent
-
-Qwen3 4B Instruct is the local model certified for coding agents: tested for
-tool calls and long context. Download it once, then open any supported agent
-on it. Pick the build for your machine:
-
-```bash
-# Apple Silicon (MLX, 2.2 GB)
-wally models pull mlx-qwen3-4b-instruct-2507
-wally opencode -m mlx-qwen3-4b-instruct-2507
-
-# Windows and Linux (GGUF, 4 GB)
-wally models pull qwen3-4b-instruct-2507
-wally opencode -m qwen3-4b-instruct-2507
-```
-
-`claude-code`, `claude-desktop`, `hermes`, `openclaw`, `deepseek` and
-`prime-agent` take the same `-m`. [EDITORS.md](docs/EDITORS.md) says how each one is wired. Other
-local models are refused by the coding-agent commands.
-
-## Use a hosted model
-
-Sign in once, then pass a hosted model id. `glm-5.3-flash` is the default
-coding model; the rest are listed in your RunAnywhere console.
-
+**Wally Login:**
 ```bash
 wally account login
-wally opencode -m glm-5.3-flash
-wally claude-code -m glm-5.3-flash
-wally account usage
 ```
 
-Hosted models go through the coding-agent commands; `wally run` and
-`wally serve` are local only. Hosted runs are billed per token against your
-credit.
+**Install & Call a Harness:**
+```bash
+wally opencode -m glm-5.3-flash
+```
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/harness-dark.gif">
-  <img src="docs/assets/harness-light.gif" alt="OpenCode on the hosted GLM model fixing a bug through wally" width="100%">
-</picture>
+**Or Launch the Harness with Default Model:**
+```bash
+wally opencode
+```
+
+**Get Help:**
+```bash
+wally help
+```
 
 ## Ask Eve
 
@@ -126,53 +86,6 @@ wally decisions --local -m clef-flash-9b \
 
 Both transports share the request flags, the human rendering and the `--json`
 document, so the same invocation works locally and hosted.
-
-## Models at a glance
-
-| Family | Pull |
-|---|---|
-| Qwen3, Qwen3.8 | `qwen3`, `qwen3-4b-instruct-2507` |
-| Llama 3.2 | `llama-3.2-3b` |
-| Gemma 4 | `gemma-4-e2b` |
-| LFM2.5 | `lfm2.5-1.2b` |
-| Granite 4 | `granite-4.1-3b` |
-| SmolLM2 | `smollm2-135m` |
-
-Prefix an id with `mlx-` for the Apple GPU build. [MODELS.md](docs/MODELS.md)
-has the full catalog.
-
-## Commands you'll use
-
-| Chat | |
-|---|---|
-| `wally run <model> [prompt]` | chat, or one answer and exit |
-| `wally serve <model>` | OpenAI-compatible API on :8080 |
-| `wally decisions` / `decide` | score questions with Eve, the decision model |
-
-| Models | |
-|---|---|
-| `wally models list` | models on this machine; `--local` for the whole catalog, `--cloud` for your cloud models, `--all` for both |
-| `wally models pull` / `rm` | download or delete a model |
-| `wally models show` | size, context window, files |
-| `wally models default` | the model coding tools open with |
-
-| Coding tools | |
-|---|---|
-| `wally opencode` / `claude-code` / `claude-desktop` | open the tool on a model, local or hosted, with `-m` |
-| `wally hermes` / `openclaw` / `deepseek` | same |
-
-| Account | |
-|---|---|
-| `wally account login` / `logout` / `whoami` | browser sign-in and session |
-| `wally account usage` | credit left and recent spend |
-
-| Wally | |
-|---|---|
-| `wally about` | versions, backends, paths |
-| `wally update` | latest release |
-| `wally uninstall` | remove wally, its models and its config |
-
-`wally --help` and `wally <command> --help` cover the rest.
 
 ## Build from source
 
