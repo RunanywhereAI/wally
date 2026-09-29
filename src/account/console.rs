@@ -16,7 +16,7 @@ use super::{
     USAGE_REQUESTS_CURSOR_MAX_CHARS,
 };
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct HttpRequest {
     pub method: String,
     pub url: String,
@@ -24,6 +24,19 @@ pub struct HttpRequest {
     /// Never logged.
     pub bearer_token: String,
     pub timeout_ms: i32,
+}
+
+impl std::fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // bearer_token is a live credential; keep it out of any `{:?}`, dbg!, or
+        // test assert, the same way Grant's own Debug redacts its secret.
+        f.debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("body", &self.body)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -159,7 +172,7 @@ impl Default for UsageQuery {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Authorization {
     pub request_code: String,
     /// Proves the process collecting the grant started it. Never logged.
@@ -167,6 +180,18 @@ pub struct Authorization {
     pub verification_url: String,
     pub expires_in: i32,
     pub interval: i32,
+}
+
+impl std::fmt::Debug for Authorization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // poll_secret proves ownership of the login attempt; never print it.
+        f.debug_struct("Authorization")
+            .field("request_code", &self.request_code)
+            .field("verification_url", &self.verification_url)
+            .field("expires_in", &self.expires_in)
+            .field("interval", &self.interval)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for Authorization {
