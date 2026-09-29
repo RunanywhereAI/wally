@@ -315,8 +315,84 @@ jobs:
           name: wally-linux-x86_64-${{ matrix.variant }}
           path: dist/wally-*-linux-x86_64*.tar.gz*
 
+  linux-arm64:
+    # Built on the arm64 compat floor (glibc 2.34) so wally's own code stays
+    # low; the kit's Sherpa prebuilt (glibc 2.38) sets the bottle floor. The
+    # arm64 kit's cpp-httplib (zstd, brotli) and libarchive (bz2) reference
+    # three compression libraries the x86-64 kit does not, so build.rs names
+    # them and package-wally.sh bundles the runtime .so into the bottle -- hence
+    # the extra -dev packages below. This host's glibc is older than the bottle
+    # floor, so it cannot start the binary: package-wally.sh skips its run-time
+    # self-checks and there is no on-host e2e; check-linux-abi.py enforces the
+    # floor from the ELF files instead.
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [prod]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev patchelf \
+            libzstd-dev libbrotli-dev libbz2-dev
+      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
+        with:
+          key: ccache-release-linux-arm64
+      - name: Cache kit
+        id: kit
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: kit
+          key: kit-linux-arm64-${{ hashFiles('versions.toml') }}
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            build/cargo
+          key: cargo-linux-arm64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-linux-arm64-
+      - name: Download C++ desktop kit
+        if: steps.kit.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/build/fetch-kit.sh linux-arm64 "${GITHUB_WORKSPACE}/kit"
+      - uses: ./.github/actions/build-wally
+        with:
+          platform: linux-arm64
+          kit-dir: ${{ github.workspace }}/kit
+          variant: ${{ matrix.variant }}
+          package: 'true'
+      - name: Verify archive
+        run: |
+          VERSION="${WALLY_VERSION#v}"
+          python3 scripts/release/verify-release-assets.py \
+            "dist/wally-${VERSION}-linux-arm64.tar.gz" \
+            "dist/wally-${VERSION}-linux-arm64.tar.gz.sha256"
+      - name: Linux ABI floor (arm64)
+        # Reads every ELF in the bottle against versions.toml [linux_abi_arm64]
+        # (glibc 2.38, the aarch64 loader, the bundled compression sonames). The
+        # host cannot run the binary, so this static check is the gate.
+        run: |
+          VERSION="${WALLY_VERSION#v}"
+          python3 scripts/release/check-linux-abi.py --arch arm64 \
+            "dist/wally-${VERSION}-linux-arm64.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wally-linux-arm64-${{ matrix.variant }}
+          path: dist/wally-*-linux-arm64*.tar.gz*
+
   publish:
-    needs: [macos, windows, windows-arm64, linux]
+    needs: [macos, windows, windows-arm64, linux, linux-arm64]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -343,6 +419,9 @@ jobs:
           python3 scripts/release/verify-release-assets.py \
             "artifacts/wally-${VERSION}-linux-x86_64.tar.gz" \
             "artifacts/wally-${VERSION}-linux-x86_64.tar.gz.sha256"
+          python3 scripts/release/verify-release-assets.py \
+            "artifacts/wally-${VERSION}-linux-arm64.tar.gz" \
+            "artifacts/wally-${VERSION}-linux-arm64.tar.gz.sha256"
       - name: Generate Homebrew formula update
         run: |
           set -euo pipefail

@@ -30,6 +30,14 @@ BIN_DIR="${HOME}/.local/bin"
 # (glibc_max, system_libraries); scripts/ci/check-versions.py fails when they
 # drift. libc's own family is left out: glibc is checked by version above.
 MIN_GLIBC="2.35"
+# The arm64 bottle's Sherpa prebuilt is built against glibc 2.38 / GCC 13's
+# libstdc++, so an arm64 host needs a higher floor than x86-64 (mirrors
+# versions.toml [linux_abi_arm64]; check-versions.py holds it). The arm64 case
+# below swaps these in before check_linux_system runs. The system-library list
+# is the same on both arches (the loader differs, but that is checked by the
+# glibc version, not looked up here).
+MIN_GLIBC_ARM64="2.38"
+MIN_GLIBCXX_ARM64="3.4.32"
 LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 libcurl.so.4"
 
 # The highest GLIBCXX_/CXXABI_ symbol version the bottle's own ELF files ask
@@ -357,7 +365,9 @@ case "${os}/${arch}" in
     # neither and there is no build for it.
     Darwin/*)                  fail "Wally needs an Apple Silicon Mac. Detected: ${arch}" ;;
     Linux/x86_64 | Linux/amd64) PLATFORM="linux-x86_64"; check_linux_system ;;
-    Linux/aarch64 | Linux/arm64) PLATFORM="linux-arm64"; check_linux_system ;;
+    Linux/aarch64 | Linux/arm64) PLATFORM="linux-arm64"
+                                 MIN_GLIBC="$MIN_GLIBC_ARM64"; MIN_GLIBCXX="$MIN_GLIBCXX_ARM64"
+                                 check_linux_system ;;
     Linux/*)                   fail "Wally has no Linux ${arch} build yet — x86_64 and arm64 only. Build from source: https://github.com/${REPO}#build-from-source" ;;
     *)                         fail "Wally has no build for ${os}. On Windows, use install.ps1." ;;
 esac

@@ -35,7 +35,8 @@ INSTALLER = ROOT / "install.sh"
 # Part of glibc itself, so present on any system that passes install.sh's
 # MIN_GLIBC check and not worth probing one by one.
 GLIBC_LIBRARIES = {
-    "ld-linux-x86-64.so.2", "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
+    "ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1",
+    "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
 }
 
 # The release ABI checker owns reading versions.toml [linux_abi]; reuse it rather
@@ -199,43 +200,49 @@ def main() -> None:
     # allowed to take from the system.
     installer = INSTALLER.read_text(encoding="utf-8")
     abi = LINUX_ABI.read_linux_abi_policy(VERSIONS)
-    min_glibc = re.search(r'^MIN_GLIBC="([^"]*)"', installer, re.M)
-    if not min_glibc:
-        failures.append(f"{INSTALLER}: no MIN_GLIBC line found")
-    elif min_glibc.group(1) != abi["glibc_max"]:
-        failures.append(
-            f"{INSTALLER}: MIN_GLIBC \"{min_glibc.group(1)}\" != versions.toml "
-            f"[linux_abi] glibc_max \"{abi['glibc_max']}\""
-        )
-    for var, key in (("MIN_GLIBCXX", "glibcxx_max"), ("MIN_CXXABI", "cxxabi_max")):
+    abi_arm64 = LINUX_ABI.read_linux_abi_policy(VERSIONS, "linux_abi_arm64")
+
+    def check_floor(var: str, key: str, policy: dict, section: str) -> None:
         found = re.search(rf'^{var}="([^"]*)"', installer, re.M)
         if not found:
             failures.append(f"{INSTALLER}: no {var} line found")
-        elif found.group(1) != abi[key]:
+        elif found.group(1) != policy[key]:
             failures.append(
                 f"{INSTALLER}: {var} \"{found.group(1)}\" != versions.toml "
-                f"[linux_abi] {key} \"{abi[key]}\""
+                f"[{section}] {key} \"{policy[key]}\""
             )
+
+    # The x86-64 floor mirrors [linux_abi]; the arm64 override that the arm64
+    # case swaps in mirrors [linux_abi_arm64]. CXXABI is the same on both arches,
+    # so install.sh keeps one MIN_CXXABI.
+    check_floor("MIN_GLIBC", "glibc_max", abi, "linux_abi")
+    check_floor("MIN_GLIBCXX", "glibcxx_max", abi, "linux_abi")
+    check_floor("MIN_CXXABI", "cxxabi_max", abi, "linux_abi")
+    check_floor("MIN_GLIBC_ARM64", "glibc_max", abi_arm64, "linux_abi_arm64")
+    check_floor("MIN_GLIBCXX_ARM64", "glibcxx_max", abi_arm64, "linux_abi_arm64")
+
     checked = re.search(r'^LINUX_SYSTEM_LIBRARIES="([^"]*)"', installer, re.M)
     if not checked:
         failures.append(f"{INSTALLER}: no LINUX_SYSTEM_LIBRARIES line found")
     else:
         installer_checks = set(checked.group(1).split())
-        allowed = set(abi["system_libraries"])
-        for library in sorted(installer_checks - allowed):
-            failures.append(
-                f"{INSTALLER}: checks {library}, which versions.toml [linux_abi] "
-                "system_libraries does not list"
-            )
-        # The other direction matters more: a library the bottle takes from the
-        # system but the installer does not look for is only discovered after
-        # the download, as a loader error. glibc's own libraries are covered by
-        # the MIN_GLIBC check instead.
-        for library in sorted(allowed - installer_checks - GLIBC_LIBRARIES):
-            failures.append(
-                f"{INSTALLER}: LINUX_SYSTEM_LIBRARIES does not check {library}, which the "
-                "bottle takes from the system (versions.toml [linux_abi] system_libraries)"
-            )
+        # The one installer list serves both arches, so it has to satisfy each:
+        # everything it checks must be allowed, and every system library either
+        # arch takes must be checked. A library the bottle takes but the
+        # installer skips is only discovered after the download, as a loader
+        # error; glibc's own libraries are covered by the MIN_GLIBC check.
+        for section, policy in (("linux_abi", abi), ("linux_abi_arm64", abi_arm64)):
+            allowed = set(policy["system_libraries"])
+            for library in sorted(installer_checks - allowed):
+                failures.append(
+                    f"{INSTALLER}: checks {library}, which versions.toml "
+                    f"[{section}] system_libraries does not list"
+                )
+            for library in sorted(allowed - installer_checks - GLIBC_LIBRARIES):
+                failures.append(
+                    f"{INSTALLER}: LINUX_SYSTEM_LIBRARIES does not check {library}, which the "
+                    f"bottle takes from the system (versions.toml [{section}] system_libraries)"
+                )
 
     # The Swift package's exact SDK pin.
     package = PACKAGE.read_text(encoding="utf-8")

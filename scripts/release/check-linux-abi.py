@@ -68,8 +68,13 @@ def version_key(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split("."))
 
 
-def read_linux_abi_policy(path: pathlib.Path = VERSIONS) -> dict[str, object]:
-    """`[linux_abi]` from versions.toml: three ceilings and the system sonames."""
+def read_linux_abi_policy(
+    path: pathlib.Path = VERSIONS, section_name: str = "linux_abi"
+) -> dict[str, object]:
+    """One `[linux_abi*]` table from versions.toml: three ceilings and the system
+    sonames. `section_name` picks the per-arch table (`linux_abi` for x86-64,
+    `linux_abi_arm64` for arm64), whose floors differ because the arm64 kit's
+    prebuilts are built against a newer glibc/libstdc++."""
     section: dict[str, object] = {}
     in_section = False
     text = path.read_text(encoding="utf-8")
@@ -80,7 +85,9 @@ def read_linux_abi_policy(path: pathlib.Path = VERSIONS) -> dict[str, object]:
         if not line:
             continue
         if line.startswith("[") and line.endswith("]") and "=" not in line:
-            in_section = line == "[linux_abi]"
+            # Exact match, so reading [linux_abi] does not spill into
+            # [linux_abi_arm64] (or the reverse).
+            in_section = line == f"[{section_name}]"
             continue
         if not in_section or "=" not in line:
             continue
@@ -91,8 +98,16 @@ def read_linux_abi_policy(path: pathlib.Path = VERSIONS) -> dict[str, object]:
             section[key] = value.strip('"')
     missing = [k for k in (*FAMILIES.values(), "system_libraries", "interpreters") if k not in section]
     if missing:
-        raise AbiError(f"versions.toml [linux_abi] is missing {missing}")
+        raise AbiError(f"versions.toml [{section_name}] is missing {missing}")
     return section
+
+
+def policy_section_for(archive: pathlib.Path, arch: str | None) -> str:
+    """Which `[linux_abi*]` table governs this archive. `--arch` wins; otherwise
+    the platform tag in the archive name decides, defaulting to x86-64."""
+    if arch == "arm64" or (arch is None and "linux-arm64" in archive.name):
+        return "linux_abi_arm64"
+    return "linux_abi"
 
 
 def _cstring(blob: bytes, offset: int) -> str:
@@ -280,9 +295,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("archive", type=pathlib.Path)
     parser.add_argument("--versions", type=pathlib.Path, default=VERSIONS)
+    parser.add_argument(
+        "--arch", choices=("x86_64", "arm64"),
+        help="which [linux_abi*] table to check against; inferred from the "
+             "archive name when omitted",
+    )
     args = parser.parse_args(argv)
     try:
-        policy = read_linux_abi_policy(args.versions)
+        section = policy_section_for(args.archive, args.arch)
+        policy = read_linux_abi_policy(args.versions, section)
         problems = check_files(archive_files(args.archive), policy)
     except (AbiError, OSError, tarfile.TarError) as exc:
         print(f"error: {exc}", file=sys.stderr)
