@@ -234,6 +234,61 @@ jobs:
           WALLY_SDK_KIT: ${{ github.workspace }}/kit
         run: bash scripts/test/e2e.sh ./build/wally
 
+  linux-arm64:
+    # The arm64 bottle. Built on the arm64 compat floor (glibc 2.34) so wally's
+    # own code stays low while the kit's Sherpa prebuilt (glibc 2.38) rides in
+    # the bottle; the arm64 kit's cpp-httplib/libarchive also pull zstd/brotli/
+    # bz2, which build.rs names and package-wally.sh bundles (hence the extra
+    # -dev packages). This host cannot start a 2.38 binary, so there is no
+    # unit-test or e2e run here -- those build and execute it; the static ABI
+    # floor is the gate, and release.yml packages the arm64 bottle the same way.
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake libcurl4-openssl-dev patchelf \
+            libzstd-dev libbrotli-dev libbz2-dev
+      - uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d
+        with:
+          key: ccache-ci-linux-arm64
+      - name: Cache kit
+        id: kit
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: kit
+          key: kit-linux-arm64-${{ hashFiles('versions.toml') }}
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            build/cargo
+          key: cargo-linux-arm64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-linux-arm64-
+      - name: Download C++ desktop kit
+        if: steps.kit.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/build/fetch-kit.sh linux-arm64 "${GITHUB_WORKSPACE}/kit"
+      - name: Product version
+        run: echo "WALLY_VERSION=$(sed -nE 's/^version = "([^"]+)"/\1/p' versions.toml | head -1)" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/build-wally
+        with:
+          platform: linux-arm64
+          kit-dir: ${{ github.workspace }}/kit
+          package: 'true'
+      - name: Linux ABI floor (arm64)
+        run: python3 scripts/release/check-linux-abi.py --arch arm64 "dist/wally-${WALLY_VERSION}-linux-arm64.tar.gz"
+
   windows-arm64:
     # Native ARM64 runner, free for public repos. Cross-compiling from the x64
     # host would build but never execute, and Windows-on-ARM is exactly where
