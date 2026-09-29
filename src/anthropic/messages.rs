@@ -570,11 +570,22 @@ impl StreamPipe {
         }
     }
 
+    /// The shared state, taking a poisoned lock's inner value rather than
+    /// panicking. A poison means a worker or route thread unwound mid-write, but
+    /// the flags and chunk buffer are still coherent to read and set, and the
+    /// drop guards below run *during* an unwind: a panic there would abort the
+    /// whole process and drop every in-flight connection.
+    fn lock(&self) -> std::sync::MutexGuard<'_, StreamPipeShared> {
+        self.shared
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     /// Blocks for the next transport chunk, waking every second to report a
     /// keepalive instead of the stream's first token, and `Finished` once the
     /// stream has ended with nothing left to hand over.
     fn read(&self) -> StreamReadResult {
-        let guard = self.shared.lock().unwrap();
+        let guard = self.lock();
         let (mut guard, _timeout) = self
             .changed
             .wait_timeout_while(guard, Duration::from_secs(1), |shared| {
@@ -602,7 +613,7 @@ struct StopPipeOnDrop<'a>(&'a StreamPipe);
 
 impl Drop for StopPipeOnDrop<'_> {
     fn drop(&mut self) {
-        let mut guard = self.0.shared.lock().unwrap();
+        let mut guard = self.0.lock();
         guard.stopped = true;
         self.0.changed.notify_all();
     }
@@ -617,7 +628,7 @@ struct FinishPipeOnDrop<'a>(&'a StreamPipe);
 
 impl Drop for FinishPipeOnDrop<'_> {
     fn drop(&mut self) {
-        let mut guard = self.0.shared.lock().unwrap();
+        let mut guard = self.0.lock();
         guard.finished = true;
         self.0.changed.notify_all();
     }
@@ -716,7 +727,7 @@ fn handle_streaming(
             let _finish_on_drop = FinishPipeOnDrop(&pipe);
             let reader_gone = || probe.is_gone();
             let mut receiver = |data: &[u8]| -> bool {
-                let mut guard = pipe.shared.lock().unwrap();
+                let mut guard = pipe.lock();
                 if guard.status < 200 || guard.status >= 300 {
                     // A non-2xx body is the error body, kept bounded so a
                     // real (2xx) stream of any size costs only these few
@@ -745,7 +756,7 @@ fn handle_streaming(
                 true
             };
             let mut on_headers = |head: &ResponseHead| {
-                let mut guard = pipe.shared.lock().unwrap();
+                let mut guard = pipe.lock();
                 guard.status = head.status;
                 guard.retry_after = head.header("Retry-After").unwrap_or("").to_string();
                 guard.headers_ready = true;
@@ -761,7 +772,7 @@ fn handle_streaming(
                 &reader_gone,
                 Some(&mut on_headers),
             );
-            let mut guard = pipe.shared.lock().unwrap();
+            let mut guard = pipe.lock();
             guard.successful = matches!(&result.reply, Ok(r) if r.status >= 200 && r.status < 300);
             guard.abandoned = result.abandoned;
             // `_finish_on_drop`, dropped when this closure returns (however
@@ -771,7 +782,7 @@ fn handle_streaming(
         // Pre-stream decision (#83): known before any event is written, so
         // it can be answered as a normal reply that keeps the status and
         // any Retry-After, rather than a 200 stream carrying an error.
-        let mut guard = pipe.shared.lock().unwrap();
+        let mut guard = pipe.lock();
         loop {
             if guard.headers_ready || guard.finished {
                 break;
@@ -863,7 +874,7 @@ fn handle_streaming(
         }
 
         let (abandoned, successful, error_body) = {
-            let guard = pipe.shared.lock().unwrap();
+            let guard = pipe.lock();
             (guard.abandoned, guard.successful, guard.error_body.clone())
         };
         if abandoned {
