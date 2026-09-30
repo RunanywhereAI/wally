@@ -30,16 +30,14 @@ BIN_DIR="${HOME}/.local/bin"
 # (glibc_max, system_libraries); scripts/ci/check-versions.py fails when they
 # drift. libc's own family is left out: glibc is checked by version above.
 MIN_GLIBC="2.35"
-# The arm64 bottle's Sherpa prebuilt is built against glibc 2.38 / GCC 13's
-# libstdc++, so an arm64 host needs a higher floor than x86-64 (mirrors
-# versions.toml [linux_abi_arm64]; check-versions.py holds it). The arm64 case
-# below swaps these in before check_linux_system runs. The system-library list
-# is the same on both arches (the loader differs, but that is checked by the
-# glibc version, not looked up here).
-MIN_GLIBC_ARM64="2.38"
-MIN_GLIBCXX_ARM64="3.4.32"
-# What the refusals name as a system that qualifies; the arm64 case below swaps
-# in the newer distributions its floor means.
+# The arm64 bottle has its own floor entry so the two arches can diverge again
+# (mirrors versions.toml [linux_abi_arm64]; check-versions.py holds it). The
+# arm64 case below swaps these in before check_linux_system runs. The
+# system-library list is the same on both arches (the loader differs, but that
+# is checked by the glibc version, not looked up here).
+MIN_GLIBC_ARM64="2.35"
+MIN_GLIBCXX_ARM64="3.4.30"
+# What the refusals name as a system that qualifies.
 DISTRO_HINT="Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on"
 MIN_GCC="12"
 LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 libcurl.so.4"
@@ -172,9 +170,10 @@ check_libstdcxx_symbols() {
 }
 
 # check_linux_system reads the system's libc and libstdc++, but not what the
-# bottle's own files ask of them. The arm64 bottle's bundled Sherpa and OpenMP
-# libraries need glibc 2.38 while the declared floor said 2.35, so a Debian 12
-# host passed every check, unpacked, and only then failed to start. Reads the
+# bottle's own files ask of them. A floor declared here can drift from the
+# payload (0.7.1's arm64 Sherpa and OpenMP libraries needed glibc 2.38 under a
+# declared 2.35), and a host that clears every check above then unpacks and
+# fails to start. Reads the
 # highest GLIBC_/GLIBCXX_ version each shipped ELF file names, the way
 # check_libstdcxx_symbols reads the system libstdc++, and refuses by file name
 # before anything under ${LIB_DIR} changes. A floor that drifts from the payload
@@ -190,10 +189,10 @@ check_bottle_symbols() {
         need_glibcxx="$(printf '%s\n' "$listing" | grep '^GLIBCXX_' | sed 's/^GLIBCXX_//' | sort -V | tail -1)"
         name="${file#"${staged_dir}"/}"
         if [ -n "$need_glibc" ] && [ "$(printf '%s\n%s\n' "$need_glibc" "$glibc" | sort -V | head -n1)" != "$need_glibc" ]; then
-            fail "This build's ${name} needs glibc ${need_glibc}; this system has ${glibc}. Use a newer distribution (Ubuntu 24.04+, Debian 13+)."
+            fail "This build's ${name} needs glibc ${need_glibc}; this system has ${glibc}. A newer distribution is needed."
         fi
         if [ -n "$need_glibcxx" ] && [ -n "${max_glibcxx:-}" ] && [ "$(printf '%s\n%s\n' "$need_glibcxx" "$max_glibcxx" | sort -V | head -n1)" != "$need_glibcxx" ]; then
-            fail "This build's ${name} needs libstdc++ GLIBCXX_${need_glibcxx}; this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. Use a newer distribution (Ubuntu 24.04+, Debian 13+)."
+            fail "This build's ${name} needs libstdc++ GLIBCXX_${need_glibcxx}; this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. A newer distribution is needed."
         fi
     done
 }
@@ -398,7 +397,6 @@ case "${os}/${arch}" in
     Linux/x86_64 | Linux/amd64) PLATFORM="linux-x86_64"; check_linux_system ;;
     Linux/aarch64 | Linux/arm64) PLATFORM="linux-arm64"
                                  MIN_GLIBC="$MIN_GLIBC_ARM64"; MIN_GLIBCXX="$MIN_GLIBCXX_ARM64"
-                                 DISTRO_HINT="Ubuntu 24.04+, Debian 13+ and other distributions from 2023 on"; MIN_GCC="13"
                                  check_linux_system ;;
     Linux/*)                   fail "Wally has no Linux ${arch} build yet — x86_64 and arm64 only. Build from source: https://github.com/${REPO}#build-from-source" ;;
     *)                         fail "Wally has no build for ${os}. On Windows, use install.ps1." ;;
