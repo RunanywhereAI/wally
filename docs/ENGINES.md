@@ -28,14 +28,14 @@ wally run --engine qhexrt /path/to/lfm2_5_230m_HNPU "Hello"
 
 ### Where each engine exists
 
-| Backend | macOS Apple Silicon | Windows x64 | Windows ARM64 | Linux x64 |
-|---|---|---|---|---|
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) | public bottle | public bottle | — | public tarball |
-| [MLX](https://github.com/ml-explore/mlx) (Apple GPU) | public bottle (product `wally`, not `wally-cxx`) | — | — | — |
-| [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) | public bottle | public bottle | — | public tarball |
-| [ONNX Runtime](https://onnxruntime.ai) | public bottle | public bottle | — | public tarball |
-| NeuRT (Apple Neural Engine; Core ML is the format) | **overlay** rebuild | — | — | — |
-| QHexRT (Qualcomm Hexagon NPU) | — | — | **overlay** rebuild | — |
+| Backend | macOS Apple Silicon | Windows x64 | Windows ARM64 | Linux x64 | Linux ARM64 |
+|---|---|---|---|---|---|
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) | public bottle | public bottle | — | public tarball | public tarball |
+| [MLX](https://github.com/ml-explore/mlx) (Apple GPU) | public bottle (product `wally`, not `wally-cxx`) | — | — | — | — |
+| [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx) | public bottle | public bottle | — | public tarball | public tarball |
+| [ONNX Runtime](https://onnxruntime.ai) | public bottle | public bottle | — | public tarball | public tarball |
+| NeuRT (Apple Neural Engine; Core ML is the format) | **overlay** rebuild | — | — | — | — |
+| QHexRT (Qualcomm Hexagon NPU) | — | — | **overlay** rebuild | — | — |
 
 Public Windows ARM64 kits are commons-only (no llama.cpp / ONNX / Sherpa on MSVC ARM64). Snapdragon NPU is overlay-only. x64 Windows has no Hexagon path.
 
@@ -60,6 +60,8 @@ QHexRT on device also needs QAIRT matching the Hexagon skel (`QNN_SDK_ROOT` + `A
 **Windows x64** (public zip): GGUF / ONNX / Sherpa. No MLX, no NeuRT, no QHexRT.
 
 **Linux x86-64** (public tarball): llama.cpp + Sherpa + ONNX, same as Windows x64. Needs glibc 2.35 or newer.
+
+**Linux ARM64** (public tarball): llama.cpp + Sherpa + ONNX, same as Linux x86-64. Needs glibc 2.38 or newer and a libstdc++ with `GLIBCXX_3.4.32` or newer (from GCC 13+) — the bundled arm64 Sherpa prebuilt sets this floor, so the Linux ARM64 requirement is stricter than x86-64's. See #141.
 
 **Windows ARM64** (Snapdragon): public kit has no llama.cpp/ONNX/Sherpa. The QHexRT overlay runs Hexagon NPU models from a local `*_HNPU` tree. Do not expect `mlx-*`, GGUF, or `sd15` on that binary.
 
