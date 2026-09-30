@@ -116,7 +116,9 @@ check() {
 run() {
     home="$1"; symbols="$2"; fixture="${3:-$GOOD}"; login_shell="${4:-${SHELL:-}}"
     status=0
-    out="$(WALLY_LIBSTDCXX_SYMBOLS="$symbols" WALLY_STUB_DIR="$fixture" SHELL="$login_shell" \
+    # XDG_CONFIG_HOME is pinned inside the temp HOME: a caller (or a CI runner)
+    # that sets it would otherwise have fish's config written outside it.
+    out="$(XDG_CONFIG_HOME="$home/.config" WALLY_LIBSTDCXX_SYMBOLS="$symbols" WALLY_STUB_DIR="$fixture" SHELL="$login_shell" \
         HOME="$home" PATH="$STUB:$PATH" "$INSTALL_SH" "$INSTALL" 2>&1)" || status=$?
     printf '%s\n%s' "$status" "$out"
 }
