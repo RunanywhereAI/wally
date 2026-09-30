@@ -505,6 +505,11 @@ if [ "${PATH_ALREADY_HAS_BIN_DIR}" -eq 0 ]; then
     case "$(basename "${SHELL:-}")" in
         zsh)  rc="${HOME}/.zshrc" ;;
         bash) rc="${HOME}/.bashrc" ;;
+        # fish reads neither ~/.profile nor `export`: it has its own config file
+        # and its own syntax, and PATH is a list there.
+        fish) rc="${XDG_CONFIG_HOME:-${HOME}/.config}/fish/config.fish"
+              line="contains -- \"${path_entry}\" \$PATH; or set -gx PATH \"${path_entry}\" \$PATH"
+              mkdir -p "$(dirname "$rc")" 2>/dev/null || true ;;
         *)    rc="${HOME}/.profile" ;;
     esac
     # Matching the directory rather than our exact line: somebody who added

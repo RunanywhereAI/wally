@@ -114,9 +114,9 @@ check() {
 }
 
 run() {
-    home="$1"; symbols="$2"; fixture="${3:-$GOOD}"
+    home="$1"; symbols="$2"; fixture="${3:-$GOOD}"; login_shell="${4:-${SHELL:-}}"
     status=0
-    out="$(WALLY_LIBSTDCXX_SYMBOLS="$symbols" WALLY_STUB_DIR="$fixture" \
+    out="$(WALLY_LIBSTDCXX_SYMBOLS="$symbols" WALLY_STUB_DIR="$fixture" SHELL="$login_shell" \
         HOME="$home" PATH="$STUB:$PATH" "$INSTALL_SH" "$INSTALL" 2>&1)" || status=$?
     printf '%s\n%s' "$status" "$out"
 }
@@ -183,6 +183,24 @@ home_ok="$WORK/home-ok"; mkdir -p "$home_ok"
 result_ok="$(run "$home_ok" "$new" "$ok_glibc")"
 ok_code="$(printf '%s\n' "$result_ok" | head -1)"
 check "a bottle library within the host's glibc installs (exit 0)" "$([ "$ok_code" = "0" ] && echo 1 || echo 0)"
+
+# --- PATH for future shells goes where each shell reads it -----------------
+# fish reads neither ~/.profile nor `export`; it has its own file and syntax.
+home_fish="$WORK/home-fish"; mkdir -p "$home_fish"
+result_fish="$(run "$home_fish" "$new" "$GOOD" /usr/bin/fish)"
+fish_code="$(printf '%s\n' "$result_fish" | head -1)"
+fish_body="$(printf '%s\n' "$result_fish" | tail -n +2)"
+check "fish installs (exit 0)" "$([ "$fish_code" = "0" ] && echo 1 || echo 0)"
+check "fish gets a set -gx PATH line in config.fish" \
+    "$(grep -qF 'set -gx PATH "$HOME/.local/bin" $PATH' "$home_fish/.config/fish/config.fish" 2>/dev/null && echo 1 || echo 0)"
+check "fish does not get an export line in .profile" "$([ ! -e "$home_fish/.profile" ] && echo 1 || echo 0)"
+check "the message names config.fish" \
+    "$(printf '%s' "$fish_body" | grep -qF 'config.fish' && echo 1 || echo 0)"
+
+home_bash="$WORK/home-bash"; mkdir -p "$home_bash"
+run "$home_bash" "$new" "$GOOD" /bin/bash >/dev/null
+check "bash still gets an export line in .bashrc" \
+    "$(grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$home_bash/.bashrc" 2>/dev/null && echo 1 || echo 0)"
 
 [ "$fails" -eq 0 ] || { printf '%d test(s) failed\n' "$fails" >&2; exit 1; }
 printf 'all install preflight cases pass\n'
