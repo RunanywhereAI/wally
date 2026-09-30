@@ -513,14 +513,14 @@ if [ "${PATH_ALREADY_HAS_BIN_DIR}" -eq 0 ]; then
     # ~/.local/bin to their own rc file by hand wrote it their own way, and
     # appending a second entry for a directory already on PATH helps nobody.
     if [ -f "$rc" ] && grep -q "$path_entry" "$rc" 2>/dev/null; then
-        ok "${BIN_DIR} is already on PATH in ${rc} (open a new shell)"
+        ok "${BIN_DIR} is already on PATH in ${rc}; to use wally in this terminal, run: . ${rc}"
     elif [ -e "$rc" ] && [ ! -f "$rc" ]; then
         # A directory or a device where the rc file should be. Nothing to append
         # to, and the shell's own redirection error would reach the terminal.
         warn "${rc} is not a regular file; add this line to your shell startup: ${line}"
     elif { [ -w "$rc" ] || [ ! -e "$rc" ]; } &&
         printf '\n# Added by the Wally installer\n%s\n' "$line" >> "$rc" 2>/dev/null; then
-        warn "added ${BIN_DIR} to your PATH in ${rc} (open a new shell)"
+        warn "added ${BIN_DIR} to your PATH in ${rc}; to use wally in this terminal, run: . ${rc}"
     else
         # Saying "added" when the write failed is how somebody ends up with a
         # terminal that cannot find wally and no idea why.

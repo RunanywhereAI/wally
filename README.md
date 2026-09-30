@@ -31,6 +31,10 @@ Windows (x64 and ARM64):
 irm https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.ps1 | iex
 ```
 
+The installer adds wally to your PATH for new terminals. In the terminal you
+installed from, run the line it prints (`. ~/.zshrc` or similar), or open a new
+one, before your first `wally` command. On Windows, open a new terminal.
+
 ## Run a model on your machine
 
 You don't need an account or a key.

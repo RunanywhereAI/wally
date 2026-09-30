@@ -8,6 +8,7 @@ pub mod declared_harness;
 pub mod harness;
 pub mod local_models;
 pub mod opencode;
+pub mod path_reload;
 
 pub use agents::*;
 pub use catalog_models::*;

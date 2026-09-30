@@ -16,6 +16,7 @@ use crate::util::term;
 use super::catalog_models::catalog_models_for;
 use super::local_models::{local_context_size, local_models, local_output_size};
 use super::opencode::build_open_code_config;
+use super::path_reload;
 
 /// Where a coding tool is pointed: a hosted API or a local SDK server.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -548,9 +549,9 @@ pub fn release(endpoint: &Endpoint) {
 }
 
 #[cfg(windows)]
-const PATH_SEPARATOR: char = ';';
+pub(super) const PATH_SEPARATOR: char = ';';
 #[cfg(not(windows))]
-const PATH_SEPARATOR: char = ':';
+pub(super) const PATH_SEPARATOR: char = ':';
 
 /// The file names a launchable `tool` can take in a directory. Windows
 /// carries the extension in the name (an npm shim is `tool.cmd`, a native
@@ -850,13 +851,47 @@ fn offer_install(tool: &str) -> InstallOffer {
         out::error_line(&format!("the {tool} installer did not finish"));
         return InstallOffer::Stopped;
     }
+    // The installer changed the person's startup files or PATH, which this
+    // process never sees. Read what a new terminal would get and carry on with
+    // that, so the launch does not end in "open a new terminal".
+    let was_on_path = on_path(tool);
+    if !was_on_path && !found(tool) {
+        reload_search_path(installer.needs_npm);
+    }
     if found(tool) {
+        // The person's own shell is beyond wally's reach; say what to type.
+        if !was_on_path {
+            out::status_line(&format!(
+                "{tool} is not on this terminal's PATH yet; to use it yourself, {}",
+                path_reload::reload_hint()
+            ));
+        }
         return InstallOffer::Installed;
     }
     out::status_line(&format!(
-        "{tool} is installed but not on PATH yet; open a new terminal and run this again"
+        "{tool} is installed but wally could not find it; {} and run this again",
+        path_reload::reload_hint()
     ));
     InstallOffer::Stopped
+}
+
+/// Adds to this process's PATH the directories a new terminal would have and
+/// this one does not: the person's shell-configured PATH, and npm's global
+/// bin for an npm tool.
+fn reload_search_path(needs_npm: bool) {
+    let mut path = std::env::var("PATH").unwrap_or_default();
+    if let Some(fresh) = path_reload::fresh_path() {
+        path = path_reload::merge_path(&path, &fresh);
+    }
+    if needs_npm {
+        if let Some(bin) = path_reload::npm_global_bin() {
+            path = path_reload::merge_path(&path, &bin.to_string_lossy());
+        }
+    }
+    // SAFETY: as prepend_to_path: wally is single-threaded at this point.
+    unsafe {
+        std::env::set_var("PATH", path);
+    }
 }
 
 /// True when the CLI `tool` can be launched. When it cannot, says so and
