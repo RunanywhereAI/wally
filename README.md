@@ -17,7 +17,8 @@ on it. Hosted models bill against your RunAnywhere credit.
 ## Install
 
 macOS on Apple Silicon (Intel Macs are not supported) and Linux on x86-64 with
-glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+; no ARM build yet):
+glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+), or Linux on ARM64/aarch64 with
+glibc 2.38 or newer (Ubuntu 24.04+, Debian 13+):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.sh | sh
