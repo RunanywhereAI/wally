@@ -8,6 +8,12 @@
 # but not that symbol version, so it passed the old preflight, downloaded,
 # and only then failed to start.
 #
+# The same file covers check_bottle_symbols: a bottle whose own library asks
+# for a newer glibc or GLIBCXX than the host has is refused after the download
+# and before anything is installed (the arm64 bottle's Sherpa needed glibc 2.38
+# while the declared floor said 2.35, and Debian 12 failed to start after
+# unpacking).
+#
 # Stubs uname/getconf/ldconfig/curl so this runs the same on macOS as it
 # would on the Linux hosts it protects, and feeds a fixture symbol listing
 # through WALLY_LIBSTDCXX_SYMBOLS rather than a real libstdc++.so.6. No
@@ -108,9 +114,9 @@ check() {
 }
 
 run() {
-    home="$1"; symbols="$2"
+    home="$1"; symbols="$2"; fixture="${3:-$GOOD}"
     status=0
-    out="$(WALLY_LIBSTDCXX_SYMBOLS="$symbols" WALLY_STUB_DIR="$GOOD" \
+    out="$(WALLY_LIBSTDCXX_SYMBOLS="$symbols" WALLY_STUB_DIR="$fixture" \
         HOME="$home" PATH="$STUB:$PATH" "$INSTALL_SH" "$INSTALL" 2>&1)" || status=$?
     printf '%s\n%s' "$status" "$out"
 }
@@ -139,5 +145,44 @@ check "a libstdc++ at the floor installs (exit 0)" "$([ "$new_code" = "0" ] && e
 check "wally v1.2.3 is reported installed" \
     "$(printf '%s' "$new_body" | grep -qF 'wally v1.2.3' && echo 1 || echo 0)"
 
+# --- a bottle library that needs a newer glibc than the host is refused ----
+# ELF version tags are plain strings in the file, which is all the check reads,
+# so a text file naming GLIBC_2.99 stands in for a library built on a newer
+# toolchain than this host (glibc 2.35 in the stub).
+make_bad() {
+    dir="$WORK/fixture-$1"; needle="$2"
+    cp -R "$GOOD" "$dir"
+    mkdir -p "$dir/wally-linux-x86_64/lib"
+    printf 'ELF stand-in naming %s\n' "$needle" > "$dir/wally-linux-x86_64/lib/libbundled.so.1"
+    ( cd "$dir" && rm -f asset.tar.gz && tar -czf asset.tar.gz wally-linux-x86_64 )
+    shasum -a 256 "$dir/asset.tar.gz" | awk '{print $1"  wally-1.2.3-linux-x86_64.tar.gz"}' > "$dir/asset.sha256"
+    printf '%s' "$dir"
+}
+bad_glibc="$(make_bad glibc GLIBC_2.99)"
+home_bg="$WORK/home-bg"; mkdir -p "$home_bg"
+result_bg="$(run "$home_bg" "$new" "$bad_glibc")"
+bg_code="$(printf '%s\n' "$result_bg" | head -1)"
+bg_body="$(printf '%s\n' "$result_bg" | tail -n +2)"
+check "a bottle library needing a newer glibc is refused (exit 1)" "$([ "$bg_code" = "1" ] && echo 1 || echo 0)"
+check "the refusal names the file and both glibc versions" \
+    "$(printf '%s' "$bg_body" | grep -qF 'lib/libbundled.so.1 needs glibc 2.99; this system has 2.35' && echo 1 || echo 0)"
+check "nothing was installed after that refusal" \
+    "$([ ! -e "$home_bg/.local/lib/wally" ] && [ ! -e "$home_bg/.local/bin/wally" ] && echo 1 || echo 0)"
+
+bad_cxx="$(make_bad cxx GLIBCXX_3.4.99)"
+home_bc="$WORK/home-bc"; mkdir -p "$home_bc"
+result_bc="$(run "$home_bc" "$new" "$bad_cxx")"
+bc_code="$(printf '%s\n' "$result_bc" | head -1)"
+bc_body="$(printf '%s\n' "$result_bc" | tail -n +2)"
+check "a bottle library needing a newer libstdc++ is refused (exit 1)" "$([ "$bc_code" = "1" ] && echo 1 || echo 0)"
+check "that refusal names the file and the GLIBCXX versions" \
+    "$(printf '%s' "$bc_body" | grep -qF 'lib/libbundled.so.1 needs libstdc++ GLIBCXX_3.4.99' && echo 1 || echo 0)"
+
+ok_glibc="$(make_bad ok GLIBC_2.34)"
+home_ok="$WORK/home-ok"; mkdir -p "$home_ok"
+result_ok="$(run "$home_ok" "$new" "$ok_glibc")"
+ok_code="$(printf '%s\n' "$result_ok" | head -1)"
+check "a bottle library within the host's glibc installs (exit 0)" "$([ "$ok_code" = "0" ] && echo 1 || echo 0)"
+
 [ "$fails" -eq 0 ] || { printf '%d test(s) failed\n' "$fails" >&2; exit 1; }
-printf 'all libstdc++ preflight cases pass\n'
+printf 'all install preflight cases pass\n'

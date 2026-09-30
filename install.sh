@@ -38,6 +38,10 @@ MIN_GLIBC="2.35"
 # glibc version, not looked up here).
 MIN_GLIBC_ARM64="2.38"
 MIN_GLIBCXX_ARM64="3.4.32"
+# What the refusals name as a system that qualifies; the arm64 case below swaps
+# in the newer distributions its floor means.
+DISTRO_HINT="Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on"
+MIN_GCC="12"
 LINUX_SYSTEM_LIBRARIES="libstdc++.so.6 libgcc_s.so.1 libssl.so.3 libcrypto.so.3 libcurl.so.4"
 
 # The highest GLIBCXX_/CXXABI_ symbol version the bottle's own ELF files ask
@@ -111,7 +115,7 @@ check_linux_system() {
     if [ -z "$glibc" ]; then
         warn "could not read the glibc version; continuing"
     elif [ "$(printf '%s\n%s\n' "$MIN_GLIBC" "$glibc" | sort -V | head -n1)" != "$MIN_GLIBC" ]; then
-        fail "Wally needs glibc ${MIN_GLIBC} or newer; this system has ${glibc}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+        fail "Wally needs glibc ${MIN_GLIBC} or newer; this system has ${glibc}. ${DISTRO_HINT} qualify."
     fi
     ldconfig_bin="$(command -v ldconfig 2>/dev/null || true)"
     [ -n "$ldconfig_bin" ] || { [ -x /sbin/ldconfig ] && ldconfig_bin=/sbin/ldconfig; }
@@ -160,11 +164,38 @@ check_libstdcxx_symbols() {
     max_glibcxx="$(printf '%s\n' "$listing" | grep '^GLIBCXX_' | sed 's/^GLIBCXX_//' | sort -V | tail -1)"
     max_cxxabi="$(printf '%s\n' "$listing" | grep '^CXXABI_' | sed 's/^CXXABI_//' | sort -V | tail -1)"
     if [ -n "$max_glibcxx" ] && [ "$(printf '%s\n%s\n' "$MIN_GLIBCXX" "$max_glibcxx" | sort -V | head -n1)" != "$MIN_GLIBCXX" ]; then
-        fail "Wally needs a libstdc++ with GLIBCXX_${MIN_GLIBCXX} or newer (from GCC 12+); this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+        fail "Wally needs a libstdc++ with GLIBCXX_${MIN_GLIBCXX} or newer (from GCC ${MIN_GCC}+); this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. ${DISTRO_HINT} qualify."
     fi
     if [ -n "$max_cxxabi" ] && [ "$(printf '%s\n%s\n' "$MIN_CXXABI" "$max_cxxabi" | sort -V | head -n1)" != "$MIN_CXXABI" ]; then
-        fail "Wally needs a libstdc++ with CXXABI_${MIN_CXXABI} or newer (from GCC 12+); this system's libstdc++ only provides up to CXXABI_${max_cxxabi}. Ubuntu 22.04+, Debian 12+ and other distributions from 2022 on qualify."
+        fail "Wally needs a libstdc++ with CXXABI_${MIN_CXXABI} or newer (from GCC ${MIN_GCC}+); this system's libstdc++ only provides up to CXXABI_${max_cxxabi}. ${DISTRO_HINT} qualify."
     fi
+}
+
+# check_linux_system reads the system's libc and libstdc++, but not what the
+# bottle's own files ask of them. The arm64 bottle's bundled Sherpa and OpenMP
+# libraries need glibc 2.38 while the declared floor said 2.35, so a Debian 12
+# host passed every check, unpacked, and only then failed to start. Reads the
+# highest GLIBC_/GLIBCXX_ version each shipped ELF file names, the way
+# check_libstdcxx_symbols reads the system libstdc++, and refuses by file name
+# before anything under ${LIB_DIR} changes. A floor that drifts from the payload
+# is caught here instead of on the user's machine.
+check_bottle_symbols() {
+    staged_dir="$1"
+    # Unknown host versions were already warned about in check_linux_system.
+    [ -n "${glibc:-}" ] || return 0
+    for file in "${staged_dir}/bin/wally" "${staged_dir}"/lib/*.so*; do
+        [ -f "$file" ] || continue
+        listing="$(grep -aoE 'GLIBC(XX)?_[0-9]+(\.[0-9]+)*' "$file" 2>/dev/null || true)"
+        need_glibc="$(printf '%s\n' "$listing" | grep '^GLIBC_' | sed 's/^GLIBC_//' | sort -V | tail -1)"
+        need_glibcxx="$(printf '%s\n' "$listing" | grep '^GLIBCXX_' | sed 's/^GLIBCXX_//' | sort -V | tail -1)"
+        name="${file#"${staged_dir}"/}"
+        if [ -n "$need_glibc" ] && [ "$(printf '%s\n%s\n' "$need_glibc" "$glibc" | sort -V | head -n1)" != "$need_glibc" ]; then
+            fail "This build's ${name} needs glibc ${need_glibc}; this system has ${glibc}. Use a newer distribution (Ubuntu 24.04+, Debian 13+)."
+        fi
+        if [ -n "$need_glibcxx" ] && [ -n "${max_glibcxx:-}" ] && [ "$(printf '%s\n%s\n' "$need_glibcxx" "$max_glibcxx" | sort -V | head -n1)" != "$need_glibcxx" ]; then
+            fail "This build's ${name} needs libstdc++ GLIBCXX_${need_glibcxx}; this system's libstdc++ only provides up to GLIBCXX_${max_glibcxx}. Use a newer distribution (Ubuntu 24.04+, Debian 13+)."
+        fi
+    done
 }
 
 # Runs a binary once and keeps what it printed. A binary that cannot start
@@ -367,6 +398,7 @@ case "${os}/${arch}" in
     Linux/x86_64 | Linux/amd64) PLATFORM="linux-x86_64"; check_linux_system ;;
     Linux/aarch64 | Linux/arm64) PLATFORM="linux-arm64"
                                  MIN_GLIBC="$MIN_GLIBC_ARM64"; MIN_GLIBCXX="$MIN_GLIBCXX_ARM64"
+                                 DISTRO_HINT="Ubuntu 24.04+, Debian 13+ and other distributions from 2023 on"; MIN_GCC="13"
                                  check_linux_system ;;
     Linux/*)                   fail "Wally has no Linux ${arch} build yet — x86_64 and arm64 only. Build from source: https://github.com/${REPO}#build-from-source" ;;
     *)                         fail "Wally has no build for ${os}. On Windows, use install.ps1." ;;
@@ -404,6 +436,9 @@ step "Installing to ${LIB_DIR}"
 tar -xzf "${tmp}/${ASSET}" -C "$tmp"
 staged="${tmp}/wally-${PLATFORM}"
 [ -x "${staged}/bin/wally" ] || fail "Archive did not contain bin/wally as expected."
+case "$PLATFORM" in
+    linux-*) check_bottle_symbols "$staged" ;;
+esac
 
 # The new tree is copied beside the old one, started once, and only then
 # renamed into place. A build that cannot run on this machine therefore fails
