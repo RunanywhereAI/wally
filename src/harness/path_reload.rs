@@ -7,7 +7,8 @@
 
 use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::harness::PATH_SEPARATOR;
@@ -65,10 +66,36 @@ pub fn merge_path(current: &str, fresh: &str) -> String {
     merged.join(&PATH_SEPARATOR.to_string())
 }
 
+/// How long output may keep arriving after the process has exited. Whatever the
+/// shell printed is already in the pipe by then; only a leftover background
+/// child holding the pipe open can make the reader wait longer.
+const DRAIN_GRACE: Duration = Duration::from_millis(250);
+
+/// Ends the process and everything it started. On Unix it leads its own
+/// process group (see `run_for_output`), so one signal reaches a startup
+/// file's background jobs too, which would otherwise keep the pipe open.
+fn kill_tree(child: &mut Child) {
+    #[cfg(unix)]
+    // SAFETY: killpg only signals the group this child leads.
+    unsafe {
+        libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Runs `command`, and returns its stdout if it exits cleanly within the
 /// timeout. Stdin is closed and stderr dropped: a shell started without a
-/// terminal complains about job control, and none of that is wanted.
+/// terminal complains about job control, and none of that is wanted. Output is
+/// read on its own thread and collected as it arrives, so a child that outlives
+/// the shell with the pipe still open costs at most `DRAIN_GRACE`, not its own
+/// lifetime.
 fn run_for_output(mut command: Command) -> Option<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -76,32 +103,86 @@ fn run_for_output(mut command: Command) -> Option<String> {
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stdout.read_to_end(&mut bytes);
-        bytes
-    });
+    let collected = Arc::new(Mutex::new(Vec::new()));
+    let (ended, end_of_output) = mpsc::channel();
+    {
+        let collected = Arc::clone(&collected);
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(read) = stdout.read(&mut chunk) {
+                if read == 0 {
+                    break;
+                }
+                if let Ok(mut bytes) = collected.lock() {
+                    bytes.extend_from_slice(&chunk[..read]);
+                }
+            }
+            let _ = ended.send(());
+        });
+    }
     let deadline = Instant::now() + PROBE_TIMEOUT;
     let finished = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status.success(),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_tree(&mut child);
                 break false;
             }
         }
     };
-    let bytes = reader.join().ok()?;
-    finished.then(|| String::from_utf8_lossy(&bytes).into_owned())
+    if !finished {
+        return None;
+    }
+    let grace = DRAIN_GRACE.min(deadline.saturating_duration_since(Instant::now()));
+    if end_of_output.recv_timeout(grace).is_err() {
+        kill_tree(&mut child);
+    }
+    let bytes = collected.lock().ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The flag sets to run `shell` with. bash reads `~/.bashrc` only as a
+/// non-login interactive shell, and `~/.bash_profile` (which need not source
+/// it) only as a login one, so a PATH set in either place needs both runs.
+/// The other shells read what they need in the one.
+#[cfg(not(windows))]
+fn probe_modes(shell: &str) -> &'static [&'static [&'static str]] {
+    match shell_name(shell).as_str() {
+        "bash" => &[&["-l", "-i", "-c"], &["-i", "-c"]],
+        _ => &[&["-l", "-i", "-c"]],
+    }
+}
+
+/// The PATH `shell` reports in each of its probe modes, merged. `home`
+/// replaces HOME for the probe, which is how a test gives it its own
+/// startup files.
+#[cfg(not(windows))]
+fn shell_path(shell: &str, home: Option<&std::path::Path>) -> Option<String> {
+    let script = probe_script(shell)?;
+    let mut merged: Option<String> = None;
+    for flags in probe_modes(shell) {
+        let mut command = Command::new(shell);
+        command.args(*flags).arg(&script);
+        if let Some(home) = home {
+            command.env("HOME", home);
+        }
+        if let Some(path) = run_for_output(command).and_then(|output| parse_probe(&output)) {
+            merged = Some(match merged {
+                Some(have) => merge_path(&have, &path),
+                None => path,
+            });
+        }
+    }
+    merged
 }
 
 /// The PATH a new terminal would start with, as far as it can be told.
 ///
 /// POSIX: the person's own shell, run as a login shell and an interactive one
 /// so it reads the profile files and the rc files an installer might have
-/// appended to. Windows: the machine and user PATH from the registry, which
+/// appended to (bash is also run as a plain interactive shell, see
+/// `probe_modes`). Windows: the machine and user PATH from the registry, which
 /// is where an installer writes.
 pub fn fresh_path() -> Option<String> {
     #[cfg(windows)]
@@ -119,10 +200,7 @@ pub fn fresh_path() -> Option<String> {
     #[cfg(not(windows))]
     {
         let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty())?;
-        let script = probe_script(&shell)?;
-        let mut command = Command::new(&shell);
-        command.args(["-l", "-i", "-c", &script]);
-        parse_probe(&run_for_output(command)?)
+        shell_path(&shell, None)
     }
 }
 
@@ -263,6 +341,68 @@ mod tests {
         let started = Instant::now();
         assert_eq!(run_for_output(command), None);
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_background_child_holding_the_pipe_does_not_hold_the_probe_up() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 & printf '__WALLY_PATH__/x__WALLY_PATH__'"]);
+        let started = Instant::now();
+        let output = run_for_output(command).expect("the shell itself exited cleanly");
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(parse_probe(&output).as_deref(), Some("/x"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_slow_probe_is_bounded_and_takes_its_children_with_it() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30; printf '__WALLY_PATH__/x__WALLY_PATH__'"]);
+        let started = Instant::now();
+        assert_eq!(run_for_output(command), None);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn bash_is_probed_as_a_login_shell_and_as_a_plain_interactive_one() {
+        assert_eq!(probe_modes("/bin/bash").len(), 2);
+        assert_eq!(probe_modes("/bin/zsh").len(), 1);
+        assert_eq!(probe_modes("/usr/bin/fish").len(), 1);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn bash_finds_a_path_entry_set_only_in_bashrc() {
+        let home = std::env::temp_dir().join(format!("wally-path-reload-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        // The profile does not source .bashrc, which is the case a login-only
+        // probe misses. Each file adds one entry the other cannot see.
+        std::fs::write(
+            home.join(".bash_profile"),
+            "export PATH=\"/only/in/profile:$PATH\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            home.join(".bashrc"),
+            "export PATH=\"/only/in/bashrc:$PATH\"\n",
+        )
+        .unwrap();
+        let found = shell_path("bash", Some(&home));
+        let _ = std::fs::remove_dir_all(&home);
+        let found = found.expect("bash answered");
+        let dirs: Vec<&str> = found.split(':').collect();
+        assert!(dirs.contains(&"/only/in/bashrc"), "{found}");
+        assert!(dirs.contains(&"/only/in/profile"), "{found}");
     }
 
     #[cfg(not(windows))]
