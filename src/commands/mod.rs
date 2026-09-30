@@ -36,6 +36,7 @@ pub mod cmd_models;
 pub mod cmd_pull;
 pub mod cmd_rag;
 pub mod cmd_rerank;
+pub mod cmd_responses;
 pub mod cmd_rm;
 pub mod cmd_run;
 pub mod cmd_segment;
@@ -74,6 +75,7 @@ pub use cmd_models::{register_models, register_models_aliases};
 pub use cmd_pull::{configure_models_download, pull_model_flow};
 pub use cmd_rag::register_rag;
 pub use cmd_rerank::register_rerank;
+pub use cmd_responses::register_responses_serve;
 pub use cmd_rm::configure_models_delete;
 pub use cmd_run::{
     configure_llm, configure_vlm_generate, register_llm, register_llm_aliases, register_vlm,

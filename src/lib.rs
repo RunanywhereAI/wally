@@ -23,6 +23,8 @@ pub mod io;
 pub mod net;
 pub mod progress;
 pub mod repl;
+pub mod responses;
+pub mod shim;
 pub mod sys;
 pub mod util;
 
