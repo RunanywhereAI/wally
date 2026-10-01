@@ -335,7 +335,7 @@ pub fn run(args: &[String]) -> i32 {
             // This shortcut is exactly one bare arg (args.len() == 2 above),
             // so it can never carry a `--home` override; an empty string
             // preserves the shortcut's existing default-home behavior.
-            let code = crate::commands::run_uninstall(false, "");
+            let code = crate::commands::run_uninstall(false, false, "");
             bootstrap::shutdown();
             return code;
         }

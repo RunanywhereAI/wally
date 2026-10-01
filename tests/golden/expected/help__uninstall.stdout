@@ -5,3 +5,4 @@ Usage: wally uninstall [OPTIONS]
 Options:
   -h, --help                  Show help
   -y, --yes                   Skip the confirmation prompt
+      --delete-models         Also delete downloaded models (kept by default)
