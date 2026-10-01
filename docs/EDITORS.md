@@ -40,6 +40,14 @@ which is what lets an agent on the far side run the tools it was given rather
 than describe them. `opencode`, `hermes` and `openclaw` speak OpenAI already, so
 they talk to the endpoint directly.
 
+The model's reasoning shows up as a thinking block with an empty signature,
+because these models can't sign it. Claude Code accepts that, and wally drops
+the block again when Claude Code sends it back. Cache reads show up as
+`cache_read_input_tokens`, taken out of `input_tokens` so nothing is counted
+twice. Cache writes aren't reported, because the endpoint doesn't report them.
+OpenCode, OpenClaw and Prime Agent get the catalog's cache-read price, so their
+cost display charges a cached prompt at the cached rate.
+
 Nothing wally writes for a tool outlives the run. The variables go in the child
 process. DeepSeek Harness is handed a patch in a temp directory, deleted when it
 exits; its own `$DSH_HOME` is never written to, and the API key never enters

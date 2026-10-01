@@ -195,13 +195,14 @@ fn stream_usage_falls_back_when_endpoint_never_reports_it() {
 }
 
 #[test]
-fn reasoning_content_counts_without_an_unsigned_block() {
+fn reasoning_content_streams_as_thinking_and_counts_toward_output() {
     // Some endpoints stream their thinking as `delta.reasoning_content`,
     // separate from `delta.content`, and on a tight max_tokens budget it can
-    // be the ONLY thing the model emits. Those characters must count toward
-    // the fallback estimate so the turn is not mistaken for a free one -- but
-    // they must NOT go out as a `thinking` block, which Anthropic's stream
-    // requires a signature_delta to close and an OpenAI endpoint cannot sign.
+    // be the ONLY thing the model emits. It goes out as a thinking block with
+    // an empty signature: our upstreams cannot sign reasoning, and Claude Code
+    // accepts the unsigned block (checked live against Claude Code 2.1.286
+    // over two turns, 1 Oct 2026). The characters still count toward the
+    // fallback estimate so the turn is not mistaken for a free one.
     let mut state = tr::StreamState::new();
     let thinking_chunk: serde_json::Value = serde_json::from_str(
         r#"{"id":"c1","choices":[{"delta":{"reasoning_content":"counting to five"}}]}"#,
@@ -214,22 +215,17 @@ fn reasoning_content_counts_without_an_unsigned_block() {
     tr::stream_chunk_to_anthropic(&finish_chunk, &mut state);
     let closing = tr::stream_close_to_anthropic(&mut state);
 
-    // No unsigned thinking block on the wire, in either half of the stream.
     assert!(
-        !opening.contains("\"type\":\"thinking\"") && !opening.contains("thinking_delta"),
-        "reasoning must not surface as a thinking block; got: {opening}"
+        opening.contains("\"type\":\"thinking\"") && opening.contains("thinking_delta"),
+        "reasoning should open a thinking block; got: {opening}"
     );
     assert!(
-        !closing.contains("\"type\":\"thinking\""),
-        "reasoning must not surface as a thinking block; got: {closing}"
+        closing.contains("\"type\":\"content_block_stop\""),
+        "the thinking block should be closed; got: {closing}"
     );
     // "counting to five" is 17 characters -> a 4-token fallback estimate.
     // The real point: not 0. A turn that spent its whole budget thinking
     // must not report as though nothing happened.
-    assert!(
-        !closing.contains("\"output_tokens\":0"),
-        "thinking-only turn still reports 0 output_tokens; got: {closing}"
-    );
     assert!(
         closing.contains("\"output_tokens\":4"),
         "expected the 4-token character estimate for 17 characters; got: {closing}"
