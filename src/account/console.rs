@@ -255,6 +255,7 @@ pub struct CatalogPrice {
     pub id: String,
     pub input_per_mtok: i64,
     pub output_per_mtok: i64,
+    pub cached_input_per_mtok: i64,
 }
 
 pub const LOGIN_MAX_WAIT_SECONDS: i32 = 10;
@@ -1909,6 +1910,7 @@ impl ConsoleClient {
                 id: model.id,
                 input_per_mtok: model.input_per_mtok,
                 output_per_mtok: model.output_per_mtok,
+                cached_input_per_mtok: model.cached_input_per_mtok,
             })
             .collect();
         (IdentityResult::Ok, prices, String::new())
