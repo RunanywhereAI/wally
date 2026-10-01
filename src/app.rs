@@ -318,6 +318,7 @@ fn restore_stale_desktop_gateway(argv: &[String]) {
 /// Run wally with `args` (program name at index 0). Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     restore_stale_desktop_gateway(args);
+    crate::commands::sweep_replaced_files();
 
     // `-u`/`-U` top-level shortcuts, guarded to the one shape that can't be
     // confused with a subcommand's own arguments: the entire command line is

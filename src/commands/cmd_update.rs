@@ -7,33 +7,33 @@
 //! this build's version, and the script decides: pull the newer release, or
 //! report that this machine is already current and download nothing.
 //!
-//! The same script answers `install.sh --check` with the latest release
-//! version alone. `--check-for-updates` and the one-line update-available
-//! notice both read that, so the version lookup lives in one place.
+//! The same script answers a check with the latest release version alone:
+//! `install.sh --check`, or `install.ps1` under `WALLY_INSTALL_CHECK=1` (it is
+//! run as `irm | iex`, which passes no arguments). `--check-for-updates` and the
+//! one-line update-available notice both read that, so the version lookup
+//! lives in one place.
 
 use crate::cli::App;
 use crate::io::output as out;
-#[cfg(not(windows))]
 use crate::util::getenv;
 
 // The same script the install line in the README pipes to a shell. Kept as one
 // constant so the update path and the documented install path cannot drift.
 #[cfg(not(windows))]
 const INSTALL_URL: &str = "https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.sh";
+#[cfg(windows)]
+const INSTALL_URL: &str = "https://raw.githubusercontent.com/RunanywhereAI/wally/main/install.ps1";
 
-// Points update and the update check at another copy of install.sh, for
-// release tests and mirrors, the way install.sh's own WALLY_INSTALL_BASE_URL
+// Points update and the update check at another copy of the installer, for
+// release tests and mirrors, the way the installer's own WALLY_INSTALL_BASE_URL
 // points it at another copy of the release.
-#[cfg(not(windows))]
 const SCRIPT_URL_ENV: &str = "WALLY_UPDATE_SCRIPT_URL";
 
 // How long a version lookup is trusted before the notice asks again.
-#[cfg(not(windows))]
 const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 // Bounds the lookup so a dead network cannot hold `--check-for-updates`, or
 // leave a background check running, for long.
-#[cfg(not(windows))]
 const CHECK_TIMEOUT_SECS: &str = "10";
 
 // Homebrew's own prefixes, plus whatever `$HOMEBREW_PREFIX` names (set by
@@ -85,15 +85,6 @@ pub fn register_update(app: &mut App) {
 }
 
 /// Shared by `wally update` and the whole-argv `-u/--update` shortcut.
-#[cfg(windows)]
-pub fn run_update() -> i32 {
-    // The installer is a POSIX shell script; the Windows bottle updates
-    // through its own channel, not this command.
-    out::error_line("wally update is not available on Windows; reinstall from the release page");
-    1
-}
-
-/// Shared by `wally update` and the whole-argv `-u/--update` shortcut.
 #[cfg(not(windows))]
 pub fn run_update() -> i32 {
     let exe = crate::commands::cmd_maintenance::self_executable();
@@ -126,14 +117,65 @@ pub fn run_update() -> i32 {
     }
 }
 
+/// Shared by `wally update` and the whole-argv `-u/--update` shortcut.
+///
+/// install.ps1 replaces the running wally.exe and its DLLs file by file
+/// (Windows renames a file in use but will not move or delete it), so the
+/// installer runs while this process waits, the same as on macOS and Linux.
 #[cfg(windows)]
-fn run_check_for_updates() -> i32 {
-    run_update()
+pub fn run_update() -> i32 {
+    let current = env!("WALLY_VERSION");
+    out::status_line("checking for a newer wally...");
+    let Some(latest) = fetch_latest_version() else {
+        out::error_line("could not check for a newer wally; check your connection and try again");
+        return 1;
+    };
+    write_cached_latest(&latest);
+    if !is_newer(&latest, current) {
+        out::status_line(&format!("wally {current} is the latest"));
+        return 0;
+    }
+    // The URL reaches PowerShell as an environment variable, never spliced
+    // into the command, so an override URL carries nothing a caller could
+    // inject. A non-zero exit means the installer already said why.
+    let script = r#"$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-Expression (Invoke-RestMethod -UseBasicParsing $env:WALLY_UPDATE_RESOLVED_URL)"#;
+    let ok = powershell(script)
+        .env_remove("WALLY_INSTALL_CHECK")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if ok {
+        0
+    } else {
+        1
+    }
 }
+
+/// Deletes the `<name>.old` files an update left beside wally.exe because
+/// they were still in use. Best effort: one still in use stays for next time.
+#[cfg(windows)]
+pub fn sweep_replaced_files() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().ends_with(".old") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn sweep_replaced_files() {}
 
 /// `wally update --check-for-updates`: say what is out, then ask before
 /// installing. Without a terminal to ask on, it reports and stops.
-#[cfg(not(windows))]
 fn run_check_for_updates() -> i32 {
     let current = env!("WALLY_VERSION");
     out::status_line("checking for a newer wally...");
@@ -153,7 +195,6 @@ fn run_check_for_updates() -> i32 {
     run_update()
 }
 
-#[cfg(not(windows))]
 fn confirm_install() -> bool {
     use std::io::Write;
     eprint!("install now? [y/N] ");
@@ -165,7 +206,6 @@ fn confirm_install() -> bool {
     matches!(line.as_bytes().first(), Some(b'y') | Some(b'Y'))
 }
 
-#[cfg(not(windows))]
 fn install_script_url() -> String {
     getenv(SCRIPT_URL_ENV)
         .filter(|url| !url.is_empty())
@@ -192,11 +232,46 @@ fn installer_command(args: &[String], timeout_secs: Option<&str>) -> std::proces
     command
 }
 
-/// The latest release version from `install.sh --check`, or None when the
-/// lookup failed or answered with something that is not a version.
-#[cfg(not(windows))]
+/// Windows PowerShell running `script`, with the installer's URL in
+/// `WALLY_UPDATE_RESOLVED_URL`. powershell.exe rather than pwsh: it ships with
+/// every Windows, and install.ps1's file:// mirror path needs 5.1.
+#[cfg(windows)]
+fn powershell(script: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("powershell.exe");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+        ])
+        .arg(script)
+        .env("WALLY_UPDATE_RESOLVED_URL", install_script_url());
+    command
+}
+
+// install.ps1 in check mode, printing only the latest version. Shared by the
+// check and the background refresh.
+#[cfg(windows)]
+const CHECK_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$env:WALLY_INSTALL_CHECK = '1'
+$script = Invoke-RestMethod -UseBasicParsing -TimeoutSec $env:WALLY_UPDATE_TIMEOUT $env:WALLY_UPDATE_RESOLVED_URL
+$latest = (Invoke-Expression $script | Out-String).Trim()"#;
+
+/// The latest release version from the installer's check mode, or None when
+/// the lookup failed or answered with something that is not a version.
 fn fetch_latest_version() -> Option<String> {
-    let output = installer_command(&["--check".to_string()], Some(CHECK_TIMEOUT_SECS))
+    #[cfg(not(windows))]
+    let mut command = installer_command(&["--check".to_string()], Some(CHECK_TIMEOUT_SECS));
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = powershell(&format!("{CHECK_SCRIPT}\n$latest"));
+        command.env("WALLY_UPDATE_TIMEOUT", CHECK_TIMEOUT_SECS);
+        command
+    };
+    let output = command
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
@@ -210,7 +285,6 @@ fn fetch_latest_version() -> Option<String> {
 
 /// `X.Y.Z`, with an optional leading `v`. Anything else (a dev build's
 /// `-dev` suffix included) is not comparable and yields None.
-#[cfg(not(windows))]
 pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
     let text = text.strip_prefix('v').unwrap_or(text);
     let mut parts = text.split('.');
@@ -230,7 +304,6 @@ pub(crate) fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
 
 /// True only when both parse and `latest` is strictly ahead, so a dev build
 /// or one already past the latest release never hears it is behind.
-#[cfg(not(windows))]
 pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
     match (parse_version(latest), parse_version(current)) {
         (Some(latest), Some(current)) => latest > current,
@@ -239,7 +312,6 @@ pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
 }
 
 /// The notice, colored when `color` is set.
-#[cfg(not(windows))]
 pub(crate) fn notice_line(latest: &str, current: &str, color: bool) -> String {
     if color {
         format!(
@@ -250,7 +322,6 @@ pub(crate) fn notice_line(latest: &str, current: &str, color: bool) -> String {
     }
 }
 
-#[cfg(not(windows))]
 fn cache_path() -> Option<std::path::PathBuf> {
     let dir = crate::config::cli_paths::state_dir();
     if dir.is_empty() {
@@ -259,7 +330,6 @@ fn cache_path() -> Option<std::path::PathBuf> {
     Some(std::path::Path::new(&dir).join("update-check"))
 }
 
-#[cfg(not(windows))]
 fn write_cached_latest(latest: &str) {
     let Some(path) = cache_path() else { return };
     if let Some(parent) = path.parent() {
@@ -270,7 +340,6 @@ fn write_cached_latest(latest: &str) {
 
 /// The cached latest version and whether it is still within CHECK_INTERVAL.
 /// An empty cache (a lookup that failed) is fresh but names no version.
-#[cfg(not(windows))]
 fn read_cache(path: &std::path::Path) -> Option<(Option<String>, bool)> {
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
     let fresh = modified
@@ -286,7 +355,6 @@ fn read_cache(path: &std::path::Path) -> Option<(Option<String>, bool)> {
 /// Starts a lookup that outlives this process and writes the cache when it
 /// finishes, so no command ever waits on the network for the notice. The
 /// cache is touched first: one attempt per interval, even offline.
-#[cfg(not(windows))]
 fn refresh_cache_in_background(path: &std::path::Path) {
     if let Some(parent) = path.parent() {
         if std::fs::create_dir_all(parent).is_err() {
@@ -301,25 +369,55 @@ fn refresh_cache_in_background(path: &std::path::Path) {
     if touched.is_err() {
         return;
     }
-    let script = r#"url="$1"; max="$2"; cache="$3"; tmp="$cache.$$"
-curl -fsSL --max-time "$max" "$url" | sh -s -- --check > "$tmp" 2>/dev/null     && [ -s "$tmp" ] && mv -f "$tmp" "$cache" || rm -f "$tmp""#;
-    let _ = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(script)
-        .arg("wally-update-check")
-        .arg(install_script_url())
-        .arg(CHECK_TIMEOUT_SECS)
-        .arg(path)
+    let _ = background_refresh_command(path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
 }
 
+#[cfg(not(windows))]
+fn background_refresh_command(path: &std::path::Path) -> std::process::Command {
+    let script = r#"url="$1"; max="$2"; cache="$3"; tmp="$cache.$$"
+curl -fsSL --max-time "$max" "$url" | sh -s -- --check > "$tmp" 2>/dev/null \
+    && [ -s "$tmp" ] && mv -f "$tmp" "$cache" || rm -f "$tmp""#;
+    let mut command = std::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg(script)
+        .arg("wally-update-check")
+        .arg(install_script_url())
+        .arg(CHECK_TIMEOUT_SECS)
+        .arg(path);
+    command
+}
+
+#[cfg(windows)]
+fn background_refresh_command(path: &std::path::Path) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    // No console window, and its own process group so the Ctrl+C that ends
+    // the command that started it does not end the lookup too.
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let script = format!(
+        r#"{CHECK_SCRIPT}
+if ($latest -match '^\d+\.\d+\.\d+$') {{
+    $tmp = "$env:WALLY_UPDATE_CACHE.$PID"
+    Set-Content -LiteralPath $tmp -Value $latest -Encoding Ascii
+    Move-Item -LiteralPath $tmp -Destination $env:WALLY_UPDATE_CACHE -Force
+}}"#
+    );
+    let mut command = powershell(&script);
+    command
+        .env("WALLY_UPDATE_TIMEOUT", CHECK_TIMEOUT_SECS)
+        .env("WALLY_UPDATE_CACHE", path)
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    command
+}
+
 /// Prints the update-available notice when the cache says a newer release is
 /// out, and refreshes a stale cache in the background. Interactive terminals
 /// only: never in pipes, in CI, or under `--json`/`--quiet`.
-#[cfg(not(windows))]
 pub fn show_update_notice(json: bool, quiet: bool, no_color: bool) {
     use crate::util::term;
     if json || quiet || getenv("CI").is_some() {
@@ -345,9 +443,6 @@ pub fn show_update_notice(json: bool, quiet: bool, no_color: bool) {
         }
     }
 }
-
-#[cfg(windows)]
-pub fn show_update_notice(_json: bool, _quiet: bool, _no_color: bool) {}
 
 #[cfg(all(test, not(windows)))]
 mod tests {
