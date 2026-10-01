@@ -65,3 +65,8 @@ row's size from the build its id pulls (it had shown the MLX build's size while
 `pull <id>` fetched the GGUF), and started showing `mlx-ternary-bonsai-27b-2bit`
 for the one MLX-only row whose merge key names no registered model. Those sizes
 and that id are the only differences from the C++ capture.
+
+Four `uninstall` cases were edited when `wally uninstall` started keeping
+downloaded models by default and gained `--delete-models`
+(`help__uninstall`, `help__help__uninstall`, `leaf__uninstall__bogus_flag`,
+`leaf__uninstall__extra_positional`). The options list is the only difference.
