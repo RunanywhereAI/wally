@@ -65,3 +65,8 @@ row's size from the build its id pulls (it had shown the MLX build's size while
 `pull <id>` fetched the GGUF), and started showing `mlx-ternary-bonsai-27b-2bit`
 for the one MLX-only row whose merge key names no registered model. Those sizes
 and that id are the only differences from the C++ capture.
+
+Four `update` cases were edited when `wally update` dropped `--nightly` and
+gained `-c, --check-for-updates` (`help__update`, `help__help__update`,
+`leaf__update__bogus_flag`, `leaf__update__extra_positional`). The options
+list is the only thing that differs from the C++ capture.
