@@ -738,6 +738,7 @@ fn installer(tool: &str) -> Option<Installer> {
         "opencode" => ("npm i -g opencode-ai", "npm.cmd i -g opencode-ai", true),
         "openclaw" => ("npm i -g openclaw@latest", "npm.cmd i -g openclaw@latest", true),
         "dsh" => ("npm i -g @deepseek-ai/dsh", "npm.cmd i -g @deepseek-ai/dsh", true),
+        "codex" => ("npm i -g @openai/codex", "npm.cmd i -g @openai/codex", true),
         "claude" => (
             "curl -fsSL https://claude.ai/install.sh | bash",
             "irm https://claude.ai/install.ps1 | iex",
@@ -1217,7 +1218,7 @@ pub(crate) fn spawn(tool: &str, args: &[String]) -> i32 {
 }
 
 #[cfg(not(windows))]
-fn spawn(tool: &str, args: &[String]) -> i32 {
+pub(crate) fn spawn(tool: &str, args: &[String]) -> i32 {
     use std::ffi::CString;
 
     // Checked before the fork, not after: a failed exec happens in the

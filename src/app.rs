@@ -73,6 +73,7 @@ pub fn configure_app(app: &mut App) {
 
     crate::commands::register_editors(app);
     crate::commands::register_harness(app); // coding agents
+    crate::commands::register_codex(app);
     crate::commands::register_responses_serve(app); // hidden dev: `wally __responses-serve`
     crate::commands::register_default_models(app);
 
@@ -129,6 +130,7 @@ pub fn configure_app(app: &mut App) {
                 "openclaw",
                 "deepseek",
                 "prime-agent",
+                "codex",
             ],
         },
         Section {
@@ -171,6 +173,7 @@ fn is_passthrough_command(token: &str) -> bool {
         "openclaw",
         "deepseek",
         "prime-agent",
+        "codex",
     ];
     NAMES.contains(&token)
 }

@@ -21,6 +21,7 @@ Coding tools:
   openclaw                    Open OpenClaw with a model
   deepseek                    Open DeepSeek Harness with a model
   prime-agent                 Open Prime Agent with a model
+  codex                       Open Codex with a model
 
 Account:
   account login               Sign in through the browser
