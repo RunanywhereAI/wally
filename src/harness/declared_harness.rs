@@ -55,6 +55,7 @@ mod tests {
             (DeclaredHarness::KOpencode, "opencode"),
             (DeclaredHarness::KOpenclaw, "openclaw"),
             (DeclaredHarness::KDeepseek, "deepseek"),
+            (DeclaredHarness::KCodex, "codex"),
         ] {
             assert_eq!(harness_header_value(harness), value);
         }

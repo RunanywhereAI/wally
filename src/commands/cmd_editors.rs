@@ -93,13 +93,13 @@ fn bundle_path(editor: &Editor) -> String {
 }
 
 /// Sets `name` for the child, remembering what was there so it can be undone.
-struct ScopedEnv {
+pub(crate) struct ScopedEnv {
     name: String,
     previous: Option<String>,
 }
 
 impl ScopedEnv {
-    fn new(name: &str, value: &str) -> Self {
+    pub(crate) fn new(name: &str, value: &str) -> Self {
         let previous = std::env::var(name).ok();
         std::env::set_var(name, value);
         ScopedEnv {
@@ -293,7 +293,7 @@ fn prepare_claude_config_dir() -> Option<String> {
 /// launch. Fed to Claude Code as CLAUDE_CODE_MAX_CONTEXT_TOKENS, this is what
 /// makes its auto-compaction fire at the model's real limit instead of a guessed
 /// default (which overruns qwen/gemma's 256k and wastes glm's 1M).
-fn cloud_context_window(model: &str) -> i64 {
+pub(crate) fn cloud_context_window(model: &str) -> i64 {
     let Ok(credentials) = account::load() else {
         return 0;
     };

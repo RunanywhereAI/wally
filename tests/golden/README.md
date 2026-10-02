@@ -65,3 +65,7 @@ row's size from the build its id pulls (it had shown the MLX build's size while
 `pull <id>` fetched the GGUF), and started showing `mlx-ternary-bonsai-27b-2bit`
 for the one MLX-only row whose merge key names no registered model. Those sizes
 and that id are the only differences from the C++ capture.
+
+Thirty-one cases that print the top-level command list were re-captured from
+the Rust binary when `wally codex` was added to the Coding tools section. The
+new `codex` line is the only difference in each.
