@@ -104,22 +104,21 @@ fn platform_base() -> String {
 }
 
 // The on-device model store, matching harness/local_models.rs: {base}/Models
-// or {base}/RunAnywhere/Models. Every base it can derive is checked -- the
-// global --home override, the env override, the kit's answer, and the
-// platform default -- and the first store that actually exists wins, so a
-// missing bootstrap cannot hide it.
+// or {base}/RunAnywhere/Models. An explicit --home takes precedence over
+// RUNANYWHERE_HOME, and either override confines the search to that base,
+// even when its model store is absent. With neither override, check the
+// kit's answer and the platform default so a missing bootstrap cannot hide it.
 fn models_directory(home_override: &str) -> String {
     let mut bases: Vec<String> = Vec::new();
-    if let Some(env) = getenv("RUNANYWHERE_HOME") {
-        bases.push(env);
-    }
     let home = cli_paths::resolve_home(home_override);
     if !home.is_empty() {
         bases.push(home);
     }
-    let fallback = platform_base();
-    if !fallback.is_empty() {
-        bases.push(fallback);
+    if home_override.is_empty() && getenv("RUNANYWHERE_HOME").is_none() {
+        let fallback = platform_base();
+        if !fallback.is_empty() {
+            bases.push(fallback);
+        }
     }
 
     for base in &bases {
@@ -638,6 +637,41 @@ mod tests {
     use super::*;
     use crate::util::env_lock::lock as env_lock;
 
+    struct RestoreEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                // SAFETY: callers hold env_lock until with_storage_env returns.
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    // Callers hold env_lock for the whole test, including tempfile creation.
+    fn with_storage_env<T>(vars: &[(&'static str, Option<&Path>)], body: impl FnOnce() -> T) -> T {
+        let _restore = RestoreEnv(
+            vars.iter()
+                .map(|(name, _)| (*name, std::env::var_os(name)))
+                .collect(),
+        );
+        for (name, value) in vars {
+            // SAFETY: env_lock is held until after the previous values are restored.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        body()
+    }
+
     // Dir_size (uninstall's pre-delete size preview) must follow a
     // symlink to a regular file, matching C++'s is_regular_file(ec)/
     // file_size(ec) (which call status(), following symlinks).
@@ -712,27 +746,104 @@ mod tests {
     // always resolve against HOME/RUNANYWHERE_HOME, so it could remove a
     // different model store than the one `wally models` was just pointed at.
     #[test]
-    #[cfg(unix)]
     fn models_directory_prefers_the_home_override_over_home() {
         let _lock = env_lock();
         let home_a = tempfile::tempdir().expect("tempdir A");
         let home_b = tempfile::tempdir().expect("tempdir B");
         std::fs::create_dir_all(home_b.path().join("Models")).expect("mkdir B/Models");
-        // SAFETY: env_lock() is held for this whole test body.
-        unsafe {
-            std::env::set_var("HOME", home_a.path());
-            std::env::remove_var("RUNANYWHERE_HOME");
+
+        with_storage_env(
+            &[("HOME", Some(home_a.path())), ("RUNANYWHERE_HOME", None)],
+            || {
+                assert_eq!(
+                    PathBuf::from(models_directory(&home_b.path().to_string_lossy())),
+                    home_b.path().join("Models")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn models_directory_prefers_home_override_over_runanywhere_home() {
+        let _lock = env_lock();
+        for layout in ["Models", "RunAnywhere/Models"] {
+            let explicit = tempfile::tempdir().expect("explicit home");
+            let from_env = tempfile::tempdir().expect("environment home");
+            let expected = explicit.path().join(layout);
+            std::fs::create_dir_all(&expected).expect("explicit model store");
+            std::fs::create_dir_all(from_env.path().join("Models"))
+                .expect("environment model store");
+
+            with_storage_env(&[("RUNANYWHERE_HOME", Some(from_env.path()))], || {
+                assert_eq!(
+                    PathBuf::from(models_directory(&explicit.path().to_string_lossy())),
+                    expected
+                );
+            });
         }
+    }
 
-        let result = models_directory(&home_b.path().to_string_lossy());
+    #[test]
+    fn models_directory_does_not_fall_back_when_home_override_has_no_models() {
+        let _lock = env_lock();
+        let explicit = tempfile::tempdir().expect("explicit home");
+        let from_env = tempfile::tempdir().expect("environment home");
+        let default_home = tempfile::tempdir().expect("default home");
+        std::fs::create_dir_all(from_env.path().join("Models")).expect("environment model store");
 
-        // SAFETY: still holding env_lock().
-        unsafe { std::env::remove_var("HOME") };
+        for env_home in [Some(from_env.path()), None] {
+            with_storage_env(
+                &[
+                    ("HOME", Some(default_home.path())),
+                    ("XDG_DATA_HOME", Some(default_home.path())),
+                    ("RUNANYWHERE_HOME", env_home),
+                ],
+                || {
+                    std::fs::create_dir_all(Path::new(&platform_base()).join("Models"))
+                        .expect("default model store");
+                    assert_eq!(
+                        PathBuf::from(models_directory(&explicit.path().to_string_lossy())),
+                        explicit.path().join("Models")
+                    );
+                },
+            );
+        }
+    }
 
-        assert!(
-            result.starts_with(home_b.path().to_str().expect("utf8 path")),
-            "models_directory({home_b:?}) must resolve against the override, not HOME \
-             ({home_a:?}): got {result}"
+    #[test]
+    fn models_directory_uses_runanywhere_home_without_a_home_override() {
+        let _lock = env_lock();
+        for layout in ["Models", "RunAnywhere/Models"] {
+            let from_env = tempfile::tempdir().expect("environment home");
+            let expected = from_env.path().join(layout);
+            std::fs::create_dir_all(&expected).expect("environment model store");
+
+            with_storage_env(&[("RUNANYWHERE_HOME", Some(from_env.path()))], || {
+                assert_eq!(PathBuf::from(models_directory("")), expected);
+            });
+        }
+    }
+
+    #[test]
+    fn models_directory_does_not_fall_back_when_runanywhere_home_has_no_models() {
+        let _lock = env_lock();
+        let from_env = tempfile::tempdir().expect("environment home");
+        let default_home = tempfile::tempdir().expect("default home");
+
+        with_storage_env(
+            &[
+                ("HOME", Some(default_home.path())),
+                ("XDG_DATA_HOME", Some(default_home.path())),
+                ("RUNANYWHERE_HOME", Some(from_env.path())),
+            ],
+            || {
+                std::fs::create_dir_all(Path::new(&platform_base()).join("Models"))
+                    .expect("default model store");
+                assert_eq!(
+                    PathBuf::from(models_directory("")),
+                    from_env.path().join("Models")
+                );
+            },
         );
     }
 
