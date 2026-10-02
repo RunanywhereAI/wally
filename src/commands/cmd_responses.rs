@@ -43,11 +43,10 @@ pub fn register_responses_serve(app: &mut App) {
             max_output: 0,
         };
 
-        // KRcli: a real contract Harness value for now (no codex variant yet).
         let shim = match responses::start(
             &endpoint,
             &model,
-            DeclaredHarness::KRcli,
+            DeclaredHarness::KCodex,
             verbose,
             "",
             &ModelAliases::new(),

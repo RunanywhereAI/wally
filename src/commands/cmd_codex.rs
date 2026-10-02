@@ -125,12 +125,10 @@ fn run(model: &str, rest: &[String], options: &GlobalOptions) -> i32 {
     let Some(endpoint) = harness::resolve(model, options, TOOL) else {
         return 1;
     };
-    // TODO(contract): bill as Codex once the console contract has a value for
-    // it; until then the bridge declares the CLI itself.
     let Some(mut shim) = responses::start(
         &endpoint,
         model,
-        DeclaredHarness::KRcli,
+        DeclaredHarness::KCodex,
         options.verbose,
         "",
         &ModelAliases::new(),
