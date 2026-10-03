@@ -20,7 +20,7 @@ from typing import Callable
 from browser_use import Agent
 
 from .elements import elements_from_selector_map, is_personal, label
-from .guards import Element, check_page
+from .guards import Element, check_page, host_of
 from .policy import GATE_BOT, GATE_PAYMENT, GATE_THRESHOLD, EvePolicy, Observation
 from .profile import Profile, key_fits_field
 from .text import TextError, TextModel
@@ -291,7 +291,9 @@ class EveAgent(Agent):
         target = decision.target
         # Finding 10: eve proposes the key; the field's own label must agree before a profile
         # value is typed, so personal data never lands in a search or promo box.
-        if decision.value_key and key_fits_field(decision.value_key, target.label_text, target.autocomplete):
+        third_party = bool(target.frame_url) and host_of(target.frame_url) != host_of(obs.url)
+        if (decision.value_key and not third_party
+                and key_fits_field(decision.value_key, target.label_text, target.autocomplete)):
             value = self._wally_profile.get(decision.value_key)
             if value is not None:
                 return value, f"profile:{decision.value_key}"
