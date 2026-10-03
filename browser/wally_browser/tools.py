@@ -27,9 +27,9 @@ from typing import Callable
 from browser_use import ActionResult, Tools
 from pydantic import BaseModel, Field
 
-from .elements import element_from_node, label
-from .guards import ControlTier, NAVIGATES_TO_PAYMENT, control_tier, is_payment_gateway, is_typeable, \
-    never_type_reason, normalize
+from .elements import element_from_node, is_personal, label
+from .guards import ControlTier, Element, control_tier, is_payment_gateway, is_selectable, is_typeable, \
+    never_type_reason
 
 ALLOWED_ACTIONS = {"done", "navigate", "go_back", "wait", "click", "input", "switch", "scroll", "select_dropdown"}
 GUARDED = {"click", "input", "select_dropdown"}
@@ -51,10 +51,23 @@ class AskUserParams(BaseModel):
 
 @dataclass
 class GuardContext:
-    """Set by the agent every step; read by the action guard."""
+    """Set by the agent every step and by the guard itself; read by the guard."""
 
-    attach: bool = False  # the person's own Chrome: saved cards, logins, 1-click
+    attach: bool = False  # the person's own Chrome, or a persistent profile: saved cards, logins, 1-click
     checkout: str | None = None  # why this page needs every click confirmed, or None
+    # Set once the run types a personal detail. Commits (bookings, purchases, schedules) come after
+    # the details are entered, so from here every click and choice needs the person's yes, whatever
+    # the labels say.
+    personal_typed: bool = False
+
+    def confirm_reason(self) -> str | None:
+        if self.attach:
+            return "this browser keeps your logins and saved payment methods"
+        if self.personal_typed:
+            return "your details are entered, so any click could commit"
+        if self.checkout:
+            return self.checkout
+        return None
 
 
 def terminal_ask(question: str) -> str | None:
@@ -113,7 +126,11 @@ def _guard_registry(tools: Tools, ask, on_stop, context: GuardContext) -> None:
     original = registry.execute_action
 
     async def execute_action(action_name: str, params: dict, browser_session=None, **kwargs):
-        refusal = await check_action(action_name, params or {}, browser_session, ask, on_stop, context)
+        params = dict(params or {})
+        if isinstance(params.get("text"), str):
+            # A newline is an Enter keystroke: it can submit the form's default button.
+            params["text"] = clean_text(params["text"])
+        refusal = await check_action(action_name, params, browser_session, ask, on_stop, context)
         if refusal is not None:
             return refusal
         return await original(action_name, params, browser_session=browser_session, **kwargs)
@@ -121,10 +138,17 @@ def _guard_registry(tools: Tools, ask, on_stop, context: GuardContext) -> None:
     registry.execute_action = execute_action
 
 
+def clean_text(text: str) -> str:
+    """Typed text without newlines or control characters (each would be a keystroke)."""
+    return " ".join("".join(c if c.isprintable() else " " for c in text).split())
+
+
 async def live_text(session, node) -> str | None:
-    """What the element says in the page right now; None when it cannot be read."""
+    """What the element says in the page right now; None when it cannot be read. Resolved through
+    the node's own session (the one browser-use clicks through), so an element in a cross-origin
+    frame is read where it lives."""
     try:
-        cdp = await session.get_or_create_cdp_session(target_id=node.target_id, focus=False)
+        cdp = await session.cdp_client_for_node(node)
         resolved = await cdp.cdp_client.send.DOM.resolveNode(
             params={"backendNodeId": node.backend_node_id}, session_id=cdp.session_id)
         result = await cdp.cdp_client.send.Runtime.callFunctionOn(
@@ -134,21 +158,6 @@ async def live_text(session, node) -> str | None:
         return value if isinstance(value, str) else None
     except Exception:
         return None
-
-
-_DISMISS = ("skip", "no thanks", "not now", "close", "cancel", "back", "dismiss", "maybe later", "×", "x")
-
-
-def _confirm_needed(element, context: GuardContext) -> str | None:
-    """Why this click needs the person's yes beyond the label tiers, or None."""
-    text = normalize(element.name or element.full_text)
-    if text in _DISMISS or NAVIGATES_TO_PAYMENT.fullmatch(text or "-"):
-        return None
-    if context.attach:
-        return "this is your own Chrome, where saved cards and logins can complete a purchase"
-    if context.checkout:
-        return context.checkout
-    return None
 
 
 async def check_action(name: str, params: dict, session, ask, on_stop,
@@ -173,19 +182,40 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
         return ActionResult(error=f"wally refused {name}: element [{index}] is not on the page any more")
     element = element_from_node(index, node)
 
-    if name in ("input", "select_dropdown"):
+    if name == "input":
         if not is_typeable(element):
-            return ActionResult(error=f"wally refused {name} into [{index}]: it is not a text field or dropdown")
+            return ActionResult(error=f"wally refused input into [{index}]: it is not a text field")
         reason = never_type_reason(element)
         if reason:
             return ActionResult(error=f"wally refused to type into [{index}]: {reason}")
         if context.attach:
-            answer = await asyncio.to_thread(
-                ask, f"Type into {label(element)!r} in your own Chrome? [y/N]")
-            if (answer or "").strip().lower() not in ("y", "yes"):
-                ended = answer is None
-                return ActionResult(error=f"the person did not confirm typing into [{index}]", is_done=ended,
-                                    success=False if ended else None)
+            refusal = await _ask_or_refuse(ask, f"Type into {label(element)!r} in your own browser? [y/N]",
+                                           f"the person did not confirm typing into [{index}]")
+            if refusal:
+                return refusal
+        if is_personal(element):
+            context.personal_typed = True
+        return None
+
+    if name == "select_dropdown":
+        if not is_selectable(element):
+            return ActionResult(error=f"wally refused select in [{index}]: it is not a dropdown")
+        reason = never_type_reason(element)
+        if reason:
+            return ActionResult(error=f"wally refused to choose in [{index}]: {reason}")
+        # The option is clicked (ARIA) or fires change (native): check its text like a button.
+        option = Element(index=index, tag="option", name=str(params.get("text", "")),
+                         full_text=str(params.get("text", "")), context_text=element.name)
+        tier = control_tier(option)
+        if tier is ControlTier.PAYMENT:
+            message = f"wally stops before payment: choosing {option.name!r} in [{index}] would pay"
+            if on_stop:
+                on_stop(message)
+            return ActionResult(error=message, is_done=True, success=True, extracted_content=message)
+        why = "it may book or confirm" if tier is ControlTier.COMMIT else context.confirm_reason()
+        if why:
+            return await _ask_or_refuse(ask, f"Choose {option.name!r} in {label(element)!r} ({why})? [y/N]",
+                                        f"the person did not confirm choosing {option.name!r}")
         return None
 
     # click: read what the element says now, not only what it said at the start of the step.
@@ -198,12 +228,20 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
         if on_stop:
             on_stop(message)
         return ActionResult(error=message, is_done=True, success=True, extracted_content=message)
-    why = "it may book or confirm" if tier is ControlTier.COMMIT else _confirm_needed(element, context)
+    why = "it may book or confirm" if tier is ControlTier.COMMIT else context.confirm_reason()
+    if why is None and live is None and element.frame_url:
+        why = "its current text could not be read inside a frame"  # fail closed
     if why:
-        answer = await asyncio.to_thread(ask, f"The next click is {label(element)!r} ({why}). Click it? [y/N]")
-        if (answer or "").strip().lower() not in ("y", "yes"):
-            ended = answer is None  # nobody to ask: the run stops here
-            return ActionResult(error=f"the person did not confirm clicking [{index}] {element.name!r}; "
-                                      "do not try it again", is_done=ended,
-                                success=False if ended else None)
+        return await _ask_or_refuse(ask, f"The next click is {label(element)!r} ({why}). Click it? [y/N]",
+                                    f"the person did not confirm clicking [{index}] {element.name!r}; "
+                                    "do not try it again")
     return None
+
+
+async def _ask_or_refuse(ask, question: str, refusal: str) -> ActionResult | None:
+    """None on the person's yes; otherwise the refusal. Nobody to ask ends the run."""
+    answer = await asyncio.to_thread(ask, question)
+    if (answer or "").strip().lower() in ("y", "yes"):
+        return None
+    ended = answer is None
+    return ActionResult(error=refusal, is_done=ended, success=False if ended else None)
