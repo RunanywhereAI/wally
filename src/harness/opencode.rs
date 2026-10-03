@@ -252,6 +252,13 @@ pub fn launch_open_code_cloud_with(
         out::error_line(&format!("'{model}' is not a valid model id"));
         return 2;
     }
+    // `--cloud` skips harness::resolve(), and with it resolve()'s refusal of
+    // decision models, so the same refusal runs here, before any session
+    // or catalog call.
+    if super::is_decisions_model(model) {
+        out::error_line(&super::decisions_model_refusal(model));
+        return 2;
+    }
 
     let mut credentials = match account::load() {
         Ok(c) => c,
