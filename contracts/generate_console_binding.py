@@ -108,9 +108,21 @@ def _resolve_type(schema: dict, schemas: dict) -> tuple[str, bool]:
         item, _ = _resolve_type(schema["additionalProperties"], schemas)
         return f"BTreeMap<String, {item}>", False
     if "enum" in schema:
-        # Inline enums are carried as strings. Named enums remain generated
-        # closed Rust enums through the $ref branch above.
-        return "String", False
+        # An untyped inline enum takes its type from its values: `enum: [2, 3]`
+        # is an integer on the wire, and reading it as a string would fail
+        # every response that carries it. Inline string enums are carried as
+        # strings; named enums remain generated closed Rust enums through the
+        # $ref branch above.
+        values = [value for value in schema["enum"] if value is not None]
+        if values and all(isinstance(value, bool) for value in values):
+            return "bool", None in schema["enum"]
+        if values and all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+            return INT, None in schema["enum"]
+        if values and all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) for value in values
+        ):
+            return FLOAT, None in schema["enum"]
+        return "String", None in schema["enum"]
     raise SystemExit(f"unsupported schema shape: {schema}")
 
 
@@ -514,7 +526,7 @@ def main() -> None:
                 "and commit the result.\n"
             )
             sys.exit(1)
-        print("console_contract.rs matches the pinned contract")
+        print(f"{output.name} matches the pinned contract")
         return
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding="utf-8")
