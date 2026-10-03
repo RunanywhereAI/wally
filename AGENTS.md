@@ -93,7 +93,9 @@ CLI only reports, so `console.rs` lifts a value the binding does not know out
 of the body before parsing and carries it as text instead of failing the page.
 One field goes the other way: the export's `next_cursor` is required, and a
 defaulted one would read as the last page, so `console.rs` fails a page that
-omits it rather than end the export early.
+omits it rather than end the export early. The decisions error's `code` and
+`type` are exempt the same way as `provider`: an unknown value is lifted out
+before parsing, so the refusal's message still reaches the person.
 `test_wally_contract` and `python3 contracts/sync_from_inferenceinfra.py
 --check` fail the build if the header, the pin, and the artifact drift.
 The separately vendored `contracts/wally-decisions-public-v1.openapi.json` is
