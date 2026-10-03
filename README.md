@@ -97,10 +97,11 @@ credit.
   <img src="docs/assets/harness-light.gif" alt="OpenCode on the hosted GLM model fixing a bug through wally" width="100%">
 </picture>
 
-## Ask a decision model
+## Ask Eve
 
-`pplx-decider-v1` is a hosted decision model: it scores explicit labels without
-generating text. Ask yes/no, choice, or ordered score questions:
+Wally runs the models; Eve makes the calls. `eve` is RunAnywhere's hosted
+decision model: it scores explicit labels without generating text. Ask yes/no,
+choice, or ordered score questions:
 
 ```bash
 wally decisions --input "Checkout is blank after Pay" \
@@ -132,7 +133,7 @@ has the full catalog.
 |---|---|
 | `wally run <model> [prompt]` | chat, or one answer and exit |
 | `wally serve <model>` | OpenAI-compatible API on :8080 |
-| `wally decisions` / `decide` | score questions with a hosted decision model |
+| `wally decisions` / `decide` | score questions with Eve, the decision model |
 
 | Models | |
 |---|---|
