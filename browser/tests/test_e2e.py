@@ -86,8 +86,8 @@ def test_the_run_stops_at_the_payment_page_and_never_pays(tmp_path):
         # The person says yes to every click confirmation; pay controls stay refused regardless.
         agent, history, asked = asyncio.run(_run(site, "/search", profile, tmp_path, {"Click it?": "y"}))
         assert "payment page" in agent.stop_reason.lower(), agent.stop_reason
-        # Checkout pages (traveller details, review) asked before every click.
-        assert any("checkout step" in q for q in asked), asked
+        # Once details are entered (and on checkout pages), every click asked first.
+        assert any("details are entered" in q or "checkout step" in q for q in asked), asked
         assert site.beacon_values("paid") == []
         assert site.beacon_values("typed_card") == [] and site.beacon_values("typed_cvv") == []
         assert site.beacon_values("confirm") == ["false"], site.beacons  # confirm() dismissed, not accepted
