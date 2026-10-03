@@ -54,7 +54,9 @@ class GuardContext:
     """Set by the agent every step and by the guard itself; read by the guard."""
 
     attach: bool = False  # the person's own Chrome, or a persistent profile: saved cards, logins, 1-click
-    checkout: str | None = None  # why this page needs every click confirmed, or None
+    # Sticky: the first checkout-like page of the run sets it, and nothing clears it. From then on
+    # every click and choice asks, whatever its label (checkout mode).
+    checkout: str | None = None
     # Set once the run types a personal detail. Commits (bookings, purchases, schedules) come after
     # the details are entered, so from here every click and choice needs the person's yes, whatever
     # the labels say.
@@ -70,7 +72,7 @@ class GuardContext:
         if self.personal_typed:
             return "your details are entered, so any click could commit"
         if self.checkout:
-            return self.checkout
+            return f"checkout mode: {self.checkout}"
         return None
 
 
@@ -108,6 +110,8 @@ def build_tools(ask: Callable[[str], str | None] = terminal_ask, on_stop: Callab
                            param_model=AskUserParams)
     async def ask_user(params: AskUserParams):
         answer = await asyncio.to_thread(ask, params.question)
+        if answer is not None:
+            context.person_used_browser = True  # they had the window and may have signed in
         if answer is None:
             return ActionResult(error="nobody to ask (not a terminal); the run stops here", is_done=True,
                                 success=False, extracted_content=f"Needed from the person: {params.question}")
@@ -145,6 +149,30 @@ def _guard_registry(tools: Tools, ask, on_stop, context: GuardContext) -> None:
 def clean_text(text: str) -> str:
     """Typed text without newlines or control characters (each would be a keystroke)."""
     return " ".join("".join(c if c.isprintable() else " " for c in text).split())
+
+
+OPTION_TEXT_JS = """function (wanted) {
+  const w = String(wanted).trim().toLowerCase();
+  for (const o of this.options || []) {
+    if (o.text.trim().toLowerCase() === w || String(o.value).trim().toLowerCase() === w) return o.text;
+  }
+  return null;
+}"""
+
+
+async def option_text(session, node, wanted: str) -> str | None:
+    """The visible text of the native <select> option browser-use would pick for `wanted`."""
+    try:
+        cdp = await session.cdp_client_for_node(node)
+        resolved = await cdp.cdp_client.send.DOM.resolveNode(
+            params={"backendNodeId": node.backend_node_id}, session_id=cdp.session_id)
+        result = await cdp.cdp_client.send.Runtime.callFunctionOn(
+            params={"objectId": resolved["object"]["objectId"], "functionDeclaration": OPTION_TEXT_JS,
+                    "arguments": [{"value": wanted}], "returnByValue": True}, session_id=cdp.session_id)
+        value = (result.get("result") or {}).get("value")
+        return value if isinstance(value, str) else None
+    except Exception:
+        return None
 
 
 async def live_text(session, node) -> str | None:
@@ -207,9 +235,12 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
         reason = never_type_reason(element)
         if reason:
             return ActionResult(error=f"wally refused to choose in [{index}]: {reason}")
-        # The option is clicked (ARIA) or fires change (native): check its text like a button.
-        option = Element(index=index, tag="option", name=str(params.get("text", "")),
-                         full_text=str(params.get("text", "")), context_text=element.name)
+        # The option is clicked (ARIA) or fires change (native): check the option that will really be
+        # chosen like a button. browser-use matches the given text against an option's text OR value.
+        wanted = str(params.get("text", ""))
+        shown = await option_text(session, node, wanted) if element.tag == "select" else None
+        option = Element(index=index, tag="option", name=shown or wanted,
+                         full_text=f"{wanted} {shown or ''}", context_text=element.name)
         tier = control_tier(option)
         if tier is ControlTier.PAYMENT:
             message = f"wally stops before payment: choosing {option.name!r} in [{index}] would pay"
