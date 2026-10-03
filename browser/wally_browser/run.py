@@ -31,7 +31,7 @@ from .decisions import DecisionClient
 from .policy import EvePolicy
 from .profile import ProfileError, load
 from .text import TextModel
-from .tools import build_tools, terminal_ask
+from .tools import GuardContext, build_tools, terminal_ask
 
 
 HUMAN_STEP_TIMEOUT_S = 1800
@@ -95,8 +95,10 @@ async def run(goal: str, start_url: str | None) -> int:
     decisions = DecisionClient(base, key, decision_model, prompt_format_version=None)
     text = TextModel(base, key, text_model)
     stop_messages: list[str] = []
-    tools = build_tools(ask=terminal_ask, on_stop=stop_messages.append)
-    session = build_browser(_env("WALLY_BROWSER_CHROME", "dedicated"))
+    chrome = _env("WALLY_BROWSER_CHROME", "dedicated")
+    guard = GuardContext(attach=chrome == "attach")
+    tools = build_tools(ask=terminal_ask, on_stop=stop_messages.append, context=guard)
+    session = build_browser(chrome)
     task = goal if not start_url else f"{goal} (start at {start_url})"
     # browser-use's own model slot: GLM on the same API. eve chooses the actions;
     # this is set so any browser-use path that still calls a model stays on our API.
@@ -108,7 +110,7 @@ async def run(goal: str, start_url: str | None) -> int:
     agent = EveAgent(
         task=task, llm=llm, browser_session=session, tools=tools,
         policy=EvePolicy(decisions, profile), text_model=text, profile=profile, ask=terminal_ask,
-        log_path=log_path, use_vision=False, use_judge=False, enable_planning=False, message_compaction=False,
+        log_path=log_path, guard_context=guard, use_vision=False, use_judge=False, enable_planning=False, message_compaction=False,
         final_response_after_failure=False, max_actions_per_step=1, calculate_cost=False,
         include_tool_call_examples=False, register_should_stop_callback=should_stop,
         # A step can include the person (a CAPTCHA, a y/N, a missing detail); browser-use's 180 s
