@@ -34,7 +34,8 @@ archive. The rows are commented out in `src/catalog/catalog.rs` under
 
 ### Decisions
 
-`pplx-decider-v1` is hosted only and returns label probabilities rather than
-generated text. Use `wally decisions` (alias `wally decide`), not `wally run`
-or a coding harness; it is the default model there, so `-m` is optional. It supports yes/no (`--ask`), choices (`--choice`) and ordered levels
-(`--score`); `wally decisions --help` shows the request-file and JSON forms.
+`eve` is hosted only and returns label probabilities rather than generated
+text. Use `wally decisions` (alias `wally decide`), not `wally run` or a coding
+harness; it is the default model there, so `-m` is optional. It supports
+yes/no (`--ask`), choices (`--choice`) and ordered levels (`--score`);
+`wally decisions --help` shows the request-file and JSON forms.
