@@ -85,6 +85,16 @@ pub type rac_llamacpp_log_callback_fn = ::std::option::Option<
         user_data: *mut ::std::os::raw::c_void,
     ),
 >;
+#[doc = " The kind of answer a question expects. Selects both the shape of the answer\n and the calibration formula used for its confidence."]
+pub type rac_decision_question_type = ::std::os::raw::c_uint;
+#[doc = " One candidate answer for a question. Both pointers stay caller-owned for the\n duration of the decide call."]
+pub type rac_decision_option_t = rac_decision_option;
+pub type rac_decision_question_t = rac_decision_question;
+pub type rac_decision_options_t = rac_decision_options;
+pub type rac_decision_answer_t = rac_decision_answer;
+pub type rac_decision_result_t = rac_decision_result;
+pub type rac_decision_service_ops_t = rac_decision_service_ops;
+pub type rac_decision_service_t = rac_decision_service;
 pub type rac_diarization_options_t = rac_diarization_options;
 pub type rac_diarization_segment_t = rac_diarization_segment;
 pub type rac_diarization_result_t = rac_diarization_result;
@@ -308,6 +318,17 @@ pub type rac_mlx_context_length_fn = ::std::option::Option<
     unsafe extern "C" fn(
         handle: rac_handle_t,
         out_context_length: *mut i32,
+        user_data: *mut ::std::os::raw::c_void,
+    ) -> rac_result_t,
+>;
+pub type rac_mlx_decision_fn = ::std::option::Option<
+    unsafe extern "C" fn(
+        handle: rac_handle_t,
+        state: *const ::std::os::raw::c_char,
+        questions: *const rac_decision_question_t,
+        question_count: usize,
+        options: *const rac_decision_options_t,
+        out_result: *mut rac_decision_result_t,
         user_data: *mut ::std::os::raw::c_void,
     ) -> rac_result_t,
 >;
@@ -1185,6 +1206,106 @@ pub struct rac_llm_llamacpp_config {
     pub gpu_layers: i32,
     #[doc = " Batch size for prompt processing"]
     pub batch_size: i32,
+}
+#[doc = " One candidate answer for a question. Both pointers stay caller-owned for the\n duration of the decide call."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_decision_option {
+    #[doc = " Stable identifier echoed back in the answer."]
+    pub key: *const ::std::os::raw::c_char,
+    #[doc = " Human-readable text for this option. MAY be NULL."]
+    pub description: *const ::std::os::raw::c_char,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_decision_question {
+    #[doc = " Identifier echoed back on the matching answer."]
+    pub id: *const ::std::os::raw::c_char,
+    pub type_: rac_decision_question_type_t,
+    #[doc = " Instructions read by the model. MAY be NULL."]
+    pub instructions: *const ::std::os::raw::c_char,
+    pub options: *const rac_decision_option_t,
+    pub option_count: usize,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_decision_options {
+    #[doc = " Per-request temperature override; 0 = the model's own per-type value."]
+    pub temperature: f32,
+    #[doc = " Prompt-wording version the caller requires; 0 = the model's own served\n version. A model that serves a different version refuses the request\n (RAC_ERROR_NOT_SUPPORTED) rather than scoring with unknown wording."]
+    pub prompt_format_version: u32,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_decision_answer {
+    #[doc = " malloc-owned copy of the question id."]
+    pub id: *mut ::std::os::raw::c_char,
+    pub type_: rac_decision_question_type_t,
+    #[doc = " CHOICE: malloc-owned copy of the winning option key (NULL otherwise)."]
+    pub choice: *mut ::std::os::raw::c_char,
+    #[doc = " NOUL: probability of the \"true\" option in [0, 1]."]
+    pub noul: f32,
+    #[doc = " SCORE: expected level index over the ordered options."]
+    pub score: f32,
+    #[doc = " Probability of each option, parallel to the request question's options."]
+    pub probabilities: *mut f32,
+    pub probability_count: usize,
+    #[doc = " Calibrated confidence in [0, 1]."]
+    pub confidence: f32,
+    #[doc = " SCORE only: descriptions parallel to `probabilities` (entries may be\n NULL). NULL when the request carried no descriptions. The array is\n malloc-owned and released by rac_decision_result_free; the entries\n point into the caller's request (which must outlive the result), so a\n backend must NOT allocate them and MUST NOT free them."]
+    pub legend: *mut *mut ::std::os::raw::c_char,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_decision_result {
+    #[doc = " One answer per request question, in request order."]
+    pub answers: *mut rac_decision_answer_t,
+    pub answer_count: usize,
+    pub processing_time_ms: i64,
+    pub model_id: *mut ::std::os::raw::c_char,
+    #[doc = " Tokens of the jointly-evaluated prompt."]
+    pub input_tokens: i32,
+    #[doc = " Prompt-wording version the model served; 0 when it reports none."]
+    pub prompt_format_version: u32,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_decision_service_ops {
+    pub initialize: ::std::option::Option<
+        unsafe extern "C" fn(
+            impl_: *mut ::std::os::raw::c_void,
+            model_path: *const ::std::os::raw::c_char,
+        ) -> rac_result_t,
+    >,
+    #[doc = " Score every question against the state and produce one answer per\n question, in request order. Every pointer returned in out_result MUST use\n a malloc/free-compatible allocator and remains caller-owned on both\n success and partial failure."]
+    pub decide: ::std::option::Option<
+        unsafe extern "C" fn(
+            impl_: *mut ::std::os::raw::c_void,
+            state: *const ::std::os::raw::c_char,
+            questions: *const rac_decision_question_t,
+            question_count: usize,
+            options: *const rac_decision_options_t,
+            out_result: *mut rac_decision_result_t,
+        ) -> rac_result_t,
+    >,
+    pub cleanup: ::std::option::Option<
+        unsafe extern "C" fn(impl_: *mut ::std::os::raw::c_void) -> rac_result_t,
+    >,
+    pub destroy: ::std::option::Option<unsafe extern "C" fn(impl_: *mut ::std::os::raw::c_void)>,
+    pub create: ::std::option::Option<
+        unsafe extern "C" fn(
+            model_id: *const ::std::os::raw::c_char,
+            config_json: *const ::std::os::raw::c_char,
+            out_impl: *mut *mut ::std::os::raw::c_void,
+        ) -> rac_result_t,
+    >,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_decision_service {
+    pub ops: *const rac_decision_service_ops_t,
+    pub impl_: *mut ::std::os::raw::c_void,
+    pub model_id: *const ::std::os::raw::c_char,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -2134,6 +2255,8 @@ pub struct rac_mlx_callbacks {
     pub llm_generate_chat_stream: rac_mlx_llm_generate_chat_stream_fn,
     #[doc = " Loaded model context from Swift's parsed config.json (optional)."]
     pub context_length: rac_mlx_context_length_fn,
+    #[doc = " Joint decision scoring (optional). Runs one forward pass over the encoded\n request and fills `out_result` with one answer per question, in request\n order. Appended for ABI compatibility; rac_mlx_set_callbacks probes\n struct_size before reading this slot."]
+    pub decision: rac_mlx_decision_fn,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -3592,7 +3715,8 @@ pub struct rac_engine_vtable {
     pub image_embedding_ops: *const rac_image_embedding_service_ops,
     #[doc = " OCR (`RAC_PRIMITIVE_OCR`). Promoted from reserved_slot_4 in ABI v11 — same binary\n  offset, so the 17-pointer tail is unchanged and only the ABI version gates it."]
     pub ocr_ops: *mut rac_ocr_service_ops,
-    pub reserved_slot_5: *const ::std::os::raw::c_void,
+    #[doc = " Joint decision scoring (`RAC_PRIMITIVE_DECIDE`). Promoted from reserved_slot_5 in\n  ABI v13 — same binary offset, so the 17-pointer tail is unchanged."]
+    pub decision_ops: *const rac_decision_service_ops,
     pub reserved_slot_6: *const ::std::os::raw::c_void,
     pub reserved_slot_7: *const ::std::os::raw::c_void,
     pub reserved_slot_8: *const ::std::os::raw::c_void,
@@ -3797,6 +3921,8 @@ pub const RAC_DEFAULT_LLM_GENERATION_OPTIONS_PRESENCE_PENALTY: f64 = 0.0;
 pub const RAC_DEFAULT_LLM_GENERATION_OPTIONS_REPEAT_LAST_N: u32 = 0;
 pub const RAC_DEFAULT_LLM_GENERATION_OPTIONS_MIN_P: f64 = 0.05;
 pub const RAC_DEFAULT_LLM_CONFIGURATION_CONTEXT_LENGTH: u32 = 2048;
+pub const RAC_DEFAULT_DECISION_OPTIONS_TEMPERATURE: f64 = 0.0;
+pub const RAC_DEFAULT_DECISION_OPTIONS_PROMPT_FORMAT_VERSION: u32 = 0;
 pub const RAC_DEFAULT_DIARIZATION_OPTIONS_SAMPLE_RATE: u32 = 16000;
 pub const RAC_DEFAULT_DIARIZATION_OPTIONS_CHANNELS: u32 = 1;
 pub const RAC_DEFAULT_DIARIZATION_OPTIONS_THRESHOLD: f64 = 0.5;
@@ -3902,6 +4028,7 @@ pub const RAC_MLX_SESSION_KIND_LLM: u32 = 4;
 pub const RAC_MLX_SESSION_KIND_VLM: u32 = 5;
 pub const RAC_MLX_SESSION_KIND_EMBEDDINGS: u32 = 8;
 pub const RAC_MLX_SESSION_KIND_DIARIZATION: u32 = 11;
+pub const RAC_MLX_SESSION_KIND_DECISION: u32 = 15;
 pub const RAC_MLX_CALLBACKS_LEGACY_SIZE: u32 = 192;
 pub const RAC_AUDIO_LEVEL_FLOOR_DB: f64 = -60.0;
 pub const RAC_AUDIO_PCM16_SCALE: f64 = 32768.0;
@@ -3943,7 +4070,7 @@ pub const RAC_ENDPOINT_HEALTH: &[u8; 11] = b"/v1/health\0";
 pub const RAC_ENDPOINT_DEVICE_REGISTER: &[u8; 25] = b"/api/v1/devices/register\0";
 pub const RAC_ENDPOINT_TELEMETRY_V2_PREFIX: &[u8; 23] = b"/api/v2/sdk/telemetry/\0";
 pub const RAC_ENDPOINT_MODELS_AVAILABLE: &[u8; 25] = b"/api/v1/models/available\0";
-pub const RAC_PLUGIN_API_VERSION: u32 = 12;
+pub const RAC_PLUGIN_API_VERSION: u32 = 13;
 pub const RAC_ERROR_SERVER_ALREADY_RUNNING: i32 = -200;
 pub const RAC_ERROR_SERVER_NOT_RUNNING: i32 = -201;
 pub const RAC_ERROR_SERVER_BIND_FAILED: i32 = -202;
@@ -4223,6 +4350,115 @@ const _: () = {
         [::std::mem::offset_of!(rac_llm_llamacpp_config, gpu_layers) - 8usize];
     ["Offset of field: rac_llm_llamacpp_config::batch_size"]
         [::std::mem::offset_of!(rac_llm_llamacpp_config, batch_size) - 12usize];
+};
+pub const RAC_DECISION_QUESTION_UNSPECIFIED: rac_decision_question_type = 0;
+#[doc = " Pick one of the listed options; the answer carries per-option probabilities."]
+pub const RAC_DECISION_QUESTION_CHOICE: rac_decision_question_type = 1;
+#[doc = " Yes / no / unknown; the answer carries the probability of the \"true\" option."]
+pub const RAC_DECISION_QUESTION_NOUL: rac_decision_question_type = 2;
+#[doc = " A level on an ordered scale; the answer carries the expected level index."]
+pub const RAC_DECISION_QUESTION_SCORE: rac_decision_question_type = 3;
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_decision_option"][::std::mem::size_of::<rac_decision_option>() - 16usize];
+    ["Alignment of rac_decision_option"][::std::mem::align_of::<rac_decision_option>() - 8usize];
+    ["Offset of field: rac_decision_option::key"]
+        [::std::mem::offset_of!(rac_decision_option, key) - 0usize];
+    ["Offset of field: rac_decision_option::description"]
+        [::std::mem::offset_of!(rac_decision_option, description) - 8usize];
+};
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_decision_question"][::std::mem::size_of::<rac_decision_question>() - 40usize];
+    ["Alignment of rac_decision_question"]
+        [::std::mem::align_of::<rac_decision_question>() - 8usize];
+    ["Offset of field: rac_decision_question::id"]
+        [::std::mem::offset_of!(rac_decision_question, id) - 0usize];
+    ["Offset of field: rac_decision_question::type_"]
+        [::std::mem::offset_of!(rac_decision_question, type_) - 8usize];
+    ["Offset of field: rac_decision_question::instructions"]
+        [::std::mem::offset_of!(rac_decision_question, instructions) - 16usize];
+    ["Offset of field: rac_decision_question::options"]
+        [::std::mem::offset_of!(rac_decision_question, options) - 24usize];
+    ["Offset of field: rac_decision_question::option_count"]
+        [::std::mem::offset_of!(rac_decision_question, option_count) - 32usize];
+};
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_decision_options"][::std::mem::size_of::<rac_decision_options>() - 8usize];
+    ["Alignment of rac_decision_options"][::std::mem::align_of::<rac_decision_options>() - 4usize];
+    ["Offset of field: rac_decision_options::temperature"]
+        [::std::mem::offset_of!(rac_decision_options, temperature) - 0usize];
+    ["Offset of field: rac_decision_options::prompt_format_version"]
+        [::std::mem::offset_of!(rac_decision_options, prompt_format_version) - 4usize];
+};
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_decision_answer"][::std::mem::size_of::<rac_decision_answer>() - 64usize];
+    ["Alignment of rac_decision_answer"][::std::mem::align_of::<rac_decision_answer>() - 8usize];
+    ["Offset of field: rac_decision_answer::id"]
+        [::std::mem::offset_of!(rac_decision_answer, id) - 0usize];
+    ["Offset of field: rac_decision_answer::type_"]
+        [::std::mem::offset_of!(rac_decision_answer, type_) - 8usize];
+    ["Offset of field: rac_decision_answer::choice"]
+        [::std::mem::offset_of!(rac_decision_answer, choice) - 16usize];
+    ["Offset of field: rac_decision_answer::noul"]
+        [::std::mem::offset_of!(rac_decision_answer, noul) - 24usize];
+    ["Offset of field: rac_decision_answer::score"]
+        [::std::mem::offset_of!(rac_decision_answer, score) - 28usize];
+    ["Offset of field: rac_decision_answer::probabilities"]
+        [::std::mem::offset_of!(rac_decision_answer, probabilities) - 32usize];
+    ["Offset of field: rac_decision_answer::probability_count"]
+        [::std::mem::offset_of!(rac_decision_answer, probability_count) - 40usize];
+    ["Offset of field: rac_decision_answer::confidence"]
+        [::std::mem::offset_of!(rac_decision_answer, confidence) - 48usize];
+    ["Offset of field: rac_decision_answer::legend"]
+        [::std::mem::offset_of!(rac_decision_answer, legend) - 56usize];
+};
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_decision_result"][::std::mem::size_of::<rac_decision_result>() - 40usize];
+    ["Alignment of rac_decision_result"][::std::mem::align_of::<rac_decision_result>() - 8usize];
+    ["Offset of field: rac_decision_result::answers"]
+        [::std::mem::offset_of!(rac_decision_result, answers) - 0usize];
+    ["Offset of field: rac_decision_result::answer_count"]
+        [::std::mem::offset_of!(rac_decision_result, answer_count) - 8usize];
+    ["Offset of field: rac_decision_result::processing_time_ms"]
+        [::std::mem::offset_of!(rac_decision_result, processing_time_ms) - 16usize];
+    ["Offset of field: rac_decision_result::model_id"]
+        [::std::mem::offset_of!(rac_decision_result, model_id) - 24usize];
+    ["Offset of field: rac_decision_result::input_tokens"]
+        [::std::mem::offset_of!(rac_decision_result, input_tokens) - 32usize];
+    ["Offset of field: rac_decision_result::prompt_format_version"]
+        [::std::mem::offset_of!(rac_decision_result, prompt_format_version) - 36usize];
+};
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_decision_service_ops"]
+        [::std::mem::size_of::<rac_decision_service_ops>() - 40usize];
+    ["Alignment of rac_decision_service_ops"]
+        [::std::mem::align_of::<rac_decision_service_ops>() - 8usize];
+    ["Offset of field: rac_decision_service_ops::initialize"]
+        [::std::mem::offset_of!(rac_decision_service_ops, initialize) - 0usize];
+    ["Offset of field: rac_decision_service_ops::decide"]
+        [::std::mem::offset_of!(rac_decision_service_ops, decide) - 8usize];
+    ["Offset of field: rac_decision_service_ops::cleanup"]
+        [::std::mem::offset_of!(rac_decision_service_ops, cleanup) - 16usize];
+    ["Offset of field: rac_decision_service_ops::destroy"]
+        [::std::mem::offset_of!(rac_decision_service_ops, destroy) - 24usize];
+    ["Offset of field: rac_decision_service_ops::create"]
+        [::std::mem::offset_of!(rac_decision_service_ops, create) - 32usize];
+};
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_decision_service"][::std::mem::size_of::<rac_decision_service>() - 24usize];
+    ["Alignment of rac_decision_service"][::std::mem::align_of::<rac_decision_service>() - 8usize];
+    ["Offset of field: rac_decision_service::ops"]
+        [::std::mem::offset_of!(rac_decision_service, ops) - 0usize];
+    ["Offset of field: rac_decision_service::impl_"]
+        [::std::mem::offset_of!(rac_decision_service, impl_) - 8usize];
+    ["Offset of field: rac_decision_service::model_id"]
+        [::std::mem::offset_of!(rac_decision_service, model_id) - 16usize];
 };
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -5018,7 +5254,7 @@ const _: () = {
 };
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rac_mlx_callbacks"][::std::mem::size_of::<rac_mlx_callbacks>() - 208usize];
+    ["Size of rac_mlx_callbacks"][::std::mem::size_of::<rac_mlx_callbacks>() - 216usize];
     ["Alignment of rac_mlx_callbacks"][::std::mem::align_of::<rac_mlx_callbacks>() - 8usize];
     ["Offset of field: rac_mlx_callbacks::struct_size"]
         [::std::mem::offset_of!(rac_mlx_callbacks, struct_size) - 0usize];
@@ -5072,6 +5308,8 @@ const _: () = {
         [::std::mem::offset_of!(rac_mlx_callbacks, llm_generate_chat_stream) - 192usize];
     ["Offset of field: rac_mlx_callbacks::context_length"]
         [::std::mem::offset_of!(rac_mlx_callbacks, context_length) - 200usize];
+    ["Offset of field: rac_mlx_callbacks::decision"]
+        [::std::mem::offset_of!(rac_mlx_callbacks, decision) - 208usize];
 };
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -5229,6 +5467,8 @@ pub const RAC_MODEL_CATEGORY_SPEAKER_DIARIZATION: rac_model_category = 9;
 pub const RAC_MODEL_CATEGORY_SEMANTIC_SEGMENTATION: rac_model_category = 10;
 #[doc = "< Full-page optical character recognition"]
 pub const RAC_MODEL_CATEGORY_OCR: rac_model_category = 11;
+#[doc = "< Joint decision scoring (choice/noul/score)"]
+pub const RAC_MODEL_CATEGORY_DECISION: rac_model_category = 12;
 #[doc = "< Unknown category"]
 pub const RAC_MODEL_CATEGORY_UNKNOWN: rac_model_category = 99;
 pub const RAC_MODEL_FORMAT_UNSPECIFIED: rac_model_format = 0;
@@ -5755,6 +5995,8 @@ pub const RAC_RESOURCE_TYPE_SEGMENTATION_MODEL: rac_resource_type = 8;
 pub const RAC_RESOURCE_TYPE_RERANK_MODEL: rac_resource_type = 9;
 #[doc = "< Full-page OCR model"]
 pub const RAC_RESOURCE_TYPE_OCR_MODEL: rac_resource_type = 10;
+#[doc = "< Joint decision scoring model"]
+pub const RAC_RESOURCE_TYPE_DECISION_MODEL: rac_resource_type = 11;
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rac_lifecycle_metrics"][::std::mem::size_of::<rac_lifecycle_metrics>() - 56usize];
@@ -6949,17 +7191,17 @@ pub const RAC_PRIMITIVE_RERANK: rac_primitive = 11;
 pub const RAC_PRIMITIVE_EMBED_IMAGE: rac_primitive = 12;
 #[doc = " Optical character recognition (page or line image -> text + boxes). Promoted from\n  RAC_PRIMITIVE_RESERVED_13 in ABI v11. Distinct from VLM (image + PROMPT -> free text):\n  OCR takes no prompt, is not generative, and returns geometry alongside the text, so a\n  CTC line recognizer cannot be honestly described by the VLM contract."]
 pub const RAC_PRIMITIVE_OCR: rac_primitive = 13;
-#[doc = " Optical character recognition (page or line image -> text + boxes). Promoted from\n  RAC_PRIMITIVE_RESERVED_13 in ABI v11. Distinct from VLM (image + PROMPT -> free text):\n  OCR takes no prompt, is not generative, and returns geometry alongside the text, so a\n  CTC line recognizer cannot be honestly described by the VLM contract."]
-pub const RAC_PRIMITIVE_RESERVED_14: rac_primitive = 14;
-#[doc = " Optical character recognition (page or line image -> text + boxes). Promoted from\n  RAC_PRIMITIVE_RESERVED_13 in ABI v11. Distinct from VLM (image + PROMPT -> free text):\n  OCR takes no prompt, is not generative, and returns geometry alongside the text, so a\n  CTC line recognizer cannot be honestly described by the VLM contract."]
+#[doc = " Joint decision scoring (state + typed questions -> calibrated answers). Promoted from\n  RAC_PRIMITIVE_RESERVED_14 in ABI v13. A decision model is not generative: it scores every\n  option of every question in one forward pass through a joint head, so GENERATE_TEXT\n  cannot describe it and the answer layer needs probabilities, not tokens."]
+pub const RAC_PRIMITIVE_DECIDE: rac_primitive = 14;
+#[doc = " Joint decision scoring (state + typed questions -> calibrated answers). Promoted from\n  RAC_PRIMITIVE_RESERVED_14 in ABI v13. A decision model is not generative: it scores every\n  option of every question in one forward pass through a joint head, so GENERATE_TEXT\n  cannot describe it and the answer layer needs probabilities, not tokens."]
 pub const RAC_PRIMITIVE_RESERVED_15: rac_primitive = 15;
-#[doc = " Optical character recognition (page or line image -> text + boxes). Promoted from\n  RAC_PRIMITIVE_RESERVED_13 in ABI v11. Distinct from VLM (image + PROMPT -> free text):\n  OCR takes no prompt, is not generative, and returns geometry alongside the text, so a\n  CTC line recognizer cannot be honestly described by the VLM contract."]
+#[doc = " Joint decision scoring (state + typed questions -> calibrated answers). Promoted from\n  RAC_PRIMITIVE_RESERVED_14 in ABI v13. A decision model is not generative: it scores every\n  option of every question in one forward pass through a joint head, so GENERATE_TEXT\n  cannot describe it and the answer layer needs probabilities, not tokens."]
 pub const RAC_PRIMITIVE_RESERVED_16: rac_primitive = 16;
-#[doc = " Optical character recognition (page or line image -> text + boxes). Promoted from\n  RAC_PRIMITIVE_RESERVED_13 in ABI v11. Distinct from VLM (image + PROMPT -> free text):\n  OCR takes no prompt, is not generative, and returns geometry alongside the text, so a\n  CTC line recognizer cannot be honestly described by the VLM contract."]
+#[doc = " Joint decision scoring (state + typed questions -> calibrated answers). Promoted from\n  RAC_PRIMITIVE_RESERVED_14 in ABI v13. A decision model is not generative: it scores every\n  option of every question in one forward pass through a joint head, so GENERATE_TEXT\n  cannot describe it and the answer layer needs probabilities, not tokens."]
 pub const RAC_PRIMITIVE_RESERVED_17: rac_primitive = 17;
-#[doc = " Optical character recognition (page or line image -> text + boxes). Promoted from\n  RAC_PRIMITIVE_RESERVED_13 in ABI v11. Distinct from VLM (image + PROMPT -> free text):\n  OCR takes no prompt, is not generative, and returns geometry alongside the text, so a\n  CTC line recognizer cannot be honestly described by the VLM contract."]
+#[doc = " Joint decision scoring (state + typed questions -> calibrated answers). Promoted from\n  RAC_PRIMITIVE_RESERVED_14 in ABI v13. A decision model is not generative: it scores every\n  option of every question in one forward pass through a joint head, so GENERATE_TEXT\n  cannot describe it and the answer layer needs probabilities, not tokens."]
 pub const RAC_PRIMITIVE_RESERVED_18: rac_primitive = 18;
-#[doc = " Optical character recognition (page or line image -> text + boxes). Promoted from\n  RAC_PRIMITIVE_RESERVED_13 in ABI v11. Distinct from VLM (image + PROMPT -> free text):\n  OCR takes no prompt, is not generative, and returns geometry alongside the text, so a\n  CTC line recognizer cannot be honestly described by the VLM contract."]
+#[doc = " Joint decision scoring (state + typed questions -> calibrated answers). Promoted from\n  RAC_PRIMITIVE_RESERVED_14 in ABI v13. A decision model is not generative: it scores every\n  option of every question in one forward pass through a joint head, so GENERATE_TEXT\n  cannot describe it and the answer layer needs probabilities, not tokens."]
 pub const RAC_PRIMITIVE_COUNT: rac_primitive = 19;
 pub const RAC_RUNTIME_UNSPECIFIED: rac_runtime_id = 0;
 #[doc = "< Plain CPU (SIMD ok)."]
@@ -7055,8 +7297,8 @@ const _: () = {
         [::std::mem::offset_of!(rac_engine_vtable, image_embedding_ops) - 176usize];
     ["Offset of field: rac_engine_vtable::ocr_ops"]
         [::std::mem::offset_of!(rac_engine_vtable, ocr_ops) - 184usize];
-    ["Offset of field: rac_engine_vtable::reserved_slot_5"]
-        [::std::mem::offset_of!(rac_engine_vtable, reserved_slot_5) - 192usize];
+    ["Offset of field: rac_engine_vtable::decision_ops"]
+        [::std::mem::offset_of!(rac_engine_vtable, decision_ops) - 192usize];
     ["Offset of field: rac_engine_vtable::reserved_slot_6"]
         [::std::mem::offset_of!(rac_engine_vtable, reserved_slot_6) - 200usize];
     ["Offset of field: rac_engine_vtable::reserved_slot_7"]
@@ -7128,6 +7370,8 @@ pub use self::rac_audio_format_enum as rac_audio_format_enum_t;
 pub use self::rac_audio_pipeline_state as rac_audio_pipeline_state_t;
 #[doc = " Capability types supported by backends.\n These match the capabilities defined in runanywhere-core."]
 pub use self::rac_capability as rac_capability_t;
+#[doc = " The kind of answer a question expects. Selects both the shape of the answer\n and the calibration formula used for its confidence."]
+pub use self::rac_decision_question_type as rac_decision_question_type_t;
 #[doc = " Device type for backend execution."]
 pub use self::rac_device as rac_device_t;
 #[doc = " @brief Generation mode"]
@@ -7417,6 +7661,28 @@ unsafe extern "C" {
     pub fn rac_backend_llamacpp_register() -> rac_result_t;
     #[doc = " Unregisters the LlamaCPP backend.\n\n @return RAC_SUCCESS or error code"]
     pub fn rac_backend_llamacpp_unregister() -> rac_result_t;
+    #[doc = " Free every malloc-owned result field and zero the struct."]
+    pub fn rac_decision_result_free(result: *mut rac_decision_result_t);
+    #[doc = " The prompt-wording version the clef decision lineage serves. Engines that\n have no per-checkpoint override report this; it is kept in step with the\n cloud contract, so a caller pinning the version it saw in the cloud gets the\n same wording locally."]
+    pub fn rac_decision_default_prompt_format_version() -> u32;
+    pub fn rac_decision_create(
+        model_id: *const ::std::os::raw::c_char,
+        out_handle: *mut rac_handle_t,
+    ) -> rac_result_t;
+    pub fn rac_decision_initialize(
+        handle: rac_handle_t,
+        model_path: *const ::std::os::raw::c_char,
+    ) -> rac_result_t;
+    pub fn rac_decision_decide(
+        handle: rac_handle_t,
+        state: *const ::std::os::raw::c_char,
+        questions: *const rac_decision_question_t,
+        question_count: usize,
+        options: *const rac_decision_options_t,
+        out_result: *mut rac_decision_result_t,
+    ) -> rac_result_t;
+    pub fn rac_decision_cleanup(handle: rac_handle_t) -> rac_result_t;
+    pub fn rac_decision_destroy(handle: rac_handle_t);
     #[doc = " Free all malloc-owned fields in a success or partial-error backend result\n and zero the struct. NULL is accepted; calling again after the first free is\n safe because the first call clears every field."]
     pub fn rac_diarization_result_free(result: *mut rac_diarization_result_t);
     pub fn rac_diarization_create(
