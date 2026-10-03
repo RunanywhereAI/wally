@@ -14,9 +14,15 @@ Options:
       --request TEXT          Complete DecisionsRequest JSON file (- for stdin)
       --temperature FLOAT     Probability temperature (>0, at most 100)
       --json                  Print the raw response JSON
+      --local                 Score on this machine with a local decision model
+                              (never the network)
+      --cloud                 Score on your account's hosted endpoint (never a
+                              local model)
       --no-retry              Do not retry HTTP 429 or 503
 
 Examples:
   wally decisions --input 'Checkout is blank' --ask 'Is this a bug?'
 
   wally decide --input-file ticket.txt --choice 'Owner=frontend,payments,account'
+
+  wally decisions --local -m clef-flash-gguf --input 'Checkout is blank' --ask 'Is this a bug?'

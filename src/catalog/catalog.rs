@@ -2500,6 +2500,89 @@ const SHERPA_SUPERTONIC_V3_FILES: &[CatalogFile] = &[
     },
 ];
 
+// LOCAL(decision): multi-file inventory for the MLX decision checkpoint.
+// Same file set the Swift MLX loader needs (backbone config + shards +
+// tokenizer + the joint-head config and weights).
+const CLEF_FLASH_MLX_4BIT_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/chat_template.jinja",
+        filename: "chat_template.jinja",
+        required: false,
+        size_bytes: 7756,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 3722,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/generation_config.json",
+        filename: "generation_config.json",
+        required: false,
+        size_bytes: 116,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/joint_head.safetensors",
+        filename: "joint_head.safetensors",
+        required: true,
+        size_bytes: 243538016,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/joint_head_config.json",
+        filename: "joint_head_config.json",
+        required: true,
+        size_bytes: 119,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/model-00001-of-00002.safetensors",
+        filename: "model-00001-of-00002.safetensors",
+        required: true,
+        size_bytes: 5349769710,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/model-00002-of-00002.safetensors",
+        filename: "model-00002-of-00002.safetensors",
+        required: true,
+        size_bytes: 600449850,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/model.safetensors.index.json",
+        filename: "model.safetensors.index.json",
+        required: true,
+        size_bytes: 123592,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/processor_config.json",
+        filename: "processor_config.json",
+        required: false,
+        size_bytes: 1191,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 19989339,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/mlx-community/clef-flash-4bit/resolve/main/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 1190,
+        checksum_sha256: None,
+    },
+];
+
 const CATALOG: &[CatalogEntry] = &[
     // --- LLM (LlamaCpp / GGUF) ---
     // Name carries Q8_0 on purpose: this is the one GGUF artifact in the
@@ -4401,6 +4484,45 @@ const CATALOG: &[CatalogEntry] = &[
         merge_key: None,
         harness_compatible: false,
     },
+    // LOCAL(decision): the two local decision checkpoints. The hosted model
+    // (`eve`) owns the cloud path in `wally decisions`; these rows are what
+    // that command loads when it runs on-device. Not part of the
+    // transliterated C++ catalog block above — if parse_catalog.py runs
+    // again, the rows must be carried in its source (the SDK's catalog.cpp).
+    CatalogEntry {
+        id: "clef-flash-gguf",
+        alias: Some("clef-gguf"),
+        name: "Clef Flash Q4_K_M (decision, GGUF)",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::LlamaCpp,
+        format: v1::ModelFormat::Gguf,
+        url: Some("https://huggingface.co/ggml-org/Clef-Flash-GGUF/resolve/main/Clef-Flash-Q4_K_M.gguf"),
+        files: &[],
+        download_size_bytes: 6486448192,
+        context_length: 0,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("clef-flash"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "clef-flash-mlx-4bit",
+        alias: Some("clef-mlx"),
+        name: "Clef Flash 4-bit (decision, MLX)",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: CLEF_FLASH_MLX_4BIT_FILES,
+        download_size_bytes: 6213978243,
+        context_length: 0,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("clef-flash"),
+        harness_compatible: false,
+    },
 ];
 
 // AUTO-TRANSLITERATED DATA END
@@ -4408,8 +4530,16 @@ const CATALOG: &[CatalogEntry] = &[
 // modality's entries still live in CATALOG above, but are filtered out here,
 // so `models list`, lookups, suggestions and SDK registration all see LLMs
 // only. Delete is_llm and its four uses below to restore the full catalog.
+//
+// LOCAL(decision): decision rows are surfaced alongside LLMs. `wally
+// decisions` loads them by catalog id, so they must resolve, register and
+// list; every modality the cut hides (STT/TTS/VLM/...) stays hidden. This is
+// additive: Language or Decision.
 fn is_llm(entry: &CatalogEntry) -> bool {
-    entry.category == v1::ModelCategory::Language
+    matches!(
+        entry.category,
+        v1::ModelCategory::Language | v1::ModelCategory::Decision
+    )
 }
 
 // MLX is an Apple-only backend. On any other platform its entries are hidden

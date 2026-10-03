@@ -562,6 +562,26 @@ pub type rac_file_list_directory_fn = ::std::option::Option<
 >;
 #[doc = " @brief Configuration for the desktop adapter. All fields optional."]
 pub type rac_desktop_adapter_config_t = rac_desktop_adapter_config;
+#[doc = " @brief Capability loading state\n\n Mirrors Swift's CapabilityLoadingState enum."]
+pub type rac_lifecycle_state = ::std::os::raw::c_uint;
+#[doc = " @brief Resource type for lifecycle tracking\n\n Mirrors Swift's CapabilityResourceType enum."]
+pub type rac_resource_type = ::std::os::raw::c_uint;
+#[doc = " @brief Lifecycle metrics\n\n Mirrors Swift's ModelLifecycleMetrics struct."]
+pub type rac_lifecycle_metrics_t = rac_lifecycle_metrics;
+#[doc = " @brief Lifecycle configuration"]
+pub type rac_lifecycle_config_t = rac_lifecycle_config;
+#[doc = " @brief Service creation callback\n\n Called by the lifecycle manager to create a service for a given model ID.\n\n @param model_id The model ID to load\n @param user_data User-provided context\n @param out_service Output: Handle to the created service\n @return RAC_SUCCESS or error code"]
+pub type rac_lifecycle_create_service_fn = ::std::option::Option<
+    unsafe extern "C" fn(
+        model_id: *const ::std::os::raw::c_char,
+        user_data: *mut ::std::os::raw::c_void,
+        out_service: *mut rac_handle_t,
+    ) -> rac_result_t,
+>;
+#[doc = " @brief Service destroy callback\n\n Called by the lifecycle manager to destroy a service.\n\n @param service Handle to the service to destroy\n @param user_data User-provided context"]
+pub type rac_lifecycle_destroy_service_fn = ::std::option::Option<
+    unsafe extern "C" fn(service: rac_handle_t, user_data: *mut ::std::os::raw::c_void),
+>;
 #[doc = " @brief Diffusion scheduler/sampler types\n\n Different scheduling algorithms for the denoising process.\n DPM++ 2M Karras is recommended for best quality/speed tradeoff."]
 pub type rac_diffusion_scheduler = ::std::os::raw::c_uint;
 #[doc = " @brief Model variant types\n\n Different Stable Diffusion model variants with different capabilities."]
@@ -643,26 +663,6 @@ pub type rac_rag_stream_proto_callback_t = ::std::option::Option<
         event_size: usize,
         user_data: *mut ::std::os::raw::c_void,
     ) -> rac_bool_t,
->;
-#[doc = " @brief Capability loading state\n\n Mirrors Swift's CapabilityLoadingState enum."]
-pub type rac_lifecycle_state = ::std::os::raw::c_uint;
-#[doc = " @brief Resource type for lifecycle tracking\n\n Mirrors Swift's CapabilityResourceType enum."]
-pub type rac_resource_type = ::std::os::raw::c_uint;
-#[doc = " @brief Lifecycle metrics\n\n Mirrors Swift's ModelLifecycleMetrics struct."]
-pub type rac_lifecycle_metrics_t = rac_lifecycle_metrics;
-#[doc = " @brief Lifecycle configuration"]
-pub type rac_lifecycle_config_t = rac_lifecycle_config;
-#[doc = " @brief Service creation callback\n\n Called by the lifecycle manager to create a service for a given model ID.\n\n @param model_id The model ID to load\n @param user_data User-provided context\n @param out_service Output: Handle to the created service\n @return RAC_SUCCESS or error code"]
-pub type rac_lifecycle_create_service_fn = ::std::option::Option<
-    unsafe extern "C" fn(
-        model_id: *const ::std::os::raw::c_char,
-        user_data: *mut ::std::os::raw::c_void,
-        out_service: *mut rac_handle_t,
-    ) -> rac_result_t,
->;
-#[doc = " @brief Service destroy callback\n\n Called by the lifecycle manager to destroy a service.\n\n @param service Handle to the service to destroy\n @param user_data User-provided context"]
-pub type rac_lifecycle_destroy_service_fn = ::std::option::Option<
-    unsafe extern "C" fn(service: rac_handle_t, user_data: *mut ::std::os::raw::c_void),
 >;
 #[doc = " One candidate document/passage handed to the reranker. Both pointers are\n caller-owned and only borrowed for the duration of the `rerank` call; the id\n is echoed back on the corresponding scored item."]
 pub type rac_rerank_candidate_t = rac_rerank_candidate;
@@ -2607,6 +2607,38 @@ pub struct rac_desktop_adapter_config {
     #[doc = " Directory for the secure-store files (created 0700 on POSIX if missing).\n NULL → the platform default config directory."]
     pub secure_store_dir: *const ::std::os::raw::c_char,
 }
+#[doc = " @brief Lifecycle metrics\n\n Mirrors Swift's ModelLifecycleMetrics struct."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_lifecycle_metrics {
+    #[doc = " Total lifecycle events"]
+    pub total_events: i32,
+    #[doc = " Start time (ms since epoch)"]
+    pub start_time_ms: i64,
+    #[doc = " Last event time (ms since epoch, 0 if none)"]
+    pub last_event_time_ms: i64,
+    #[doc = " Total load attempts"]
+    pub total_loads: i32,
+    #[doc = " Successful loads"]
+    pub successful_loads: i32,
+    #[doc = " Failed loads"]
+    pub failed_loads: i32,
+    #[doc = " Average load time in milliseconds"]
+    pub average_load_time_ms: f64,
+    #[doc = " Total unloads"]
+    pub total_unloads: i32,
+}
+#[doc = " @brief Lifecycle configuration"]
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct rac_lifecycle_config {
+    #[doc = " Resource type for event tracking"]
+    pub resource_type: rac_resource_type_t,
+    #[doc = " Logger category (can be NULL for default)"]
+    pub logger_category: *const ::std::os::raw::c_char,
+    #[doc = " User data for callbacks"]
+    pub user_data: *mut ::std::os::raw::c_void,
+}
 #[doc = " @brief Tokenizer configuration\n\n Configuration for downloading and using tokenizer files.\n The SDK will automatically download missing tokenizer files (vocab.json, merges.txt)\n from the specified source URL.\n\n Example for custom URL:\n @code\n rac_diffusion_tokenizer_config_t tokenizer_config = {\n     .source = RAC_DIFFUSION_TOKENIZER_CUSTOM,\n     .custom_base_url = \"https://huggingface.co/my-org/my-model/resolve/main/tokenizer\",\n     .auto_download = RAC_TRUE\n };\n @endcode"]
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -2812,38 +2844,6 @@ pub struct rac_diffusion_service {
     pub impl_: *mut ::std::os::raw::c_void,
     #[doc = " Model ID for reference"]
     pub model_id: *const ::std::os::raw::c_char,
-}
-#[doc = " @brief Lifecycle metrics\n\n Mirrors Swift's ModelLifecycleMetrics struct."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct rac_lifecycle_metrics {
-    #[doc = " Total lifecycle events"]
-    pub total_events: i32,
-    #[doc = " Start time (ms since epoch)"]
-    pub start_time_ms: i64,
-    #[doc = " Last event time (ms since epoch, 0 if none)"]
-    pub last_event_time_ms: i64,
-    #[doc = " Total load attempts"]
-    pub total_loads: i32,
-    #[doc = " Successful loads"]
-    pub successful_loads: i32,
-    #[doc = " Failed loads"]
-    pub failed_loads: i32,
-    #[doc = " Average load time in milliseconds"]
-    pub average_load_time_ms: f64,
-    #[doc = " Total unloads"]
-    pub total_unloads: i32,
-}
-#[doc = " @brief Lifecycle configuration"]
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct rac_lifecycle_config {
-    #[doc = " Resource type for event tracking"]
-    pub resource_type: rac_resource_type_t,
-    #[doc = " Logger category (can be NULL for default)"]
-    pub logger_category: *const ::std::os::raw::c_char,
-    #[doc = " User data for callbacks"]
-    pub user_data: *mut ::std::os::raw::c_void,
 }
 #[doc = " One candidate document/passage handed to the reranker. Both pointers are\n caller-owned and only borrowed for the duration of the `rerank` call; the id\n is echoed back on the corresponding scored item."]
 #[repr(C)]
@@ -5751,6 +5751,66 @@ const _: () = {
     ["Offset of field: rac_desktop_adapter_config::secure_store_dir"]
         [::std::mem::offset_of!(rac_desktop_adapter_config, secure_store_dir) - 0usize];
 };
+#[doc = "< Not loaded"]
+pub const RAC_LIFECYCLE_STATE_IDLE: rac_lifecycle_state = 0;
+#[doc = "< Currently loading"]
+pub const RAC_LIFECYCLE_STATE_LOADING: rac_lifecycle_state = 1;
+#[doc = "< Successfully loaded"]
+pub const RAC_LIFECYCLE_STATE_LOADED: rac_lifecycle_state = 2;
+#[doc = "< Load failed"]
+pub const RAC_LIFECYCLE_STATE_FAILED: rac_lifecycle_state = 3;
+pub const RAC_RESOURCE_TYPE_LLM_MODEL: rac_resource_type = 0;
+pub const RAC_RESOURCE_TYPE_STT_MODEL: rac_resource_type = 1;
+pub const RAC_RESOURCE_TYPE_TTS_VOICE: rac_resource_type = 2;
+pub const RAC_RESOURCE_TYPE_VAD_MODEL: rac_resource_type = 3;
+pub const RAC_RESOURCE_TYPE_DIARIZATION_MODEL: rac_resource_type = 4;
+#[doc = "< Vision Language Model"]
+pub const RAC_RESOURCE_TYPE_VLM_MODEL: rac_resource_type = 5;
+#[doc = "< Diffusion/Image Generation Model"]
+pub const RAC_RESOURCE_TYPE_DIFFUSION_MODEL: rac_resource_type = 6;
+#[doc = "< Text embedding model"]
+pub const RAC_RESOURCE_TYPE_EMBEDDINGS_MODEL: rac_resource_type = 7;
+#[doc = "< Semantic segmentation model"]
+pub const RAC_RESOURCE_TYPE_SEGMENTATION_MODEL: rac_resource_type = 8;
+#[doc = "< Cross-encoder reranking model"]
+pub const RAC_RESOURCE_TYPE_RERANK_MODEL: rac_resource_type = 9;
+#[doc = "< Full-page OCR model"]
+pub const RAC_RESOURCE_TYPE_OCR_MODEL: rac_resource_type = 10;
+#[doc = "< Joint decision scoring model"]
+pub const RAC_RESOURCE_TYPE_DECISION_MODEL: rac_resource_type = 11;
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_lifecycle_metrics"][::std::mem::size_of::<rac_lifecycle_metrics>() - 56usize];
+    ["Alignment of rac_lifecycle_metrics"]
+        [::std::mem::align_of::<rac_lifecycle_metrics>() - 8usize];
+    ["Offset of field: rac_lifecycle_metrics::total_events"]
+        [::std::mem::offset_of!(rac_lifecycle_metrics, total_events) - 0usize];
+    ["Offset of field: rac_lifecycle_metrics::start_time_ms"]
+        [::std::mem::offset_of!(rac_lifecycle_metrics, start_time_ms) - 8usize];
+    ["Offset of field: rac_lifecycle_metrics::last_event_time_ms"]
+        [::std::mem::offset_of!(rac_lifecycle_metrics, last_event_time_ms) - 16usize];
+    ["Offset of field: rac_lifecycle_metrics::total_loads"]
+        [::std::mem::offset_of!(rac_lifecycle_metrics, total_loads) - 24usize];
+    ["Offset of field: rac_lifecycle_metrics::successful_loads"]
+        [::std::mem::offset_of!(rac_lifecycle_metrics, successful_loads) - 28usize];
+    ["Offset of field: rac_lifecycle_metrics::failed_loads"]
+        [::std::mem::offset_of!(rac_lifecycle_metrics, failed_loads) - 32usize];
+    ["Offset of field: rac_lifecycle_metrics::average_load_time_ms"]
+        [::std::mem::offset_of!(rac_lifecycle_metrics, average_load_time_ms) - 40usize];
+    ["Offset of field: rac_lifecycle_metrics::total_unloads"]
+        [::std::mem::offset_of!(rac_lifecycle_metrics, total_unloads) - 48usize];
+};
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rac_lifecycle_config"][::std::mem::size_of::<rac_lifecycle_config>() - 24usize];
+    ["Alignment of rac_lifecycle_config"][::std::mem::align_of::<rac_lifecycle_config>() - 8usize];
+    ["Offset of field: rac_lifecycle_config::resource_type"]
+        [::std::mem::offset_of!(rac_lifecycle_config, resource_type) - 0usize];
+    ["Offset of field: rac_lifecycle_config::logger_category"]
+        [::std::mem::offset_of!(rac_lifecycle_config, logger_category) - 8usize];
+    ["Offset of field: rac_lifecycle_config::user_data"]
+        [::std::mem::offset_of!(rac_lifecycle_config, user_data) - 16usize];
+};
 #[doc = "< DPM++ 2M Karras (recommended)"]
 pub const RAC_DIFFUSION_SCHEDULER_DPM_PP_2M_KARRAS: rac_diffusion_scheduler = 0;
 #[doc = "< DPM++ 2M"]
@@ -5969,66 +6029,6 @@ const _: () = {
         [::std::mem::offset_of!(rac_diffusion_service, impl_) - 8usize];
     ["Offset of field: rac_diffusion_service::model_id"]
         [::std::mem::offset_of!(rac_diffusion_service, model_id) - 16usize];
-};
-#[doc = "< Not loaded"]
-pub const RAC_LIFECYCLE_STATE_IDLE: rac_lifecycle_state = 0;
-#[doc = "< Currently loading"]
-pub const RAC_LIFECYCLE_STATE_LOADING: rac_lifecycle_state = 1;
-#[doc = "< Successfully loaded"]
-pub const RAC_LIFECYCLE_STATE_LOADED: rac_lifecycle_state = 2;
-#[doc = "< Load failed"]
-pub const RAC_LIFECYCLE_STATE_FAILED: rac_lifecycle_state = 3;
-pub const RAC_RESOURCE_TYPE_LLM_MODEL: rac_resource_type = 0;
-pub const RAC_RESOURCE_TYPE_STT_MODEL: rac_resource_type = 1;
-pub const RAC_RESOURCE_TYPE_TTS_VOICE: rac_resource_type = 2;
-pub const RAC_RESOURCE_TYPE_VAD_MODEL: rac_resource_type = 3;
-pub const RAC_RESOURCE_TYPE_DIARIZATION_MODEL: rac_resource_type = 4;
-#[doc = "< Vision Language Model"]
-pub const RAC_RESOURCE_TYPE_VLM_MODEL: rac_resource_type = 5;
-#[doc = "< Diffusion/Image Generation Model"]
-pub const RAC_RESOURCE_TYPE_DIFFUSION_MODEL: rac_resource_type = 6;
-#[doc = "< Text embedding model"]
-pub const RAC_RESOURCE_TYPE_EMBEDDINGS_MODEL: rac_resource_type = 7;
-#[doc = "< Semantic segmentation model"]
-pub const RAC_RESOURCE_TYPE_SEGMENTATION_MODEL: rac_resource_type = 8;
-#[doc = "< Cross-encoder reranking model"]
-pub const RAC_RESOURCE_TYPE_RERANK_MODEL: rac_resource_type = 9;
-#[doc = "< Full-page OCR model"]
-pub const RAC_RESOURCE_TYPE_OCR_MODEL: rac_resource_type = 10;
-#[doc = "< Joint decision scoring model"]
-pub const RAC_RESOURCE_TYPE_DECISION_MODEL: rac_resource_type = 11;
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rac_lifecycle_metrics"][::std::mem::size_of::<rac_lifecycle_metrics>() - 56usize];
-    ["Alignment of rac_lifecycle_metrics"]
-        [::std::mem::align_of::<rac_lifecycle_metrics>() - 8usize];
-    ["Offset of field: rac_lifecycle_metrics::total_events"]
-        [::std::mem::offset_of!(rac_lifecycle_metrics, total_events) - 0usize];
-    ["Offset of field: rac_lifecycle_metrics::start_time_ms"]
-        [::std::mem::offset_of!(rac_lifecycle_metrics, start_time_ms) - 8usize];
-    ["Offset of field: rac_lifecycle_metrics::last_event_time_ms"]
-        [::std::mem::offset_of!(rac_lifecycle_metrics, last_event_time_ms) - 16usize];
-    ["Offset of field: rac_lifecycle_metrics::total_loads"]
-        [::std::mem::offset_of!(rac_lifecycle_metrics, total_loads) - 24usize];
-    ["Offset of field: rac_lifecycle_metrics::successful_loads"]
-        [::std::mem::offset_of!(rac_lifecycle_metrics, successful_loads) - 28usize];
-    ["Offset of field: rac_lifecycle_metrics::failed_loads"]
-        [::std::mem::offset_of!(rac_lifecycle_metrics, failed_loads) - 32usize];
-    ["Offset of field: rac_lifecycle_metrics::average_load_time_ms"]
-        [::std::mem::offset_of!(rac_lifecycle_metrics, average_load_time_ms) - 40usize];
-    ["Offset of field: rac_lifecycle_metrics::total_unloads"]
-        [::std::mem::offset_of!(rac_lifecycle_metrics, total_unloads) - 48usize];
-};
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rac_lifecycle_config"][::std::mem::size_of::<rac_lifecycle_config>() - 24usize];
-    ["Alignment of rac_lifecycle_config"][::std::mem::align_of::<rac_lifecycle_config>() - 8usize];
-    ["Offset of field: rac_lifecycle_config::resource_type"]
-        [::std::mem::offset_of!(rac_lifecycle_config, resource_type) - 0usize];
-    ["Offset of field: rac_lifecycle_config::logger_category"]
-        [::std::mem::offset_of!(rac_lifecycle_config, logger_category) - 8usize];
-    ["Offset of field: rac_lifecycle_config::user_data"]
-        [::std::mem::offset_of!(rac_lifecycle_config, user_data) - 16usize];
 };
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
@@ -8757,6 +8757,89 @@ unsafe extern "C" {
     pub fn rac_desktop_device_model() -> *const ::std::os::raw::c_char;
     #[doc = " OS version (kernel release, capped at the backend's 20-char column); \"\" when unknown."]
     pub fn rac_desktop_os_version() -> *const ::std::os::raw::c_char;
+    #[doc = " @brief Create a lifecycle manager\n\n @param config Lifecycle configuration\n @param create_fn Service creation callback\n @param destroy_fn Service destruction callback (can be NULL)\n @param out_handle Output: Handle to the lifecycle manager\n @return RAC_SUCCESS or error code"]
+    pub fn rac_lifecycle_create(
+        config: *const rac_lifecycle_config_t,
+        create_fn: rac_lifecycle_create_service_fn,
+        destroy_fn: rac_lifecycle_destroy_service_fn,
+        out_handle: *mut rac_handle_t,
+    ) -> rac_result_t;
+    #[doc = " @brief Load a model with automatic event tracking\n\n Mirrors Swift's ManagedLifecycle.load(_:)\n If already loaded with same ID, skips duplicate load.\n\n @param handle Lifecycle manager handle\n @param model_path File path to the model (used for loading) - REQUIRED\n @param model_id Model identifier for telemetry (e.g., \"sherpa-onnx-whisper-tiny.en\")\n                 Optional: if NULL, defaults to model_path\n @param model_name Human-readable model name (e.g., \"Sherpa Whisper Tiny (ONNX)\")\n                   Optional: if NULL, defaults to model_id\n @param out_service Output: Handle to the loaded service\n @return RAC_SUCCESS or error code"]
+    pub fn rac_lifecycle_load(
+        handle: rac_handle_t,
+        model_path: *const ::std::os::raw::c_char,
+        model_id: *const ::std::os::raw::c_char,
+        model_name: *const ::std::os::raw::c_char,
+        out_service: *mut rac_handle_t,
+    ) -> rac_result_t;
+    #[doc = " @brief Unload the currently loaded model\n\n Mirrors Swift's ManagedLifecycle.unload()\n\n @param handle Lifecycle manager handle\n @return RAC_SUCCESS or error code"]
+    pub fn rac_lifecycle_unload(handle: rac_handle_t) -> rac_result_t;
+    #[doc = " @brief Reset all state\n\n Mirrors Swift's ManagedLifecycle.reset()\n\n @param handle Lifecycle manager handle\n @return RAC_SUCCESS or error code"]
+    pub fn rac_lifecycle_reset(handle: rac_handle_t) -> rac_result_t;
+    #[doc = " @brief Get current lifecycle state\n\n Mirrors Swift's ManagedLifecycle.state\n\n @param handle Lifecycle manager handle\n @return Current state"]
+    pub fn rac_lifecycle_get_state(handle: rac_handle_t) -> rac_lifecycle_state_t;
+    #[doc = " @brief Check if a model is loaded\n\n Mirrors Swift's ManagedLifecycle.isLoaded\n\n @param handle Lifecycle manager handle\n @return RAC_TRUE if loaded, RAC_FALSE otherwise"]
+    pub fn rac_lifecycle_is_loaded(handle: rac_handle_t) -> rac_bool_t;
+    #[doc = " @brief Get current model ID\n\n Mirrors Swift's ManagedLifecycle.currentModelId\n\n @param handle Lifecycle manager handle\n @return Current model ID (may be NULL if not loaded)"]
+    pub fn rac_lifecycle_get_model_id(handle: rac_handle_t) -> *const ::std::os::raw::c_char;
+    #[doc = " @brief Get current model name (human-readable)\n\n @param handle Lifecycle manager handle\n @return Current model name (may be NULL if not loaded)"]
+    pub fn rac_lifecycle_get_model_name(handle: rac_handle_t) -> *const ::std::os::raw::c_char;
+    #[doc = " @brief Get current service handle\n\n Mirrors Swift's ManagedLifecycle.currentService\n\n @param handle Lifecycle manager handle\n @return Current service handle (may be NULL if not loaded)"]
+    pub fn rac_lifecycle_get_service(handle: rac_handle_t) -> rac_handle_t;
+    #[doc = " @brief Require service or return error\n\n Mirrors Swift's ManagedLifecycle.requireService()\n\n @param handle Lifecycle manager handle\n @param out_service Output: Service handle\n @return RAC_SUCCESS or RAC_ERROR_NOT_INITIALIZED if not loaded"]
+    pub fn rac_lifecycle_require_service(
+        handle: rac_handle_t,
+        out_service: *mut rac_handle_t,
+    ) -> rac_result_t;
+    #[doc = " @brief Acquire (pin) the current service, preventing unload while held.\n\n Increments an internal refcount. The caller MUST call rac_lifecycle_release_service()\n when done. Unload/destroy will block until all acquired references are released.\n\n @param handle Lifecycle manager handle\n @param out_service Output: Service handle (pinned)\n @return RAC_SUCCESS or RAC_ERROR_NOT_INITIALIZED if not loaded"]
+    pub fn rac_lifecycle_acquire_service(
+        handle: rac_handle_t,
+        out_service: *mut rac_handle_t,
+    ) -> rac_result_t;
+    #[doc = " @brief Release a previously acquired service reference.\n\n @param handle Lifecycle manager handle"]
+    pub fn rac_lifecycle_release_service(handle: rac_handle_t);
+    #[doc = " @brief Track an operation error\n\n Mirrors Swift's ManagedLifecycle.trackOperationError(_:operation:)\n\n @param handle Lifecycle manager handle\n @param error_code Error code\n @param operation Operation name"]
+    pub fn rac_lifecycle_track_error(
+        handle: rac_handle_t,
+        error_code: rac_result_t,
+        operation: *const ::std::os::raw::c_char,
+    );
+    #[doc = " @brief Get lifecycle metrics\n\n Mirrors Swift's ManagedLifecycle.getLifecycleMetrics()\n\n @param handle Lifecycle manager handle\n @param out_metrics Output: Lifecycle metrics\n @return RAC_SUCCESS or error code"]
+    pub fn rac_lifecycle_get_metrics(
+        handle: rac_handle_t,
+        out_metrics: *mut rac_lifecycle_metrics_t,
+    ) -> rac_result_t;
+    #[doc = " @brief Destroy a lifecycle manager\n\n @param handle Lifecycle manager handle"]
+    pub fn rac_lifecycle_destroy(handle: rac_handle_t);
+    #[doc = " @brief Get state name string\n\n @param state Lifecycle state\n @return Human-readable state name"]
+    pub fn rac_lifecycle_state_name(state: rac_lifecycle_state_t) -> *const ::std::os::raw::c_char;
+    #[doc = " @brief Get resource type name string\n\n @param type Resource type\n @return Human-readable resource type name"]
+    pub fn rac_resource_type_name(type_: rac_resource_type_t) -> *const ::std::os::raw::c_char;
+    pub fn rac_decision_component_create(out_handle: *mut rac_handle_t) -> rac_result_t;
+    pub fn rac_decision_component_is_loaded(handle: rac_handle_t) -> rac_bool_t;
+    pub fn rac_decision_component_get_model_id(
+        handle: rac_handle_t,
+    ) -> *const ::std::os::raw::c_char;
+    pub fn rac_decision_component_load_model(
+        handle: rac_handle_t,
+        model_path: *const ::std::os::raw::c_char,
+        model_id: *const ::std::os::raw::c_char,
+        model_name: *const ::std::os::raw::c_char,
+    ) -> rac_result_t;
+    pub fn rac_decision_component_unload(handle: rac_handle_t) -> rac_result_t;
+    pub fn rac_decision_component_get_state(handle: rac_handle_t) -> rac_lifecycle_state_t;
+    pub fn rac_decision_component_get_metrics(
+        handle: rac_handle_t,
+        out_metrics: *mut rac_lifecycle_metrics_t,
+    ) -> rac_result_t;
+    pub fn rac_decision_component_destroy(handle: rac_handle_t);
+    #[doc = " SDK-facing ABI over runanywhere.v1.DecisionRequest → DecisionResult."]
+    pub fn rac_decision_component_decide_proto(
+        handle: rac_handle_t,
+        request_proto_bytes: *const u8,
+        request_proto_size: usize,
+        out_result: *mut rac_proto_buffer_t,
+    ) -> rac_result_t;
     #[doc = " @brief Free diffusion result resources\n\n @param result Result to free (can be NULL)"]
     pub fn rac_diffusion_result_free(result: *mut rac_diffusion_result_t);
     #[doc = " @brief Create a diffusion service\n\n Routes through service registry to find appropriate backend.\n\n @param model_id Model identifier (registry ID or path to model)\n @param out_handle Output: Handle to the created service\n @return RAC_SUCCESS or error code"]
@@ -9001,64 +9084,6 @@ unsafe extern "C" {
         session: rac_handle_t,
         out_stats: *mut rac_proto_buffer_t,
     ) -> rac_result_t;
-    #[doc = " @brief Create a lifecycle manager\n\n @param config Lifecycle configuration\n @param create_fn Service creation callback\n @param destroy_fn Service destruction callback (can be NULL)\n @param out_handle Output: Handle to the lifecycle manager\n @return RAC_SUCCESS or error code"]
-    pub fn rac_lifecycle_create(
-        config: *const rac_lifecycle_config_t,
-        create_fn: rac_lifecycle_create_service_fn,
-        destroy_fn: rac_lifecycle_destroy_service_fn,
-        out_handle: *mut rac_handle_t,
-    ) -> rac_result_t;
-    #[doc = " @brief Load a model with automatic event tracking\n\n Mirrors Swift's ManagedLifecycle.load(_:)\n If already loaded with same ID, skips duplicate load.\n\n @param handle Lifecycle manager handle\n @param model_path File path to the model (used for loading) - REQUIRED\n @param model_id Model identifier for telemetry (e.g., \"sherpa-onnx-whisper-tiny.en\")\n                 Optional: if NULL, defaults to model_path\n @param model_name Human-readable model name (e.g., \"Sherpa Whisper Tiny (ONNX)\")\n                   Optional: if NULL, defaults to model_id\n @param out_service Output: Handle to the loaded service\n @return RAC_SUCCESS or error code"]
-    pub fn rac_lifecycle_load(
-        handle: rac_handle_t,
-        model_path: *const ::std::os::raw::c_char,
-        model_id: *const ::std::os::raw::c_char,
-        model_name: *const ::std::os::raw::c_char,
-        out_service: *mut rac_handle_t,
-    ) -> rac_result_t;
-    #[doc = " @brief Unload the currently loaded model\n\n Mirrors Swift's ManagedLifecycle.unload()\n\n @param handle Lifecycle manager handle\n @return RAC_SUCCESS or error code"]
-    pub fn rac_lifecycle_unload(handle: rac_handle_t) -> rac_result_t;
-    #[doc = " @brief Reset all state\n\n Mirrors Swift's ManagedLifecycle.reset()\n\n @param handle Lifecycle manager handle\n @return RAC_SUCCESS or error code"]
-    pub fn rac_lifecycle_reset(handle: rac_handle_t) -> rac_result_t;
-    #[doc = " @brief Get current lifecycle state\n\n Mirrors Swift's ManagedLifecycle.state\n\n @param handle Lifecycle manager handle\n @return Current state"]
-    pub fn rac_lifecycle_get_state(handle: rac_handle_t) -> rac_lifecycle_state_t;
-    #[doc = " @brief Check if a model is loaded\n\n Mirrors Swift's ManagedLifecycle.isLoaded\n\n @param handle Lifecycle manager handle\n @return RAC_TRUE if loaded, RAC_FALSE otherwise"]
-    pub fn rac_lifecycle_is_loaded(handle: rac_handle_t) -> rac_bool_t;
-    #[doc = " @brief Get current model ID\n\n Mirrors Swift's ManagedLifecycle.currentModelId\n\n @param handle Lifecycle manager handle\n @return Current model ID (may be NULL if not loaded)"]
-    pub fn rac_lifecycle_get_model_id(handle: rac_handle_t) -> *const ::std::os::raw::c_char;
-    #[doc = " @brief Get current model name (human-readable)\n\n @param handle Lifecycle manager handle\n @return Current model name (may be NULL if not loaded)"]
-    pub fn rac_lifecycle_get_model_name(handle: rac_handle_t) -> *const ::std::os::raw::c_char;
-    #[doc = " @brief Get current service handle\n\n Mirrors Swift's ManagedLifecycle.currentService\n\n @param handle Lifecycle manager handle\n @return Current service handle (may be NULL if not loaded)"]
-    pub fn rac_lifecycle_get_service(handle: rac_handle_t) -> rac_handle_t;
-    #[doc = " @brief Require service or return error\n\n Mirrors Swift's ManagedLifecycle.requireService()\n\n @param handle Lifecycle manager handle\n @param out_service Output: Service handle\n @return RAC_SUCCESS or RAC_ERROR_NOT_INITIALIZED if not loaded"]
-    pub fn rac_lifecycle_require_service(
-        handle: rac_handle_t,
-        out_service: *mut rac_handle_t,
-    ) -> rac_result_t;
-    #[doc = " @brief Acquire (pin) the current service, preventing unload while held.\n\n Increments an internal refcount. The caller MUST call rac_lifecycle_release_service()\n when done. Unload/destroy will block until all acquired references are released.\n\n @param handle Lifecycle manager handle\n @param out_service Output: Service handle (pinned)\n @return RAC_SUCCESS or RAC_ERROR_NOT_INITIALIZED if not loaded"]
-    pub fn rac_lifecycle_acquire_service(
-        handle: rac_handle_t,
-        out_service: *mut rac_handle_t,
-    ) -> rac_result_t;
-    #[doc = " @brief Release a previously acquired service reference.\n\n @param handle Lifecycle manager handle"]
-    pub fn rac_lifecycle_release_service(handle: rac_handle_t);
-    #[doc = " @brief Track an operation error\n\n Mirrors Swift's ManagedLifecycle.trackOperationError(_:operation:)\n\n @param handle Lifecycle manager handle\n @param error_code Error code\n @param operation Operation name"]
-    pub fn rac_lifecycle_track_error(
-        handle: rac_handle_t,
-        error_code: rac_result_t,
-        operation: *const ::std::os::raw::c_char,
-    );
-    #[doc = " @brief Get lifecycle metrics\n\n Mirrors Swift's ManagedLifecycle.getLifecycleMetrics()\n\n @param handle Lifecycle manager handle\n @param out_metrics Output: Lifecycle metrics\n @return RAC_SUCCESS or error code"]
-    pub fn rac_lifecycle_get_metrics(
-        handle: rac_handle_t,
-        out_metrics: *mut rac_lifecycle_metrics_t,
-    ) -> rac_result_t;
-    #[doc = " @brief Destroy a lifecycle manager\n\n @param handle Lifecycle manager handle"]
-    pub fn rac_lifecycle_destroy(handle: rac_handle_t);
-    #[doc = " @brief Get state name string\n\n @param state Lifecycle state\n @return Human-readable state name"]
-    pub fn rac_lifecycle_state_name(state: rac_lifecycle_state_t) -> *const ::std::os::raw::c_char;
-    #[doc = " @brief Get resource type name string\n\n @param type Resource type\n @return Human-readable resource type name"]
-    pub fn rac_resource_type_name(type_: rac_resource_type_t) -> *const ::std::os::raw::c_char;
     #[doc = " Free every malloc-owned result field and zero the struct."]
     pub fn rac_rerank_result_free(result: *mut rac_rerank_result_t);
     pub fn rac_rerank_create(

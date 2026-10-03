@@ -1,15 +1,28 @@
-//! Hosted decision scoring (`wally decisions`, alias `decide`): a decision
-//! model answers typed questions with label probabilities instead of text.
+//! Decision scoring (`wally decisions`, alias `decide`): a decision model
+//! answers typed questions with label probabilities instead of text.
+//!
+//! Two transports, one request/response contract. `--cloud` (or no local
+//! artifact for `--model`) scores on the hosted console; `--local` (or a
+//! `--model` that resolves to an on-disk artifact) scores in-process through
+//! the kit's `rac_decision_*` component. The request shape, the rendering and
+//! `--json` output are shared, so a script can point the same invocation at
+//! either transport.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::ffi::CString;
 use std::io::Read;
 use std::time::Instant;
 
 use crate::account::decisions_contract as contract;
 use crate::account::{self, ConsoleClient, ConsoleSession};
+use crate::bootstrap::{self, GlobalOptions};
 use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};
+use crate::commands::model_setup::ensure_model_ready;
 use crate::io::output as out;
+use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
+use crate::sys;
 use crate::util::term;
 
 const DEFAULT_MODEL: &str = crate::harness::DEFAULT_DECISIONS_MODEL;
@@ -46,18 +59,26 @@ fn nonblank(value: &str, label: &str, maximum: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn validate(request: &contract::DecisionsRequest) -> Result<(), String> {
-    nonblank(&request.input, "input", 1_000_000)?;
-    nonblank(&request.model, "model", 128)?;
-    let mut chars = request.model.chars();
+/// The hosted console accepts a model id, not a path; the local transport
+/// accepts a catalog id, a registered id, or a path on this machine. So the
+/// console's id-shape rule is applied by the cloud branch, not here — a
+/// local path would otherwise be refused before the transport is chosen.
+fn validate_model_shape(model: &str) -> Result<(), String> {
+    nonblank(model, "model", 128)?;
+    let mut chars = model.chars();
     if !chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
-        || !request
-            .model
+        || !model
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "._:/-".contains(c))
     {
         return Err("model must be a valid Wally model id".to_string());
     }
+    Ok(())
+}
+
+fn validate(request: &contract::DecisionsRequest) -> Result<(), String> {
+    nonblank(&request.input, "input", 1_000_000)?;
+    nonblank(&request.model, "model", 128)?;
     if !(1..=128).contains(&request.questions.len()) {
         return Err("provide 1 to 128 questions".to_string());
     }
@@ -438,7 +459,15 @@ fn top_row(rows: &[(String, f64)]) -> Option<&(String, f64)> {
         })
 }
 
-fn render_human(request: &contract::DecisionsRequest, response: &contract::DecisionsResponse) {
+/// `label_mass_present` is the transport capability: the cloud server reports
+/// the share of the whole next-token distribution that landed on the
+/// question's labels, the local head does not. The low-fit note is only
+/// printed when a mass actually exists to judge.
+fn render_human(
+    request: &contract::DecisionsRequest,
+    response: &contract::DecisionsResponse,
+    label_mass_present: bool,
+) {
     for (id, view) in question_views(request) {
         let Some(answer) = response.answers.0.get(&id) else {
             continue;
@@ -464,7 +493,7 @@ fn render_human(request: &contract::DecisionsRequest, response: &contract::Decis
                 probability * 100.0
             ));
         }
-        if answer.label_mass < 0.5 {
+        if label_mass_present && answer.label_mass < 0.5 {
             out::result_line("  note: low fit — most probability was outside these labels");
         }
         out::result_line("");
@@ -477,7 +506,304 @@ fn display_label_line(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
-fn run(p: &crate::cli::Parsed, json: bool) -> i32 {
+/// Which transport `wally decisions` should use. `Auto` is resolved by
+/// whether `--model` names a local artifact: a decision model on this machine
+/// is what the command runs; otherwise the hosted console.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Transport {
+    Auto,
+    Local,
+    Cloud,
+}
+
+fn transport_from_flags(p: &crate::cli::Parsed) -> Result<Transport, String> {
+    let local = p.flag("--local");
+    let cloud = p.flag("--cloud");
+    match (local, cloud) {
+        (true, true) => Err("--local and --cloud are mutually exclusive".to_string()),
+        (true, false) => Ok(Transport::Local),
+        (false, true) => Ok(Transport::Cloud),
+        (false, false) => Ok(Transport::Auto),
+    }
+}
+
+/// Whether `reference` is a local model id/alias/path the decision component
+/// can load. A catalog decision row or a path on disk counts; a hosted model
+/// id (`eve`) does not.
+fn model_resolves_locally(reference: &str) -> bool {
+    match crate::catalog::model_ref::resolve(reference, None) {
+        Ok(resolved) => {
+            if resolved.from_catalog {
+                crate::catalog::find(reference)
+                    .map(|entry| entry.category == v1::ModelCategory::Decision)
+                    .unwrap_or(false)
+            } else {
+                // Registered ids (a manifest-restored pull) and local paths
+                // are local artifacts; a hosted id is not registered here.
+                true
+            }
+        }
+        Err(_) => false,
+    }
+}
+
+/// The response shape `create_decisions` returns, rebuilt locally so the
+/// shared renderer/`--json` path is identical across transports. `label_mass`
+/// is left at its default 0 and the renderer is told it is absent: the local
+/// head has no whole-distribution mass to report, and faking one would be a
+/// lie the `--json` output carried.
+fn local_response(
+    result: &v1::DecisionResult,
+    request: &contract::DecisionsRequest,
+) -> contract::DecisionsResponse {
+    let mut answers = BTreeMap::new();
+    for answer in &result.answers {
+        let r#type = match v1::DecisionQuestionType::try_from(answer.r#type) {
+            Ok(v1::DecisionQuestionType::Choice) => "choice",
+            Ok(v1::DecisionQuestionType::Noul) => "yes_no",
+            Ok(v1::DecisionQuestionType::Score) => "score",
+            _ => "",
+        }
+        .to_string();
+        // The local head keys probabilities by the option key it was given.
+        // For a yes/no question the contract renders "yes"/"no", so the
+        // canonical true/false keys are re-keyed the same way the SDK does.
+        let mut probabilities = BTreeMap::new();
+        for (key, probability) in &answer.probabilities {
+            let key = match (r#type.as_str(), key.as_str()) {
+                ("yes_no", "true") => "yes".to_string(),
+                ("yes_no", "false") => "no".to_string(),
+                (_, other) => other.to_string(),
+            };
+            probabilities.insert(key, f64::from(*probability));
+        }
+        let choice = match (&answer.answer, r#type.as_str()) {
+            (Some(v1::decision_answer::Answer::Choice(key)), "choice") => Some(key.clone()),
+            _ => None,
+        };
+        let score = match &answer.answer {
+            Some(v1::decision_answer::Answer::Score(value)) => Some(f64::from(*value)),
+            _ => None,
+        };
+        answers.insert(
+            answer.id.clone(),
+            contract::DecisionAnswer {
+                choice,
+                label_mass: 0.0,
+                probabilities: contract::LabelProbabilities(probabilities),
+                score,
+                r#type,
+            },
+        );
+    }
+    let input_tokens = result
+        .usage
+        .as_ref()
+        .map(|usage| i64::from(usage.input_tokens))
+        .unwrap_or(0);
+    contract::DecisionsResponse {
+        answers: contract::DecisionAnswers(answers),
+        model: if result.model_id.is_empty() {
+            request.model.clone()
+        } else {
+            result.model_id.clone()
+        },
+        object: "decision".to_string(),
+        prompt_format_version: i64::from(result.prompt_format_version),
+        usage: contract::DecisionUsage {
+            completion_tokens: 0,
+            prompt_tokens: input_tokens,
+            reasoning_tokens: None,
+            total_tokens: input_tokens,
+        },
+    }
+}
+
+/// Build the proto request the local component takes from the contract-shaped
+/// request the CLI built. The cloud `yes_no` question is the local NOUL; choice
+/// options map name→key (the name IS the canonical key the renderer expects);
+/// score levels map to ordered keys "0".."n-1" with the level text as the
+/// description, so the answer's `legend` can label the expected level.
+fn local_request(request: &contract::DecisionsRequest) -> v1::DecisionRequest {
+    let questions = request
+        .questions
+        .iter()
+        .map(|question| match question {
+            contract::DecisionQuestion::YesNoQuestion(value) => v1::DecisionQuestion {
+                id: value.id.clone(),
+                r#type: v1::DecisionQuestionType::Noul as i32,
+                instructions: value.question.clone(),
+                options: vec![
+                    v1::DecisionOption {
+                        key: "true".to_string(),
+                        description: value.yes.clone().unwrap_or_default(),
+                    },
+                    v1::DecisionOption {
+                        key: "false".to_string(),
+                        description: value.no.clone().unwrap_or_default(),
+                    },
+                ],
+            },
+            contract::DecisionQuestion::ChoiceQuestion(value) => v1::DecisionQuestion {
+                id: value.id.clone(),
+                r#type: v1::DecisionQuestionType::Choice as i32,
+                instructions: value.question.clone(),
+                options: value
+                    .options
+                    .iter()
+                    .map(|option| v1::DecisionOption {
+                        key: option.name.clone(),
+                        description: option.description.clone().unwrap_or_default(),
+                    })
+                    .collect(),
+            },
+            contract::DecisionQuestion::ScoreQuestion(value) => v1::DecisionQuestion {
+                id: value.id.clone(),
+                r#type: v1::DecisionQuestionType::Score as i32,
+                instructions: value.question.clone(),
+                options: value
+                    .levels
+                    .iter()
+                    .enumerate()
+                    .map(|(index, level)| v1::DecisionOption {
+                        key: index.to_string(),
+                        description: level.clone(),
+                    })
+                    .collect(),
+            },
+        })
+        .collect();
+
+    let options = (request.temperature.is_some() || request.prompt_format_version.is_some()).then(
+        || v1::DecisionOptions {
+            temperature: request.temperature.unwrap_or(0.0) as f32,
+            prompt_format_version: request.prompt_format_version.unwrap_or(0) as u32,
+        },
+    );
+
+    v1::DecisionRequest {
+        state: request.input.clone(),
+        questions,
+        options,
+        model_id: (!request.model.is_empty()).then(|| request.model.clone()),
+    }
+}
+
+/// Score through the local component: resolve the model, load it through the
+/// lifecycle (auto-pull when missing), drive the decision component, and hand
+/// the mapped response back to the shared renderer.
+fn run_local(
+    options: &GlobalOptions,
+    request: &contract::DecisionsRequest,
+    json: bool,
+) -> i32 {
+    if bootstrap::bootstrap(options).is_err() {
+        return 1;
+    }
+    if let Err(error) = crate::commands::model_setup::refresh_registry() {
+        out::status_line(&format!("warning: registry refresh failed: {error}"));
+    }
+
+    let model = match ensure_model_ready(options, &request.model) {
+        Ok(model) => model,
+        Err(exit_code) => return exit_code,
+    };
+
+    let mut handle: sys::rac_handle_t = std::ptr::null_mut();
+    // SAFETY: `handle` is a valid out-pointer for the duration of the call.
+    let rc = unsafe { sys::rac_decision_component_create(&mut handle) };
+    if rc != sys::SUCCESS || handle.is_null() {
+        out::error_line("failed to create decision component");
+        return 1;
+    }
+
+    let model_path = CString::new(model.primary_path.as_str());
+    let model_id = CString::new(model.model_id.as_str());
+    let model_name = CString::new(model.display_name.as_str());
+    let (model_path, model_id, model_name) = match (model_path, model_id, model_name) {
+        (Ok(path), Ok(id), Ok(name)) => (path, id, name),
+        _ => {
+            out::error_line("model path, id or name contains a NUL byte");
+            // SAFETY: handle was just created above.
+            unsafe { sys::rac_decision_component_destroy(handle) };
+            return 1;
+        }
+    };
+    // SAFETY: handle is the live component created above; the three C strings
+    // outlive this call.
+    let rc = unsafe {
+        sys::rac_decision_component_load_model(
+            handle,
+            model_path.as_ptr(),
+            model_id.as_ptr(),
+            model_name.as_ptr(),
+        )
+    };
+    if rc != sys::SUCCESS {
+        out::error_line(&format!(
+            "failed to load decision model: {}",
+            out::describe_result(rc)
+        ));
+        // SAFETY: handle is the live component created above.
+        unsafe { sys::rac_decision_component_destroy(handle) };
+        return 1;
+    }
+
+    let proto_request = local_request(request);
+    let bytes = serialize(&proto_request);
+    let mut out_buffer = ProtoBuffer::new();
+    let started = Instant::now();
+    // SAFETY: handle is the live, loaded component; bytes/out_buffer are valid
+    // for the duration of the call.
+    let proto_rc = unsafe {
+        sys::rac_decision_component_decide_proto(
+            handle,
+            bytes.as_ptr(),
+            bytes.len(),
+            out_buffer.as_mut_ptr(),
+        )
+    };
+    let result = match parse_proto_buffer::<v1::DecisionResult>(out_buffer) {
+        Ok(result) if proto_rc == sys::SUCCESS => result,
+        Ok(result) if !result.answers.is_empty() => result,
+        Ok(_) => {
+            out::error_line("decision failed: ");
+            // SAFETY: handle is the live component created above.
+            unsafe { sys::rac_decision_component_destroy(handle) };
+            return 1;
+        }
+        Err(error) => {
+            out::error_line(&format!("decision failed: {error}"));
+            // SAFETY: handle is the live component created above.
+            unsafe { sys::rac_decision_component_destroy(handle) };
+            return 1;
+        }
+    };
+    // SAFETY: handle is the live component created above; not used again.
+    unsafe { sys::rac_decision_component_destroy(handle) };
+
+    let latency_ms = started.elapsed().as_millis();
+    let response = local_response(&result, request);
+    if json {
+        out::result_line(&crate::io::json::dump(&response.to_json()));
+    } else {
+        render_human(request, &response, false);
+    }
+    out::status_line(&format!(
+        "{} · {} tokens · local · {}ms",
+        response.model, response.usage.total_tokens, latency_ms
+    ));
+    0
+}
+
+fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
+    let transport = match transport_from_flags(p) {
+        Ok(transport) => transport,
+        Err(error) => {
+            out::error_line(&error);
+            return 2;
+        }
+    };
     let request = match build_request(p) {
         Ok(request) => request,
         Err(error) => {
@@ -485,6 +811,33 @@ fn run(p: &crate::cli::Parsed, json: bool) -> i32 {
             return 2;
         }
     };
+    let local = match transport {
+        Transport::Local => {
+            if !model_resolves_locally(&request.model) {
+                out::error_line(&format!(
+                    "--local was given but '{}' does not resolve to a model on this machine",
+                    request.model
+                ));
+                return 2;
+            }
+            true
+        }
+        Transport::Cloud => false,
+        Transport::Auto => model_resolves_locally(&request.model),
+    };
+    if local {
+        if p.is_set("--no-retry") {
+            out::error_line("--no-retry is a cloud-only flag");
+            return 2;
+        }
+        return run_local(options, &request, json);
+    }
+    // The hosted console takes a model id, not a path; only the local
+    // transport accepts a path, so the id-shape rule gates cloud here.
+    if let Err(error) = validate_model_shape(&request.model) {
+        out::error_line(&error);
+        return 2;
+    }
     let credentials = match account::load() {
         Ok(credentials) if credentials.signed_in() => credentials,
         Ok(_) => {
@@ -539,7 +892,7 @@ fn run(p: &crate::cli::Parsed, json: bool) -> i32 {
     if json {
         out::result_line(&result.raw_json);
     } else {
-        render_human(&request, &result.response);
+        render_human(&request, &result.response, true);
     }
     let usage = &result.response.usage;
     let cost = session
@@ -606,6 +959,14 @@ pub fn register_decisions(app: &mut App) {
         "Probability temperature (>0, at most 100)",
     );
     cmd.add_flag("--json", "Print the raw response JSON");
+    cmd.add_flag(
+        "--local",
+        "Score on this machine with a local decision model (never the network)",
+    );
+    cmd.add_flag(
+        "--cloud",
+        "Score on your account's hosted endpoint (never a local model)",
+    );
     cmd.add_flag("--no-retry", "Do not retry HTTP 429 or 503");
     cmd.footer(&examples_footer(&[
         Example::new(
@@ -616,8 +977,12 @@ pub fn register_decisions(app: &mut App) {
             "wally decide --input-file ticket.txt --choice 'Owner=frontend,payments,account'",
             "",
         ),
+        Example::new(
+            "wally decisions --local -m clef-flash-gguf --input 'Checkout is blank' --ask 'Is this a bug?'",
+            "",
+        ),
     ]));
-    cmd.callback(|p, global| run(p, p.flag("--json") || global.json));
+    cmd.callback(|p, global| run(p, global, p.flag("--json") || global.json));
 }
 
 #[cfg(test)]
@@ -753,5 +1118,184 @@ mod tests {
         let long = "x".repeat(40);
         assert_eq!(display_label(&long).chars().count(), LABEL_MAX_CHARS);
         assert!(display_label(&long).ends_with('…'));
+    }
+
+    fn ticket_request() -> contract::DecisionsRequest {
+        contract::DecisionsRequest {
+            model: "clef-flash-gguf".to_string(),
+            input: "ticket".to_string(),
+            questions: vec![
+                contract::DecisionQuestion::YesNoQuestion(contract::YesNoQuestion {
+                    id: "refund".to_string(),
+                    question: "Refund?".to_string(),
+                    r#type: "yes_no".to_string(),
+                    yes: Some("asks for a refund".to_string()),
+                    no: Some("no refund".to_string()),
+                }),
+                contract::DecisionQuestion::ScoreQuestion(contract::ScoreQuestion {
+                    id: "urgency".to_string(),
+                    question: "Urgency?".to_string(),
+                    r#type: "score".to_string(),
+                    levels: vec!["low".into(), "medium".into(), "high".into()],
+                }),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn local_request_maps_cloud_shapes_onto_the_proto_contract() {
+        let proto = local_request(&ticket_request());
+        assert_eq!(proto.state, "ticket");
+        assert_eq!(proto.questions.len(), 2);
+        let refund = &proto.questions[0];
+        assert_eq!(refund.r#type, v1::DecisionQuestionType::Noul as i32);
+        // The engine finds the affirmative option by the canonical key.
+        assert_eq!(refund.options[0].key, "true");
+        assert_eq!(refund.options[1].key, "false");
+        let urgency = &proto.questions[1];
+        assert_eq!(urgency.r#type, v1::DecisionQuestionType::Score as i32);
+        // Score levels become ordered keys with the level text as legend.
+        let keys: Vec<&str> = urgency.options.iter().map(|o| o.key.as_str()).collect();
+        assert_eq!(keys, ["0", "1", "2"]);
+        assert_eq!(urgency.options[2].description, "high");
+    }
+
+    #[test]
+    fn local_response_maps_the_proto_result_back_to_the_cloud_shape() {
+        let request = ticket_request();
+        let mut result = v1::DecisionResult {
+            model_id: "clef-flash-gguf".to_string(),
+            prompt_format_version: 3,
+            ..Default::default()
+        };
+        let mut refund = v1::DecisionAnswer {
+            id: "refund".to_string(),
+            r#type: v1::DecisionQuestionType::Noul as i32,
+            confidence: 0.93,
+            ..Default::default()
+        };
+        refund
+            .probabilities
+            .insert("true".to_string(), 0.93_f32);
+        refund
+            .probabilities
+            .insert("false".to_string(), 0.07_f32);
+        refund.answer = Some(v1::decision_answer::Answer::Noul(0.93));
+        let mut urgency = v1::DecisionAnswer {
+            id: "urgency".to_string(),
+            r#type: v1::DecisionQuestionType::Score as i32,
+            ..Default::default()
+        };
+        urgency.probabilities.insert("2".to_string(), 0.7_f32);
+        urgency.answer = Some(v1::decision_answer::Answer::Score(1.7));
+        result.answers = vec![refund, urgency];
+        result.usage = Some(v1::TokenUsage {
+            input_tokens: 97,
+            ..Default::default()
+        });
+
+        let response = local_response(&result, &request);
+        assert_eq!(response.model, "clef-flash-gguf");
+        assert_eq!(response.prompt_format_version, 3);
+        assert_eq!(response.usage.total_tokens, 97);
+        let refund_answer = &response.answers.0["refund"];
+        // yes_no keys are re-keyed to the contract's yes/no spelling.
+        assert_eq!(refund_answer.r#type, "yes_no");
+        assert!((refund_answer.probabilities.0["yes"] - 0.93).abs() < 1e-6);
+        assert!((refund_answer.probabilities.0["no"] - 0.07).abs() < 1e-6);
+        let urgency_answer = &response.answers.0["urgency"];
+        assert_eq!(urgency_answer.r#type, "score");
+        assert!((urgency_answer.score.unwrap() - 1.7).abs() < 1e-6);
+        // The local head reports no whole-distribution mass; the renderer is
+        // told it is absent rather than printing a fake low-fit note.
+        assert_eq!(refund_answer.label_mass, 0.0);
+    }
+
+    #[test]
+    fn local_response_choice_keeps_the_option_key() {
+        let request = contract::DecisionsRequest {
+            model: "clef-flash-gguf".to_string(),
+            input: "ticket".to_string(),
+            questions: vec![contract::DecisionQuestion::ChoiceQuestion(
+                contract::ChoiceQuestion {
+                    id: "team".to_string(),
+                    question: "Owner?".to_string(),
+                    r#type: "choice".to_string(),
+                    options: vec![
+                        contract::DecisionOption {
+                            name: "billing".into(),
+                            description: None,
+                        },
+                        contract::DecisionOption {
+                            name: "technical".into(),
+                            description: None,
+                        },
+                    ],
+                },
+            )],
+            ..Default::default()
+        };
+        let mut result = v1::DecisionResult::default();
+        let mut answer = v1::DecisionAnswer {
+            id: "team".to_string(),
+            r#type: v1::DecisionQuestionType::Choice as i32,
+            ..Default::default()
+        };
+        answer
+            .probabilities
+            .insert("billing".to_string(), 0.97_f32);
+        answer.probabilities.insert("technical".to_string(), 0.03_f32);
+        answer.answer = Some(v1::decision_answer::Answer::Choice("billing".to_string()));
+        result.answers = vec![answer];
+
+        let response = local_response(&result, &request);
+        let mapped = &response.answers.0["team"];
+        assert_eq!(mapped.choice.as_deref(), Some("billing"));
+        assert!((mapped.probabilities.0["billing"] - 0.97).abs() < 1e-6);
+        assert!(mapped.score.is_none());
+    }
+
+    #[test]
+    fn a_decision_catalog_row_resolves_locally_and_a_hosted_id_does_not() {
+        // The engine sees this as an unregistered hosted id; it must not be
+        // treated as a local artifact (and must not try to load it as one).
+        assert!(!model_resolves_locally("eve"));
+        assert!(!model_resolves_locally("definitely-not-a-model"));
+    }
+
+    #[test]
+    fn transport_flags_are_mutually_exclusive() {
+        use crate::cli::Parsed;
+        let flag = |name: &str| {
+            let mut parsed = Parsed::default();
+            parsed
+                .name_to_spec
+                .insert(name.to_string(), name.to_string());
+            parsed
+                .flag_values
+                .insert(name.to_string(), vec!["true".to_string()]);
+            parsed
+        };
+
+        let mut both = flag("--local");
+        both.name_to_spec
+            .insert("--cloud".to_string(), "--cloud".to_string());
+        both.flag_values
+            .insert("--cloud".to_string(), vec!["true".to_string()]);
+        assert!(transport_from_flags(&both).is_err());
+
+        assert_eq!(
+            transport_from_flags(&flag("--local")).unwrap(),
+            Transport::Local
+        );
+        assert_eq!(
+            transport_from_flags(&flag("--cloud")).unwrap(),
+            Transport::Cloud
+        );
+        assert_eq!(
+            transport_from_flags(&Parsed::default()).unwrap(),
+            Transport::Auto
+        );
     }
 }
