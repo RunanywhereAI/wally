@@ -53,6 +53,12 @@ the four `alt_help__*`, `version__bare`, every `unknown__*` case, and
 is the only difference in each. `help__prime-agent` and
 `help__help__prime-agent` are new cases, mirroring OpenClaw's.
 
+`wally decisions` now describes itself as "Score questions with a hosted
+decision model" (it named the retired Qwev model) and its `--model` default is
+`pplx-decider-v1`. The 33 cases that print the command list or that help were
+updated for those two strings only, and the corpus replays byte-exact against
+the Rust binary.
+
 Re-capture from a binary (only when behaviour changes on purpose):
 
     python3 scripts/test/golden-capture.py --binary build/wally --out tests/golden --cases tests/golden/cases.json
