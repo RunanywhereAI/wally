@@ -20,7 +20,7 @@ from browser_use import ActionResult, Tools
 from pydantic import BaseModel, Field
 
 from .elements import element_from_node, label
-from .guards import ControlTier, control_tier, never_type_reason
+from .guards import ControlTier, control_tier, is_payment_gateway, never_type_reason
 
 ALLOWED_ACTIONS = {"done", "navigate", "go_back", "wait", "click", "input", "switch", "scroll", "select_dropdown"}
 GUARDED = {"click", "input", "select_dropdown"}
@@ -60,40 +60,64 @@ def build_tools(ask: Callable[[str], str | None] = terminal_ask, on_stop: Callab
         return ActionResult(extracted_content=f"The person answered {params.question!r}: {answer}",
                             long_term_memory=f"Person said: {answer}")
 
-    for name in GUARDED:
-        registered = tools.registry.registry.actions[name]
-        registered.function = _guard(name, registered.function, ask, on_stop)
+    _guard_registry(tools, ask, on_stop)
     return tools
 
 
-def _guard(name, original, ask, on_stop):
-    async def guarded(params, **context):
-        session = context.get("browser_session")
-        index = getattr(params, "index", None)
-        if session is None or index is None:
-            return await original(params=params, **context)
-        node = await session.get_element_by_index(index)
-        if node is None:
-            return await original(params=params, **context)
-        element = element_from_node(index, node)
-        if name in ("input", "select_dropdown"):
-            reason = never_type_reason(element)
-            if reason:
-                return ActionResult(error=f"wally refused to type into [{index}]: {reason}")
-        tier = control_tier(element)
-        if tier is ControlTier.PAYMENT:
-            message = f"wally stops before payment: [{index}] {label(element)} would pay or place the order"
-            if on_stop:
-                on_stop(message)
-            return ActionResult(error=message, is_done=True, success=True, extracted_content=message)
-        if tier is ControlTier.COMMIT and name == "click":
-            answer = await asyncio.to_thread(
-                ask, f"The next click is {label(element)!r}, which may book or confirm. Click it? [y/N]")
-            if (answer or "").strip().lower() not in ("y", "yes"):
-                ended = answer is None  # nobody to ask: the run stops here
-                return ActionResult(error=f"the person did not confirm clicking [{index}] {element.name!r}; "
-                                          "do not try it again", is_done=ended,
-                                    success=False if ended else None)
-        return await original(params=params, **context)
+def _guard_registry(tools: Tools, ask, on_stop) -> None:
+    """Gate every action at the one place all of them pass through.
 
-    return guarded
+    Wrapping the registered functions would not hold: browser-use re-registers
+    `click` (Tools.set_coordinate_clicking, called from Agent.__init__ for some
+    model names), which would drop such a wrapper. execute_action stays ours.
+    """
+    registry = tools.registry
+    original = registry.execute_action
+
+    async def execute_action(action_name: str, params: dict, browser_session=None, **kwargs):
+        refusal = await check_action(action_name, params or {}, browser_session, ask, on_stop)
+        if refusal is not None:
+            return refusal
+        return await original(action_name, params, browser_session=browser_session, **kwargs)
+
+    registry.execute_action = execute_action
+
+
+async def check_action(name: str, params: dict, session, ask, on_stop) -> ActionResult | None:
+    """None when the action may run; otherwise the ActionResult that replaces it. Fails closed."""
+    if name == "navigate":
+        url = str(params.get("url", ""))
+        if is_payment_gateway(url):
+            return ActionResult(error=f"wally refused to open a payment gateway ({url[:80]})")
+        return None
+    if name not in GUARDED:
+        return None
+    index = params.get("index")
+    if index is None:
+        return ActionResult(error=f"wally refused {name} without an element index (coordinate actions are not "
+                                  "checked, so they are not allowed)")
+    if session is None:
+        return ActionResult(error=f"wally refused {name}: no browser session to check the element against")
+    node = await session.get_element_by_index(index)
+    if node is None:
+        return ActionResult(error=f"wally refused {name}: element [{index}] is not on the page any more")
+    element = element_from_node(index, node)
+    if name in ("input", "select_dropdown"):
+        reason = never_type_reason(element)
+        if reason:
+            return ActionResult(error=f"wally refused to type into [{index}]: {reason}")
+    tier = control_tier(element)
+    if tier is ControlTier.PAYMENT:
+        message = f"wally stops before payment: [{index}] {label(element)} would pay or place the order"
+        if on_stop:
+            on_stop(message)
+        return ActionResult(error=message, is_done=True, success=True, extracted_content=message)
+    if tier is ControlTier.COMMIT and name == "click":
+        answer = await asyncio.to_thread(
+            ask, f"The next click is {label(element)!r}, which may book or confirm. Click it? [y/N]")
+        if (answer or "").strip().lower() not in ("y", "yes"):
+            ended = answer is None  # nobody to ask: the run stops here
+            return ActionResult(error=f"the person did not confirm clicking [{index}] {element.name!r}; "
+                                      "do not try it again", is_done=ended,
+                                success=False if ended else None)
+    return None
