@@ -84,7 +84,7 @@ AUTOCOMPLETE_KEYS = {"given-name": "first_name", "additional-name": "middle_name
 # Fields for another person, or for marketing: the traveller's own details never go there.
 _SOMEONE_ELSE = re.compile(r"recipient|nominee|beneficiary|newsletter|\bdeals\b|\boffers\b|\binbox\b|subscribe|"
                            r"\bpromo|\bgift\b|\bfriend|referr|emergency|guardian|\bparent\b|spouse|\bchild|"
-                           r"\binfant|\b(adult|passenger|traveller|traveler|guest)\s*[2-9]", re.I)
+                           r"\binfant|\b(adults?|passengers?|travell?ers?|guests?|rooms?|pax)\s*#?\s*\[?\s*\d", re.I)
 _PAYMENT_FORM = re.compile(r"card|wallet|\bupi\b|\bvpa\b|bank|\bbilling\b|payment|\bpaytm\b|gpay|phonepe",
                            re.I)
 
