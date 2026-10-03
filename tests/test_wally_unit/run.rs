@@ -110,13 +110,9 @@ fn run_refuses_qwev_before_model_resolution() {
 #[test]
 fn run_refuses_the_served_decision_model_before_model_resolution() {
     let home = common::TempHome::new();
-    let (code, _stdout, stderr) =
-        common::run_wally(&home, &["run", "pplx-decider-v1", "classify this"]);
+    let (code, _stdout, stderr) = common::run_wally(&home, &["run", "eve", "classify this"]);
     assert_eq!(code, 2, "{stderr}");
-    assert!(
-        stderr.contains("wally decisions -m pplx-decider-v1"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("wally decisions -m eve"), "{stderr}");
 }
 
 #[test]
