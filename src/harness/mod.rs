@@ -21,12 +21,13 @@ pub use opencode::*;
 /// must never be routed through chat/completions or a coding harness. The
 /// console catalog cannot tell them apart (its entries carry an id, a name and
 /// prices, and the gateway hides decisions-only models from /v1/models), so
-/// the list is explicit. `qwev` is retired but stays refused, so an old
-/// command line gets this answer rather than a gateway 404.
-pub const DECISIONS_MODEL_IDS: &[&str] = &["pplx-decider-v1", "qwev"];
+/// the list is explicit. `pplx-decider-v1` and `qwev` are the decision
+/// model's earlier public names, retired but still refused, so an old command
+/// line gets this answer rather than a gateway 404.
+pub const DECISIONS_MODEL_IDS: &[&str] = &["eve", "pplx-decider-v1", "qwev"];
 
-/// The model `wally decisions` asks when no `--model` is given.
-pub const DEFAULT_DECISIONS_MODEL: &str = "pplx-decider-v1";
+/// The model `wally decisions` asks when no `--model` is given: Eve.
+pub const DEFAULT_DECISIONS_MODEL: &str = "eve";
 
 pub fn is_decisions_model(id: &str) -> bool {
     DECISIONS_MODEL_IDS.contains(&id)
