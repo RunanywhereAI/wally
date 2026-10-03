@@ -61,9 +61,10 @@ KEY_FIELDS: dict[str, re.Pattern] = {key: re.compile(pattern, re.I) for key, pat
     "last_name": r"last|surname|family|\blname",
     "full_name": r"full ?name|\bname\b",
     "gender": r"gender|\bsex\b",
-    "date_of_birth": r"birth|\bdob\b|\bbday",
+    "date_of_birth": r"date of birth|birth ?date|\bdob\b|\bbday",  # not "place of birth"
     "nationality": r"nationality|citizenship",
-    "passport_number": r"passport",
+    # Not "passport expiry date" or "passport issuing country": those take other keys.
+    "passport_number": r"passport ?(number|no\b|#)|^(?!.*(expir|issu|country|place|nationality)).*passport",
     "passport_expiry": r"passport.*expir|expir.*passport",
     "passport_country": r"passport.*(country|issu)|issu(ing|ed).*country",
     "email": r"e-?mail",
@@ -80,6 +81,10 @@ AUTOCOMPLETE_KEYS = {"given-name": "first_name", "additional-name": "middle_name
                      "bday": "date_of_birth", "honorific-prefix": "title", "sex": "gender"}
 
 
+# Fields for another person, or for marketing: the traveller's own details never go there.
+_SOMEONE_ELSE = re.compile(r"recipient|nominee|beneficiary|newsletter|\bdeals\b|\boffers\b|\binbox\b|subscribe|"
+                           r"\bpromo|\bgift\b|\bfriend|referr|emergency|guardian|\bparent\b|spouse|\bchild|"
+                           r"\binfant|\b(adult|passenger|traveller|traveler|guest)\s*[2-9]", re.I)
 _PAYMENT_FORM = re.compile(r"card|wallet|\bupi\b|\bvpa\b|bank|\bbilling\b|payment|\bpaytm\b|gpay|phonepe",
                            re.I)
 
@@ -87,7 +92,7 @@ _PAYMENT_FORM = re.compile(r"card|wallet|\bupi\b|\bvpa\b|bank|\bbilling\b|paymen
 def key_fits_field(key: str, label_text: str, autocomplete: str = "") -> bool:
     """Whether a profile value of kind `key` may be typed into a field with this label.
     Never into a field that belongs to a card, wallet, UPI or bank form."""
-    if _PAYMENT_FORM.search(label_text or ""):
+    if _PAYMENT_FORM.search(label_text or "") or _SOMEONE_ELSE.search(label_text or ""):
         return False
     token = autocomplete.split(" ")[-1].lower() if autocomplete else ""
     if token.startswith("cc-"):
