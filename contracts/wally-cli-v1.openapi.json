@@ -380,6 +380,11 @@
             "title": "Cached Input Per Mtok",
             "type": "integer"
           },
+          "decisions_only": {
+            "description": "True when the model serves only POST /v1/decisions and /v1/systemone; its chat and text completions are refused. constants.toml [[models]] decisions_only.",
+            "title": "Decisions Only",
+            "type": "boolean"
+          },
           "display_name": {
             "maxLength": 255,
             "minLength": 1,
@@ -411,7 +416,8 @@
           "display_name",
           "input_per_mtok",
           "output_per_mtok",
-          "cached_input_per_mtok"
+          "cached_input_per_mtok",
+          "decisions_only"
         ],
         "title": "CatalogModelResponse",
         "type": "object"
@@ -2387,8 +2393,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "feat/openrouter-listing-complete",
-    "commit": "fced93708d8e1ae13a621fb9dd9d52cf84fa1759",
+    "branch": "chore/decisions-contract-gate",
+    "commit": "95c1df76d6e783987c627f117598c18f86fe5a34",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
