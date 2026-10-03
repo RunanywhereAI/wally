@@ -973,10 +973,7 @@ fn run_llm(options: &GlobalOptions, verb: LlmVerb, prompt: &str, params: &RunPar
         return 2;
     }
     if crate::harness::is_decisions_model(&params.model) {
-        error_line(&format!(
-            "{} is a decision model; use `wally decisions` instead",
-            params.model
-        ));
+        error_line(&crate::harness::decisions_model_refusal(&params.model));
         return 2;
     }
     if bootstrap::bootstrap(options).is_err() {
