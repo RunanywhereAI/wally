@@ -90,10 +90,18 @@ fn model_id_accepts_ordinary_ids() {
 }
 
 #[test]
-fn qwev_is_reserved_for_the_decisions_surface() {
+fn decision_models_are_reserved_for_the_decisions_surface() {
+    assert!(harness::is_decisions_model("pplx-decider-v1"));
+    // Retired, but an old command line still gets the decisions answer.
     assert!(harness::is_decisions_model("qwev"));
-    assert_eq!(harness::DECISIONS_MODEL_IDS, &["qwev"]);
+    assert_eq!(harness::DECISIONS_MODEL_IDS, &["pplx-decider-v1", "qwev"]);
+    assert_eq!(harness::DEFAULT_DECISIONS_MODEL, "pplx-decider-v1");
     assert!(!harness::is_decisions_model("glm-5.3-flash"));
+    let refusal = harness::decisions_model_refusal("pplx-decider-v1");
+    assert!(
+        refusal.contains("wally decisions -m pplx-decider-v1"),
+        "{refusal}"
+    );
 }
 
 // ---------------------------------------------------------------------------
