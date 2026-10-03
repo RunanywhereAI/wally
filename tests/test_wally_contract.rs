@@ -53,12 +53,12 @@ fn decisions_binding_matches_the_pinned_contract() {
 
 #[test]
 fn decisions_response_reads_the_served_prompt_format_as_an_integer() {
-    // pplx-decider-v1 serves prompt format 3, an integer on the wire. The
+    // The decision model serves prompt format 3, an integer on the wire. The
     // contract spells it as an untyped `enum: [2, 3]`, which the generator
     // once carried as a string, failing every response.
     use wally::account::decisions_contract as decision;
     let response = serde_json::json!({
-        "object": "decisions", "model": "pplx-decider-v1", "prompt_format_version": 3,
+        "object": "decisions", "model": "eve", "prompt_format_version": 3,
         "answers": {
             "owner": {"type": "choice", "probabilities": {"billing": 0.989, "auth": 0.011},
                       "label_mass": 1.0, "choice": "billing"},
@@ -78,7 +78,7 @@ fn decisions_response_reads_the_served_prompt_format_as_an_integer() {
 fn decisions_contract_round_trips_typed_questions_and_answers() {
     use wally::account::decisions_contract as decision;
     let request = serde_json::json!({
-        "model": "pplx-decider-v1",
+        "model": "eve",
         "input": "The checkout is blank",
         "questions": [
             {"id": "bug", "type": "yes_no", "question": "Is this a bug?"},
@@ -92,7 +92,7 @@ fn decisions_contract_round_trips_typed_questions_and_answers() {
     assert_eq!(parsed.to_json(), request);
 
     let response = serde_json::json!({
-        "object": "decisions", "model": "pplx-decider-v1", "prompt_format_version": 3,
+        "object": "decisions", "model": "eve", "prompt_format_version": 3,
         "answers": {
             "bug": {"type": "yes_no", "probabilities": {"yes": 0.9, "no": 0.1}, "label_mass": 0.8}
         },
