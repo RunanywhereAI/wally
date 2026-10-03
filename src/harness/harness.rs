@@ -420,11 +420,9 @@ pub fn resolve(model: &str, options: &GlobalOptions, harness_command: &str) -> O
     } else {
         // Decision models are not chat models. Refuse before consulting the
         // hosted-model cache, whose empty-cache fail-open would otherwise let
-        // qwev reach a coding tool's /chat/completions request.
+        // a decision model reach a coding tool's /chat/completions request.
         if super::is_decisions_model(model) {
-            out::error_line(&format!(
-                "{model} is a decision model; use `wally decisions` instead"
-            ));
+            out::error_line(&super::decisions_model_refusal(model));
             return None;
         }
         let requested = catalog::find(model);
