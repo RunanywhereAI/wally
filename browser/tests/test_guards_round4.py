@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 import wally_browser  # noqa: F401
-from wally_browser.agent import is_details_form, looks_personal, note_value_source
-from wally_browser.guards import Element, check_page, never_type_reason, refused_value
+from wally_browser.agent import looks_personal, note_value_source
+from wally_browser.guards import Element, check_page, details_form_reason, never_type_reason, refused_value
 from wally_browser.tools import GuardContext
 
 
@@ -34,9 +34,9 @@ def test_an_ordinary_model_value_does_not_mark_details_entered():
 
 def test_a_reservation_form_with_unlabelled_fields_is_a_details_form():
     unlabeled = [field(attributes={"id": "f1"}), field(attributes={"id": "f2"}), field(attributes={"id": "f3"})]
-    assert is_details_form(unlabeled)
-    assert is_details_form([field("Guest name")])
-    assert not is_details_form([field("Where to?")])
+    assert details_form_reason(unlabeled)
+    assert details_form_reason([field("Guest name")])
+    assert details_form_reason([field("Where to?")]) is None
     assert looks_personal("asha@example.com") and looks_personal("+91 98765") and not looks_personal("Goa")
 
 
