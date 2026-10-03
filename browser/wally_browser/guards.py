@@ -240,11 +240,13 @@ _CARD_NUMBER = re.compile(r"(?:\d[ \-]?){13,19}")
 
 # A UPI id: name@handle where the handle has no dot (an email's domain always has one).
 _UPI_ID = re.compile(r"^[\w.\-]{2,}@[a-z][a-z0-9]{1,24}$", re.I)
-_SHORT_CODE = re.compile(r"^\d{4,6}$")
-# Fields a 4-6 digit number legitimately goes into (an Indian PIN code is 6 digits).
-_SHORT_NUMBER_FIELD = re.compile(r"pin ?code|\bzip\b|postal|post ?code|quantity|\bqty\b|count|\bage\b|\byear\b|"
-                                 r"\bdate\b|adults?|children|rooms?|passengers?|travell?ers?|guests?|flight ?(no|number)",
-                                 re.I)
+_SHORT_CODE = re.compile(r"^\d{4,8}$")
+# Fields a 4-8 digit number legitimately goes into (an Indian PIN code is 6 digits), on whole words:
+# "account" must not pass because it contains "count".
+_SHORT_NUMBER_FIELD = re.compile(r"\b(pin ?code|zip|zip ?code|postal ?code|post ?code|postcode|quantity|qty|count|"
+                                 r"number of \w+|age|year|date|adults?|children|rooms?|passengers?|travell?ers?|"
+                                 r"guests?|flight ?(no|number))\b", re.I)
+_PHONE_FIELD = re.compile(r"\b(phone|mobile|telephone|tel|landline|contact number)\b", re.I)
 _CARD_RUN = re.compile(r"(?<!\d)(?:\d[ .\-/]?){12,18}\d(?!\d)")
 
 
@@ -262,15 +264,17 @@ def refused_value(value: str, element: Element) -> str | None:
     """Why this VALUE must not be typed here, whatever the field is called: a card number anywhere
     in it, a UPI id, or a 4-6 digit code (an OTP) in a field that is not a PIN code or count field."""
     text = (value or "").strip()
-    for run in _CARD_RUN.findall(text):
-        digits = re.sub(r"\D", "", run)
-        if 13 <= len(digits) <= 19 and _luhn(digits):
-            return "the value contains a card number"
+    every_digit = re.sub(r"\D", "", text)
+    candidates = [re.sub(r"\D", "", run) for run in _CARD_RUN.findall(text)] + [every_digit]
+    if any(13 <= len(digits) <= 19 and _luhn(digits) for digits in candidates):
+        return "the value contains a card number"
     if _UPI_ID.match(text):
         return "the value looks like a UPI id"
     compact = re.sub(r"[ \-]", "", text)
     if _SHORT_CODE.match(compact) and not _SHORT_NUMBER_FIELD.search(element.label_text):
-        return "the value looks like a one-time code"
+        phone = _PHONE_FIELD.search(element.label_text) or element.input_type == "tel"
+        if len(compact) <= 6 or not phone:  # a 7-8 digit landline may go into a phone field
+            return "the value looks like a one-time code"
     return None
 
 
@@ -293,7 +297,8 @@ _PAY = (
     # (it is also a nav link); an icon-only pay button on a checkout page is confirmed anyway.
     r"shopping_cart_checkout|^credit_card$|^account_balance_wallet$|"
     # Hindi, German, French, Spanish, Portuguese
-    r"भुगतान|खरीद|ऑर्डर करें|zahlungspflichtig|jetzt kaufen|\bkaufen\b|bezahlen|\bpayer\b|acheter|commander|"
+    r"भुगतान|खरीद|ऑर्डर करें|zahlungspflichtig|kostenpflichtig|jetzt kaufen|jetzt bestellen|\bkaufen\b|bezahlen|"
+    r"\bpayer\b|acheter|commander|acquista|paga ora|"
     r"\bpagar\b|comprar|realizar pedido|finalizar compra"
 )
 _COMMIT = (
@@ -301,7 +306,8 @@ _COMMIT = (
     r"\bsubmit\b|\bagree and continue\b|\baccept and continue\b|\bschedule\b|\brequest\b|\bregister\b|"
     r"\brsvp\b|\bget tickets?\b|\benrol+\b|\bapply( now)?\b|\bclaim\b|\bsign ?up\b|\bjoin\b|"
     r"\bcancel (my |the |this )?(booking|trip|order|reservation|ticket|subscription)\b|\bfee\b|"
-    r"बुक करें|पुष्टि|buchen|bestätigen|réserver|confirmer|reservar|confirmar"
+    r"बुक करें|पुष्टि|buchen|bestätigen|reservieren|bestellen|réserver|confirmer|reservar|confirmar|prenota|"
+    r"conferma"
 )
 PAYMENT_CONTROL = re.compile(_PAY, re.I)
 COMMIT_CONTROL = re.compile(_COMMIT, re.I)
@@ -354,7 +360,9 @@ _TYPEABLE_TAGS = {"input", "select", "textarea"}
 # Checkout-like pages, by URL (path, query, fragment) and, more strictly, by title.
 _CHECKOUT_URL = re.compile(r"checkout|payment|\bpay\b|\bbook\b|booking|reserv|\bcart\b|\border\b|passenger|"
                            r"traveller|traveler|contact|review|summary|itinerary|add ?ons|\bseats?\b|confirm|"
-                           r"appointment|schedul|\brsvp\b|callback|regist|enrol|subscri|guest ?details|\bdetails\b",
+                           r"appointment|schedul|\brsvp\b|callback|regist|enrol|subscri|guest ?details|\bdetails\b|"
+                           r"\bkasse\b|warenkorb|bestellung|buchung|reservierung|panier|paiement|commande|"
+                           r"pagamento|carrello|prenotazione|carrito|\bpago\b|reserva",
                            re.I)
 _CHECKOUT_TITLE = re.compile(r"checkout|payment|review (your )?(booking|trip|order|itinerary)|passenger|"
                              r"traveller details|traveler details|contact (details|information)|order summary|"
