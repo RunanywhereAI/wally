@@ -563,7 +563,7 @@ fn run(p: &crate::cli::Parsed, json: bool) -> i32 {
 }
 
 pub fn register_decisions(app: &mut App) {
-    let cmd = app.add_subcommand("decisions", "Score questions with a hosted decision model");
+    let cmd = app.add_subcommand("decisions", "Score questions with Eve, the decision model");
     cmd.alias("decide");
     cmd.add_option(
         "--model,-m",
@@ -648,14 +648,14 @@ mod tests {
 
     #[test]
     fn defaults_to_the_served_decision_model() {
-        assert_eq!(DEFAULT_MODEL, "pplx-decider-v1");
+        assert_eq!(DEFAULT_MODEL, "eve");
         assert!(crate::harness::is_decisions_model(DEFAULT_MODEL));
     }
 
     #[test]
     fn request_file_with_an_unknown_field_is_named_at_every_depth() {
         let value = serde_json::json!({
-            "model": "pplx-decider-v1",
+            "model": "eve",
             "input": "ticket",
             "temprature": 0.2,
             "questions": [
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn request_file_with_only_contract_fields_passes_including_nulls() {
         let value = serde_json::json!({
-            "model": "pplx-decider-v1",
+            "model": "eve",
             "input": "ticket",
             "temperature": 1.0,
             "prompt_format_version": null,
