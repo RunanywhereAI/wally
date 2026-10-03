@@ -152,10 +152,14 @@ def main():
 
             # Chat surfaces refuse a decision model before anything else, so
             # these hold with no coding tool installed and no session.
-            for command in (["opencode"], ["opencode", "--cloud"], ["claude-code"], ["hermes"]):
-                refused = invoke(binary, env, *command, "-m", "pplx-decider-v1")
-                assert refused.returncode == 2, (command, refused.stderr)
-                assert "wally decisions -m pplx-decider-v1" in refused.stderr, refused.stderr
+            for command, model in (
+                (["opencode"], "eve"), (["opencode", "--cloud"], "eve"),
+                (["claude-code"], "eve"), (["hermes"], "eve"),
+                (["opencode"], "pplx-decider-v1"), (["claude-code"], "qwev"),
+            ):
+                refused = invoke(binary, env, *command, "-m", model)
+                assert refused.returncode == 2, (command, model, refused.stderr)
+                assert f"wally decisions -m {model}" in refused.stderr, refused.stderr
 
             login = invoke(binary, env, "account", "login", "--no-browser")
             assert login.returncode == 0, login.stderr
@@ -167,7 +171,7 @@ def main():
             assert human.returncode == 0, human.stderr
             assert "Is this a bug?" in human.stdout and "Owner" in human.stdout
             sent = ConsoleHandler.requests[-1][2]
-            assert sent["model"] == "pplx-decider-v1" and sent["temperature"] == 0.7
+            assert sent["model"] == "eve" and sent["temperature"] == 0.7
             assert [question["id"] for question in sent["questions"]] == ["q1", "q2"]
 
             raw = invoke(binary, env, "--json", "decide", "--input", "json", "--ask", "Okay?")
@@ -194,7 +198,7 @@ def main():
 
             forbidden = invoke(binary, env, "decisions", "--input", "forbidden", "--ask", "Okay?")
             assert forbidden.returncode == 1
-            assert "not entitled to pplx-decider-v1" in forbidden.stderr, forbidden.stderr
+            assert "not entitled to eve" in forbidden.stderr, forbidden.stderr
             assert "wally account login" in forbidden.stderr, forbidden.stderr
 
             too_long = invoke(binary, env, "decisions", "--input", "too-long", "--ask", "Okay?")
@@ -216,7 +220,7 @@ def main():
             before = len(ConsoleHandler.requests)
             typo_file = pathlib.Path(profile, "typo.json")
             typo_file.write_text(json.dumps({
-                "model": "pplx-decider-v1", "input": "typo", "temprature": 0.2,
+                "model": "eve", "input": "typo", "temprature": 0.2,
                 "questions": [{"id": "q1", "type": "yes_no", "question": "Okay?"}],
             }))
             typo = invoke(binary, env, "decisions", "--request", str(typo_file))
@@ -224,7 +228,7 @@ def main():
             assert len(ConsoleHandler.requests) == before, "a refused request file was sent"
 
             custom = {
-                "model": "pplx-decider-v1", "input": "custom",
+                "model": "eve", "input": "custom",
                 "questions": [{"id": "custom-id", "type": "choice", "question": "Route?",
                                "options": [{"name": "a", "description": "Alpha"},
                                            {"name": "b", "description": "Beta"}]}],
