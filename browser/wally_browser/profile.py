@@ -80,9 +80,18 @@ AUTOCOMPLETE_KEYS = {"given-name": "first_name", "additional-name": "middle_name
                      "bday": "date_of_birth", "honorific-prefix": "title", "sex": "gender"}
 
 
+_PAYMENT_FORM = re.compile(r"card|wallet|\bupi\b|\bvpa\b|bank|\bbilling\b|payment|\bpaytm\b|gpay|phonepe",
+                           re.I)
+
+
 def key_fits_field(key: str, label_text: str, autocomplete: str = "") -> bool:
-    """Whether a profile value of kind `key` may be typed into a field with this label."""
+    """Whether a profile value of kind `key` may be typed into a field with this label.
+    Never into a field that belongs to a card, wallet, UPI or bank form."""
+    if _PAYMENT_FORM.search(label_text or ""):
+        return False
     token = autocomplete.split(" ")[-1].lower() if autocomplete else ""
+    if token.startswith("cc-"):
+        return False
     if token in AUTOCOMPLETE_KEYS:
         return AUTOCOMPLETE_KEYS[token] == key
     rule = KEY_FIELDS.get(key)
