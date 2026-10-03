@@ -37,15 +37,23 @@ class Element:
     value: str = ""
     frame_url: str = ""  # src of the nearest enclosing iframe, "" for the top document
     attributes: dict = field(default_factory=dict, compare=False, hash=False)
+    # The element's whole text, never clipped (the display `name` is cut to 80
+    # characters). Guards read this, so a pay word past character 80 or deep in
+    # nested spans is still seen.
+    full_text: str = field(default="", compare=False, hash=False)
 
     @property
-    def label_text(self) -> str:
-        """Every human-readable name the element carries, lowercased."""
-        parts = [self.name, self.placeholder, self.attributes.get("aria-label", ""),
+    def text_parts(self) -> list[str]:
+        """Every human-readable name the element carries, each on its own, lowercased."""
+        parts = [self.full_text or self.name, self.name, self.placeholder, self.attributes.get("aria-label", ""),
                  self.attributes.get("name", ""), self.attributes.get("id", ""),
                  self.attributes.get("title", ""), self.attributes.get("value", "")
                  if self.tag in ("button", "input") and self.input_type in ("submit", "button", "") else ""]
-        return " ".join(p for p in parts if p).lower()
+        return [" ".join(p.split()).lower() for p in parts if p and p.strip()]
+
+    @property
+    def label_text(self) -> str:
+        return " ".join(self.text_parts)
 
 
 class ControlTier(Enum):
@@ -57,7 +65,9 @@ class ControlTier(Enum):
 # Payment gateways whose frames or pages mean "payment details from here on".
 PAYMENT_GATEWAY_HOSTS = (
     "razorpay.com", "juspay.in", "payu.in", "payumoney.com", "billdesk.com", "ccavenue.com",
-    "stripe.com", "stripe.network", "adyen.com", "adyenpayments.com", "paypal.com", "paytm.in", "paytm.com",
+    # Not stripe.network: its m.stripe.network frame is fraud detection on every page of a
+    # Stripe shop, not a payment form, and it would end runs on the home page.
+    "stripe.com", "adyen.com", "adyenpayments.com", "paypal.com", "paytm.in", "paytm.com",
     "cashfree.com", "phonepe.com", "braintreegateway.com", "checkout.com", "worldpay.com",
     "cybersource.com", "authorize.net", "klarna.com", "airpay.co.in", "easebuzz.in", "instamojo.com",
 )
@@ -75,24 +85,34 @@ SENSITIVE_AUTOCOMPLETE = ("cc-", "one-time-code", "current-password", "new-passw
 SENSITIVE_LABEL = re.compile(
     r"card[ _-]?(number|num\b|no\b|holder)|name ?on ?(the )?card|credit[ _-]?card|debit[ _-]?card|"
     r"\bcvv|\bcvc|\bcsc\b|security[ _-]?code|"
-    r"expir|valid ?(thru|through|till)|\bmm ?/ ?yy|\bupi\b|\bvpa\b|\bpin\b|\bmpin|\botp\b|one[- ]time|"
-    r"verification ?code|net ?banking|ifsc|account ?number|aadhaar|password|passcode",
+    r"expir|valid ?(thru|through|till)|\bmm ?/ ?yy\b|\bexp[ _-]?(month|year|date|mm|yy)|\bupi\b|\bvpa\b|"
+    r"\bpin\b|\bmpin|\botp\b|one[- ]time|verification ?code|security ?code|\b(enter|sms|email|phone)[ _-]?code\b|"
+    r"\b\d[- ]?digit code|\bcode (sent|we sent)|\bcc[ _-]?(num|number|no)\b|\bccnum|\bcardnum|\bcvn\b|"
+    r"\d{4} ?\d{4} ?\d{4} ?\d{4}|net ?banking|ifsc|account ?number|aadhaar|password|passcode",
     re.I,
 )
 
-_PAY_WORDS = r"(₹|rs\.?|inr|\$|€|£|usd)?\s*[\d,]+(\.\d+)?"
+# Any whole word "pay" counts ("Proceed to Pay", "Tap to pay", "₹4,500 Pay", "Pay later"): a
+# stop on a harmless one costs a prompt, a miss could cost money. "payment" and "PayPal" are
+# other words; a PayPal button sits in a gateway frame, which is PAYMENT anyway.
 PAYMENT_CONTROL = re.compile(
-    rf"^\s*pay\b|\bpay\s*now\b|\bpay\s+{_PAY_WORDS}|\bpay\s+securely\b|\bmake\s+(a\s+)?payment\b|"
-    r"\bplace\s+(your\s+)?order\b|\bpurchase\b|\bbuy\s+now\b|\bcomplete\s+(the\s+)?(purchase|payment|order|booking)\b|"
-    r"\bconfirm\s+(and|&)\s+pay\b|\bconfirm\s+payment\b|\bsubmit\s+payment\b|\bauthori[sz]e\s+payment\b",
+    r"\bpay\b|\bmake\s+(a\s+)?payment\b|\bplace\s+(your\s+|the\s+)?order\b|\bpurchase\b|\bbuy\b|"
+    r"\border\s+now\b|\b(submit|confirm|complete|finali[sz]e)\s+(your\s+|the\s+)?order\b|"
+    r"\bcomplete\s+(the\s+)?(purchase|payment|booking)\b|\bconfirm\s+payment\b|\bsubmit\s+payment\b|"
+    r"\bauthori[sz]e\s+payment\b|\bcheckout\s+(and|&)\s+pay\b",
     re.I,
 )
 COMMIT_CONTROL = re.compile(
-    r"\bbook\b|\bbooking\s+confirm|\bconfirm\b|\breserve\b|\breservation\b|\bcheckout\b|\bcheck\s+out\b",
+    r"\bbook\b|\bbooking\b|\bconfirm\b|\breserve\b|\breservation\b|\bcheckout\b|\bcheck\s+out\b|"
+    r"\bhold\b|\bsubmit\b",
     re.I,
 )
-# Wording that only navigates toward payment; allowed even though it says "pay".
-NAVIGATES_TO_PAYMENT = re.compile(r"\b(continue|proceed|go)\s+to\s+(the\s+)?(payment|checkout)\b", re.I)
+# A label that is ONLY a navigation phrase ("Continue to payment", "Proceed to checkout") moves
+# toward payment without committing anything. Matched against the whole label, so "Place order
+# and proceed to payment" stays PAYMENT.
+NAVIGATES_TO_PAYMENT = re.compile(
+    r"\s*(continue|proceed|go|next)(:)?\s+(to\s+)?(the\s+)?(payment|checkout|payment page|review)(\s+page)?"
+    r"\s*[>→»]*\s*", re.I)
 
 
 def host_of(url: str) -> str:
@@ -122,6 +142,10 @@ def is_bot_check_url(url: str) -> bool:
     return bool(url) and _host_matches(url, BOT_CHECK_HOSTS)
 
 
+# A field whose whole label is just "MM", "YY", "YYYY" or "MM/YY" is a card expiry.
+_BARE_EXPIRY = re.compile(r"\s*(mm|yy|yyyy|mm ?/ ?yy(yy)?|month|year)\s*", re.I)
+
+
 def never_type_reason(element: Element) -> str | None:
     """Why the agent must not type into this element, or None when it may."""
     if element.input_type == "password":
@@ -134,21 +158,23 @@ def never_type_reason(element: Element) -> str | None:
     match = SENSITIVE_LABEL.search(element.label_text)
     if match:
         return f"label mentions '{match.group(0).strip()}'"
+    visible = element.name or element.placeholder or element.attributes.get("aria-label", "")
+    if visible and _BARE_EXPIRY.fullmatch(visible) and "birth" not in element.label_text:
+        return f"a bare '{visible.strip()}' field reads as a card expiry"
     return None
 
 
 def control_tier(element: Element) -> ControlTier:
-    """How dangerous a click on this element is. Read from its visible name."""
+    """How dangerous a click on this element is. Every text the element carries
+    is checked on its own: a pay word in ANY of them makes it PAYMENT, and no
+    navigation phrase elsewhere can lower that."""
     if is_payment_gateway(element.frame_url):
         return ControlTier.PAYMENT
-    text = element.label_text
-    if not text:
-        return ControlTier.NONE
-    if NAVIGATES_TO_PAYMENT.search(text):
-        return ControlTier.NONE
-    if PAYMENT_CONTROL.search(text):
+    parts = element.text_parts
+    if any(PAYMENT_CONTROL.search(part) for part in parts):
         return ControlTier.PAYMENT
-    if COMMIT_CONTROL.search(text):
+    committing = [part for part in parts if COMMIT_CONTROL.search(part)]
+    if committing and not all(NAVIGATES_TO_PAYMENT.fullmatch(part) for part in committing):
         return ControlTier.COMMIT
     return ControlTier.NONE
 
@@ -181,7 +207,8 @@ def check_page(url: str, title: str, elements: list[Element], frame_urls: list[s
     if BOT_CHECK_TITLES.search(title or ""):
         bot = f"the page title reads '{title}'"
     for frame in (*frame_urls, *(e.frame_url for e in elements)):
-        if bot is None and is_bot_check_url(frame):
+        # reCAPTCHA v3 loads an invisible anchor frame on ordinary pages; it blocks nothing.
+        if bot is None and is_bot_check_url(frame) and "size=invisible" not in frame.lower():
             bot = f"a bot-check frame is on the page ({host_of(frame) or frame})"
     return PageCheck(payment_page=payment, bot_check=bot)
 
