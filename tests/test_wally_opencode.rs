@@ -140,7 +140,7 @@ fn cloud_launch_refuses_a_decision_model_before_any_session_or_spawn() {
         0
     });
 
-    let status = harness::launch_open_code_cloud_with("pplx-decider-v1", &[], &console, &spawn);
+    let status = harness::launch_open_code_cloud_with("eve", &[], &console, &spawn);
     assert_eq!(status, 2);
     assert!(!asked_flag.load(Ordering::SeqCst), "asked the console");
     assert!(!spawned_flag.load(Ordering::SeqCst), "spawned opencode");
