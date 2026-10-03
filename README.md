@@ -95,9 +95,12 @@ credit.
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/harness-dark.gif">
   <img src="docs/assets/harness-light.gif" alt="OpenCode on the hosted GLM model fixing a bug through wally" width="100%">
+</picture>
 
-Qwev is a hosted decision model: it scores explicit labels without generating
-text. Ask yes/no, choice, or ordered score questions:
+## Ask a decision model
+
+`pplx-decider-v1` is a hosted decision model: it scores explicit labels without
+generating text. Ask yes/no, choice, or ordered score questions:
 
 ```bash
 wally decisions --input "Checkout is blank after Pay" \
@@ -106,9 +109,8 @@ wally decisions --input "Checkout is blank after Pay" \
 ```
 
 Use `--json` for the raw API response, or `--request FILE` for the complete
-typed request shape. Qwev is intentionally refused by `wally run` and coding
-harnesses.
-</picture>
+typed request shape. Decision models are refused by `wally run` and the coding
+tools, which point back here.
 
 ## Models at a glance
 
@@ -130,7 +132,7 @@ has the full catalog.
 |---|---|
 | `wally run <model> [prompt]` | chat, or one answer and exit |
 | `wally serve <model>` | OpenAI-compatible API on :8080 |
-| `wally decisions` / `decide` | score questions with hosted Qwev |
+| `wally decisions` / `decide` | score questions with a hosted decision model |
 
 | Models | |
 |---|---|
