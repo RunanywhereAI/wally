@@ -20,7 +20,7 @@ from typing import Callable
 from browser_use import Agent
 
 from .elements import elements_from_selector_map, is_personal, label
-from .guards import Element, check_page, host_of
+from .guards import Element, check_page, host_of, is_typeable
 from .policy import GATE_BOT, GATE_PAYMENT, GATE_THRESHOLD, EvePolicy, Observation
 from .profile import Profile, key_fits_field
 from .text import TextError, TextModel
@@ -53,6 +53,27 @@ class StepRecord:
     elements: int = 0
     gates: dict = field(default_factory=dict)
     stop: str = ""
+
+
+_PERSONAL_VALUE = re.compile(r"@|\d{6,}|\+\d")
+
+
+def looks_personal(value: str | None) -> bool:
+    """An email, a phone or another long number: treated as a personal detail wherever it goes."""
+    return bool(value) and bool(_PERSONAL_VALUE.search(value))
+
+
+def note_value_source(guard: GuardContext, source: str, value: str | None) -> None:
+    """A value from the profile or the person, or one that looks personal, means details are on the
+    page: from here every click needs the person's yes, whatever the field was called."""
+    if source.startswith("profile:") or source == "person" or looks_personal(value):
+        guard.personal_typed = True
+
+
+def is_details_form(elements) -> bool:
+    """A page that collects details: any field the rules call personal, or three or more text fields."""
+    fields = [e for e in elements if is_typeable(e)]
+    return len(fields) >= 3 or any(is_personal(e) for e in fields)
 
 
 def outcome_notes(results, last_target: Element | None) -> tuple[list[str], set[str]]:
@@ -250,6 +271,7 @@ class EveAgent(Agent):
         if answer is None:
             return self._done(f"Stopped: a bot check needs a person ({why}).", False)
         self._wally_notes.append("the person solved a bot check")
+        self._wally_guard.person_used_browser = True  # they may have signed in
         return self._output({"wait": {"seconds": 1}}, "re-read the page after the bot check")
 
     async def _act(self, decision, obs: Observation, record: StepRecord):
@@ -262,6 +284,7 @@ class EveAgent(Agent):
             if value is None:
                 return await self._ask_for(target, obs, record)
             record.value_source = source
+            note_value_source(self._wally_guard, source, value)
             self._wally_history.append(f"{'typed' if op == 'TYPE' else 'selected'} into {short(target)}")
             if op == "TYPE":
                 return self._output({"input": {"index": target.index, "text": value, "clear": True}},
@@ -297,8 +320,10 @@ class EveAgent(Agent):
             value = self._wally_profile.get(decision.value_key)
             if value is not None:
                 return value, f"profile:{decision.value_key}"
-        if is_personal(target):
-            return None, ""  # personal details come from the profile or the person, never a model
+        if is_personal(target) or is_details_form(obs.elements):
+            # Personal details come from the profile or the person, never a model; and on a form that
+            # collects details, a field the rules cannot name is asked about rather than guessed.
+            return None, ""
         if self._wally_text is None:
             return None, ""
         started = time.perf_counter()
@@ -325,6 +350,7 @@ class EveAgent(Agent):
             return self._done(f"Stopped: reached {what} ({target.name or target.placeholder}). "
                               f"{obs.title} — {obs.url}", False)
         record.value_source = "person"
+        note_value_source(self._wally_guard, "person", answer)
         self._wally_history.append(f"typed the person's answer into {short(target)}")
         return self._output({"input": {"index": target.index, "text": answer.strip(), "clear": True}},
                             f"fill {target.name}")
