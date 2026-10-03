@@ -115,6 +115,38 @@ fn ephemeral_config_and_passthrough() {
 }
 
 #[test]
+fn cloud_launch_refuses_a_decision_model_before_any_session_or_spawn() {
+    // `--cloud` skips harness::resolve(); the decision-model refusal must
+    // still run, before credentials are read or the console is asked.
+    let _lock = env_lock();
+    let mut env = EnvGuard::new();
+    let temporary = tempfile::tempdir().expect("temp dir");
+    env.set("WALLY_PROFILE_DIR", temporary.path());
+    env.unset("OPENCODE_CONFIG_CONTENT");
+
+    let asked_flag = Arc::new(AtomicBool::new(false));
+    let asked = asked_flag.clone();
+    let console = ConsoleClient::new(Some(Arc::new(move |_request: &HttpRequest| {
+        asked.store(true, Ordering::SeqCst);
+        Ok(HttpResponse {
+            status: 500,
+            ..Default::default()
+        })
+    })));
+    let spawned_flag = Arc::new(AtomicBool::new(false));
+    let spawned = spawned_flag.clone();
+    let spawn: SpawnFunction = Arc::new(move |_executable: &str, _received: &[String]| {
+        spawned.store(true, Ordering::SeqCst);
+        0
+    });
+
+    let status = harness::launch_open_code_cloud_with("pplx-decider-v1", &[], &console, &spawn);
+    assert_eq!(status, 2);
+    assert!(!asked_flag.load(Ordering::SeqCst), "asked the console");
+    assert!(!spawned_flag.load(Ordering::SeqCst), "spawned opencode");
+}
+
+#[test]
 fn refreshes_expired_session_without_sdk_bootstrap() {
     let _lock = env_lock();
     let mut env = EnvGuard::new();
