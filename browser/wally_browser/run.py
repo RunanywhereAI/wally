@@ -34,6 +34,9 @@ from .text import TextModel
 from .tools import build_tools, terminal_ask
 
 
+HUMAN_STEP_TIMEOUT_S = 1800
+
+
 class ConfigError(ValueError):
     pass
 
@@ -107,7 +110,11 @@ async def run(goal: str, start_url: str | None) -> int:
         policy=EvePolicy(decisions, profile), text_model=text, profile=profile, ask=terminal_ask,
         log_path=log_path, use_vision=False, use_judge=False, enable_planning=False, message_compaction=False,
         final_response_after_failure=False, max_actions_per_step=1, calculate_cost=False,
-        include_tool_call_examples=False, llm_timeout=180, register_should_stop_callback=should_stop,
+        include_tool_call_examples=False, register_should_stop_callback=should_stop,
+        # A step can include the person (a CAPTCHA, a y/N, a missing detail); browser-use's 180 s
+        # defaults would time them out and leave a stdin reader behind. The decision and text calls
+        # carry their own 60 s HTTP timeouts.
+        llm_timeout=HUMAN_STEP_TIMEOUT_S, step_timeout=HUMAN_STEP_TIMEOUT_S,
         initial_actions=[{"navigate": {"url": start_url}}] if start_url else None,
     )
     started = time.perf_counter()
