@@ -22,7 +22,7 @@ from browser_use import Agent
 from .elements import elements_from_selector_map, is_personal, label
 from .guards import Element, check_page
 from .policy import GATE_BOT, GATE_PAYMENT, GATE_THRESHOLD, EvePolicy, Observation
-from .profile import Profile
+from .profile import Profile, key_fits_field
 from .text import TextError, TextModel
 
 CONTACT_FIELD = re.compile(r"e-?mail|\bmail\b|phone|mobile|\btel\b|contact", re.I)
@@ -54,6 +54,48 @@ class StepRecord:
     stop: str = ""
 
 
+def outcome_notes(results, last_target: Element | None) -> tuple[list[str], set[str]]:
+    """Notes for eve from the previous action's results, and the element names that must not be
+    offered again (the person declined, or a guard refused)."""
+    notes: list[str] = []
+    refused: set[str] = set()
+    for result in results:
+        error = getattr(result, "error", None)
+        content = getattr(result, "extracted_content", None)
+        if error:
+            notes.append(f"last action failed: {error[:200]}")
+            if last_target is not None and ("did not confirm" in error or "refused" in error):
+                refused.add(last_target.name)
+        elif content:
+            notes.append(content[:300])
+    return notes, refused
+
+
+def page_frames(dom_state, limit: int = 50000) -> list[tuple[str, bool]]:
+    """(src, visible) of every iframe/frame in THIS page's DOM tree (not every
+    tab's), walking children, shadow roots and frame documents."""
+    root = getattr(getattr(dom_state, "_root", None), "original_node", None)
+    found: list[tuple[str, bool]] = []
+    stack = [root] if root is not None else []
+    seen = 0
+    while stack and seen < limit:
+        node = stack.pop()
+        seen += 1
+        if (getattr(node, "node_name", "") or "").upper() in ("IFRAME", "FRAME"):
+            src = (getattr(node, "attributes", None) or {}).get("src", "")
+            box = getattr(node, "absolute_position", None)
+            tiny = box is not None and (getattr(box, "width", 1) < 3 or getattr(box, "height", 1) < 3)
+            visible = getattr(node, "is_visible", None) is not False and not tiny
+            if src:
+                found.append((src, visible))
+        stack.extend(getattr(node, "children_nodes", None) or [])
+        stack.extend(getattr(node, "shadow_roots", None) or [])
+        document = getattr(node, "content_document", None)
+        if document is not None:
+            stack.append(document)
+    return found
+
+
 class EveAgent(Agent):
     def __init__(self, *args, policy: EvePolicy, text_model: TextModel | None, profile: Profile,
                  ask: Callable[[str], str | None], log_path: Path | None = None, **kwargs):
@@ -69,8 +111,24 @@ class EveAgent(Agent):
         self._wally_notes: list[str] = []
         self._wally_steps: list[StepRecord] = []
         self._wally_step_started = 0.0
+        self._wally_last_results: list = []
+        self._wally_last_target = None
+        self._wally_refused: set[str] = set()  # element names the person declined or a guard refused
+        self._wally_handed_off: set[tuple[str, str]] = set()  # (url, reason) already handed to the person
         self.stop_reason = ""
         self.plan_ms = 0
+
+    # step() clears state.last_result right after _prepare_context; read it here first.
+    async def _prepare_context(self, step_info=None):
+        self._wally_last_results = list(self.state.last_result or [])
+        return await super()._prepare_context(step_info)
+
+    def _absorb_results(self) -> None:
+        """Hand the previous action's outcome to eve: answers, refusals and errors."""
+        notes, refused = outcome_notes(self._wally_last_results, self._wally_last_target)
+        self._wally_notes.extend(notes)
+        self._wally_refused.update(refused)
+        self._wally_last_results = []
 
     # browser-use hands the page state to _get_next_action; keep it for get_model_output.
     async def _get_next_action(self, browser_state_summary):
@@ -110,36 +168,44 @@ class EveAgent(Agent):
         if self._wally_text is not None and not self._wally_plan:
             started = time.perf_counter()
             try:
-                self._wally_plan = self._wally_text.plan(goal)
+                self._wally_plan = await asyncio.to_thread(self._wally_text.plan, goal)
             except TextError as error:
                 self._wally_notes.append(f"no plan: {error}")
             self.plan_ms = round((time.perf_counter() - started) * 1000)
 
+        self._absorb_results()
         elements = elements_from_selector_map(state.dom_state.selector_map)
         try:
-            frames, _ = await self.browser_session.get_all_frames()
-            frame_urls = [info.get("url", "") for info in frames.values()]
-        except Exception:
-            frame_urls = []
+            frames = page_frames(state.dom_state)
+        except Exception as error:
+            frames = []
+            self._wally_notes.append(f"could not read the page's frames: {error}")
+        # Payment: any frame, visible or not, ends the run (fail closed). Bot check: visible only.
+        payment_frames = [src for src, _ in frames]
+        visible_frames = [src for src, visible in frames if visible]
         record = StepRecord(step=len(self._wally_steps) + 1, url=state.url, operation="", elements=len(elements))
         self._wally_steps.append(record)
 
         # Page rules first. They need no model and nothing can override them.
-        page = check_page(state.url, state.title, elements, frame_urls)
+        page = check_page(state.url, state.title, elements, payment_frames)
+        bot = check_page(state.url, state.title, [], visible_frames).bot_check if page.bot_check else None
         if page.payment_page:
             record.operation, record.stop = "STOP", f"payment page: {page.payment_page}"
             return self._done(f"Stopped at the payment page ({page.payment_page}). {state.title} — {state.url}", True)
-        if page.bot_check:
-            record.operation, record.stop = "HAND_OFF", f"bot check: {page.bot_check}"
-            return await self._hand_off_bot_check(page.bot_check)
+        if bot and (state.url, bot) not in self._wally_handed_off:
+            self._wally_handed_off.add((state.url, bot))
+            record.operation, record.stop = "HAND_OFF", f"bot check: {bot}"
+            return await self._hand_off_bot_check(bot)
 
         for message in getattr(state, "closed_popup_messages", None) or []:
             if message not in self._wally_notes:
                 self._wally_notes.append(message)
-        obs = Observation(goal=goal, url=state.url, title=state.title, elements=elements,
+        offered = [e for e in elements if e.name not in self._wally_refused]
+        obs = Observation(goal=goal, url=state.url, title=state.title, elements=offered,
                           tabs=[(t.target_id[-4:], t.title) for t in state.tabs], plan=self._wally_plan,
                           history=self._wally_history, notes=self._wally_notes)
-        decision = self._wally_policy.decide(obs)
+        decision = await asyncio.to_thread(self._wally_policy.decide, obs)
+        self._wally_last_target = decision.target
         record.operation = decision.operation
         record.target = label(decision.target) if decision.target else ""
         record.decision_ms, record.rounds = decision.decision_ms, decision.rounds
@@ -154,7 +220,8 @@ class EveAgent(Agent):
             if answer is None or answer.strip().lower() in ("", "y", "yes"):
                 record.stop = "payment page (eve gate)"
                 return self._done(f"Stopped: this looks like the payment page. {state.title} — {state.url}", True)
-        if decision.gates.get(GATE_BOT, 0) >= GATE_THRESHOLD:
+        if decision.gates.get(GATE_BOT, 0) >= GATE_THRESHOLD and (state.url, "eve") not in self._wally_handed_off:
+            self._wally_handed_off.add((state.url, "eve"))
             record.stop = "bot check (eve gate)"
             return await self._hand_off_bot_check("eve reads a bot check on the page")
 
@@ -176,10 +243,10 @@ class EveAgent(Agent):
     async def _act(self, decision, obs: Observation, record: StepRecord):
         op, target = decision.operation, decision.target
         if op == "CLICK" and target is not None:
-            self._wally_history.append(f"clicked {short(target)}")
+            self._wally_history.append(f"chose to click {short(target)}")
             return self._output({"click": {"index": target.index}}, f"click {target.name}")
         if op in ("TYPE", "SELECT") and target is not None:
-            value, source = self._value_for(decision, obs, record)
+            value, source = await self._value_for(decision, obs, record)
             if value is None:
                 return await self._ask_for(target, obs, record)
             record.value_source = source
@@ -208,9 +275,11 @@ class EveAgent(Agent):
         self._wally_history.append("waited")
         return self._output({"wait": {"seconds": 2}}, "wait")
 
-    def _value_for(self, decision, obs: Observation, record: StepRecord) -> tuple[str | None, str]:
+    async def _value_for(self, decision, obs: Observation, record: StepRecord) -> tuple[str | None, str]:
         target = decision.target
-        if decision.value_key:
+        # Finding 10: eve proposes the key; the field's own label must agree before a profile
+        # value is typed, so personal data never lands in a search or promo box.
+        if decision.value_key and key_fits_field(decision.value_key, target.label_text, target.autocomplete):
             value = self._wally_profile.get(decision.value_key)
             if value is not None:
                 return value, f"profile:{decision.value_key}"
@@ -220,7 +289,8 @@ class EveAgent(Agent):
             return None, ""
         started = time.perf_counter()
         try:
-            value = self._wally_text.field_text(obs.goal, self._wally_plan, obs.title, label(target))
+            value = await asyncio.to_thread(self._wally_text.field_text, obs.goal, self._wally_plan, obs.title,
+                                            label(target))
         except TextError as error:
             self._wally_notes.append(f"text model: {error}")
             value = None
