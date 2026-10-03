@@ -1,6 +1,7 @@
-//! Hosted Qwev decision scoring (`wally decisions`, alias `decide`).
+//! Hosted decision scoring (`wally decisions`, alias `decide`): a decision
+//! model answers typed questions with label probabilities instead of text.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::time::Instant;
 
@@ -11,8 +12,13 @@ use crate::cli_formatter::{examples_footer, Example};
 use crate::io::output as out;
 use crate::util::term;
 
-const DEFAULT_MODEL: &str = "qwev";
+const DEFAULT_MODEL: &str = crate::harness::DEFAULT_DECISIONS_MODEL;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+/// The pinned contract, read for its closed objects when a `--request` file is
+/// checked for fields the server would refuse (or this CLI would drop).
+const CONTRACT: &str = include_str!("../../contracts/wally-decisions-public-v1.openapi.json");
+/// Widest label column in the human rendering; longer labels are cut.
+const LABEL_MAX_CHARS: usize = 32;
 
 fn read_stdin() -> Result<String, String> {
     let mut value = String::new();
@@ -156,6 +162,16 @@ fn build_request(p: &crate::cli::Parsed) -> Result<contract::DecisionsRequest, S
         }
         let value: serde_json::Value =
             serde_json::from_str(&raw).map_err(|error| format!("invalid request JSON: {error}"))?;
+        // The generated reader is tolerant (right for responses), so a
+        // misspelled field would be dropped and the request sent without it.
+        // The contract closes every request object; hold the file to that.
+        let unknown = unknown_request_fields(&value);
+        if !unknown.is_empty() {
+            return Err(format!(
+                "request has fields the decisions contract does not define: {}",
+                unknown.join(", ")
+            ));
+        }
         let request = contract::DecisionsRequest::from_json(&value)
             .map_err(|error| format!("request does not match the decisions contract: {error}"))?;
         validate(&request)?;
@@ -236,41 +252,215 @@ fn build_request(p: &crate::cli::Parsed) -> Result<contract::DecisionsRequest, S
     Ok(request)
 }
 
-fn question_labels(request: &contract::DecisionsRequest) -> BTreeMap<String, String> {
+/// Walks `value` against the contract schema `schema`, collecting the paths of
+/// fields a closed object (`additionalProperties: false`) does not define.
+/// Follows `$ref`s, picks a discriminated union's branch by its tag, and
+/// descends into properties and array items.
+fn collect_unknown_fields(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+    path: &str,
+    unknown: &mut Vec<String>,
+) {
+    let mut schema = schema;
+    while let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        match reference
+            .strip_prefix('#')
+            .and_then(|pointer| root.pointer(pointer))
+        {
+            Some(target) => schema = target,
+            None => return,
+        }
+    }
+    if let (Some(mapping), Some(tag)) = (
+        schema.pointer("/discriminator/mapping"),
+        schema
+            .pointer("/discriminator/propertyName")
+            .and_then(serde_json::Value::as_str),
+    ) {
+        if let Some(branch) = value
+            .get(tag)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|kind| mapping.get(kind))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|reference| reference.strip_prefix('#'))
+            .and_then(|pointer| root.pointer(pointer))
+        {
+            collect_unknown_fields(value, branch, root, path, unknown);
+        }
+        return;
+    }
+    if let Some(items) = value.as_array() {
+        if let Some(item_schema) = schema.get("items") {
+            for (index, item) in items.iter().enumerate() {
+                collect_unknown_fields(
+                    item,
+                    item_schema,
+                    root,
+                    &format!("{path}[{index}]"),
+                    unknown,
+                );
+            }
+        }
+        return;
+    }
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    let properties = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    let closed = schema.get("additionalProperties") == Some(&serde_json::Value::Bool(false));
+    for (key, field) in object {
+        let field_path = if path.is_empty() {
+            key.clone()
+        } else {
+            format!("{path}.{key}")
+        };
+        match properties.and_then(|properties| properties.get(key)) {
+            Some(field_schema) => {
+                collect_unknown_fields(field, field_schema, root, &field_path, unknown)
+            }
+            None if closed => unknown.push(field_path),
+            None => {}
+        }
+    }
+}
+
+/// Fields of a `--request` document that the contract's DecisionsRequest
+/// does not define, as dotted paths (`questions[0].opitons`).
+fn unknown_request_fields(value: &serde_json::Value) -> Vec<String> {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(CONTRACT) else {
+        return Vec::new();
+    };
+    let Some(schema) = root.pointer("/components/schemas/DecisionsRequest") else {
+        return Vec::new();
+    };
+    let mut unknown = Vec::new();
+    collect_unknown_fields(value, schema, &root, "", &mut unknown);
+    unknown
+}
+
+/// One question as the human rendering shows it: its text, and its labels in
+/// the order the question listed them, each with the probability key the
+/// server answers under. A score question's levels come back keyed "0" to
+/// "9", so the level text the person wrote is what gets printed.
+struct QuestionView {
+    text: String,
+    labels: Vec<(String, String)>,
+}
+
+fn question_views(request: &contract::DecisionsRequest) -> Vec<(String, QuestionView)> {
     request
         .questions
         .iter()
         .map(|question| match question {
-            contract::DecisionQuestion::YesNoQuestion(value) => {
-                (value.id.clone(), value.question.clone())
-            }
-            contract::DecisionQuestion::ChoiceQuestion(value) => {
-                (value.id.clone(), value.question.clone())
-            }
-            contract::DecisionQuestion::ScoreQuestion(value) => {
-                (value.id.clone(), value.question.clone())
-            }
+            contract::DecisionQuestion::YesNoQuestion(value) => (
+                value.id.clone(),
+                QuestionView {
+                    text: value.question.clone(),
+                    labels: ["yes", "no"]
+                        .iter()
+                        .map(|label| (label.to_string(), label.to_string()))
+                        .collect(),
+                },
+            ),
+            contract::DecisionQuestion::ChoiceQuestion(value) => (
+                value.id.clone(),
+                QuestionView {
+                    text: value.question.clone(),
+                    labels: value
+                        .options
+                        .iter()
+                        .map(|option| (option.name.clone(), option.name.clone()))
+                        .collect(),
+                },
+            ),
+            contract::DecisionQuestion::ScoreQuestion(value) => (
+                value.id.clone(),
+                QuestionView {
+                    text: value.question.clone(),
+                    labels: value
+                        .levels
+                        .iter()
+                        .enumerate()
+                        .map(|(index, level)| (index.to_string(), level.clone()))
+                        .collect(),
+                },
+            ),
         })
         .collect()
 }
 
+/// A label for one terminal column: control characters dropped, cut to
+/// LABEL_MAX_CHARS with an ellipsis.
+fn display_label(label: &str) -> String {
+    let clean: String = label.chars().filter(|c| !c.is_control()).collect();
+    if clean.chars().count() <= LABEL_MAX_CHARS {
+        clean
+    } else {
+        let cut: String = clean.chars().take(LABEL_MAX_CHARS - 1).collect();
+        format!("{cut}…")
+    }
+}
+
+/// The question's answer as rows of (display label, probability), in the
+/// question's own label order. A label the server answered that the question
+/// did not list (it should not happen) follows, under its key.
+fn answer_rows(view: &QuestionView, answer: &contract::DecisionAnswer) -> Vec<(String, f64)> {
+    let mut rows: Vec<(String, f64)> = view
+        .labels
+        .iter()
+        .filter_map(|(key, label)| {
+            answer
+                .probabilities
+                .0
+                .get(key)
+                .map(|probability| (display_label(label), *probability))
+        })
+        .collect();
+    for (key, probability) in &answer.probabilities.0 {
+        if !view.labels.iter().any(|(listed, _)| listed == key) {
+            rows.push((display_label(key), *probability));
+        }
+    }
+    rows
+}
+
+/// The most probable row. On a tie the earlier label wins, so the headline
+/// follows the question's own order rather than whichever came last.
+fn top_row(rows: &[(String, f64)]) -> Option<&(String, f64)> {
+    rows.iter()
+        .fold(None, |best: Option<&(String, f64)>, row| match best {
+            Some(current) if current.1 >= row.1 => Some(current),
+            _ => Some(row),
+        })
+}
+
 fn render_human(request: &contract::DecisionsRequest, response: &contract::DecisionsResponse) {
-    let questions = question_labels(request);
-    for (id, answer) in &response.answers.0 {
-        out::result_line(questions.get(id).map(String::as_str).unwrap_or(id));
-        let top = answer
-            .probabilities
-            .0
-            .iter()
-            .max_by(|left, right| left.1.total_cmp(right.1));
-        if let Some((label, probability)) = top {
+    for (id, view) in question_views(request) {
+        let Some(answer) = response.answers.0.get(&id) else {
+            continue;
+        };
+        out::result_line(&display_label_line(&view.text));
+        let rows = answer_rows(&view, answer);
+        if let Some((label, probability)) = top_row(&rows) {
             out::result_line(&format!("{label}  {:.1}%", probability * 100.0));
         }
-        for (label, probability) in &answer.probabilities.0 {
-            let width = (probability * 20.0).round().clamp(0.0, 20.0) as usize;
+        let width = rows
+            .iter()
+            .map(|(label, _)| label.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(12);
+        for (label, probability) in &rows {
+            let bar = (probability * 20.0).round().clamp(0.0, 20.0) as usize;
+            let pad = width - label.chars().count();
             out::result_line(&format!(
-                "  {label:<12} {:<20} {:>5.1}%",
-                "█".repeat(width),
+                "  {label}{} {:<20} {:>5.1}%",
+                " ".repeat(pad),
+                "█".repeat(bar),
                 probability * 100.0
             ));
         }
@@ -279,6 +469,12 @@ fn render_human(request: &contract::DecisionsRequest, response: &contract::Decis
         }
         out::result_line("");
     }
+}
+
+/// A question's text on one line: control characters (a newline in a long
+/// question) dropped.
+fn display_label_line(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).collect()
 }
 
 fn run(p: &crate::cli::Parsed, json: bool) -> i32 {
@@ -292,7 +488,7 @@ fn run(p: &crate::cli::Parsed, json: bool) -> i32 {
     let credentials = match account::load() {
         Ok(credentials) if credentials.signed_in() => credentials,
         Ok(_) => {
-            out::error_line("Sign in first: wally login");
+            out::error_line("Sign in first: wally account login");
             return 1;
         }
         Err(error) => {
@@ -321,7 +517,8 @@ fn run(p: &crate::cli::Parsed, json: bool) -> i32 {
             no_retry,
             Some(&|status, wait| {
                 out::status_line(&format!(
-                    "Qwev returned HTTP {status}; retrying{}",
+                    "{} returned HTTP {status}; retrying{}",
+                    request.model,
                     if wait > 0 {
                         format!(" in {wait}s")
                     } else {
@@ -366,12 +563,12 @@ fn run(p: &crate::cli::Parsed, json: bool) -> i32 {
 }
 
 pub fn register_decisions(app: &mut App) {
-    let cmd = app.add_subcommand("decisions", "Score questions with hosted Qwev");
+    let cmd = app.add_subcommand("decisions", "Score questions with a hosted decision model");
     cmd.alias("decide");
     cmd.add_option(
         "--model,-m",
         ValueType::Text,
-        "Decision model (default qwev)",
+        &format!("Decision model (default {DEFAULT_MODEL})"),
     )
     .default_val(DEFAULT_MODEL);
     cmd.add_option(
@@ -430,7 +627,7 @@ mod tests {
     #[test]
     fn validates_question_and_temperature_constraints() {
         let request = contract::DecisionsRequest {
-            model: "qwev".to_string(),
+            model: DEFAULT_MODEL.to_string(),
             input: "ticket".to_string(),
             questions: vec![contract::DecisionQuestion::YesNoQuestion(
                 contract::YesNoQuestion {
@@ -447,5 +644,114 @@ mod tests {
         let mut invalid = request;
         invalid.temperature = Some(0.0);
         assert!(validate(&invalid).is_err());
+    }
+
+    #[test]
+    fn defaults_to_the_served_decision_model() {
+        assert_eq!(DEFAULT_MODEL, "pplx-decider-v1");
+        assert!(crate::harness::is_decisions_model(DEFAULT_MODEL));
+    }
+
+    #[test]
+    fn request_file_with_an_unknown_field_is_named_at_every_depth() {
+        let value = serde_json::json!({
+            "model": "pplx-decider-v1",
+            "input": "ticket",
+            "temprature": 0.2,
+            "questions": [
+                {"id": "q1", "type": "yes_no", "question": "Bug?", "yse": "it is"},
+                {"id": "q2", "type": "choice", "question": "Owner?",
+                 "options": [{"name": "a", "descripton": "x"}, {"name": "b"}]},
+                {"id": "q3", "type": "score", "question": "Severity?", "levels": ["low", "high"]}
+            ]
+        });
+        assert_eq!(
+            unknown_request_fields(&value),
+            vec![
+                "questions[0].yse".to_string(),
+                "questions[1].options[0].descripton".to_string(),
+                "temprature".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn request_file_with_only_contract_fields_passes_including_nulls() {
+        let value = serde_json::json!({
+            "model": "pplx-decider-v1",
+            "input": "ticket",
+            "temperature": 1.0,
+            "prompt_format_version": null,
+            "questions": [
+                {"id": "q1", "type": "yes_no", "question": "Bug?", "yes": "broken", "no": "fine"},
+                {"id": "q2", "type": "choice", "question": "Owner?",
+                 "options": [{"name": "a", "description": "x"}, {"name": "b"}]}
+            ]
+        });
+        assert!(unknown_request_fields(&value).is_empty());
+    }
+
+    fn score_request() -> contract::DecisionsRequest {
+        contract::DecisionsRequest {
+            model: DEFAULT_MODEL.to_string(),
+            input: "ticket".to_string(),
+            questions: vec![contract::DecisionQuestion::ScoreQuestion(
+                contract::ScoreQuestion {
+                    id: "q1".to_string(),
+                    question: "Severity?".to_string(),
+                    levels: vec![
+                        "none".into(),
+                        "minor".into(),
+                        "major".into(),
+                        "outage".into(),
+                    ],
+                    r#type: "score".to_string(),
+                },
+            )],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn score_answers_show_level_names_in_level_order() {
+        let request = score_request();
+        let mut answer = contract::DecisionAnswer {
+            r#type: "score".to_string(),
+            label_mass: 1.0,
+            ..Default::default()
+        };
+        for (key, probability) in [("3", 0.1), ("0", 0.2), ("2", 0.6), ("1", 0.1)] {
+            answer.probabilities.0.insert(key.to_string(), probability);
+        }
+        let views = question_views(&request);
+        let rows = answer_rows(&views[0].1, &answer);
+        let labels: Vec<&str> = rows.iter().map(|(label, _)| label.as_str()).collect();
+        assert_eq!(labels, ["none", "minor", "major", "outage"]);
+        assert_eq!(
+            top_row(&rows).map(|(label, _)| label.as_str()),
+            Some("major")
+        );
+    }
+
+    #[test]
+    fn a_tie_headlines_the_earlier_label() {
+        let rows = vec![
+            ("none".to_string(), 0.25),
+            ("minor".to_string(), 0.25),
+            ("major".to_string(), 0.25),
+            ("outage".to_string(), 0.25),
+        ];
+        assert_eq!(
+            top_row(&rows).map(|(label, _)| label.as_str()),
+            Some("none")
+        );
+    }
+
+    #[test]
+    fn long_or_control_labels_are_cut_for_the_terminal() {
+        assert_eq!(display_label("a\u{1b}[31mb"), "a[31mb");
+        let long = "x".repeat(40);
+        assert_eq!(display_label(&long).chars().count(), LABEL_MAX_CHARS);
+        assert!(display_label(&long).ends_with('…'));
     }
 }
