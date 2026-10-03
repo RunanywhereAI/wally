@@ -45,6 +45,9 @@ pub fn register_harness(app: &mut App) {
         .multi();
     opencode.prefix_command(true);
     opencode.callback(|p, g| {
+        if harness::refuse_decisions_model(p.get_str("--model").as_deref()) {
+            return 2;
+        }
         // Before resolving a model or printing anything: a person without the
         // tool should see only that it is missing and how to install it.
         if !harness::ensure_installed("opencode") {
@@ -96,6 +99,9 @@ pub fn register_harness(app: &mut App) {
             .multi();
         command.prefix_command(true);
         command.callback(move |p, g| {
+            if harness::refuse_decisions_model(p.get_str("--model").as_deref()) {
+                return 2;
+            }
             // Same as opencode: check the tool is here before resolving a model
             // or printing a preamble.
             if !harness::ensure_installed(agent.command) {
