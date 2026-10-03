@@ -12,26 +12,30 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-from .guards import Element, never_type_reason
+from .guards import Element, looks_like_card_number, never_type_reason
 
 # The decision API's hard limits (eve, /v1/decisions; master's 00:46 corrections).
 MAX_OPTIONS = 26
 MAX_QUESTION_TOKENS = 8185
 OPTION_NAME_MAX = 256
 NAME_MAX = 80
-FULL_TEXT_MAX = 2000  # what the guards read; the display name is NAME_MAX
+FULL_TEXT_MAX = 2000  # what the guards read (head and tail kept); the display name is NAME_MAX
+CONTEXT_MAX = 600
 
 # Fields whose values are personal: filled from the profile or by the person, never by a model.
 PERSONAL_FIELD = re.compile(
     r"\bname\b|first|last|surname|given|family|middle|\bdob\b|birth|passport|e-?mail|\bmail\b|phone|mobile|"
-    r"\btel\b|contact|gender|nationality|address|pin ?code|zip|postal|frequent|aadhaar|\bpan\b|\btitle\b|salutation",
+    r"\btel\b|contact|gender|nationality|address|street|\bflat\b|house|building|landmark|locality|\barea\b|"
+    r"sector|village|apartment|\bsuite\b|pin ?code|zip|postal|frequent|aadhaar|\bpan\b|\btitle\b|salutation",
     re.I,
 )
 
 
 def is_personal(element: Element) -> bool:
-    if element.input_type in ("email", "tel") or element.autocomplete.split(" ")[-1] in (
-            "email", "tel", "tel-national", "name", "given-name", "family-name", "bday"):
+    token = element.autocomplete.split(" ")[-1] if element.autocomplete else ""
+    if element.input_type in ("email", "tel") or token in (
+            "email", "tel", "tel-national", "name", "given-name", "family-name", "bday", "street-address",
+            "address-line1", "address-line2", "address-line3", "address-level1", "address-level2", "postal-code"):
         return True
     return bool(PERSONAL_FIELD.search(element.label_text))
 
@@ -59,6 +63,53 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+_TEXT_NODE = 3
+
+
+def _all_text(node, budget: int = 20000) -> str:
+    """Every text node under `node`, light and shadow DOM alike (not frame documents).
+    browser-use's get_all_children_text walks children only and skips shadow roots."""
+    parts: list[str] = []
+    stack = [node]
+    seen = 0
+    while stack and seen < budget:
+        current = stack.pop()
+        seen += 1
+        if getattr(current, "node_type", None) == _TEXT_NODE or (getattr(current, "node_type", None) is not None
+                                                                  and int(current.node_type) == _TEXT_NODE):
+            value = getattr(current, "node_value", "") or ""
+            if value.strip():
+                parts.append(value.strip())
+            continue
+        children = list(getattr(current, "children_nodes", None) or [])
+        shadows = list(getattr(current, "shadow_roots", None) or [])
+        stack.extend(reversed(children + shadows))
+    return " ".join(parts)
+
+
+def _head_and_tail(text: str, limit: int) -> str:
+    """Long text keeps its start and its end: a fare card's pay word is often last."""
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + " … " + text[-half:]
+
+
+def _dialog_context(node) -> str:
+    """Text of the nearest dialog or modal ancestor, so a bare "Yes" is read in context."""
+    current = getattr(node, "parent_node", None)
+    depth = 0
+    while current is not None and depth < 60:
+        attributes = getattr(current, "attributes", None) or {}
+        name = (getattr(current, "node_name", "") or "").upper()
+        if (name == "DIALOG" or attributes.get("role") in ("dialog", "alertdialog")
+                or attributes.get("aria-modal") == "true"):
+            return " ".join(_all_text(current, 4000).split())[:CONTEXT_MAX]
+        current = getattr(current, "parent_node", None)
+        depth += 1
+    return ""
+
+
 def _frame_url(node) -> str:
     """src of the nearest enclosing iframe/frame, walking up parent_node."""
     current = getattr(node, "parent_node", None)
@@ -79,18 +130,19 @@ def element_from_node(index: int, node) -> Element:
     role = (getattr(ax, "role", None) or attributes.get("role") or "").lower()
     name = getattr(ax, "name", None) or attributes.get("aria-label") or ""
     try:
-        # All descendants, not 3 levels: `<div role=button><span><span><span><b>Pay ₹500</b>` has
-        # its only words 5 levels down, and the guards must read them.
-        children = node.get_all_children_text(max_depth=-1)
+        # Every descendant, shadow roots included: `<div role=button><span><span><b>Pay ₹500</b>`
+        # has its only words levels down, and a custom element may keep them in its shadow root.
+        children = _all_text(node)
     except Exception:
         children = ""
-    full_text = " ".join(f"{name} {children}".split())[:FULL_TEXT_MAX]
+    full_text = _head_and_tail(" ".join(f"{name} {children}".split()), FULL_TEXT_MAX)
     return Element(
         index=index,
         tag=tag,
         role=role,
         name=_clip(name or children, NAME_MAX),
         full_text=full_text,
+        context_text=_dialog_context(node),
         input_type=attributes.get("type", "").lower() if tag == "input" else "",
         autocomplete=attributes.get("autocomplete", ""),
         placeholder=_clip(attributes.get("placeholder", ""), NAME_MAX),
@@ -125,7 +177,8 @@ def label(element: Element) -> str:
     if kind_of(element) in ("type", "select"):
         # A personal or sensitive value is never shown, to eve or in the step log: only whether
         # the field is filled. The decision needs no more than that.
-        if element.value and (is_personal(element) or never_type_reason(element)):
+        if element.value and (is_personal(element) or never_type_reason(element)
+                              or looks_like_card_number(element.value)):
             text += " · filled"
         else:
             text += f" · {element.value or 'empty'}"
