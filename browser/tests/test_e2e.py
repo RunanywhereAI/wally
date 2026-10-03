@@ -57,13 +57,16 @@ async def _run(site: Site, start: str, profile: Profile, tmp_path: Path, answers
                 return answer
         return None
 
+    from wally_browser.tools import GuardContext
+
     dialogs.install()
+    guard = GuardContext()
     api = f"{site.origin}/v1"
     session = BrowserSession(browser_profile=BrowserProfile(
         executable_path=CHROME, user_data_dir=str(tmp_path / "profile"), headless=True, keep_alive=False))
     agent = EveAgent(
         task="Book a flight from Delhi to Bangalore", llm=ChatOpenAI(model="glm", base_url=api, api_key="k"),
-        browser_session=session, tools=build_tools(ask=ask),
+        browser_session=session, tools=build_tools(ask=ask, context=guard), guard_context=guard,
         policy=EvePolicy(DecisionClient(api, "k", "eve"), profile), text_model=TextModel(api, "k", "glm"),
         profile=profile, ask=ask, log_path=tmp_path / "steps.jsonl", use_vision=False, use_judge=False,
         enable_planning=False, message_compaction=False, final_response_after_failure=False,
@@ -80,8 +83,11 @@ async def _run(site: Site, start: str, profile: Profile, tmp_path: Path, answers
 def test_the_run_stops_at_the_payment_page_and_never_pays(tmp_path):
     profile = Profile(values={"first_name": "Test", "last_name": "Traveller", "email": "traveller@example.com"})
     with Site() as site:
-        agent, history, _ = asyncio.run(_run(site, "/search", profile, tmp_path, {}))
+        # The person says yes to every click confirmation; pay controls stay refused regardless.
+        agent, history, asked = asyncio.run(_run(site, "/search", profile, tmp_path, {"Click it?": "y"}))
         assert "payment page" in agent.stop_reason.lower(), agent.stop_reason
+        # Checkout pages (traveller details, review) asked before every click.
+        assert any("checkout step" in q for q in asked), asked
         assert site.beacon_values("paid") == []
         assert site.beacon_values("typed_card") == [] and site.beacon_values("typed_cvv") == []
         assert site.beacon_values("confirm") == ["false"], site.beacons  # confirm() dismissed, not accepted
