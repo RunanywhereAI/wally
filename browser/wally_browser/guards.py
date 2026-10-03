@@ -249,6 +249,8 @@ _PAY = (
     r"\bcomplete (the )?(purchase|payment|booking)\b|\bconfirm payment\b|\bsubmit payment\b|"
     r"\bauthori[sz]e (the )?payment\b|\bcheckout (and|&) pay\b|\bsubscribe\b|\bupgrade( now)?\b|\bdonate\b|"
     r"\brecharge( now)?\b|\btop ?up\b|\badd money\b|\bsend money\b|\bplace (a )?bid\b|\bbid now\b|"
+    r"\bcharged?\b|\bdebit(ed)?\b|\bdeduct(ed)?\b|\bauto-? ?renew|\bautopay\b|\bsubscription\b|\brent\b.*\d|"
+    r"^(₹|rs\.?|inr|\$|€|£|usd)\s*[\d,]+(\.\d+)?$|"
     # Material icon ligatures joined by underscores are distinctive. A bare "payments" is not
     # (it is also a nav link); an icon-only pay button on a checkout page is confirmed anyway.
     r"shopping_cart_checkout|^credit_card$|^account_balance_wallet$|"
@@ -258,7 +260,9 @@ _PAY = (
 )
 _COMMIT = (
     r"\bbook\b|\bbooking\b|\bconfirm\b|\breserve\b|\breservation\b|\bcheckout\b|\bcheck out\b|\bhold\b|"
-    r"\bsubmit\b|\bagree and continue\b|\baccept and continue\b|"
+    r"\bsubmit\b|\bagree and continue\b|\baccept and continue\b|\bschedule\b|\brequest\b|\bregister\b|"
+    r"\brsvp\b|\bget tickets?\b|\benrol+\b|\bapply( now)?\b|\bclaim\b|\bsign ?up\b|\bjoin\b|"
+    r"\bcancel (my |the |this )?(booking|trip|order|reservation|ticket|subscription)\b|\bfee\b|"
     r"बुक करें|पुष्टि|buchen|bestätigen|réserver|confirmer|reservar|confirmar"
 )
 PAYMENT_CONTROL = re.compile(_PAY, re.I)
@@ -272,9 +276,11 @@ _PAY_SQUASHED = re.compile(r"^(pay|paynow|payrs|payinr|buynow|buy|placeorder|pur
 NAVIGATES_TO_PAYMENT = re.compile(
     r"\s*(continue|proceed|go|next)(:)?\s+(to\s+)?(the\s+)?(payment|checkout|payment page|review)(\s+page)?"
     r"\s*[>→»]*\s*", re.I)
-# A bare affirmation is read in its dialog's context ("Pay ₹4,500 from your saved card?" + "Yes").
-AFFIRMATION = re.compile(r"\s*(yes|ok|okay|confirm|proceed|continue|submit|agree|i agree|done|go|sure|accept)"
-                         r"( ?[,!.])?\s*", re.I)
+# Inside a money or commit dialog ("Pay ₹4,500 from your wallet?", "Cancel this booking? A fee
+# applies."), every button is read in that context: "Yes, continue", "OK" and even "Cancel" can be
+# the commit. Only a clearly negative answer in a money dialog drops to "ask the person".
+NEGATIVE = re.compile(r"\s*(no|no thanks|not now|close|keep|keep (my |the )?(booking|plan)|back|go back|dismiss|"
+                      r"maybe later|don'?t|×|x)( ?[,!.].*)?\s*", re.I)
 
 
 def control_tier(element: Element) -> ControlTier:
@@ -292,9 +298,10 @@ def control_tier(element: Element) -> ControlTier:
     if any(len(part) <= 40 and _PAY_SQUASHED.match(squash(part)) for part in parts):
         return ControlTier.PAYMENT
     context = normalize(element.context_text)
-    if context and any(AFFIRMATION.fullmatch(part) for part in parts):
+    if context:
+        negative = any(NEGATIVE.fullmatch(part) for part in visible)
         if PAYMENT_CONTROL.search(context):
-            return ControlTier.PAYMENT
+            return ControlTier.COMMIT if negative else ControlTier.PAYMENT
         if COMMIT_CONTROL.search(context):
             return ControlTier.COMMIT
     committing = [part for part in parts if COMMIT_CONTROL.search(part)]
@@ -323,12 +330,19 @@ _NOT_TEXT_INPUTS = {"submit", "button", "image", "reset", "checkbox", "radio", "
 
 
 def is_typeable(element: Element) -> bool:
-    """A field text can go into. An <input type=submit> is a button, not a field: typing into
-    it makes browser-use click it."""
-    if element.tag == "input" and element.input_type in _NOT_TEXT_INPUTS:
-        return False
-    return (element.tag in _TYPEABLE_TAGS or element.role in ("textbox", "searchbox", "combobox", "spinbutton")
-            or element.attributes.get("contenteditable") in ("", "true"))
+    """A real text field: <input> of a text kind, <textarea>, or contenteditable. An ARIA role on a
+    <button> or <div> is not enough: typing a space or Enter into a focused button clicks it, and
+    an <input type=submit> is a button."""
+    if element.tag == "input":
+        return element.input_type not in _NOT_TEXT_INPUTS
+    if element.tag == "textarea":
+        return True
+    return element.tag not in ("button", "a", "label") and element.attributes.get("contenteditable") in ("", "true")
+
+
+def is_selectable(element: Element) -> bool:
+    """A dropdown: a native <select>, or an ARIA combobox/listbox (whose options get clicked)."""
+    return element.tag == "select" or element.role in ("combobox", "listbox")
 
 
 def check_page(url: str, title: str, elements: list[Element], frame_urls: list[str] = ()) -> PageCheck:
@@ -341,7 +355,7 @@ def check_page(url: str, title: str, elements: list[Element], frame_urls: list[s
             payment = f"a payment gateway frame is on the page ({host_of(frame)})"
     if payment is None:
         for element in elements:
-            if not is_typeable(element):
+            if not (is_typeable(element) or is_selectable(element) or element.role in ("textbox", "searchbox")):
                 continue
             found = sensitive_field(element)
             if found and found[0] in PAYMENT_CATEGORIES:
@@ -356,9 +370,10 @@ def check_page(url: str, title: str, elements: list[Element], frame_urls: list[s
             bot = f"a bot-check frame is on the page ({host_of(frame) or frame})"
     checkout = None
     try:
-        path = urlsplit(url).path
+        parts = urlsplit(url)
+        path = f"{parts.path} {parts.query} {parts.fragment}"
     except ValueError:
-        path = ""
+        path = url
     where = normalize(split_identifier(path) + " " + (title or ""))
     match = _CHECKOUT_WORDS.search(where)
     if match:
