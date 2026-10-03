@@ -118,7 +118,8 @@ def _frame_url(node) -> str:
     depth = 0
     while current is not None and depth < 200:
         if (getattr(current, "node_name", "") or "").upper() in ("IFRAME", "FRAME"):
-            return (getattr(current, "attributes", None) or {}).get("src", "")
+            # A frame injected without a src (chat and support widgets) is still someone else's frame.
+            return (getattr(current, "attributes", None) or {}).get("src", "") or "about:blank"
         current = getattr(current, "parent_node", None)
         depth += 1
     return ""
