@@ -117,3 +117,48 @@ def test_a_cloudflare_interstitial_title_is_a_bot_check():
                                          ("beforeunload", False)])
 def test_only_plain_alerts_are_accepted(kind, accept):
     assert dialog_should_accept(kind) is accept
+
+
+# Review findings (code-review at high effort on M1), each probe pinned.
+
+@pytest.mark.parametrize("name", [
+    "Place order and proceed to payment", "Proceed to Pay", "Continue to pay", "Tap to pay", "₹4,500 Pay",
+    "Submit order", "Order now", "Confirm order", "Pay later",
+])
+def test_review_probes_that_must_be_payment(name):
+    assert control_tier(button(name)) is ControlTier.PAYMENT
+
+
+def test_a_navigation_title_cannot_lower_a_pay_button():
+    assert control_tier(button("Pay now", attributes={"title": "Go to payment"})) is ControlTier.PAYMENT
+
+
+@pytest.mark.parametrize("name", ["Confirm booking & continue to payment", "Book and proceed to checkout"])
+def test_a_navigation_phrase_inside_a_commit_label_stays_commit(name):
+    assert control_tier(button(name)) is ControlTier.COMMIT
+
+
+@pytest.mark.parametrize("name", ["Proceed to checkout", "Continue to payment →", "Go to review"])
+def test_a_label_that_is_only_navigation_is_allowed(name):
+    assert control_tier(button(name)) is ControlTier.NONE
+
+
+def test_a_pay_word_past_the_display_clip_is_seen():
+    long_name = ("Total 45,000 INR for 2 adults incl. taxes, fees and convenience charges (see fare rules) "
+                 "Pay now")
+    element = Element(index=1, tag="div", role="button", name=long_name[:79] + "…", full_text=long_name)
+    assert control_tier(element) is ControlTier.PAYMENT
+
+
+@pytest.mark.parametrize("element", [
+    field(name="MM", tag="select"), field(name="YY", tag="select"), field(name="", attributes={"name": "exp_month"}),
+    field(name="", attributes={"name": "ccnum"}), field(name="", attributes={"name": "cc_number"}),
+    field(name="Card", placeholder="1234 5678 9012 3456"), field(name="Enter code"),
+    field(name="Enter the 6-digit code sent to your phone"),
+])
+def test_review_probes_that_must_never_be_typed(element):
+    assert never_type_reason(element) is not None
+
+
+def test_a_date_of_birth_month_field_is_not_mistaken_for_card_expiry():
+    assert never_type_reason(field(name="Month", attributes={"name": "birth_month"})) is None
