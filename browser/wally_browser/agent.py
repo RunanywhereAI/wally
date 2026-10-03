@@ -220,7 +220,8 @@ class EveAgent(Agent):
 
         # Page rules first. They need no model and nothing can override them.
         page = check_page(state.url, state.title, elements, payment_frames)
-        self._wally_guard.checkout = page.checkout  # every click here needs the person's yes
+        if page.checkout and not self._wally_guard.checkout:
+            self._wally_guard.checkout = page.checkout  # sticky: checkout mode for the rest of the run
         bot = check_page(state.url, state.title, [], visible_frames).bot_check if page.bot_check else None
         if page.payment_page:
             record.operation, record.stop = "STOP", f"payment page: {page.payment_page}"
@@ -334,11 +335,19 @@ class EveAgent(Agent):
             self._wally_notes.append(f"text model: {error}")
             value = None
         record.text_ms = round((time.perf_counter() - started) * 1000)
+        if value is not None and (looks_personal(value) or target.frame_url):
+            # The model only writes non-personal text for the site's own fields. A personal-looking
+            # value, or any field in a frame, goes to the person instead.
+            return None, ""
         return value, "text-model" if value is not None else ""
 
     async def _ask(self, question: str) -> str | None:
-        """Ask the person off the event loop, so the browser connection stays alive while they think."""
-        return await asyncio.to_thread(self._wally_ask, question)
+        """Ask the person off the event loop, so the browser connection stays alive while they think.
+        Once they have answered, they have had the window and may have signed in."""
+        answer = await asyncio.to_thread(self._wally_ask, question)
+        if answer is not None:
+            self._wally_guard.person_used_browser = True
+        return answer
 
     async def _ask_for(self, target: Element, obs: Observation, record: StepRecord):
         contact = bool(CONTACT_FIELD.search(target.label_text)) or target.input_type in ("email", "tel")
