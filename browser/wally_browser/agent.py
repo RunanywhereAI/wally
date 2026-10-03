@@ -24,6 +24,7 @@ from .guards import Element, check_page
 from .policy import GATE_BOT, GATE_PAYMENT, GATE_THRESHOLD, EvePolicy, Observation
 from .profile import Profile, key_fits_field
 from .text import TextError, TextModel
+from .tools import GuardContext
 
 CONTACT_FIELD = re.compile(r"e-?mail|\bmail\b|phone|mobile|\btel\b|contact", re.I)
 
@@ -71,15 +72,17 @@ def outcome_notes(results, last_target: Element | None) -> tuple[list[str], set[
     return notes, refused
 
 
-def page_frames(dom_state, limit: int = 50000) -> list[tuple[str, bool]]:
+def page_frames(dom_state, limit: int = 500000) -> list[tuple[str, bool]]:
     """(src, visible) of every iframe/frame in THIS page's DOM tree (not every
     tab's), walking children, shadow roots and frame documents."""
     root = getattr(getattr(dom_state, "_root", None), "original_node", None)
     found: list[tuple[str, bool]] = []
-    stack = [root] if root is not None else []
+    from collections import deque
+
+    queue = deque([root] if root is not None else [])  # breadth first: early frames are not starved
     seen = 0
-    while stack and seen < limit:
-        node = stack.pop()
+    while queue and seen < limit:
+        node = queue.popleft()
         seen += 1
         if (getattr(node, "node_name", "") or "").upper() in ("IFRAME", "FRAME"):
             src = (getattr(node, "attributes", None) or {}).get("src", "")
@@ -88,18 +91,20 @@ def page_frames(dom_state, limit: int = 50000) -> list[tuple[str, bool]]:
             visible = getattr(node, "is_visible", None) is not False and not tiny
             if src:
                 found.append((src, visible))
-        stack.extend(getattr(node, "children_nodes", None) or [])
-        stack.extend(getattr(node, "shadow_roots", None) or [])
+        queue.extend(getattr(node, "children_nodes", None) or [])
+        queue.extend(getattr(node, "shadow_roots", None) or [])
         document = getattr(node, "content_document", None)
         if document is not None:
-            stack.append(document)
+            queue.append(document)
     return found
 
 
 class EveAgent(Agent):
     def __init__(self, *args, policy: EvePolicy, text_model: TextModel | None, profile: Profile,
-                 ask: Callable[[str], str | None], log_path: Path | None = None, **kwargs):
+                 ask: Callable[[str], str | None], log_path: Path | None = None,
+                 guard_context: GuardContext | None = None, **kwargs):
         super().__init__(*args, **kwargs)
+        self._wally_guard = guard_context or GuardContext()
         self._wally_policy = policy
         self._wally_text = text_model
         self._wally_profile = profile
@@ -180,14 +185,21 @@ class EveAgent(Agent):
         except Exception as error:
             frames = []
             self._wally_notes.append(f"could not read the page's frames: {error}")
-        # Payment: any frame, visible or not, ends the run (fail closed). Bot check: visible only.
+        # Payment: any frame, visible or not, ends the run (fail closed), including frames
+        # browser-use tracks that carry no src (srcdoc, or navigated after load). Bot check: visible only.
         payment_frames = [src for src, _ in frames]
+        try:
+            all_frames, _ = await self.browser_session.get_all_frames()
+            payment_frames += [info.get("url", "") for info in all_frames.values()]
+        except Exception:
+            pass
         visible_frames = [src for src, visible in frames if visible]
         record = StepRecord(step=len(self._wally_steps) + 1, url=state.url, operation="", elements=len(elements))
         self._wally_steps.append(record)
 
         # Page rules first. They need no model and nothing can override them.
         page = check_page(state.url, state.title, elements, payment_frames)
+        self._wally_guard.checkout = page.checkout  # every click here needs the person's yes
         bot = check_page(state.url, state.title, [], visible_frames).bot_check if page.bot_check else None
         if page.payment_page:
             record.operation, record.stop = "STOP", f"payment page: {page.payment_page}"
