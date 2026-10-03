@@ -16,3 +16,11 @@ pub use declared_harness::*;
 pub use harness::*;
 pub use local_models::*;
 pub use opencode::*;
+
+/// Hosted decision models expose probabilities rather than generated text and
+/// must never be routed through chat/completions or a coding harness.
+pub const DECISIONS_MODEL_IDS: &[&str] = &["qwev"];
+
+pub fn is_decisions_model(id: &str) -> bool {
+    DECISIONS_MODEL_IDS.contains(&id)
+}

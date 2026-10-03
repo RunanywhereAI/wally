@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::console_contract as contract;
+use super::decisions_contract as decisions;
 use super::{
     UsageRequestRow, UsageRequestsPage, UsageRequestsQuery, UsageRequestsTotals,
     USAGE_REQUESTS_CURSOR_MAX_CHARS,
@@ -255,6 +256,13 @@ pub struct CatalogPrice {
     pub id: String,
     pub input_per_mtok: i64,
     pub output_per_mtok: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DecisionsResult {
+    pub response: decisions::DecisionsResponse,
+    /// Preserved byte-for-byte for `wally decisions --json`.
+    pub raw_json: String,
 }
 
 pub const LOGIN_MAX_WAIT_SECONDS: i32 = 10;
@@ -1130,6 +1138,96 @@ impl ConsoleClient {
                 error
             }
         })
+    }
+
+    /// Score typed questions with the hosted decisions model. The access token
+    /// stored by the CLI is already a minted gateway key, so it is sent
+    /// directly as the bearer credential.
+    pub fn create_decisions(
+        &self,
+        console_url: &str,
+        access_token: &str,
+        request_body: &decisions::DecisionsRequest,
+        no_retry: bool,
+        on_retry: Option<&dyn Fn(i32, i32)>,
+    ) -> (IdentityResult, DecisionsResult, String) {
+        let failed =
+            |message: String| (IdentityResult::Failed, DecisionsResult::default(), message);
+        if !super::session_token_is_safe(access_token) {
+            return failed("no access token is available".to_string());
+        }
+        let origin = match console_origin(console_url) {
+            Ok(origin) => origin,
+            Err(error) => return failed(error),
+        };
+        let request = HttpRequest {
+            method: "POST".to_string(),
+            url: format!("{origin}/v1/decisions"),
+            body: crate::io::json::dump(&request_body.to_json()),
+            bearer_token: access_token.to_string(),
+            timeout_ms: 300_000,
+        };
+        let mut retries = 0;
+        let response = loop {
+            let response = match self.send(request.clone()) {
+                Ok(response) => response,
+                Err(error) => return failed(error),
+            };
+            if no_retry || !matches!(response.status, 429 | 503) || retries >= 2 {
+                break response;
+            }
+            let wait = response.retry_after_seconds().clamp(0, 10);
+            retries += 1;
+            if let Some(callback) = on_retry {
+                callback(response.status, wait);
+            }
+            if wait > 0 {
+                std::thread::sleep(Duration::from_secs(wait as u64));
+            }
+        };
+        if response.status == 401 {
+            return (
+                IdentityResult::Unauthorized,
+                DecisionsResult::default(),
+                "console session expired".to_string(),
+            );
+        }
+        if response.status == 403
+            && parse_object(&response)
+                .ok()
+                .and_then(|body| decisions::OpenAIError::from_json(&body).ok())
+                .and_then(|error| error.error.code)
+                == Some(decisions::ErrorCode::KModelNotEntitled)
+        {
+            return failed(
+                "This login predates Qwev access; run `wally logout && wally login` and try again"
+                    .to_string(),
+            );
+        }
+        if response.status != 200 {
+            return failed(http_error(
+                "decisions request",
+                &origin,
+                &response,
+                access_token,
+            ));
+        }
+        let object = match parse_object(&response) {
+            Ok(object) => object,
+            Err(error) => return failed(error),
+        };
+        let parsed = match decisions::DecisionsResponse::from_json(&object) {
+            Ok(parsed) => parsed,
+            Err(_) => return failed(CONTRACT_MISMATCH.to_string()),
+        };
+        (
+            IdentityResult::Ok,
+            DecisionsResult {
+                response: parsed,
+                raw_json: response.body,
+            },
+            String::new(),
+        )
     }
 
     /// `on_retry` runs before each retry of a refused/unreachable start.

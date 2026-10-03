@@ -214,6 +214,11 @@ if(BUILD_TESTING)
     # initialising the whole SDK; each command has its own 15s bound inside
     # the script, so a real hang is still caught there.
     set_tests_properties(wally_account_cli_e2e PROPERTIES TIMEOUT 120)
+    add_test(
+        NAME wally_decisions_cli_e2e
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_decisions_cli.py"
+                "${WALLY_PRODUCT_BINARY}")
+    set_tests_properties(wally_decisions_cli_e2e PROPERTIES TIMEOUT 120)
 
     # Production CLI and the packaged SDK HTTP server, with only inference and
     # the coding tool replaced by the fixtures in tests/local_harness/.

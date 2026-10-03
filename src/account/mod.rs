@@ -6,6 +6,7 @@ pub mod cancel_worker;
 pub mod console;
 pub mod console_contract;
 pub mod credentials;
+pub mod decisions_contract;
 pub mod model_cache;
 pub mod session;
 pub mod usage_requests;

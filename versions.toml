@@ -7,7 +7,12 @@
 
 [product]
 # wally's own release version; git tag is v<version> (auto-tag.yml reads it here).
-version = "0.7.2"
+version = "0.7.3"
+
+[contracts]
+# Vendored from InferenceInfra at this exact revision.
+decisions_source_commit = "edf3c2d903d5c2ec33efa5f17919710e03cb968c"
+decisions_contract_sha256 = "5f2f3a01039a611c3fb77e6f6e7cb5b309abbd9ff025329625605ce362ae2541"
 
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.

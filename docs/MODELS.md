@@ -31,3 +31,10 @@ archive. The rows are commented out in `src/catalog/catalog.rs` under
 | [NVIDIA](https://huggingface.co/nvidia) | Nemotron | `mlx-nemotron-nano` |
 | [PrismML](https://huggingface.co/prism-ml) | Bonsai, Ternary-Bonsai | `bonsai-1.7b`, `mlx-bonsai-1.7b` |
 | [DeepGrove](https://huggingface.co/deepgrove) | Maple Preview | `maple-preview`, `mlx-maple-preview` |
+
+### Decisions
+
+`qwev` is hosted only and returns label probabilities rather than generated
+text. Use `wally decisions` (alias `wally decide`), not `wally run` or a coding
+harness. It supports yes/no (`--ask`), choices (`--choice`) and ordered levels
+(`--score`); `wally decisions --help` shows the request-file and JSON forms.

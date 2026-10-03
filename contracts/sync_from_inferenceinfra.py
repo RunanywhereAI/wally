@@ -25,6 +25,8 @@ REPO = ROOT.parent
 EXTRACTOR = ROOT / "extract-cli-contract.py"
 GENERATOR = ROOT / "generate_console_binding.py"
 EXTRACT = ROOT / "wally-cli-v1.openapi.json"
+DECISIONS_CONTRACT = ROOT / "wally-decisions-public-v1.openapi.json"
+DECISIONS_BINDING = REPO / "src" / "account" / "decisions_contract.rs"
 CONTROL_PLANE = "contracts/control-plane-v1.openapi.json"
 # The two files a sync regenerates from scratch. Named once so the destination
 # guard and the error message cannot drift apart.
@@ -105,6 +107,19 @@ def check_local(extract: Path = EXTRACT) -> None:
         print(f"alternate extract provenance OK ({stamp})")
         return
     _run([sys.executable, str(GENERATOR), "--check"])
+    _run(
+        [
+            sys.executable,
+            str(GENERATOR),
+            "--check",
+            "--contract",
+            str(DECISIONS_CONTRACT),
+            "--output",
+            str(DECISIONS_BINDING),
+            "--operation-id",
+            "createDecisions",
+        ]
+    )
     print(f"Wally CLI lock OK ({stamp})")
 
 

@@ -1,0 +1,22 @@
+Score questions with hosted Qwev
+
+Usage: wally decisions [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            Decision model (default qwev)
+  -i, --input TEXT            Text every question is about
+      --input-file TEXT       Read input from PATH (- for stdin)
+      --ask TEXT ...          Yes/no question (repeatable)
+      --choice TEXT ...       Choice question as 'QUESTION=a,b,c' (repeatable)
+      --score TEXT ...        Score question as
+                              'QUESTION=none,minor,major,outage' (repeatable)
+      --request TEXT          Complete DecisionsRequest JSON file (- for stdin)
+      --temperature FLOAT     Probability temperature (>0, at most 100)
+      --json                  Print the raw response JSON
+      --no-retry              Do not retry HTTP 429 or 503
+
+Examples:
+  wally decisions --input 'Checkout is blank' --ask 'Is this a bug?'
+
+  wally decide --input-file ticket.txt --choice 'Owner=frontend,payments,account'

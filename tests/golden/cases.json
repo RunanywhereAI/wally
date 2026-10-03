@@ -6,6 +6,20 @@
   ]
  },
  {
+  "name": "help__decisions",
+  "args": [
+   "decisions",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__decide",
+  "args": [
+   "decide",
+   "--help"
+  ]
+ },
+ {
   "name": "help__run",
   "args": [
    "run",

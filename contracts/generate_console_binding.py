@@ -14,9 +14,14 @@ the build if the two drift.
 
     python3 contracts/generate_console_binding.py            # write the file
     python3 contracts/generate_console_binding.py --check    # fail if stale
+    python3 contracts/generate_console_binding.py \
+      --contract contracts/wally-decisions-public-v1.openapi.json \
+      --output src/account/decisions_contract.rs \
+      --operation-id createDecisions
 
 Run it and commit the file whenever the pinned contract changes. Never edit
-console_contract.rs by hand.
+generated bindings by hand. With no path arguments, the historical console
+contract/output remain the defaults.
 """
 
 from __future__ import annotations
@@ -29,10 +34,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-CONTRACT = ROOT / "wally-cli-v1.openapi.json"
-OUTPUT = ROOT.parent / "src" / "account" / "console_contract.rs"
+DEFAULT_CONTRACT = ROOT / "wally-cli-v1.openapi.json"
+DEFAULT_OUTPUT = ROOT.parent / "src" / "account" / "console_contract.rs"
 
 INT = "i64"
+FLOAT = "f64"
 
 # Rust 2021 reserved/keyword identifiers among this contract's field names.
 # Escaped as a raw identifier (`r#type`) everywhere the field is named; the
@@ -59,11 +65,10 @@ def _resolve_type(schema: dict, schemas: dict) -> tuple[str, bool]:
     if "$ref" in schema:
         name = schema["$ref"].split("/")[-1]
         target = schemas.get(name, {})
-        # A constrained/plain string newtype (type "string", not an enum, not an
-        # object) has no emitted type of its own -- only objects and enums get
-        # one -- so inline it as String rather than name an undefined type.
-        if target.get("type") == "string" and "enum" not in target:
-            return "String", False
+        # Constrained scalar aliases have no emitted type of their own -- only
+        # objects, unions and enums get one -- so inline their primitive.
+        if target.get("type") in {"string", "integer", "number", "boolean"} and "enum" not in target:
+            return _resolve_type(target, schemas)
         return name, False
     if "const" in schema:
         # A fixed literal (e.g. `object: {const: "model"}`). Typed by its value;
@@ -92,11 +97,20 @@ def _resolve_type(schema: dict, schemas: dict) -> tuple[str, bool]:
         return "String", False
     if kind == "integer":
         return INT, False
+    if kind == "number":
+        return FLOAT, False
     if kind == "boolean":
         return "bool", False
     if kind == "array":
         item, _ = _resolve_type(schema["items"], schemas)
         return f"Vec<{item}>", False
+    if kind == "object" and isinstance(schema.get("additionalProperties"), dict):
+        item, _ = _resolve_type(schema["additionalProperties"], schemas)
+        return f"BTreeMap<String, {item}>", False
+    if "enum" in schema:
+        # Inline enums are carried as strings. Named enums remain generated
+        # closed Rust enums through the $ref branch above.
+        return "String", False
     raise SystemExit(f"unsupported schema shape: {schema}")
 
 
@@ -115,6 +129,8 @@ def _to_value_expr(base: str, var: str, enums: set[str], objects: set[str], is_r
         return f"Value::String({var}.clone())"
     if base == INT:
         return f"Value::from(*{var})" if is_ref else f"Value::from({var})"
+    if base == FLOAT:
+        return f"Value::from(*{var})" if is_ref else f"Value::from({var})"
     if base == "bool":
         return f"Value::Bool(*{var})" if is_ref else f"Value::Bool({var})"
     if base in enums:
@@ -125,6 +141,13 @@ def _to_value_expr(base: str, var: str, enums: set[str], objects: set[str], is_r
         inner = base[len("Vec<") : -1]
         inner_expr = _to_value_expr(inner, "item", enums, objects, is_ref=True)
         return f"Value::Array({var}.iter().map(|item| {inner_expr}).collect())"
+    if base.startswith("BTreeMap<String, "):
+        inner = base[len("BTreeMap<String, ") : -1]
+        inner_expr = _to_value_expr(inner, "item", enums, objects, is_ref=True)
+        return (
+            f"Value::Object({var}.iter().map(|(key, item)| "
+            f"(key.clone(), {inner_expr})).collect())"
+        )
     raise SystemExit(f"unsupported rust type for to_value: {base}")
 
 
@@ -133,6 +156,8 @@ def _from_value_expr(base: str, var: str, enums: set[str], objects: set[str]) ->
         return f'{var}.as_str().ok_or_else(|| "expected a string".to_string())?.to_string()'
     if base == INT:
         return f'{var}.as_i64().ok_or_else(|| "expected an integer".to_string())?'
+    if base == FLOAT:
+        return f'{var}.as_f64().ok_or_else(|| "expected a number".to_string())?'
     if base == "bool":
         return f'{var}.as_bool().ok_or_else(|| "expected a boolean".to_string())?'
     if base in enums:
@@ -150,6 +175,15 @@ def _from_value_expr(base: str, var: str, enums: set[str], objects: set[str]) ->
             f'.ok_or_else(|| "expected an array".to_string())?; '
             f"let mut items = Vec::with_capacity(array.len()); "
             f"for item in array {{ items.push({inner_expr}); }} items }}"
+        )
+    if base.startswith("BTreeMap<String, "):
+        inner = base[len("BTreeMap<String, ") : -1]
+        inner_expr = _from_value_expr(inner, "item", enums, objects)
+        return (
+            f'{{ let object = {var}.as_object()'
+            f'.ok_or_else(|| "expected an object".to_string())?; '
+            f"let mut items = BTreeMap::new(); "
+            f"for (key, item) in object {{ items.insert(key.clone(), {inner_expr}); }} items }}"
         )
     raise SystemExit(f"unsupported rust type for from_value: {base}")
 
@@ -186,6 +220,39 @@ def _emit_enum(name: str, schema: dict) -> str:
     lines.append("        }")
     lines.append("    }")
     lines.append("}")
+    return "\n".join(lines)
+
+
+def _emit_union(name: str, schema: dict) -> str:
+    variants = [branch["$ref"].split("/")[-1] for branch in schema["oneOf"]]
+    discriminator = schema["discriminator"]["propertyName"]
+    mapping = {
+        value: reference.split("/")[-1]
+        for value, reference in schema["discriminator"]["mapping"].items()
+    }
+    lines = ["#[derive(Debug, Clone, PartialEq)]", f"pub enum {name} {{"]
+    lines.extend(f"    {variant}({variant})," for variant in variants)
+    lines.extend(["}", "", f"impl Default for {name} {{", "    fn default() -> Self {"])
+    lines.append(f"        Self::{variants[0]}({variants[0]}::default())")
+    lines.extend(["    }", "}", "", f"impl {name} {{"])
+    lines.append("    pub fn from_json(value: &Value) -> Result<Self, String> {")
+    lines.append(
+        f'        let kind = value.get("{discriminator}").and_then(Value::as_str)'
+        f'.ok_or_else(|| "missing discriminator {discriminator}".to_string())?;'
+    )
+    lines.append("        match kind {")
+    for value, variant in mapping.items():
+        lines.append(
+            f'            "{value}" => Ok(Self::{variant}({variant}::from_json(value)?)),'
+        )
+    lines.append(
+        f'            other => Err(format!("unknown {name} discriminator: {{other}}")),'
+    )
+    lines.extend(["        }", "    }", "", "    pub fn to_json(&self) -> Value {", "        match self {"])
+    lines.extend(
+        f"            Self::{variant}(value) => value.to_json()," for variant in variants
+    )
+    lines.extend(["        }", "    }", "}"])
     return "\n".join(lines)
 
 
@@ -273,16 +340,68 @@ def _rustfmt(source: str) -> str:
     return result.stdout
 
 
-def render() -> str:
-    raw = CONTRACT.read_bytes()
+def render(contract_path: Path, operation_id: str | None = None) -> str:
+    raw = contract_path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     document = json.loads(raw)
     schemas = document["components"]["schemas"]
 
+    if operation_id:
+        operation = next(
+            (
+                operation
+                for path in document.get("paths", {}).values()
+                for operation in path.values()
+                if isinstance(operation, dict)
+                and operation.get("operationId") == operation_id
+            ),
+            None,
+        )
+        if operation is None:
+            raise SystemExit(f"operationId not found: {operation_id}")
+        roots: set[str] = set()
+        visited_refs: set[str] = set()
+
+        def resolve_local(reference: str) -> object | None:
+            if not reference.startswith("#/"):
+                return None
+            value: object = document
+            for part in reference[2:].split("/"):
+                if not isinstance(value, dict) or part not in value:
+                    return None
+                value = value[part]
+            return value
+
+        def collect_refs(value: object) -> None:
+            if isinstance(value, dict):
+                if "$ref" in value:
+                    reference = value["$ref"]
+                    if reference.startswith("#/components/schemas/"):
+                        roots.add(reference.split("/")[-1])
+                    if reference not in visited_refs:
+                        visited_refs.add(reference)
+                        resolved = resolve_local(reference)
+                        if resolved is not None:
+                            collect_refs(resolved)
+                for child in value.values():
+                    collect_refs(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect_refs(child)
+
+        collect_refs(operation)
+        reachable: set[str] = set()
+        while roots - reachable:
+            name = (roots - reachable).pop()
+            reachable.add(name)
+            collect_refs(schemas[name])
+        schemas = {name: schema for name, schema in schemas.items() if name in reachable}
+
     enums = {n for n in schemas if _is_enum(schemas[n])}
+    unions = {n for n in schemas if "oneOf" in schemas[n] and "discriminator" in schemas[n]}
     objects = {
         n for n in schemas if schemas[n].get("type") == "object" and not _is_enum(schemas[n])
-    }
+    } | unions
 
     # Objects in dependency order: readable top-to-bottom the way the C++
     # header was, though Rust items may reference each other in any order.
@@ -320,9 +439,12 @@ def render() -> str:
     for name in sorted(objects):
         visit(name)
 
+    needs_btree = any(
+        isinstance(schema.get("additionalProperties"), dict) for schema in schemas.values()
+    )
     out = [
         "// Generated by contracts/generate_console_binding.py from",
-        "// contracts/wally-cli-v1.openapi.json. DO NOT EDIT.",
+        f"// contracts/{contract_path.name}. DO NOT EDIT.",
         "//",
         "// Typed request and response models for the CLI's control-plane calls, so",
         "// console.rs neither builds a request body by hand nor reads a response",
@@ -331,15 +453,41 @@ def render() -> str:
         "",
         "use serde_json::Value;",
         "",
-        "/// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.",
+        f"/// SHA-256 of contracts/{contract_path.name} this file was built from.",
         f'pub const CONTRACT_SHA256: &str = "{digest}";',
         "",
     ]
+    if needs_btree:
+        out.insert(out.index("use serde_json::Value;"), "use std::collections::BTreeMap;")
     for name in sorted(enums):
         out.append(_emit_enum(name, schemas[name]))
         out.append("")
     for name in ordered:
-        out.append(_emit_struct(name, schemas[name], schemas, enums, objects))
+        if name in unions:
+            out.append(_emit_union(name, schemas[name]))
+        elif isinstance(schemas[name].get("additionalProperties"), dict) and not schemas[name].get("properties"):
+            # A named string-keyed map is emitted as a transparent wrapper so
+            # it remains a distinct contract type and can own to/from_json.
+            value_type, _ = _resolve_type(schemas[name]["additionalProperties"], schemas)
+            out.append(
+                "\n".join(
+                    [
+                        "#[derive(Debug, Clone, Default, PartialEq)]",
+                        f"pub struct {name}(pub BTreeMap<String, {value_type}>);",
+                        "",
+                        f"impl {name} {{",
+                        "    pub fn from_json(value: &Value) -> Result<Self, String> {",
+                        f"        Ok(Self({_from_value_expr(f'BTreeMap<String, {value_type}>', 'value', enums, objects)}))",
+                        "    }",
+                        "    pub fn to_json(&self) -> Value {",
+                        f"        {_to_value_expr(f'BTreeMap<String, {value_type}>', 'self.0', enums, objects, False)}",
+                        "    }",
+                        "}",
+                    ]
+                )
+            )
+        else:
+            out.append(_emit_struct(name, schemas[name], schemas, enums, objects))
         out.append("")
     return _rustfmt("\n".join(out).rstrip("\n") + "\n")
 
@@ -347,21 +495,30 @@ def render() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if the file is stale")
+    parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--operation-id", help="generate only types reachable from this operation")
     args = parser.parse_args()
-    rendered = render()
+    contract_path = args.contract.resolve()
+    output = args.output.resolve()
+    rendered = render(contract_path, args.operation_id)
     if args.check:
-        current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
+        current = output.read_text(encoding="utf-8") if output.exists() else ""
         if current != rendered:
             sys.stderr.write(
-                "console_contract.rs is stale. Run:\n"
-                "  python3 contracts/generate_console_binding.py\n"
+                f"{output.name} is stale. Run:\n"
+                "  python3 contracts/generate_console_binding.py"
+                f" --contract {args.contract} --output {args.output}"
+                + (f" --operation-id {args.operation_id}" if args.operation_id else "")
+                + "\n"
                 "and commit the result.\n"
             )
             sys.exit(1)
         print("console_contract.rs matches the pinned contract")
         return
-    OUTPUT.write_text(rendered, encoding="utf-8")
-    print(f"wrote {OUTPUT}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(rendered, encoding="utf-8")
+    print(f"wrote {output}")
 
 
 if __name__ == "__main__":

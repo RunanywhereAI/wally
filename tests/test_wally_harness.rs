@@ -89,6 +89,13 @@ fn model_id_accepts_ordinary_ids() {
     }
 }
 
+#[test]
+fn qwev_is_reserved_for_the_decisions_surface() {
+    assert!(harness::is_decisions_model("qwev"));
+    assert_eq!(harness::DECISIONS_MODEL_IDS, &["qwev"]);
+    assert!(!harness::is_decisions_model("glm-5.3-flash"));
+}
+
 // ---------------------------------------------------------------------------
 // VerifyCloudSession — findings 1/2: Resolve() must confirm a session against
 // the console, not just check that a token string is non-empty.

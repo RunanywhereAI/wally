@@ -70,6 +70,7 @@ pub fn configure_app(app: &mut App) {
     // crate::commands::register_lora(app);
     crate::commands::register_models(app);
     crate::commands::register_serve(app);
+    crate::commands::register_decisions(app);
 
     crate::commands::register_editors(app);
     crate::commands::register_harness(app); // coding agents
@@ -112,7 +113,7 @@ pub fn configure_app(app: &mut App) {
     const SECTIONS: &[Section] = &[
         Section {
             group: "Chat",
-            names: &["run", "serve"],
+            names: &["run", "serve", "decisions"],
         },
         Section {
             group: "Models",

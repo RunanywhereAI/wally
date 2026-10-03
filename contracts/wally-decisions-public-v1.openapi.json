@@ -1,0 +1,1324 @@
+{
+  "components": {
+    "responses": {
+      "Error": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "OpenAI-shaped error; raw upstream bodies are never returned",
+        "headers": {
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "Key is valid but the model or route is not entitled",
+        "headers": {
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "Entitlement or GPU admission capacity limit",
+        "headers": {
+          "Access-Control-Expose-Headers": {
+            "description": "Response headers a browser client may read",
+            "schema": {
+              "$ref": "#/components/schemas/AccessControlExposeHeaders"
+            }
+          },
+          "Retry-After": {
+            "description": "Seconds before retrying when supplied",
+            "schema": {
+              "$ref": "#/components/schemas/RetryAfterSeconds"
+            }
+          },
+          "Server-Timing": {
+            "description": "Pre-stream phase timings when supplied",
+            "schema": {
+              "$ref": "#/components/schemas/ServerTiming"
+            }
+          },
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "Missing, malformed, or unknown Cloud key",
+        "headers": {
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AccessControlExposeHeaders": {
+        "description": "The response headers a browser client may read, as a comma-separated list; it names x-request-id, Retry-After and Server-Timing when the response carries them.",
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ChoiceQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/QuestionId"
+          },
+          "options": {
+            "description": "Labelled A to Z in order.",
+            "items": {
+              "$ref": "#/components/schemas/DecisionOption"
+            },
+            "maxItems": 26,
+            "minItems": 2,
+            "type": "array"
+          },
+          "question": {
+            "$ref": "#/components/schemas/QuestionText"
+          },
+          "type": {
+            "const": "choice"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "question",
+          "options"
+        ],
+        "type": "object"
+      },
+      "DecisionAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "choice": {
+            "description": "A choice question's most probable option name.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "label_mass": {
+            "description": "The share of the model's whole next-token distribution that landed on the question's labels. Low means the model would have answered none of them.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "probabilities": {
+            "$ref": "#/components/schemas/LabelProbabilities"
+          },
+          "score": {
+            "description": "A score question's probability-weighted level.",
+            "maximum": 9,
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "choice",
+              "score",
+              "yes_no"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "probabilities",
+          "label_mass"
+        ],
+        "type": "object"
+      },
+      "DecisionAnswers": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/DecisionAnswer"
+        },
+        "description": "Keyed by the caller's question ids, which the caller names at request time: each value is a typed DecisionAnswer.",
+        "maxProperties": 128,
+        "minProperties": 1,
+        "propertyNames": {
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "type": "object"
+      },
+      "DecisionOption": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "$ref": "#/components/schemas/QuestionText"
+          },
+          "name": {
+            "$ref": "#/components/schemas/OptionName"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "DecisionQuestion": {
+        "discriminator": {
+          "mapping": {
+            "choice": "#/components/schemas/ChoiceQuestion",
+            "score": "#/components/schemas/ScoreQuestion",
+            "yes_no": "#/components/schemas/YesNoQuestion"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ChoiceQuestion"
+          },
+          {
+            "$ref": "#/components/schemas/ScoreQuestion"
+          },
+          {
+            "$ref": "#/components/schemas/YesNoQuestion"
+          }
+        ]
+      },
+      "DecisionText": {
+        "description": "Nonblank text. The real limits are tighter than this bound: the whole request body is at most 1 MiB, and each question's prompt (the input, the question and the server's wording) must fit the model's per-question limit, which is the `max_input_tokens` that GET /v1/models reports for the model, counted over the input and that question's wording together. A request over either is refused with 400 and nothing is billed.",
+        "maxLength": 1000000,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "DecisionUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_tokens": {
+            "const": 0
+          },
+          "prompt_tokens": {
+            "description": "Prompt tokens prefilled: the input counted once per question, with each question's own text.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "const": 0
+          },
+          "total_tokens": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ],
+        "type": "object"
+      },
+      "DecisionsRequest": {
+        "additionalProperties": false,
+        "description": "POST /v1/decisions: score typed questions about one input with a decision model, in prefill, without generating text. Each question is answered with a probability per option. Text fields are strings only.",
+        "properties": {
+          "input": {
+            "$ref": "#/components/schemas/DecisionText",
+            "description": "The text every question is asked about. It is rendered once into each question's prompt, so it is billed once per question."
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelId"
+          },
+          "prompt_format_version": {
+            "description": "Pins the server-owned prompt wording. Version 2 is the only one served (the server refuses any other), so a caller pinning it is told when the wording, and so the probabilities, change. Null or absent takes the served version.",
+            "enum": [
+              2,
+              null
+            ],
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "questions": {
+            "description": "The questions to answer about the input, each with an id unique in the request. Each is scored on its own. The cap is one replica's question gate: a 128-question request can occupy a whole decisions replica by itself.",
+            "items": {
+              "$ref": "#/components/schemas/DecisionQuestion"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array"
+          },
+          "temperature": {
+            "description": "Divides the label log-probabilities before the softmax. Scales `probabilities` only, never `label_mass`. Default 1.",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "number"
+          }
+        },
+        "required": [
+          "model",
+          "input",
+          "questions"
+        ],
+        "type": "object"
+      },
+      "DecisionsResponse": {
+        "additionalProperties": false,
+        "description": "The 200 answer to POST /v1/decisions: one answer per question, keyed by the question's id. Usage bills the prompt once per question and no completion tokens.",
+        "properties": {
+          "answers": {
+            "$ref": "#/components/schemas/DecisionAnswers"
+          },
+          "model": {
+            "description": "The Wally model identifier the request named.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "type": "string"
+          },
+          "object": {
+            "const": "decisions"
+          },
+          "prompt_format_version": {
+            "const": 2,
+            "description": "The prompt wording the answers were computed under."
+          },
+          "usage": {
+            "$ref": "#/components/schemas/DecisionUsage"
+          }
+        },
+        "required": [
+          "object",
+          "model",
+          "prompt_format_version",
+          "answers",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "ErrorCode": {
+        "enum": [
+          "bad_request",
+          "not_found",
+          "payload_too_large",
+          "unprocessable",
+          "invalid_api_key",
+          "expired_api_key",
+          "revoked_api_key",
+          "insufficient_credit",
+          "account_frozen",
+          "model_not_entitled",
+          "not_in_cohort",
+          "user_rate_limited",
+          "request_cancelled",
+          "quota_exceeded",
+          "capacity_exceeded",
+          "idempotency_key_reused",
+          "unsupported_endpoint",
+          "proxy_retired",
+          "gateway_unavailable",
+          "control_plane_overloaded",
+          "credit_gate_unavailable",
+          "upstream_contract_violation",
+          "unattributed_key",
+          "internal",
+          "bad_gateway",
+          "draining",
+          "spool_unhealthy",
+          "cold",
+          "timeout"
+        ],
+        "type": "string"
+      },
+      "ErrorMessage": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ErrorParameter": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ErrorType": {
+        "enum": [
+          "invalid_request_error",
+          "authentication_error",
+          "permission_error",
+          "rate_limit_error",
+          "quota",
+          "capacity",
+          "server_error",
+          "timeout"
+        ],
+        "type": "string"
+      },
+      "JsonScalar": {
+        "description": "A JSON leaf inside a value System One lets the caller shape freely: text of at most 65,536 characters, a number, a boolean or null.",
+        "maxLength": 65536,
+        "maximum": 1e+300,
+        "minimum": -1e+300,
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
+      },
+      "JsonValueL1": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonScalar"
+        },
+        "description": "A JSON value of leaves: a leaf, an array of at most 256 items, or an object of at most 256 members with names of at most 256 characters. Containers nest to three levels in all (this one, JsonValueL1's own and the field's).",
+        "items": {
+          "$ref": "#/components/schemas/JsonScalar"
+        },
+        "maxItems": 256,
+        "maxLength": 65536,
+        "maxProperties": 256,
+        "maximum": 1e+300,
+        "minimum": -1e+300,
+        "propertyNames": {
+          "maxLength": 256
+        },
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null",
+          "array",
+          "object"
+        ]
+      },
+      "JsonValueL2": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonValueL1"
+        },
+        "description": "A JSON value whose arrays and objects hold JsonValueL1: a leaf, an array of at most 256 items, or an object of at most 256 members with names of at most 256 characters. Containers nest to three levels in all (this one, JsonValueL1's own and the field's).",
+        "items": {
+          "$ref": "#/components/schemas/JsonValueL1"
+        },
+        "maxItems": 256,
+        "maxLength": 65536,
+        "maxProperties": 256,
+        "maximum": 1e+300,
+        "minimum": -1e+300,
+        "propertyNames": {
+          "maxLength": 256
+        },
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null",
+          "array",
+          "object"
+        ]
+      },
+      "LabelProbabilities": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/LabelProbability"
+        },
+        "description": "Keyed by the question's labels -- a choice question's option names, a score question's level indices \"0\" to \"9\", or \"yes\" and \"no\" -- each the probability of that label. They sum to 1.",
+        "maxProperties": 26,
+        "minProperties": 2,
+        "propertyNames": {
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "type": "object"
+      },
+      "LabelProbability": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+      },
+      "ModelId": {
+        "description": "An explicitly entitled Wally model identifier that serves decisions.",
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+        "type": "string"
+      },
+      "OpenAIError": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OpenAIErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "OpenAIErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "$ref": "#/components/schemas/ErrorMessage"
+          },
+          "param": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorParameter"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/ErrorType"
+          }
+        },
+        "required": [
+          "message",
+          "type"
+        ],
+        "type": "object"
+      },
+      "OptionName": {
+        "description": "One line: at least one non-blank character, and no control or line-break character anywhere (U+0000-U+001F, U+007F, U+2028, U+2029). Both checks are a single-character search, linear in the length. Names must be distinct within a question, ignoring case and surrounding space.",
+        "maxLength": 256,
+        "minLength": 1,
+        "not": {
+          "pattern": "[\\u0000-\\u001f\\u007f\\u2028\\u2029]"
+        },
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "QuestionId": {
+        "description": "The caller's id for a question; the answer is returned under it.",
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "QuestionText": {
+        "maxLength": 65536,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "RequestId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "RetryAfterSeconds": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "ScoreQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/QuestionId"
+          },
+          "levels": {
+            "description": "Described levels, labelled 0 to 9 in order.",
+            "items": {
+              "$ref": "#/components/schemas/QuestionText"
+            },
+            "maxItems": 10,
+            "minItems": 2,
+            "type": "array"
+          },
+          "question": {
+            "$ref": "#/components/schemas/QuestionText"
+          },
+          "type": {
+            "const": "score"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "question",
+          "levels"
+        ],
+        "type": "object"
+      },
+      "ServerTiming": {
+        "description": "W3C Server-Timing. As a HEADER it carries pre-stream phases only, for example the gateway's authorize call and the sidecar's ra-queue (time waiting for a seat) and ra-admit (the sidecar's own work before the request reached the model). Time to first token is never in the header, because it is not known when the headers are sent; on a streaming response it arrives as a Server-Timing TRAILER named ra-ttft, after the last SSE frame. Metric names are not a closed set: ignore a name you do not know, and treat the trailer as optional.",
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "SystemOneAnswer": {
+        "discriminator": {
+          "mapping": {
+            "choice": "#/components/schemas/SystemOneChoiceAnswer",
+            "noul": "#/components/schemas/SystemOneNoulAnswer",
+            "score": "#/components/schemas/SystemOneScoreAnswer"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SystemOneNoulAnswer"
+          },
+          {
+            "$ref": "#/components/schemas/SystemOneChoiceAnswer"
+          },
+          {
+            "$ref": "#/components/schemas/SystemOneScoreAnswer"
+          }
+        ]
+      },
+      "SystemOneAnswers": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/SystemOneAnswer"
+        },
+        "description": "Keyed by the caller's question names: each value is a typed answer.",
+        "maxProperties": 128,
+        "minProperties": 1,
+        "propertyNames": {
+          "maxLength": 128,
+          "minLength": 1
+        },
+        "type": "object"
+      },
+      "SystemOneChoiceAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "choice": {
+            "description": "The most probable option label; the first of equals.",
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "confidence": {
+            "description": "How far the top option stands above a uniform guess, from 0 to 1: (n * max(q) - 1) / (n - 1) over the probabilities renormalised to sum to 1, clamped.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "probabilities": {
+            "$ref": "#/components/schemas/SystemOneLabelProbabilities"
+          },
+          "type": {
+            "const": "choice"
+          }
+        },
+        "required": [
+          "type",
+          "choice",
+          "confidence",
+          "probabilities"
+        ],
+        "type": "object"
+      },
+      "SystemOneChoiceCriteria": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/SystemOneGuidance"
+        },
+        "description": "Option label to guidance, in order. This API takes 2 to 26 options (System One allows 1 to 255), each label one line of at most 256 characters, distinct ignoring case and surrounding space.",
+        "maxProperties": 26,
+        "minProperties": 2,
+        "propertyNames": {
+          "maxLength": 256,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "SystemOneChoiceQuestion": {
+        "additionalProperties": false,
+        "description": "A question with one answer from a set of labelled options.",
+        "properties": {
+          "criteria": {
+            "$ref": "#/components/schemas/SystemOneChoiceCriteria"
+          },
+          "instructions": {
+            "$ref": "#/components/schemas/SystemOneTextShape"
+          },
+          "type": {
+            "const": "choice"
+          }
+        },
+        "required": [
+          "type",
+          "instructions",
+          "criteria"
+        ],
+        "type": "object"
+      },
+      "SystemOneGuidance": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonValueL2"
+        },
+        "description": "What a choice option means: text, a JSON array or object (rendered as compact JSON), or null for none. A blank string counts as none.",
+        "items": {
+          "$ref": "#/components/schemas/JsonValueL2"
+        },
+        "maxItems": 256,
+        "maxLength": 65536,
+        "maxProperties": 256,
+        "propertyNames": {
+          "maxLength": 256
+        },
+        "type": [
+          "string",
+          "array",
+          "object",
+          "null"
+        ]
+      },
+      "SystemOneLabelProbabilities": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/SystemOneProbability"
+        },
+        "description": "Keyed by the question's labels (a choice question's option labels, a score question's level indices \"0\" to \"9\"), each the probability of that label as scored, which is not renormalised.",
+        "maxProperties": 26,
+        "minProperties": 2,
+        "propertyNames": {
+          "maxLength": 256,
+          "minLength": 1
+        },
+        "type": "object"
+      },
+      "SystemOneLegend": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/SystemOneText"
+        },
+        "description": "Level index \"0\" to \"9\" to the criterion the request gave for it, as sent.",
+        "maxProperties": 10,
+        "minProperties": 2,
+        "propertyNames": {
+          "pattern": "^[0-9]$"
+        },
+        "type": "object"
+      },
+      "SystemOneModelId": {
+        "description": "An explicitly entitled Wally model identifier that serves decisions.",
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+        "type": "string"
+      },
+      "SystemOneNoulAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "noul": {
+            "description": "The probability of yes.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": {
+            "const": "noul"
+          }
+        },
+        "required": [
+          "type",
+          "noul"
+        ],
+        "type": "object"
+      },
+      "SystemOneNoulCriteria": {
+        "additionalProperties": false,
+        "description": "What a yes and a no each mean. Either may be left out.",
+        "properties": {
+          "false": {
+            "$ref": "#/components/schemas/SystemOneText"
+          },
+          "true": {
+            "$ref": "#/components/schemas/SystemOneText"
+          }
+        },
+        "type": "object"
+      },
+      "SystemOneNoulQuestion": {
+        "additionalProperties": false,
+        "description": "A yes or no question, answered with the probability of yes.",
+        "properties": {
+          "criteria": {
+            "$ref": "#/components/schemas/SystemOneNoulCriteria"
+          },
+          "instructions": {
+            "$ref": "#/components/schemas/SystemOneTextShape"
+          },
+          "type": {
+            "const": "noul"
+          }
+        },
+        "required": [
+          "type",
+          "instructions"
+        ],
+        "type": "object"
+      },
+      "SystemOneProbability": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+      },
+      "SystemOneQuestion": {
+        "description": "One question: a noul, choice or score question by `type`. Every variant takes `instructions`, checked in full here, once.",
+        "discriminator": {
+          "mapping": {
+            "choice": "#/components/schemas/SystemOneChoiceQuestion",
+            "noul": "#/components/schemas/SystemOneNoulQuestion",
+            "score": "#/components/schemas/SystemOneScoreQuestion"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SystemOneNoulQuestion"
+          },
+          {
+            "$ref": "#/components/schemas/SystemOneChoiceQuestion"
+          },
+          {
+            "$ref": "#/components/schemas/SystemOneScoreQuestion"
+          }
+        ],
+        "properties": {
+          "instructions": {
+            "$ref": "#/components/schemas/SystemOneText"
+          }
+        }
+      },
+      "SystemOneQuestions": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/SystemOneQuestion"
+        },
+        "description": "The questions, keyed by the caller's own names (1 to 128 characters, not blank); each answer is returned under its name. This API takes 1 to 128 questions. The cap is one replica's question gate: a 128-question request can occupy a whole decisions replica by itself.",
+        "maxProperties": 128,
+        "minProperties": 1,
+        "propertyNames": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "\\S",
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "SystemOneRequest": {
+        "additionalProperties": true,
+        "description": "POST /v1/systemone: the System One request shape (state, and typed noul, choice and score questions keyed by name), answered by a decision model in prefill without generating text. Unknown top-level fields are ignored, as in the System One schema this follows (OpenRouter's and TypeSafe's), so this object is open at its top level and nowhere else: `provider`, `session_id`, `trace`, `user` and any other unknown field are accepted and ignored. `temperature`, `prompt_format_version`, `return_prompt_token_ids` and `chat_template_kwargs` are not part of this API (use /v1/decisions) and are refused unless null.",
+        "examples": [
+          {
+            "model": "qwev",
+            "questions": {
+              "is_bug": {
+                "criteria": {
+                  "false": "They ask a question or request a feature.",
+                  "true": "They describe broken or unexpected product behavior."
+                },
+                "instructions": "Is the customer reporting a software defect?",
+                "type": "noul"
+              },
+              "team": {
+                "criteria": {
+                  "account": "Login, permissions, or profile issues.",
+                  "frontend": "Rendering, layout, or browser issues.",
+                  "payments": null
+                },
+                "instructions": "Which team should own this ticket?",
+                "type": "choice"
+              },
+              "urgency": {
+                "criteria": [
+                  "Can wait for the next release",
+                  "Should be fixed this week",
+                  "Blocking revenue right now"
+                ],
+                "instructions": "How urgent is this ticket?",
+                "type": "score"
+              }
+            },
+            "state": {
+              "customer_tier": "enterprise",
+              "ticket": "My checkout page shows a blank screen after I click Pay."
+            }
+          }
+        ],
+        "properties": {
+          "chat_template_kwargs": {
+            "description": "Not part of this API: use /v1/decisions for it.",
+            "type": "null"
+          },
+          "model": {
+            "$ref": "#/components/schemas/SystemOneModelId"
+          },
+          "prompt_format_version": {
+            "description": "Not part of this API: use /v1/decisions for it.",
+            "type": "null"
+          },
+          "questions": {
+            "$ref": "#/components/schemas/SystemOneQuestions"
+          },
+          "return_prompt_token_ids": {
+            "description": "Not part of this API: use /v1/decisions for it.",
+            "type": "null"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SystemOneState"
+          },
+          "temperature": {
+            "description": "Not part of this API: use /v1/decisions for it.",
+            "type": "null"
+          }
+        },
+        "required": [
+          "model",
+          "state",
+          "questions"
+        ],
+        "type": "object"
+      },
+      "SystemOneResponse": {
+        "additionalProperties": false,
+        "description": "The 200 answer to POST /v1/systemone: one typed answer per question, keyed by the caller's name. `provider` and `usage.cost`, which System One makes optional, are not sent.",
+        "examples": [
+          {
+            "answers": {
+              "is_bug": {
+                "noul": 0.96,
+                "type": "noul"
+              },
+              "team": {
+                "choice": "payments",
+                "confidence": 0.75,
+                "probabilities": {
+                  "account": 0.02,
+                  "frontend": 0.14,
+                  "payments": 0.84
+                },
+                "type": "choice"
+              },
+              "urgency": {
+                "confidence": 0.9,
+                "legend": {
+                  "0": "Can wait for the next release",
+                  "1": "Should be fixed this week",
+                  "2": "Blocking revenue right now"
+                },
+                "probabilities": {
+                  "0": 0.0,
+                  "1": 0.01,
+                  "2": 0.99
+                },
+                "score": 1.99,
+                "type": "score"
+              }
+            },
+            "id": "0b7f9d9e-4f6c-4d0b-9a55-6f0c2f4a8f11",
+            "model": "qwev",
+            "usage": {
+              "input_tokens": 476,
+              "output_tokens": 0
+            }
+          }
+        ],
+        "properties": {
+          "answers": {
+            "$ref": "#/components/schemas/SystemOneAnswers"
+          },
+          "id": {
+            "description": "The request id, the same as the x-request-id response header.",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "model": {
+            "description": "The Wally model identifier the request named.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/SystemOneUsage"
+          }
+        },
+        "required": [
+          "id",
+          "model",
+          "answers",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "SystemOneScoreAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "confidence": {
+            "description": "One minus the spread around the top level relative to a uniform spread, floored at 0.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "legend": {
+            "$ref": "#/components/schemas/SystemOneLegend"
+          },
+          "probabilities": {
+            "$ref": "#/components/schemas/SystemOneLabelProbabilities"
+          },
+          "score": {
+            "description": "The probability-weighted level: the sum of index times probability.",
+            "maximum": 9,
+            "minimum": 0,
+            "type": "number"
+          },
+          "type": {
+            "const": "score"
+          }
+        },
+        "required": [
+          "type",
+          "score",
+          "confidence",
+          "probabilities",
+          "legend"
+        ],
+        "type": "object"
+      },
+      "SystemOneScoreCriteria": {
+        "description": "The ordered levels, labelled 0 to 9. This API takes 2 to 10 levels (System One allows 1 to 10), each non-blank.",
+        "items": {
+          "$ref": "#/components/schemas/SystemOneText"
+        },
+        "maxItems": 10,
+        "minItems": 2,
+        "type": "array"
+      },
+      "SystemOneScoreQuestion": {
+        "additionalProperties": false,
+        "description": "A question answered on an ordered scale of described levels.",
+        "properties": {
+          "criteria": {
+            "$ref": "#/components/schemas/SystemOneScoreCriteria"
+          },
+          "instructions": {
+            "$ref": "#/components/schemas/SystemOneTextShape"
+          },
+          "type": {
+            "const": "score"
+          }
+        },
+        "required": [
+          "type",
+          "instructions",
+          "criteria"
+        ],
+        "type": "object"
+      },
+      "SystemOneState": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonValueL2"
+        },
+        "description": "The content every question is asked about: a non-blank string, or a JSON array or object, which is rendered into each question's prompt as compact JSON. It is billed once per question. The real limits are tighter than this bound: the whole request body is at most 1 MiB, and each question's prompt must fit the model's per-question limit, which is the `max_input_tokens` GET /v1/models reports for the model. A request over either is refused with 400 and nothing is billed.",
+        "items": {
+          "$ref": "#/components/schemas/JsonValueL2"
+        },
+        "maxItems": 256,
+        "maxLength": 1000000,
+        "maxProperties": 256,
+        "minLength": 1,
+        "propertyNames": {
+          "maxLength": 256
+        },
+        "type": [
+          "string",
+          "array",
+          "object"
+        ]
+      },
+      "SystemOneText": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonValueL2"
+        },
+        "description": "A System One free-form text: a string of at most 65,536 characters, a JSON array or a JSON object (at most 256 items or members, nested to three levels in all). A non-string is rendered into the prompt as compact JSON.",
+        "items": {
+          "$ref": "#/components/schemas/JsonValueL2"
+        },
+        "maxItems": 256,
+        "maxLength": 65536,
+        "maxProperties": 256,
+        "propertyNames": {
+          "maxLength": 256
+        },
+        "type": [
+          "string",
+          "array",
+          "object"
+        ]
+      },
+      "SystemOneTextShape": {
+        "description": "The shape of a SystemOneText with none of its members checked: where a question's variant is chosen, `instructions` is checked only for what kind of value it is and how long, so a validator does not walk its members once per variant. SystemOneQuestion checks them once, as SystemOneText.",
+        "maxItems": 256,
+        "maxLength": 65536,
+        "maxProperties": 256,
+        "type": [
+          "string",
+          "array",
+          "object"
+        ]
+      },
+      "SystemOneUsage": {
+        "additionalProperties": false,
+        "description": "What the request billed. No `cost`: the account's usage ledger is the source of truth for money.",
+        "properties": {
+          "input_tokens": {
+            "description": "Prompt tokens prefilled: the state counted once per question, with each question's own text.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "description": "Always 0: nothing is generated.",
+            "maximum": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "type": "object"
+      },
+      "YesNoQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/QuestionId"
+          },
+          "no": {
+            "$ref": "#/components/schemas/QuestionText"
+          },
+          "question": {
+            "$ref": "#/components/schemas/QuestionText"
+          },
+          "type": {
+            "const": "yes_no"
+          },
+          "yes": {
+            "$ref": "#/components/schemas/QuestionText"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "question"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "bearerFormat": "RunAnywhereCloudKey",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Score typed questions about one input with a decision model: each answer is a probability per option, computed in prefill without generating text. Billed as prompt tokens, the input counted once per question, at the model's list price. POST /systemone takes the same questions in the System One shape (state, and noul, choice and score questions keyed by name) and is billed and limited identically.",
+    "title": "RunAnywhere Wally Decisions API",
+    "version": "1.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/decisions": {
+      "post": {
+        "operationId": "createDecisions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionsResponse"
+                }
+              }
+            },
+            "description": "One answer per question, keyed by question id",
+            "headers": {
+              "Access-Control-Expose-Headers": {
+                "description": "Response headers a browser client may read",
+                "schema": {
+                  "$ref": "#/components/schemas/AccessControlExposeHeaders"
+                }
+              },
+              "Server-Timing": {
+                "description": "Phase timings when supplied",
+                "schema": {
+                  "$ref": "#/components/schemas/ServerTiming"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Answer typed questions about an input"
+      }
+    },
+    "/systemone": {
+      "post": {
+        "description": "The System One request and response shape (OpenRouter, TypeSafe, Liquid) over the same decision models: noul questions answer the probability of yes, choice questions a label with its probabilities, score questions a weighted level. Served, billed, limited and refused exactly as POST /decisions; this API's limits are narrower than System One's (128 questions, 2 to 26 options, 2 to 10 score levels).",
+        "operationId": "createSystemOne",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SystemOneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemOneResponse"
+                }
+              }
+            },
+            "description": "One typed answer per question, keyed by the caller's name",
+            "headers": {
+              "Access-Control-Expose-Headers": {
+                "description": "Response headers a browser client may read",
+                "schema": {
+                  "$ref": "#/components/schemas/AccessControlExposeHeaders"
+                }
+              },
+              "Server-Timing": {
+                "description": "Phase timings when supplied",
+                "schema": {
+                  "$ref": "#/components/schemas/ServerTiming"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "summary": "Answer typed questions about a state, System One shape"
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Wally production inference gateway",
+      "url": "https://inference.runanywhere.ai/v1"
+    }
+  ],
+  "x-runanywhere-contract": {
+    "name": "wally-decisions-public",
+    "source_schemas": {
+      "error": {
+        "path": "public/error.schema.json",
+        "sha256": "039c2486e4656d05d7478918111cb2b9bbc21cdfc46953b4680629849c6d4d15"
+      },
+      "request": {
+        "path": "public/decisions_request.schema.json",
+        "sha256": "e91c6a96300303ba0baf98dc7ba479a48b6802b45f06b83869db757c06bdbebf"
+      },
+      "response": {
+        "path": "public/decisions_response.schema.json",
+        "sha256": "db2e1cfe9f7ba70fbc3eee0462a5c83dec9e12df144613674264ba4a3bbf1526"
+      },
+      "systemone_request": {
+        "path": "public/systemone_request.schema.json",
+        "sha256": "4554f66f8070893abde4eece887406438a173a2171050388162e6d94d0d4203e"
+      },
+      "systemone_response": {
+        "path": "public/systemone_response.schema.json",
+        "sha256": "4b31e5ff4ee534fe1729d53b86f651e2def14018af386e5c9041eb5dc34427a3"
+      }
+    },
+    "status": "candidate",
+    "version": "1.1.0"
+  }
+}

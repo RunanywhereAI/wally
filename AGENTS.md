@@ -77,9 +77,10 @@ Do not wrap protobuf in OpenAPI merely to change protocol names. When Wally only
 transports SDK-owned bytes, protobuf generation and `SCHEMA_LOCK` satisfy this
 rule. When Wally directly owns an HTTP call, the OpenAPI requirement applies.
 
-The console's ten CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
+The console's eleven CLI calls (`/auth/cli/{start,poll,refresh,revoke}`, `/v1/me`,
 `/v1/cli/usage`, `/v1/cli/usage/requests`, `/v1/models`, `/v1/models/catalog`,
-`/v1/requests/{request_id}/cancel`) follow this.
+`/v1/requests/{request_id}/cancel`, plus `createDecisions` at
+`POST /v1/decisions`) follow this.
 `contracts/wally-cli-v1.openapi.json` is the pinned artifact, extracted from
 InferenceInfra's `control-plane-v1.openapi.json` by
 `contracts/extract-cli-contract.py`. `contracts/generate_console_binding.py`
@@ -95,6 +96,9 @@ defaulted one would read as the last page, so `console.rs` fails a page that
 omits it rather than end the export early.
 `test_wally_contract` and `python3 contracts/sync_from_inferenceinfra.py
 --check` fail the build if the header, the pin, and the artifact drift.
+The separately vendored `contracts/wally-decisions-public-v1.openapi.json` is
+pinned to its InferenceInfra commit in `versions.toml`; the same generator
+emits `src/account/decisions_contract.rs` with `--operation-id createDecisions`.
 
 To re-vendor from an InferenceInfra checkout (records the source commit on the
 extract):

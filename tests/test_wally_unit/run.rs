@@ -98,3 +98,20 @@ fn run_max_tokens_negative_exit2() {
         "`run --max-tokens -5` should be a usage error (stderr: {stderr})"
     );
 }
+
+#[test]
+fn run_refuses_qwev_before_model_resolution() {
+    let home = common::TempHome::new();
+    let (code, _stdout, stderr) = common::run_wally(&home, &["run", "qwev", "classify this"]);
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("wally decisions"), "{stderr}");
+}
+
+#[test]
+fn decisions_requires_a_question_with_usage_exit() {
+    let home = common::TempHome::new();
+    let (code, _stdout, stderr) =
+        common::run_wally(&home, &["decisions", "--input", "classify this"]);
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("wally decisions --input"), "{stderr}");
+}
