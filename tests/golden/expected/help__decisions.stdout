@@ -1,10 +1,10 @@
-Score questions with hosted Qwev
+Score questions with a hosted decision model
 
 Usage: wally decisions [OPTIONS]
 
 Options:
   -h, --help                  Show help
-  -m, --model TEXT            Decision model (default qwev)
+  -m, --model TEXT            Decision model (default pplx-decider-v1)
   -i, --input TEXT            Text every question is about
       --input-file TEXT       Read input from PATH (- for stdin)
       --ask TEXT ...          Yes/no question (repeatable)
