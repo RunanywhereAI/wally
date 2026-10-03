@@ -87,7 +87,7 @@ pub use cmd_stt::register_stt;
 pub use cmd_telemetry::register_telemetry;
 pub use cmd_tool::{configure_tool_call, register_tool};
 pub use cmd_tts::register_tts;
-pub use cmd_update::{register_update, run_update};
+pub use cmd_update::{register_update, run_update, show_update_notice, sweep_replaced_files};
 pub use cmd_usage::register_usage;
 pub use cmd_vad::register_vad;
 pub use cmd_version::register_version;

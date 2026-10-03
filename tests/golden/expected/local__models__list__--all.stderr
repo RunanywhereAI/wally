@@ -1,3 +1,4 @@
 telemetry POST /api/v2/sdk/telemetry/system -> rc=Network error (-151) http=0 body=(empty)
 telemetry POST /api/v2/sdk/telemetry/system -> rc=Network error (-151) http=0 body=(empty)
 telemetry ready | has_completed_http_setup=yes
+cloud models not shown: not signed in — run `wally account login`

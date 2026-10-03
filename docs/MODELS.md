@@ -1,6 +1,6 @@
 # Models
 
-`wally models list --all` is the live list.
+`wally models list --local` is the live list. `--cloud` lists the cloud models on your account, and `--all` shows both.
 
 This table groups models by publisher; the id you pull depends on the engine
 you want:

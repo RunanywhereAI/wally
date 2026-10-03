@@ -71,3 +71,19 @@ row's size from the build its id pulls (it had shown the MLX build's size while
 `pull <id>` fetched the GGUF), and started showing `mlx-ternary-bonsai-27b-2bit`
 for the one MLX-only row whose merge key names no registered model. Those sizes
 and that id are the only differences from the C++ capture.
+
+Four `update` cases were edited when `wally update` dropped `--nightly` and
+gained `-c, --check-for-updates` (`help__update`, `help__help__update`,
+`leaf__update__bogus_flag`, `leaf__update__extra_positional`). The options
+list is the only thing that differs from the C++ capture.
+
+Four `uninstall` cases were edited when `wally uninstall` started keeping
+downloaded models by default and gained `--delete-models`
+(`help__uninstall`, `help__help__uninstall`, `leaf__uninstall__bogus_flag`,
+`leaf__uninstall__extra_positional`). The options list is the only difference.
+
+Fourteen `models list` cases were re-captured from the Rust binary when
+`models list` gained `--cloud`, `--all` started adding the account's cloud
+models, and `--local` took over the old meaning of `--all`. The differences are
+the `--all`/`--local`/`--cloud` help lines, the empty-list hint (now `--local`), the "cloud models not shown"
+line on a signed-out `--all`, and a `cloud` field on each `--json` row.

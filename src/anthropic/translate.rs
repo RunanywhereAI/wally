@@ -22,6 +22,8 @@ pub struct StreamState {
     pub opened: bool,
     pub block_open: bool,
     pub text_index: i32,
+    pub thinking_open: bool,
+    pub thinking_index: i32,
     pub next_index: i32,
     pub failed: bool,
     pub closed: bool,
@@ -30,6 +32,9 @@ pub struct StreamState {
     pub stop_reason: String,
     pub input_tokens: i32,
     pub output_tokens: i32,
+    /// `prompt_tokens_details.cached_tokens` when upstream reported it; None
+    /// keeps the usage block exactly as it was before cache reporting.
+    pub cached_tokens: Option<i32>,
     pub input_estimate: i32,
     pub output_chars: i32,
     pub tool_calls: BTreeMap<i32, ToolCall>,
@@ -44,6 +49,8 @@ impl Default for StreamState {
             opened: false,
             block_open: false,
             text_index: -1,
+            thinking_open: false,
+            thinking_index: -1,
             next_index: 0,
             failed: false,
             closed: false,
@@ -52,6 +59,7 @@ impl Default for StreamState {
             stop_reason: String::new(),
             input_tokens: 0,
             output_tokens: 0,
+            cached_tokens: None,
             input_estimate: 0,
             output_chars: 0,
             tool_calls: BTreeMap::new(),
@@ -277,6 +285,62 @@ fn estimate_tokens_from_chars(chars: usize) -> i32 {
     }
 }
 
+/// `usage.prompt_tokens_details.cached_tokens`, when upstream sent it.
+fn cached_tokens(usage: &Value) -> Option<i32> {
+    usage
+        .get("prompt_tokens_details")
+        .and_then(|details| details.get("cached_tokens"))
+        .and_then(Value::as_i64)
+        .map(|v| v as i32)
+}
+
+/// Anthropic usage from OpenAI counts. Anthropic counts cache reads apart
+/// from `input_tokens` while OpenAI's `prompt_tokens` includes them, so the
+/// cached part moves to `cache_read_input_tokens` and the total is unchanged.
+fn anthropic_usage(prompt: i32, output: i32, cached: Option<i32>) -> Value {
+    match cached {
+        Some(cached) => {
+            let cached = cached.clamp(0, prompt.max(0));
+            json!({
+                "input_tokens": prompt - cached,
+                "output_tokens": output,
+                "cache_read_input_tokens": cached,
+            })
+        }
+        None => json!({"input_tokens": prompt, "output_tokens": output}),
+    }
+}
+
+fn read_stream_usage(usage: &Value, state: &mut StreamState) {
+    state.input_tokens = count(usage, "prompt_tokens", state.input_tokens);
+    state.output_tokens = count(usage, "completion_tokens", state.output_tokens);
+    if let Some(cached) = cached_tokens(usage) {
+        state.cached_tokens = Some(cached);
+    }
+}
+
+fn close_text_block(state: &mut StreamState) -> String {
+    if !state.block_open {
+        return String::new();
+    }
+    state.block_open = false;
+    event(
+        "content_block_stop",
+        &json!({"type": "content_block_stop", "index": state.text_index}),
+    )
+}
+
+fn close_thinking_block(state: &mut StreamState) -> String {
+    if !state.thinking_open {
+        return String::new();
+    }
+    state.thinking_open = false;
+    event(
+        "content_block_stop",
+        &json!({"type": "content_block_stop", "index": state.thinking_index}),
+    )
+}
+
 // ---- public API -------------------------------------------------------
 
 /// One Anthropic `/v1/messages` request body translated to OpenAI
@@ -457,9 +521,17 @@ pub fn response_to_anthropic(openai: &Value, model: &str) -> Value {
         .to_string();
 
     let mut content = Vec::new();
+    // The model's reasoning, shown the way Anthropic shows its own. The
+    // signature is empty: no upstream here signs its reasoning, and the
+    // block is dropped again when Claude Code sends the history back.
+    let reasoning = field(&message, "reasoning_content");
+    if !reasoning.is_empty() {
+        content.push(json!({"type": "thinking", "thinking": reasoning, "signature": ""}));
+    }
     if !text.is_empty() {
         content.push(json!({"type": "text", "text": text}));
     }
+    let blocks_before_tools = content.len();
     if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
         for call in calls {
             if !call.is_object() {
@@ -482,7 +554,7 @@ pub fn response_to_anthropic(openai: &Value, model: &str) -> Value {
             }));
         }
     }
-    let tool_called = content.len() > if text.is_empty() { 0 } else { 1 };
+    let tool_called = content.len() > blocks_before_tools;
     if content.is_empty() {
         content.push(json!({"type": "text", "text": ""}));
     }
@@ -503,10 +575,11 @@ pub fn response_to_anthropic(openai: &Value, model: &str) -> Value {
         "content": content,
         "stop_reason": if stop.is_empty() { Value::Null } else { json!(stop) },
         "stop_sequence": Value::Null,
-        "usage": {
-            "input_tokens": count(&usage, "prompt_tokens", 0),
-            "output_tokens": count(&usage, "completion_tokens", 0),
-        },
+        "usage": anthropic_usage(
+            count(&usage, "prompt_tokens", 0),
+            count(&usage, "completion_tokens", 0),
+            cached_tokens(&usage),
+        ),
     })
 }
 
@@ -609,8 +682,7 @@ pub fn stream_chunk_to_anthropic(chunk: &Value, state: &mut StreamState) -> Stri
             );
         }
         if let Some(usage) = chunk.get("usage").filter(|u| u.is_object()) {
-            state.input_tokens = count(usage, "prompt_tokens", state.input_tokens);
-            state.output_tokens = count(usage, "completion_tokens", state.output_tokens);
+            read_stream_usage(usage, state);
         }
         return out;
     }
@@ -629,8 +701,7 @@ pub fn stream_chunk_to_anthropic(chunk: &Value, state: &mut StreamState) -> Stri
     }
 
     if let Some(usage) = chunk.get("usage").filter(|u| u.is_object()) {
-        state.input_tokens = count(usage, "prompt_tokens", state.input_tokens);
-        state.output_tokens = count(usage, "completion_tokens", state.output_tokens);
+        read_stream_usage(usage, state);
     }
 
     if let Some(d) = choice.get("delta") {
@@ -732,10 +803,38 @@ pub fn stream_chunk_to_anthropic(chunk: &Value, state: &mut StreamState) -> Stri
         }
     }
 
-    // Reasoning tokens count toward the output estimate but never surface as
-    // their own block; Anthropic has no equivalent block type here.
-    if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str) {
+    // Reasoning streams as a thinking block, the way Anthropic streams its
+    // own. Blocks never overlap: a thinking delta closes an open text block,
+    // and text closes an open thinking block, each opening at the next index.
+    // The signature is empty; see response_to_anthropic.
+    if let Some(reasoning) = delta
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .filter(|r| !r.is_empty())
+    {
         state.output_chars += reasoning.len() as i32;
+        out += &close_text_block(state);
+        if !state.thinking_open {
+            state.thinking_open = true;
+            state.thinking_index = state.next_index;
+            state.next_index += 1;
+            out += &event(
+                "content_block_start",
+                &json!({
+                    "type": "content_block_start",
+                    "index": state.thinking_index,
+                    "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+                }),
+            );
+        }
+        out += &event(
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": state.thinking_index,
+                "delta": {"type": "thinking_delta", "thinking": reasoning},
+            }),
+        );
     }
 
     let text = delta
@@ -748,6 +847,7 @@ pub fn stream_chunk_to_anthropic(chunk: &Value, state: &mut StreamState) -> Stri
     }
     state.output_chars += text.len() as i32;
 
+    out += &close_thinking_block(state);
     if !state.block_open {
         state.block_open = true;
         state.text_index = state.next_index;
@@ -810,14 +910,8 @@ pub fn stream_close_to_anthropic(state: &mut StreamState) -> String {
     }
 
     state.closed = true;
-    let mut out = String::new();
-    if state.block_open {
-        state.block_open = false;
-        out += &event(
-            "content_block_stop",
-            &json!({"type": "content_block_stop", "index": state.text_index}),
-        );
-    }
+    let mut out = close_thinking_block(state);
+    out += &close_text_block(state);
 
     let mut index = state.next_index;
     let mut emitted_tool_block = false;
@@ -867,7 +961,7 @@ pub fn stream_close_to_anthropic(state: &mut StreamState) -> String {
         &json!({
             "type": "message_delta",
             "delta": {"stop_reason": stop, "stop_sequence": Value::Null},
-            "usage": {"input_tokens": input_final, "output_tokens": output_final},
+            "usage": anthropic_usage(input_final, output_final, state.cached_tokens),
         }),
     );
     out += &event("message_stop", &json!({"type": "message_stop"}));
@@ -1107,5 +1201,129 @@ mod tests {
         let out = stream_chunk_to_anthropic(&chunk, &mut state);
         assert!(out.contains("\"model\":\"claude-3-5-sonnet-20241022\""));
         assert_eq!(state.model, "claude-3-5-sonnet-20241022");
+    }
+
+    fn chunk(delta: Value, finish: Value) -> Value {
+        json!({"id": "c1", "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+    }
+
+    fn streamed(chunks: &[Value]) -> String {
+        let mut state = StreamState::new();
+        state.model = "m".to_string();
+        let mut out = String::new();
+        for c in chunks {
+            out += &stream_chunk_to_anthropic(c, &mut state);
+        }
+        out + &stream_close_to_anthropic(&mut state)
+    }
+
+    /// The SSE stream as (event type, index, block or delta type) rows.
+    fn shape(sse: &str) -> Vec<(String, i64, String)> {
+        sse.lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .map(|data| serde_json::from_str::<Value>(data).unwrap())
+            .map(|e| {
+                let kind = e["content_block"]["type"]
+                    .as_str()
+                    .or(e["delta"]["type"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                (
+                    e["type"].as_str().unwrap().to_string(),
+                    e["index"].as_i64().unwrap_or(-1),
+                    kind,
+                )
+            })
+            .collect()
+    }
+
+    fn row(event: &str, index: i64, kind: &str) -> (String, i64, String) {
+        (event.to_string(), index, kind.to_string())
+    }
+
+    #[test]
+    fn reasoning_then_text_streams_a_thinking_block_then_a_text_block() {
+        let out = streamed(&[
+            chunk(json!({"reasoning_content": "let me "}), Value::Null),
+            chunk(json!({"reasoning_content": "check"}), Value::Null),
+            chunk(json!({"content": "51"}), json!("stop")),
+        ]);
+        let rows = shape(&out);
+        assert_eq!(
+            rows[1..7],
+            [
+                row("content_block_start", 0, "thinking"),
+                row("content_block_delta", 0, "thinking_delta"),
+                row("content_block_delta", 0, "thinking_delta"),
+                row("content_block_stop", 0, ""),
+                row("content_block_start", 1, "text"),
+                row("content_block_delta", 1, "text_delta"),
+            ]
+        );
+        assert_eq!(rows[7], row("content_block_stop", 1, ""));
+        assert!(out.contains(r#""thinking":"let me ""#));
+    }
+
+    #[test]
+    fn reasoning_only_closes_the_thinking_block_and_opens_no_text_block() {
+        let out = streamed(&[
+            chunk(json!({"reasoning_content": "hmm"}), Value::Null),
+            chunk(json!({}), json!("length")),
+        ]);
+        let rows = shape(&out);
+        assert!(rows.contains(&row("content_block_stop", 0, "")));
+        assert!(!rows.iter().any(|r| r.2 == "text"));
+        assert!(out.contains(r#""stop_reason":"max_tokens""#));
+    }
+
+    #[test]
+    fn non_streaming_reasoning_becomes_a_thinking_block_before_the_text() {
+        let reply = response_to_anthropic(
+            &json!({"choices": [{"message": {"reasoning_content": "think", "content": "51"}, "finish_reason": "stop"}]}),
+            "m",
+        );
+        assert_eq!(
+            reply["content"],
+            json!([
+                {"type": "thinking", "thinking": "think", "signature": ""},
+                {"type": "text", "text": "51"},
+            ])
+        );
+        assert_eq!(reply["stop_reason"], json!("end_turn"));
+    }
+
+    #[test]
+    fn cached_tokens_move_from_input_to_cache_read() {
+        let out = streamed(&[
+            chunk(json!({"content": "hi"}), json!("stop")),
+            json!({"id": "c1", "choices": [], "usage": {"prompt_tokens": 3779, "completion_tokens": 9, "prompt_tokens_details": {"cached_tokens": 3776}}}),
+        ]);
+        assert!(out.contains(
+            r#""usage":{"cache_read_input_tokens":3776,"input_tokens":3,"output_tokens":9}"#
+        ));
+    }
+
+    #[test]
+    fn absent_cached_tokens_leave_usage_as_it_was() {
+        let reply = response_to_anthropic(
+            &json!({"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 2}}),
+            "m",
+        );
+        assert_eq!(
+            reply["usage"],
+            json!({"input_tokens": 10, "output_tokens": 2})
+        );
+    }
+
+    #[test]
+    fn zero_cached_tokens_report_a_zero_cache_read() {
+        let reply = response_to_anthropic(
+            &json!({"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 0}}}),
+            "m",
+        );
+        assert_eq!(
+            reply["usage"],
+            json!({"input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 0})
+        );
     }
 }

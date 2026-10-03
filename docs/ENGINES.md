@@ -9,7 +9,7 @@ One `wally` binary. **Catalog models already name their engine** (GGUF → llama
 Override only when you mean it:
 
 ```bash
-wally llm generate --engine mlx -m mlx-qwen3 "Hello"
+wally run --engine mlx mlx-qwen3 "Hello"
 wally run --engine qhexrt /path/to/lfm2_5_230m_HNPU "Hello"
 ```
 
@@ -41,21 +41,21 @@ Public Windows ARM64 kits are commons-only (no llama.cpp / ONNX / Sherpa on MSVC
 
 ### Modalities × engines
 
-Yes = this engine implements the primitive. Try = a catalog id that `wally pull` / a local path can run. Overlay engines still need the matching **on-disk bundle** (compiled `.mlmodelc` tree, or `*_HNPU` / `v81/` QNN-context dir) — a Hugging Face *repo page* is HTML, not a model.
+Yes = this engine implements the primitive. Try = a catalog id that `wally models pull` / a local path can run. Overlay engines still need the matching **on-disk bundle** (compiled `.mlmodelc` tree, or `*_HNPU` / `v81/` QNN-context dir) — a Hugging Face *repo page* is HTML, not a model.
 
 | Modality | Command | llama.cpp | MLX | Sherpa | ONNX | NeuRT | QHexRT |
 |---|---|---|---|---|---|---|---|
-| LLM | `wally run` / `llm generate` | yes · `smollm2`, `qwen3` | yes · `mlx-qwen3` | — | — | yes · `lfm2-230m-ane` local Core ML tree | yes · `lfm2-230m-npu` local `*_HNPU` |
+| LLM | `wally run` | yes · `smollm2`, `qwen3` | yes · `mlx-qwen3` | — | — | yes · `lfm2-230m-ane` local Core ML tree | yes · `lfm2-230m-npu` local `*_HNPU` |
 
 
-MLX registers with a one-line `-811` then Swift callbacks install it — that warning is expected. `image generate` is compiled only when NeuRT is linked; `--prompt` and `--out` are required (not a positional prompt). `--steps 4` is enough for a smoke PNG.
+This release ships language models only. The speech, image and embedding commands are not in the CLI yet, so the table has one row.
 
 QHexRT on device also needs QAIRT matching the Hexagon skel (`QNN_SDK_ROOT` + `ADSP_LIBRARY_PATH=…\lib\hexagon-v81\unsigned` on v81). Overlay 2.47 DLLs vs a 2.41/2.48 device skel will fail to instantiate graphs. Pass the `*_HNPU` directory, not a GGUF. GGUF files cannot run on the ARM64 overlay binary (no llama.cpp).
 
 
 ## Platforms
 
-**macOS Apple Silicon** (public bottle): llama.cpp + MLX + Sherpa + ONNX. Pull `qwen3` (GGUF) or `mlx-qwen3` (GPU). Image generation is NeuRT (`sd15`) and only works after the private overlay is linked into product `wally`.
+**macOS Apple Silicon** (public bottle): llama.cpp + MLX + Sherpa + ONNX. Pull `qwen3` (GGUF) or `mlx-qwen3` (GPU).
 
 **Windows x64** (public zip): GGUF / ONNX / Sherpa. No MLX, no NeuRT, no QHexRT.
 
@@ -65,7 +65,7 @@ QHexRT on device also needs QAIRT matching the Hexagon skel (`QNN_SDK_ROOT` + `A
 
 **Windows ARM64** (Snapdragon): public kit has no llama.cpp/ONNX/Sherpa. The QHexRT overlay runs Hexagon NPU models from a local `*_HNPU` tree. Do not expect `mlx-*`, GGUF, or `sd15` on that binary.
 
-`wally serve` is macOS and Linux.
+`wally serve` is in every build and serves any model the binary has an engine for.
 
 Device round-trips are **by modality**, not by engine. `scripts/test/e2e.sh` always
 runs `scripts/test/e2e-modalities.sh`; public CI leaves the knobs unset and skips.

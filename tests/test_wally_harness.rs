@@ -362,6 +362,7 @@ fn openclaw_config_selects_our_provider_and_model() {
         max_output: 8192,
         input_per_mtok: 300000,
         output_per_mtok: 1200000,
+        cached_input_per_mtok: 75000,
     }];
     let config: Value = serde_json::from_str(&harness::build_open_claw_config(
         "",
@@ -398,6 +399,7 @@ fn openclaw_config_selects_our_provider_and_model() {
     assert_eq!(models[0]["maxTokens"], json!(8192));
     assert_eq!(models[0]["cost"]["input"], json!(0.3));
     assert_eq!(models[0]["cost"]["output"], json!(1.2));
+    assert_eq!(models[0]["cost"]["cacheRead"], json!(0.075));
 }
 
 // A local server needs no credential and is handed none by Resolve, but an
@@ -1173,6 +1175,7 @@ fn declare_catalog() -> Vec<CatalogModel> {
         max_output: 0,
         input_per_mtok: 0,
         output_per_mtok: 0,
+        cached_input_per_mtok: 0,
     }]
 }
 
