@@ -10,7 +10,7 @@ file or printed):
     WALLY_BROWSER_PROFILE         traveller profile file (default ~/.config/wally/traveller.toml)
     WALLY_BROWSER_CHROME          dedicated (default) | attach
     WALLY_BROWSER_CDP_URL         attach: the running Chrome's DevTools URL
-    WALLY_BROWSER_USER_DATA_DIR   dedicated: profile directory (default ~/.local/share/wally/browser-profile)
+    WALLY_BROWSER_USER_DATA_DIR   dedicated: a profile directory to keep (default: a fresh one per run)
     WALLY_BROWSER_EXECUTABLE      dedicated: Chrome/Chromium binary (default: browser-use finds one)
     WALLY_BROWSER_MAX_STEPS       default 60
     WALLY_BROWSER_DEADLINE        epoch seconds the session key expires; the run ends a minute before
@@ -53,9 +53,26 @@ def _state_dir() -> Path:
     return Path(base) / "wally" / "browser"
 
 
-def _data_dir() -> Path:
-    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "wally" / "browser-profile"
+PROFILE_PREFIX = "wally-browser-"
+PROFILE_MAX_AGE_S = 24 * 3600
+
+
+def fresh_profile_dir() -> Path:
+    """A new, empty browser profile for this run, so no login, saved card or 1-click setting from
+    an earlier run is there. The browser stays open on the last page when the run ends, so the
+    directory is swept on a later run once it is a day old, not deleted on exit."""
+    import shutil
+    import tempfile
+
+    base = Path(tempfile.gettempdir())
+    now = time.time()
+    for old in base.glob(f"{PROFILE_PREFIX}*"):
+        try:
+            if now - old.stat().st_mtime > PROFILE_MAX_AGE_S:
+                shutil.rmtree(old, ignore_errors=True)
+        except OSError:
+            pass
+    return Path(tempfile.mkdtemp(prefix=PROFILE_PREFIX))
 
 
 def build_browser(chrome: str):
@@ -65,7 +82,8 @@ def build_browser(chrome: str):
         cdp_url = _env("WALLY_BROWSER_CDP_URL", "http://127.0.0.1:9222")
         profile = BrowserProfile(cdp_url=cdp_url, keep_alive=True)
     elif chrome == "dedicated":
-        user_data_dir = Path(_env("WALLY_BROWSER_USER_DATA_DIR", str(_data_dir())))
+        kept = _env("WALLY_BROWSER_USER_DATA_DIR")
+        user_data_dir = Path(kept) if kept else fresh_profile_dir()
         user_data_dir.mkdir(parents=True, exist_ok=True)
         profile = BrowserProfile(user_data_dir=str(user_data_dir), headless=False, keep_alive=True,
                                  executable_path=_env("WALLY_BROWSER_EXECUTABLE"))
@@ -96,7 +114,9 @@ async def run(goal: str, start_url: str | None) -> int:
     text = TextModel(base, key, text_model)
     stop_messages: list[str] = []
     chrome = _env("WALLY_BROWSER_CHROME", "dedicated")
-    guard = GuardContext(attach=chrome == "attach")
+    # A kept profile collects logins and saved payment methods like the person's own Chrome, so it
+    # gets the same confirm-everything rule.
+    guard = GuardContext(attach=chrome == "attach" or bool(_env("WALLY_BROWSER_USER_DATA_DIR")))
     tools = build_tools(ask=terminal_ask, on_stop=stop_messages.append, context=guard)
     session = build_browser(chrome)
     task = goal if not start_url else f"{goal} (start at {start_url})"
