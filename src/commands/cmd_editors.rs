@@ -659,6 +659,9 @@ pub fn register_editors(app: &mut App) {
             if p.flag("--restore") {
                 return restore(&editor);
             }
+            if harness::refuse_decisions_model(p.get_str("--model").as_deref()) {
+                return 2;
+            }
             // A missing harness shows only that it is missing and how to get
             // it, before any model resolution or preamble. --serve holds the
             // endpoint open without launching the tool, so it needs none present.
