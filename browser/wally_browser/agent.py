@@ -20,7 +20,7 @@ from typing import Callable
 from browser_use import Agent
 
 from .elements import elements_from_selector_map, is_personal, label
-from .guards import Element, check_page, host_of, is_typeable
+from .guards import Element, check_page, details_form_reason, host_of
 from .policy import GATE_BOT, GATE_PAYMENT, GATE_THRESHOLD, EvePolicy, Observation
 from .profile import Profile, key_fits_field
 from .text import TextError, TextModel
@@ -68,12 +68,6 @@ def note_value_source(guard: GuardContext, source: str, value: str | None) -> No
     page: from here every click needs the person's yes, whatever the field was called."""
     if source.startswith("profile:") or source == "person" or looks_personal(value):
         guard.personal_typed = True
-
-
-def is_details_form(elements) -> bool:
-    """A page that collects details: any field the rules call personal, or three or more text fields."""
-    fields = [e for e in elements if is_typeable(e)]
-    return len(fields) >= 3 or any(is_personal(e) for e in fields)
 
 
 def outcome_notes(results, last_target: Element | None) -> tuple[list[str], set[str]]:
@@ -141,6 +135,9 @@ class EveAgent(Agent):
         self._wally_last_target = None
         self._wally_refused: set[str] = set()  # element names the person declined or a guard refused
         self._wally_handed_off: set[tuple[str, str]] = set()  # (url, reason) already handed to the person
+        # profile key -> the one field it went into. A second field asking for the same detail is
+        # often another traveller's slot, so it is asked about, not filled.
+        self._wally_used_keys: dict[str, str] = {}
         self.stop_reason = ""
         self.plan_ms = 0
 
@@ -316,12 +313,16 @@ class EveAgent(Agent):
         # Finding 10: eve proposes the key; the field's own label must agree before a profile
         # value is typed, so personal data never lands in a search or promo box.
         third_party = bool(target.frame_url) and host_of(target.frame_url) != host_of(obs.url)
-        if (decision.value_key and not third_party
+        used = getattr(self, "_wally_used_keys", {})
+        slot = f"{target.index}:{target.name}"
+        reused = decision.value_key in used and used[decision.value_key] != slot
+        if (decision.value_key and not third_party and not reused
                 and key_fits_field(decision.value_key, target.label_text, target.autocomplete)):
             value = self._wally_profile.get(decision.value_key)
             if value is not None:
+                used[decision.value_key] = slot
                 return value, f"profile:{decision.value_key}"
-        if is_personal(target) or is_details_form(obs.elements):
+        if is_personal(target) or details_form_reason(obs.elements):
             # Personal details come from the profile or the person, never a model; and on a form that
             # collects details, a field the rules cannot name is asked about rather than guessed.
             return None, ""
