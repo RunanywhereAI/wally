@@ -139,7 +139,7 @@
             "type": "string"
           },
           "label_mass": {
-            "description": "The share of the model's whole next-token distribution that landed on the question's labels. Low means the model would have answered none of them. Always 1 on a model whose answer head covers only the presented options (pplx-decider-v1).",
+            "description": "The share of the model's whole next-token distribution that landed on the question's labels. Low means the model would have answered none of them. Always 1 on a model whose answer head covers only the presented options (eve).",
             "maximum": 1,
             "minimum": 0,
             "type": "number"
@@ -850,7 +850,7 @@
         "description": "POST /v1/systemone: the System One request shape (state, and typed noul, choice and score questions keyed by name), answered by a decision model in prefill without generating text. Unknown top-level fields are ignored, as in the System One schema this follows (OpenRouter's and TypeSafe's), so this object is open at its top level and nowhere else: `provider`, `session_id`, `trace`, `user` and any other unknown field are accepted and ignored. `temperature`, `prompt_format_version`, `return_prompt_token_ids` and `chat_template_kwargs` are not part of this API (use /v1/decisions) and are refused unless null.",
         "examples": [
           {
-            "model": "pplx-decider-v1",
+            "model": "eve",
             "questions": {
               "is_bug": {
                 "criteria": {
@@ -956,7 +956,7 @@
               }
             },
             "id": "0b7f9d9e-4f6c-4d0b-9a55-6f0c2f4a8f11",
-            "model": "pplx-decider-v1",
+            "model": "eve",
             "usage": {
               "input_tokens": 476,
               "output_tokens": 0
@@ -1311,15 +1311,15 @@
       },
       "response": {
         "path": "public/decisions_response.schema.json",
-        "sha256": "3756637d7507cf3a7f768c2552f5270f0c98541235d0b926304dd5bf151bf761"
+        "sha256": "68906e2b9bffa33d4f7d910b75665332ca11c248e51f4adab319f8707eb8c2a2"
       },
       "systemone_request": {
         "path": "public/systemone_request.schema.json",
-        "sha256": "a0e590dc511c8df7cd305bfcb1327dcd348ffa4a02f4e924bc3018460c4ac998"
+        "sha256": "645cc39a19e0166178eccb27a45749c6c6ecf4355ff262c91a4e523db481ab81"
       },
       "systemone_response": {
         "path": "public/systemone_response.schema.json",
-        "sha256": "9b036be040e887f91a14b3110afcac6a3519f2f931828e1bd40e3411f7b4ac5c"
+        "sha256": "0c9054cd192f4ddd83a81274cfdd59c7d65d124e7813c901bc2936695cba2158"
       }
     },
     "status": "candidate",
