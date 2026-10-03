@@ -1163,7 +1163,11 @@ mod tests {
                     "Serve a model over an OpenAI-compatible API",
                     "Chat",
                 ),
-                leaf("decisions", "Score questions with hosted Qwev", "Chat"),
+                leaf(
+                    "decisions",
+                    "Score questions with a hosted decision model",
+                    "Chat",
+                ),
                 namespace(
                     "models",
                     "Models",
