@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-from .guards import Element, looks_like_card_number, never_type_reason
+from .guards import Element, is_selectable, is_typeable, looks_like_card_number, never_type_reason
 
 # The decision API's hard limits (eve, /v1/decisions; master's 00:46 corrections).
 MAX_OPTIONS = 26
@@ -102,8 +102,10 @@ def _dialog_context(node) -> str:
     while current is not None and depth < 60:
         attributes = getattr(current, "attributes", None) or {}
         name = (getattr(current, "node_name", "") or "").upper()
+        classes = (attributes.get("class") or "").lower()
         if (name == "DIALOG" or attributes.get("role") in ("dialog", "alertdialog")
-                or attributes.get("aria-modal") == "true"):
+                or attributes.get("aria-modal") == "true"
+                or any(word in classes for word in ("modal", "dialog", "popup", "overlay", "drawer", "bottom-sheet"))):
             return " ".join(_all_text(current, 4000).split())[:CONTEXT_MAX]
         current = getattr(current, "parent_node", None)
         depth += 1
@@ -157,14 +159,11 @@ def elements_from_selector_map(selector_map: dict) -> list[Element]:
 
 
 def kind_of(element: Element) -> str:
-    """click | type | select: which target head an element belongs to."""
-    if element.tag == "select":
+    """click | type | select: which target head an element belongs to. The same predicates
+    the guards use, so eve is never offered a TYPE the guard would refuse."""
+    if is_selectable(element):
         return "select"
-    if element.tag == "textarea" or element.role in _TEXT_ROLES:
-        return "type"
-    if element.tag == "input" and element.input_type in _TYPEABLE_INPUTS:
-        return "type"
-    if element.attributes.get("contenteditable") in ("", "true"):
+    if is_typeable(element):
         return "type"
     return "click"
 
