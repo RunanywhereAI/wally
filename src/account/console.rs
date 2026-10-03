@@ -892,6 +892,25 @@ fn format_refusal(operation: &str, message: &str) -> String {
     }
 }
 
+/// The decisions endpoint's OpenAI-shaped error detail, when the body is one.
+/// `code` and `type` are closed enums in the binding, and a value the pinned
+/// contract does not know would fail the whole body and lose the message a
+/// person needs; like the usage export's `provider`, an unknown one is lifted
+/// out before parsing (the code then reads as absent, the type as its
+/// default), so the message still reaches the terminal.
+fn decisions_refusal(response: &HttpResponse) -> Option<decisions::OpenAIErrorDetail> {
+    let mut body = parse_object(response).ok()?;
+    if let Ok(error) = decisions::OpenAIError::from_json(&body) {
+        return Some(error.error);
+    }
+    let detail = body.get_mut("error")?.as_object_mut()?;
+    detail.remove("code");
+    detail.remove("type");
+    decisions::OpenAIError::from_json(&body)
+        .ok()
+        .map(|error| error.error)
+}
+
 /// Whether a response is the contract's 403 `card_required` refusal. Only the
 /// code is read here: the message a person sees still goes through
 /// `http_error`, like every other refusal, so it gets the same terminal-safety
@@ -1192,17 +1211,30 @@ impl ConsoleClient {
                 "console session expired".to_string(),
             );
         }
+        let refusal = decisions_refusal(&response);
         if response.status == 403
-            && parse_object(&response)
-                .ok()
-                .and_then(|body| decisions::OpenAIError::from_json(&body).ok())
-                .and_then(|error| error.error.code)
+            && refusal.as_ref().and_then(|error| error.code)
                 == Some(decisions::ErrorCode::KModelNotEntitled)
         {
-            return failed(
-                "This login predates Qwev access; run `wally logout && wally login` and try again"
-                    .to_string(),
-            );
+            return failed(format!(
+                "your session is not entitled to {}; sign in again with `wally account logout` \
+                 and `wally account login`, then retry",
+                request_body.model
+            ));
+        }
+        // A refused request (an input over the model's window, a model that
+        // is not a decision model, a prompt format the model does not serve)
+        // says why in the OpenAI-shaped body; a bare "HTTP 400" would leave
+        // the person guessing what to change. 429 keeps http_error's
+        // try-again wording.
+        if (400..500).contains(&response.status) && response.status != 429 {
+            if let Some(message) = refusal
+                .map(|error| error.message)
+                .filter(|message| display_text_is_safe(message, 2048))
+                .filter(|message| !message.contains(access_token))
+            {
+                return failed(format_refusal("decisions request", &message));
+            }
         }
         if response.status != 200 {
             return failed(http_error(
