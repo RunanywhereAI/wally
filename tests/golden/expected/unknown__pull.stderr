@@ -6,7 +6,7 @@ Usage: wally [OPTIONS] [COMMAND]
 Chat:
   run                         Run a model
   serve                       Serve a model over an OpenAI-compatible API
-  decisions                   Score questions with a hosted decision model
+  decisions                   Score questions with Eve, the decision model
 
 Models:
   models list                 List downloaded models (--all for the catalog)
