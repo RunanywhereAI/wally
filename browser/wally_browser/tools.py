@@ -19,7 +19,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import dataclasses
+import functools
 import sys
 from dataclasses import dataclass
 from typing import Callable
@@ -88,16 +90,43 @@ def terminal_ask(question: str) -> str | None:
         return None
 
 
+_TYPING = contextvars.ContextVar("wally_typing", default=False)
+
+
 def disable_page_typing() -> None:
-    """browser-use's input action, when typing into the element fails, clicks the
-    element and types into whatever has focus (default_action_watchdog). That
-    target was never checked, so the fallback is refused."""
+    """browser-use's input action, when typing into the element fails, clicks the element and types
+    into whatever has focus (default_action_watchdog). Neither was checked, so both halves are
+    refused: no click happens inside a typing event (typing itself focuses without clicking), and
+    typing into the page instead of the element is refused."""
     from browser_use.browser.watchdogs.default_action_watchdog import DefaultActionWatchdog
+
+    if getattr(DefaultActionWatchdog, "_wally_patched", False):
+        return
+    original_type_event = DefaultActionWatchdog.on_TypeTextEvent
+    original_click = DefaultActionWatchdog._click_element_node_impl
+
+    # browser-use's event bus routes by the handler's name, so the wrapper keeps the original's.
+    @functools.wraps(original_type_event)
+    async def on_type_text(self, event):
+        token = _TYPING.set(True)
+        try:
+            return await original_type_event(self, event)
+        finally:
+            _TYPING.reset(token)
+
+    @functools.wraps(original_click)
+    async def click(self, *args, **kwargs):
+        if _TYPING.get():
+            raise RuntimeError("wally: no click while typing (the fallback would click an unchecked element)")
+        return await original_click(self, *args, **kwargs)
 
     async def refuse(self, text: str):
         raise RuntimeError("wally: typing into the focused element is not allowed; only a checked field")
 
+    DefaultActionWatchdog.on_TypeTextEvent = on_type_text
+    DefaultActionWatchdog._click_element_node_impl = click
     DefaultActionWatchdog._type_to_page = refuse
+    DefaultActionWatchdog._wally_patched = True
 
 
 def build_tools(ask: Callable[[str], str | None] = terminal_ask, on_stop: Callable[[str], None] | None = None,
@@ -151,10 +180,32 @@ def clean_text(text: str) -> str:
     return " ".join("".join(c if c.isprintable() else " " for c in text).split())
 
 
+# The same matching browser-use's select_dropdown does (default_action_watchdog selection_script):
+# native options by trimmed text or value, ARIA menu items by text or data-value, case-insensitive,
+# also inside the element's child dropdowns.
 OPTION_TEXT_JS = """function (wanted) {
-  const w = String(wanted).trim().toLowerCase();
-  for (const o of this.options || []) {
-    if (o.text.trim().toLowerCase() === w || String(o.value).trim().toLowerCase() === w) return o.text;
+  const w = String(wanted).toLowerCase();
+  const pick = (el) => {
+    if (el.tagName && el.tagName.toLowerCase() === 'select') {
+      for (const o of el.options) {
+        if (o.text.trim().toLowerCase() === w || o.value.toLowerCase() === w) return o.text;
+      }
+      return null;
+    }
+    const role = el.getAttribute && el.getAttribute('role');
+    if (role === 'menu' || role === 'listbox' || role === 'combobox') {
+      for (const item of el.querySelectorAll('[role="menuitem"], [role="option"]')) {
+        const text = (item.textContent || '').trim();
+        if (text.toLowerCase() === w || (item.getAttribute('data-value') || '').toLowerCase() === w) return text;
+      }
+    }
+    return null;
+  };
+  const direct = pick(this);
+  if (direct !== null) return direct;
+  for (const el of this.querySelectorAll('select, [role="listbox"], [role="menu"], [role="combobox"]')) {
+    const found = pick(el);
+    if (found !== null) return found;
   }
   return null;
 }"""
@@ -222,7 +273,7 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
             return ActionResult(error=f"wally refused to type into [{index}]: {reason}")
         if context.attach:
             refusal = await _ask_or_refuse(ask, f"Type into {label(element)!r} in your own browser? [y/N]",
-                                           f"the person did not confirm typing into [{index}]")
+                                           f"the person did not confirm typing into [{index}]", context)
             if refusal:
                 return refusal
         if is_personal(element):
@@ -238,7 +289,7 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
         # The option is clicked (ARIA) or fires change (native): check the option that will really be
         # chosen like a button. browser-use matches the given text against an option's text OR value.
         wanted = str(params.get("text", ""))
-        shown = await option_text(session, node, wanted) if element.tag == "select" else None
+        shown = await option_text(session, node, wanted)
         option = Element(index=index, tag="option", name=shown or wanted,
                          full_text=f"{wanted} {shown or ''}", context_text=element.name)
         tier = control_tier(option)
@@ -248,9 +299,11 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
                 on_stop(message)
             return ActionResult(error=message, is_done=True, success=True, extracted_content=message)
         why = "it may book or confirm" if tier is ControlTier.COMMIT else context.confirm_reason()
+        if why is None and shown is None:
+            why = "the option it would pick could not be read"  # fail closed
         if why:
             return await _ask_or_refuse(ask, f"Choose {option.name!r} in {label(element)!r} ({why})? [y/N]",
-                                        f"the person did not confirm choosing {option.name!r}")
+                                        f"the person did not confirm choosing {option.name!r}", context)
         return None
 
     # click: read what the element says now, not only what it said at the start of the step.
@@ -269,13 +322,17 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
     if why:
         return await _ask_or_refuse(ask, f"The next click is {label(element)!r} ({why}). Click it? [y/N]",
                                     f"the person did not confirm clicking [{index}] {element.name!r}; "
-                                    "do not try it again")
+                                    "do not try it again", context)
     return None
 
 
-async def _ask_or_refuse(ask, question: str, refusal: str) -> ActionResult | None:
-    """None on the person's yes; otherwise the refusal. Nobody to ask ends the run."""
+async def _ask_or_refuse(ask, question: str, refusal: str,
+                         context: GuardContext | None = None) -> ActionResult | None:
+    """None on the person's yes; otherwise the refusal. Nobody to ask ends the run. Any answer
+    means the person had the window, which keeps confirmation on for the rest of the run."""
     answer = await asyncio.to_thread(ask, question)
+    if answer is not None and context is not None:
+        context.person_used_browser = True
     if (answer or "").strip().lower() in ("y", "yes"):
         return None
     ended = answer is None
