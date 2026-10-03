@@ -19,6 +19,7 @@ MAX_OPTIONS = 26
 MAX_QUESTION_TOKENS = 8185
 OPTION_NAME_MAX = 256
 NAME_MAX = 80
+FULL_TEXT_MAX = 2000  # what the guards read; the display name is NAME_MAX
 
 # Fields whose values are personal: filled from the profile or by the person, never by a model.
 PERSONAL_FIELD = re.compile(
@@ -77,16 +78,19 @@ def element_from_node(index: int, node) -> Element:
     ax = getattr(node, "ax_node", None)
     role = (getattr(ax, "role", None) or attributes.get("role") or "").lower()
     name = getattr(ax, "name", None) or attributes.get("aria-label") or ""
-    if not name:
-        try:
-            name = node.get_all_children_text(max_depth=3)
-        except Exception:
-            name = ""
+    try:
+        # All descendants, not 3 levels: `<div role=button><span><span><span><b>Pay ₹500</b>` has
+        # its only words 5 levels down, and the guards must read them.
+        children = node.get_all_children_text(max_depth=-1)
+    except Exception:
+        children = ""
+    full_text = " ".join(f"{name} {children}".split())[:FULL_TEXT_MAX]
     return Element(
         index=index,
         tag=tag,
         role=role,
-        name=_clip(name, NAME_MAX),
+        name=_clip(name or children, NAME_MAX),
+        full_text=full_text,
         input_type=attributes.get("type", "").lower() if tag == "input" else "",
         autocomplete=attributes.get("autocomplete", ""),
         placeholder=_clip(attributes.get("placeholder", ""), NAME_MAX),
