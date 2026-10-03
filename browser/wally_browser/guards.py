@@ -198,7 +198,7 @@ SENSITIVE_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple((cat, re.compile(
     ("upi", r"\bupi\b|\bvpa\b|@ok(axis|sbi|hdfcbank|icici)|@ybl|@paytm|यूपीआई"),
     ("bank", r"net ?banking|\bifsc\b|account ?(number|no)|\biban\b|\bswift\b|routing ?number|sort ?code"),
     ("otp", r"\botp\b|one ?time|verification ?code|\b(enter|sms|email|phone|mobile)( the)? code\b|"
-            r"\b\d ?digit code|\bdigit \d+ of \d+|\bcode (sent|we sent)|ओटीपी"),
+            r"\b\d[- ]?digit (code|otp|pin)|\bdigit \d+ of \d+|\bcode (sent|we sent)|ओटीपी"),
     # Masked placeholders ("•••", "***") read as a secret, but not by themselves as a payment form.
     ("pin", r"\bpin\b|\bmpin|\batm ?pin|\btpin|passcode|password|•{3}|\*{3}|पासवर्ड|पिन"),
     ("id", r"aadhaar|आधार"),
@@ -234,6 +234,26 @@ def never_type_reason(element: Element) -> str | None:
 
 
 _CARD_NUMBER = re.compile(r"(?:\d[ \-]?){13,19}")
+
+
+_UPI_ID = re.compile(r"^[\w.\-]{2,}@(ok\w+|ybl|paytm|upi|apl|ibl|axl|ptyes|ptaxis|pthdfc|ptsbi|\w*bank\w*)$", re.I)
+_SHORT_CODE = re.compile(r"^\d{4,8}$")
+_NUMERIC_FIELD = re.compile(r"pin ?code|\bzip\b|postal|phone|mobile|\btel\b|contact|\bdate\b|\byear\b|\bage\b|"
+                            r"quantity|\bqty\b|count|flight|\bno\b|number of|adults?|children|rooms?|passengers?",
+                            re.I)
+
+
+def refused_value(value: str, element: Element) -> str | None:
+    """Why this VALUE must not be typed here, whatever the field is called: a card number, a UPI
+    id, or a 4-8 digit code (an OTP) in a field that is not a PIN code, phone or count field."""
+    text = (value or "").strip()
+    if looks_like_card_number(text):
+        return "the value looks like a card number"
+    if _UPI_ID.match(text):
+        return "the value looks like a UPI id"
+    if _SHORT_CODE.match(text) and not _NUMERIC_FIELD.search(element.label_text) and element.input_type != "tel":
+        return "the value looks like a one-time code"
+    return None
 
 
 def looks_like_card_number(value: str) -> bool:
@@ -314,7 +334,8 @@ def control_tier(element: Element) -> ControlTier:
 
 _TYPEABLE_TAGS = {"input", "select", "textarea"}
 _CHECKOUT_WORDS = re.compile(r"checkout|payment|\bpay\b|review|booking|\border\b|\bcart\b|summary|itinerary|"
-                             r"traveller|passenger|add ?ons|\bseat|\bfare\b", re.I)
+                             r"traveller|passenger|add ?ons|\bseat|\bfare\b|reserv|appointment|schedul|\brsvp\b|"
+                             r"callback|regist|enrol|subscri|confirm|ticket", re.I)
 
 
 @dataclass(frozen=True)
