@@ -198,7 +198,7 @@ SENSITIVE_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple((cat, re.compile(
     ("upi", r"\bupi\b|\bvpa\b|@ok(axis|sbi|hdfcbank|icici)|@ybl|@paytm|यूपीआई"),
     ("bank", r"net ?banking|\bifsc\b|account ?(number|no)|\biban\b|\bswift\b|routing ?number|sort ?code"),
     ("otp", r"\botp\b|one ?time|verification ?code|\b(enter|sms|email|phone|mobile)( the)? code\b|"
-            r"\b\d[- ]?digit (code|otp|pin)|\bdigit \d+ of \d+|\bcode (sent|we sent)|ओटीपी"),
+            r"\b\d[- ]?digit (code|otp|pin)|\bdigit ?\d+\b|\bcode (sent|we sent)|ओटीपी"),
     # Masked placeholders ("•••", "***") read as a secret, but not by themselves as a payment form.
     ("pin", r"\bpin\b|\bmpin|\batm ?pin|\btpin|passcode|password|•{3}|\*{3}|पासवर्ड|पिन"),
     ("id", r"aadhaar|आधार"),
@@ -222,6 +222,8 @@ def sensitive_field(element: Element) -> tuple[str, str] | None:
         match = pattern.search(text)
         if match:
             return category, f"label mentions '{match.group(0).strip()}'"
+    if element.attributes.get("maxlength") == "1" and element.tag == "input":
+        return "otp", "a one-character box (one digit of a code)"
     visible = element.name or element.placeholder or element.attributes.get("aria-label", "")
     if visible and _BARE_EXPIRY.fullmatch(normalize(visible)) and "birth" not in text and "dob" not in text:
         return "card", f"a bare '{visible.strip()}' field reads as a card expiry"
@@ -236,22 +238,38 @@ def never_type_reason(element: Element) -> str | None:
 _CARD_NUMBER = re.compile(r"(?:\d[ \-]?){13,19}")
 
 
-_UPI_ID = re.compile(r"^[\w.\-]{2,}@(ok\w+|ybl|paytm|upi|apl|ibl|axl|ptyes|ptaxis|pthdfc|ptsbi|\w*bank\w*)$", re.I)
-_SHORT_CODE = re.compile(r"^\d{4,8}$")
-_NUMERIC_FIELD = re.compile(r"pin ?code|\bzip\b|postal|phone|mobile|\btel\b|contact|\bdate\b|\byear\b|\bage\b|"
-                            r"quantity|\bqty\b|count|flight|\bno\b|number of|adults?|children|rooms?|passengers?",
-                            re.I)
+# A UPI id: name@handle where the handle has no dot (an email's domain always has one).
+_UPI_ID = re.compile(r"^[\w.\-]{2,}@[a-z][a-z0-9]{1,24}$", re.I)
+_SHORT_CODE = re.compile(r"^\d{4,6}$")
+# Fields a 4-6 digit number legitimately goes into (an Indian PIN code is 6 digits).
+_SHORT_NUMBER_FIELD = re.compile(r"pin ?code|\bzip\b|postal|post ?code|quantity|\bqty\b|count|\bage\b|\byear\b|"
+                                 r"\bdate\b|adults?|children|rooms?|passengers?|travell?ers?|guests?|flight ?(no|number)",
+                                 re.I)
+_CARD_RUN = re.compile(r"(?<!\d)(?:\d[ .\-/]?){12,18}\d(?!\d)")
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for position, char in enumerate(reversed(digits)):
+        n = int(char)
+        if position % 2:
+            n = n * 2 - 9 if n > 4 else n * 2
+        total += n
+    return total % 10 == 0
 
 
 def refused_value(value: str, element: Element) -> str | None:
-    """Why this VALUE must not be typed here, whatever the field is called: a card number, a UPI
-    id, or a 4-8 digit code (an OTP) in a field that is not a PIN code, phone or count field."""
+    """Why this VALUE must not be typed here, whatever the field is called: a card number anywhere
+    in it, a UPI id, or a 4-6 digit code (an OTP) in a field that is not a PIN code or count field."""
     text = (value or "").strip()
-    if looks_like_card_number(text):
-        return "the value looks like a card number"
+    for run in _CARD_RUN.findall(text):
+        digits = re.sub(r"\D", "", run)
+        if 13 <= len(digits) <= 19 and _luhn(digits):
+            return "the value contains a card number"
     if _UPI_ID.match(text):
         return "the value looks like a UPI id"
-    if _SHORT_CODE.match(text) and not _NUMERIC_FIELD.search(element.label_text) and element.input_type != "tel":
+    compact = re.sub(r"[ \-]", "", text)
+    if _SHORT_CODE.match(compact) and not _SHORT_NUMBER_FIELD.search(element.label_text):
         return "the value looks like a one-time code"
     return None
 
@@ -333,9 +351,32 @@ def control_tier(element: Element) -> ControlTier:
 # --- pages -----------------------------------------------------------------------
 
 _TYPEABLE_TAGS = {"input", "select", "textarea"}
-_CHECKOUT_WORDS = re.compile(r"checkout|payment|\bpay\b|review|booking|\border\b|\bcart\b|summary|itinerary|"
-                             r"traveller|passenger|add ?ons|\bseat|\bfare\b|reserv|appointment|schedul|\brsvp\b|"
-                             r"callback|regist|enrol|subscri|confirm|ticket", re.I)
+# Checkout-like pages, by URL (path, query, fragment) and, more strictly, by title.
+_CHECKOUT_URL = re.compile(r"checkout|payment|\bpay\b|\bbook\b|booking|reserv|\bcart\b|\border\b|passenger|"
+                           r"traveller|traveler|contact|review|summary|itinerary|add ?ons|\bseats?\b|confirm|"
+                           r"appointment|schedul|\brsvp\b|callback|regist|enrol|subscri|guest ?details|\bdetails\b",
+                           re.I)
+_CHECKOUT_TITLE = re.compile(r"checkout|payment|review (your )?(booking|trip|order|itinerary)|passenger|"
+                             r"traveller details|traveler details|contact (details|information)|order summary|"
+                             r"\bconfirm|reserv|appointment|schedul|\brsvp\b|regist|subscri|\bcart\b", re.I)
+# Fields a search form has; anything else on a form means it collects details.
+_SEARCH_FIELD = re.compile(r"\bfrom\b|\bto\b|where|destination|origin|leaving|going|search|query|\bcity\b|"
+                           r"\bdate\b|depart|return|check ?-?in|check ?-?out|keyword|location|\bnear\b", re.I)
+
+
+def details_form_reason(elements: list[Element]) -> str | None:
+    """Why the page collects details: a personal or sensitive field, or two or more text
+    fields that are not search fields."""
+    from .elements import is_personal  # local: elements imports this module
+
+    fields = [e for e in elements if is_typeable(e)]
+    for field_ in fields:
+        if is_personal(field_) or sensitive_field(field_):
+            return f"[{field_.index}] asks for a personal or payment detail"
+    other = [f for f in fields if not _SEARCH_FIELD.search(f.label_text)]
+    if len(other) >= 2:
+        return f"a form with {len(other)} detail fields"
+    return None
 
 
 @dataclass(frozen=True)
@@ -395,10 +436,13 @@ def check_page(url: str, title: str, elements: list[Element], frame_urls: list[s
         path = f"{parts.path} {parts.query} {parts.fragment}"
     except ValueError:
         path = url
-    where = normalize(split_identifier(path) + " " + (title or ""))
-    match = _CHECKOUT_WORDS.search(where)
-    if match:
-        checkout = f"the page reads as a checkout step ('{match.group(0)}')"
+    url_match = _CHECKOUT_URL.search(normalize(split_identifier(path)))
+    title_match = _CHECKOUT_TITLE.search(normalize(title or ""))
+    form = details_form_reason(elements)
+    if url_match or title_match:
+        checkout = f"the page reads as a checkout step ('{(url_match or title_match).group(0)}')"
+    elif form:
+        checkout = form
     else:
         for element in elements:
             tier = control_tier(element)
