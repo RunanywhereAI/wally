@@ -51,6 +51,44 @@ _PAYMENT_KEY = re.compile(r"card|cvv|cvc|csc|upi|vpa|pin|otp|bank|ifsc|account|i
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+# A profile value is typed only into a field whose label says it is that kind of field. eve's
+# value head proposes the key; this rule, in code, decides whether the value may go there, so a
+# passport number never lands in a promo-code or search box.
+KEY_FIELDS: dict[str, re.Pattern] = {key: re.compile(pattern, re.I) for key, pattern in {
+    "title": r"\btitle\b|salutation|prefix",
+    "first_name": r"first|given|\bfname|forename",
+    "middle_name": r"middle",
+    "last_name": r"last|surname|family|\blname",
+    "full_name": r"full ?name|\bname\b",
+    "gender": r"gender|\bsex\b",
+    "date_of_birth": r"birth|\bdob\b|\bbday",
+    "nationality": r"nationality|citizenship",
+    "passport_number": r"passport",
+    "passport_expiry": r"passport.*expir|expir.*passport",
+    "passport_country": r"passport.*(country|issu)|issu(ing|ed).*country",
+    "email": r"e-?mail",
+    "phone": r"phone|mobile|\btel\b|contact ?(number|no)",
+    "phone_country_code": r"country ?code|\bdial|\bisd\b",
+    "frequent_flyer_airline": r"frequent|loyalty|airline",
+    "frequent_flyer_number": r"frequent|loyalty|member(ship)? ?(number|no|id)",
+    "seat_preference": r"\bseat",
+    "meal_preference": r"\bmeal",
+    "home_city": r"\bcity\b",
+}.items()}
+AUTOCOMPLETE_KEYS = {"given-name": "first_name", "additional-name": "middle_name", "family-name": "last_name",
+                     "name": "full_name", "email": "email", "tel": "phone", "tel-national": "phone",
+                     "bday": "date_of_birth", "honorific-prefix": "title", "sex": "gender"}
+
+
+def key_fits_field(key: str, label_text: str, autocomplete: str = "") -> bool:
+    """Whether a profile value of kind `key` may be typed into a field with this label."""
+    token = autocomplete.split(" ")[-1].lower() if autocomplete else ""
+    if token in AUTOCOMPLETE_KEYS:
+        return AUTOCOMPLETE_KEYS[token] == key
+    rule = KEY_FIELDS.get(key)
+    return bool(rule and rule.search(label_text))
+
+
 class ProfileError(ValueError):
     pass
 
