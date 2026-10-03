@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from .elements import element_from_node, is_personal, label
 from .guards import ControlTier, Element, control_tier, is_payment_gateway, is_selectable, is_typeable, \
-    never_type_reason
+    never_type_reason, refused_value
 
 ALLOWED_ACTIONS = {"done", "navigate", "go_back", "wait", "click", "input", "switch", "scroll", "select_dropdown"}
 GUARDED = {"click", "input", "select_dropdown"}
@@ -59,10 +59,14 @@ class GuardContext:
     # the details are entered, so from here every click and choice needs the person's yes, whatever
     # the labels say.
     personal_typed: bool = False
+    # Set after the person has had the browser window (a bot-check hand-off): they may have signed in.
+    person_used_browser: bool = False
 
     def confirm_reason(self) -> str | None:
         if self.attach:
             return "this browser keeps your logins and saved payment methods"
+        if self.person_used_browser:
+            return "you used this browser window, so it may be signed in"
         if self.personal_typed:
             return "your details are entered, so any click could commit"
         if self.checkout:
@@ -185,7 +189,7 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
     if name == "input":
         if not is_typeable(element):
             return ActionResult(error=f"wally refused input into [{index}]: it is not a text field")
-        reason = never_type_reason(element)
+        reason = never_type_reason(element) or refused_value(str(params.get("text", "")), element)
         if reason:
             return ActionResult(error=f"wally refused to type into [{index}]: {reason}")
         if context.attach:
