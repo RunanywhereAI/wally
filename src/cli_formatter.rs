@@ -1165,7 +1165,7 @@ mod tests {
                 ),
                 leaf(
                     "decisions",
-                    "Score questions with a hosted decision model",
+                    "Score questions with Eve, the decision model",
                     "Chat",
                 ),
                 namespace(
