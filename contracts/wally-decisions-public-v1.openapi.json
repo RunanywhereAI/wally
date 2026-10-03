@@ -139,7 +139,7 @@
             "type": "string"
           },
           "label_mass": {
-            "description": "The share of the model's whole next-token distribution that landed on the question's labels. Low means the model would have answered none of them.",
+            "description": "The share of the model's whole next-token distribution that landed on the question's labels. Low means the model would have answered none of them. Always 1 on a model whose answer head covers only the presented options (pplx-decider-v1).",
             "maximum": 1,
             "minimum": 0,
             "type": "number"
@@ -262,9 +262,10 @@
             "$ref": "#/components/schemas/ModelId"
           },
           "prompt_format_version": {
-            "description": "Pins the server-owned prompt wording. Version 2 is the only one served (the server refuses any other), so a caller pinning it is told when the wording, and so the probabilities, change. Null or absent takes the served version.",
+            "description": "Pins the server-owned prompt wording. Each model serves exactly one version and refuses any other with 400 before anything is billed, so a caller pinning it is told when the wording, and so the probabilities, change. Null or absent takes the model's served version.",
             "enum": [
               2,
+              3,
               null
             ],
             "type": [
@@ -313,8 +314,11 @@
             "const": "decisions"
           },
           "prompt_format_version": {
-            "const": 2,
-            "description": "The prompt wording the answers were computed under."
+            "description": "The prompt wording the answers were computed under: the requested model's one served version.",
+            "enum": [
+              2,
+              3
+            ]
           },
           "usage": {
             "$ref": "#/components/schemas/DecisionUsage"
@@ -846,7 +850,7 @@
         "description": "POST /v1/systemone: the System One request shape (state, and typed noul, choice and score questions keyed by name), answered by a decision model in prefill without generating text. Unknown top-level fields are ignored, as in the System One schema this follows (OpenRouter's and TypeSafe's), so this object is open at its top level and nowhere else: `provider`, `session_id`, `trace`, `user` and any other unknown field are accepted and ignored. `temperature`, `prompt_format_version`, `return_prompt_token_ids` and `chat_template_kwargs` are not part of this API (use /v1/decisions) and are refused unless null.",
         "examples": [
           {
-            "model": "qwev",
+            "model": "pplx-decider-v1",
             "questions": {
               "is_bug": {
                 "criteria": {
@@ -952,7 +956,7 @@
               }
             },
             "id": "0b7f9d9e-4f6c-4d0b-9a55-6f0c2f4a8f11",
-            "model": "qwev",
+            "model": "pplx-decider-v1",
             "usage": {
               "input_tokens": 476,
               "output_tokens": 0
@@ -1303,19 +1307,19 @@
       },
       "request": {
         "path": "public/decisions_request.schema.json",
-        "sha256": "e91c6a96300303ba0baf98dc7ba479a48b6802b45f06b83869db757c06bdbebf"
+        "sha256": "6157245e2159d01da76eb74abd897d48659d01f67bfde15945f39011d8d4c172"
       },
       "response": {
         "path": "public/decisions_response.schema.json",
-        "sha256": "db2e1cfe9f7ba70fbc3eee0462a5c83dec9e12df144613674264ba4a3bbf1526"
+        "sha256": "3756637d7507cf3a7f768c2552f5270f0c98541235d0b926304dd5bf151bf761"
       },
       "systemone_request": {
         "path": "public/systemone_request.schema.json",
-        "sha256": "4554f66f8070893abde4eece887406438a173a2171050388162e6d94d0d4203e"
+        "sha256": "a0e590dc511c8df7cd305bfcb1327dcd348ffa4a02f4e924bc3018460c4ac998"
       },
       "systemone_response": {
         "path": "public/systemone_response.schema.json",
-        "sha256": "4b31e5ff4ee534fe1729d53b86f651e2def14018af386e5c9041eb5dc34427a3"
+        "sha256": "9b036be040e887f91a14b3110afcac6a3519f2f931828e1bd40e3411f7b4ac5c"
       }
     },
     "status": "candidate",
