@@ -140,6 +140,18 @@ pub fn ensure_model_ready(
     }
 
     if !downloaded {
+        // Offline callers (`wally decisions --local`) promise no network, and
+        // the pull flow starts a download over the registered HTTP transport.
+        // Refuse before it begins rather than half-downloading behind the
+        // promise.
+        if options.offline {
+            error_line(&format!(
+                "model {} is not downloaded, and this command runs offline; \
+                 pull it first with `wally models pull {}`",
+                resolved.model_id, resolved.model_id
+            ));
+            return Err(1);
+        }
         crate::io::output::status_line(&format!(
             "model {} not downloaded — pulling",
             resolved.model_id

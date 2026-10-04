@@ -527,30 +527,40 @@ fn transport_from_flags(p: &crate::cli::Parsed) -> Result<Transport, String> {
     }
 }
 
-/// Whether `reference` is a local model id/alias/path the decision component
-/// can load. A catalog decision row or a path on disk counts; a hosted model
-/// id (`eve`) does not.
+/// Whether `reference` names something the local decision component can load.
 ///
-/// A registered, non-catalog id is not enough on its own: an HF-pulled LLM
-/// pulled earlier lives in the same registry, and sending one to the decision
-/// component would fail at load instead of scoring. Its stored category must
-/// say Decision. Paths are different: `register_local_path` labels them
-/// Language by default, so they never pass that check — a path is local by
-/// construction and stays accepted.
-fn model_resolves_locally(reference: &str) -> bool {
-    if crate::catalog::find(reference).is_some() {
-        return crate::catalog::find(reference)
-            .map(|entry| entry.category == v1::ModelCategory::Decision)
-            .unwrap_or(false);
+/// The catalog and the filesystem answer most references with no SDK
+/// involved. A non-catalog, non-path id needs the registry, and a fresh
+/// process has an empty in-memory registry until bootstrap restores the
+/// manifest entries — so the probe bootstraps in offline mode (no
+/// telemetry/auth, no network) before reading the stored category. A
+/// registered id is local only when that category is Decision; an HF-pulled
+/// LLM registered earlier must keep going to the hosted transport, and a
+/// hosted decision id (`eve`) is never registered locally at all.
+fn resolve_local_transport(reference: &str, options: &GlobalOptions) -> Result<bool, String> {
+    if let Some(entry) = crate::catalog::find(reference) {
+        return Ok(entry.category == v1::ModelCategory::Decision);
     }
     // A path on disk is a local artifact regardless of the registry.
     if crate::catalog::model_ref::is_local_path(reference) {
-        return true;
+        return Ok(true);
     }
-    // A registered id resolves locally only when the stored category is
-    // Decision (a manifest-restored `clef-flash-9b` pull, say); an LLM row
-    // registered here must keep going to the cloud transport.
-    registered_category(reference) == Some(v1::ModelCategory::Decision)
+    // Known hosted decision ids are cloud by definition and are never
+    // registered locally; skip the SDK init the registry read needs so the
+    // default `eve` invocation keeps its fast path.
+    if crate::harness::is_decisions_model(reference) {
+        return Ok(false);
+    }
+    let offline = GlobalOptions {
+        offline: true,
+        ..options.clone()
+    };
+    bootstrap::bootstrap(&offline)
+        .map_err(|rc| format!("cannot inspect local models: {}", out::describe_result(rc)))?;
+    // Manifest-restored pulls come back here. A failed refresh leaves
+    // whatever is already registered, so the category read is best-effort.
+    let _ = crate::commands::model_setup::refresh_registry();
+    Ok(registered_category(reference) == Some(v1::ModelCategory::Decision))
 }
 
 /// The stored category of a registered model id, if the registry knows it.
@@ -827,7 +837,9 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
         .into_iter()
         .find(|(id, _)| !result.answers.iter().any(|answer| answer.id == *id))
     {
-        out::error_line(&format!("decision failed: no answer for question '{missing}'"));
+        out::error_line(&format!(
+            "decision failed: no answer for question '{missing}'"
+        ));
         return 1;
     }
 
@@ -861,18 +873,28 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
         }
     };
     let local = match transport {
-        Transport::Local => {
-            if !model_resolves_locally(&request.model) {
+        Transport::Local => match resolve_local_transport(&request.model, options) {
+            Ok(true) => true,
+            Ok(false) => {
                 out::error_line(&format!(
                     "--local was given but '{}' does not resolve to a model on this machine",
                     request.model
                 ));
                 return 2;
             }
-            true
-        }
+            Err(error) => {
+                out::error_line(&error);
+                return 1;
+            }
+        },
         Transport::Cloud => false,
-        Transport::Auto => model_resolves_locally(&request.model),
+        Transport::Auto => match resolve_local_transport(&request.model, options) {
+            Ok(local) => local,
+            Err(error) => {
+                out::error_line(&error);
+                return 1;
+            }
+        },
     };
     if local {
         if p.is_set("--no-retry") {
@@ -1309,11 +1331,43 @@ mod tests {
     }
 
     #[test]
-    fn a_decision_catalog_row_resolves_locally_and_a_hosted_id_does_not() {
-        // The engine sees this as an unregistered hosted id; it must not be
-        // treated as a local artifact (and must not try to load it as one).
-        assert!(!model_resolves_locally("eve"));
-        assert!(!model_resolves_locally("definitely-not-a-model"));
+    fn catalog_decisions_are_local_and_hosted_ids_are_cloud() {
+        // The registry probe (the unknown-word case) bootstraps the SDK, so
+        // point it at a throwaway home rather than the real one. Every other
+        // case below answers before the registry is touched.
+        let dir = std::env::temp_dir().join(format!(
+            "wally-decisions-transport-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let options = GlobalOptions {
+            home_override: dir.to_string_lossy().into_owned(),
+            ..GlobalOptions::default()
+        };
+
+        // A catalog decision row is local; an LLM row in the same catalog is
+        // not (it would fail at the decision component).
+        assert_eq!(resolve_local_transport("clef-flash-9b", &options), Ok(true));
+        assert_eq!(
+            resolve_local_transport("clef-flash-mlx", &options),
+            Ok(true)
+        );
+        assert_eq!(resolve_local_transport("qwen3-0.6b", &options), Ok(false));
+        // A hosted decision id is cloud by definition and must not be treated
+        // as a local artifact (nor pay for an SDK init to find that out).
+        assert_eq!(resolve_local_transport("eve", &options), Ok(false));
+        // An unknown bare word is not local; the registry probe runs, finds
+        // nothing, and says so.
+        assert_eq!(
+            resolve_local_transport("definitely-not-a-model", &options),
+            Ok(false)
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
