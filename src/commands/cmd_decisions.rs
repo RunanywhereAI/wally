@@ -1352,9 +1352,11 @@ mod tests {
         // A catalog decision row is local; an LLM row in the same catalog is
         // not (it would fail at the decision component).
         assert_eq!(resolve_local_transport("clef-flash-9b", &options), Ok(true));
+        // The MLX row is platform-gated (Apple only), so off-macOS the
+        // catalog filter hides it and it does not resolve locally.
         assert_eq!(
             resolve_local_transport("clef-flash-mlx", &options),
-            Ok(true)
+            Ok(cfg!(target_os = "macos"))
         );
         assert_eq!(resolve_local_transport("qwen3-0.6b", &options), Ok(false));
         // A hosted decision id is cloud by definition and must not be treated
