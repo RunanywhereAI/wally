@@ -7,6 +7,7 @@ bonsai-1.7b                    llm         mlx/llama.cpp    236.8 MB    no
 bonsai-27b                     llm         mlx/llama.cpp    3.5 GB      no            
 bonsai-4b                      llm         mlx/llama.cpp    545.8 MB    no            
 bonsai-8b                      llm         mlx/llama.cpp    1.1 GB      no            
+clef-flash-9b                  decision    mlx/llama.cpp    6.0 GB      no            
 gemma-4-12b                    llm         mlx/llama.cpp    6.6 GB      no            
 gemma-4-26b-a4b                llm         mlx/llama.cpp    15.8 GB     no            
 gemma-4-31b                    llm         mlx/llama.cpp    17.1 GB     no            

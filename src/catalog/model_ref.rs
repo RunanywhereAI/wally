@@ -61,8 +61,10 @@ fn looks_like_hf_ref(reference: &str) -> bool {
 
 /// A ref that names an existing directory or file on disk. Checked BEFORE the
 /// HF/URL branch but AFTER the catalog and the registry, so a local path can
-/// never shadow a real model id.
-fn is_local_path(reference: &str) -> bool {
+/// never shadow a real model id. Public so a caller that must tell a path
+/// apart from a registered id (the decisions transport picker) applies the
+/// same predicate as `resolve` instead of a second, drifting copy.
+pub fn is_local_path(reference: &str) -> bool {
     if reference.is_empty() || is_http_url(reference) || looks_like_hf_ref(reference) {
         return false;
     }

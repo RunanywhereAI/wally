@@ -119,8 +119,11 @@ fn group_models(
             continue;
         }
         // LLM-only surface: a downloaded non-LLM model restored from a manifest
-        // must not reappear in the list.
-        if model.category != v1::ModelCategory::Language as i32 {
+        // must not reappear in the list. LOCAL(decision): decision models are
+        // part of the list, matching catalog.rs::is_llm.
+        if model.category != v1::ModelCategory::Language as i32
+            && model.category != v1::ModelCategory::Decision as i32
+        {
             continue;
         }
         let key = crate::catalog::merge_key_for(&model.id);

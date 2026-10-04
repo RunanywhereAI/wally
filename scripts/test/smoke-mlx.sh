@@ -112,4 +112,23 @@ echo "VLM: SKIP (vlm disabled for llm-only cut)"
 # require_text "VLM" "$vlm_out"
 # printf '%s\n' "$vlm_out"
 
+# Local decision scoring. Gated on the checkpoint being present or pullable;
+# the GGUF row is the transport every kit can run, so it is the one exercised.
+# Set WALLY_SMOKE_DECISION=0 to skip. This is the only place a real model
+# proves `wally decisions --local` end-to-end.
+DECISION_GGUF="${WALLY_SMOKE_DECISION_GGUF:-clef-flash-9b}"
+if [[ "${WALLY_SMOKE_DECISION:-1}" == "1" ]]; then
+  echo "Decision (local GGUF): $DECISION_GGUF"
+  pull_if_enabled "$DECISION_GGUF"
+  decision_out="$(wally decisions --local -m "$DECISION_GGUF" \
+    --input "I was charged twice. Please refund the extra payment." \
+    --choice "Team=billing,technical,other" \
+    --ask "Is this a refund request?" \
+    --score "Urgency=low,medium,high")"
+  require_text "Decision" "$decision_out"
+  printf '%s\n' "$decision_out"
+else
+  echo "Decision: SKIP (WALLY_SMOKE_DECISION=0)"
+fi
+
 echo "smoke-mlx: ok (tts/stt/vlm skipped for llm-only cut)"

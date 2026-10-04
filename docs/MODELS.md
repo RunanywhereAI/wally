@@ -34,8 +34,20 @@ archive. The rows are commented out in `src/catalog/catalog.rs` under
 
 ### Decisions
 
-`eve` is hosted only and returns label probabilities rather than generated
-text. Use `wally decisions` (alias `wally decide`), not `wally run` or a coding
-harness; it is the default model there, so `-m` is optional. It supports
-yes/no (`--ask`), choices (`--choice`) and ordered levels (`--score`);
-`wally decisions --help` shows the request-file and JSON forms.
+Decision models return label probabilities rather than generated text. Use
+`wally decisions` (alias `wally decide`), not `wally run` or a coding harness.
+It supports yes/no (`--ask`), choices (`--choice`) and ordered levels
+(`--score`); `wally decisions --help` shows the request-file and JSON forms.
+
+`eve` is the hosted decision model and the default, so `-m` is optional. Two
+local checkpoints run the same questions on-device:
+
+| Id | Backend | Pull |
+|---|---|---|
+| `clef-flash-9b` | llama.cpp (Q4_K_M) | `wally models pull clef-flash-9b` |
+| `clef-flash-mlx` | MLX (Apple) | `wally models pull clef-flash-mlx` |
+
+`wally decisions --local -m <id>` forces the local path and never touches the
+network; a bare `-m <local id>` selects it automatically. On Apple, MLX
+scoring needs the Swift runtime release that carries the decision callback;
+the GGUF row runs on every kit today.

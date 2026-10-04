@@ -16,6 +16,7 @@ pub fn category(category: C) -> &'static str {
         C::SemanticSegmentation => "segment",
         C::ImageGeneration => "diffusion",
         C::Audio => "audio",
+        C::Decision => "decision",
         _ => "?",
     }
 }

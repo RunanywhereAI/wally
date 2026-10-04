@@ -268,7 +268,7 @@ const ENGINE: sys::rac_engine_vtable = sys::rac_engine_vtable {
     rerank_ops: std::ptr::null(),
     image_embedding_ops: std::ptr::null(),
     ocr_ops: std::ptr::null_mut(),
-    reserved_slot_5: std::ptr::null(),
+    decision_ops: std::ptr::null(),
     reserved_slot_6: std::ptr::null(),
     reserved_slot_7: std::ptr::null(),
     reserved_slot_8: std::ptr::null(),

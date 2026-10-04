@@ -113,6 +113,19 @@ Use `--json` for the raw API response, or `--request FILE` for the complete
 typed request shape. Decision models are refused by `wally run` and the coding
 tools, which point back here.
 
+Eve is also runnable on this machine. Pull a local checkpoint and point
+`-m` at it; `--local` (or just a local `-m`) scores in-process through the
+SDK's decision component, `--cloud` forces the hosted path:
+
+```bash
+wally models pull clef-flash-9b
+wally decisions --local -m clef-flash-9b \
+  --input "Checkout is blank after Pay" --ask "Is this a software bug?"
+```
+
+Both transports share the request flags, the human rendering and the `--json`
+document, so the same invocation works locally and hosted.
+
 ## Models at a glance
 
 | Family | Pull |
