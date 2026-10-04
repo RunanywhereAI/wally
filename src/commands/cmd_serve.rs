@@ -38,6 +38,21 @@ const DEFAULT_SERVE_MODEL: &str = "qwen3-4b-instruct-2507";
 // its mutex.
 static SERVE_STOP: AtomicBool = AtomicBool::new(false);
 
+#[cfg(wally_has_server)]
+fn serve_gpu_layers(value: Option<i64>) -> Result<i32, &'static str> {
+    match value {
+        None => Ok(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO),
+        Some(-1) => Ok(-1),
+        Some(0) => Ok(0),
+        Some(value) if value == i64::from(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO) => {
+            Ok(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO)
+        }
+        Some(_) => {
+            Err("--gpu-layers accepts -1 (GPU) or 0 (CPU); omit it for automatic placement")
+        }
+    }
+}
+
 /// Literal mirror of `RAC_SERVER_CONFIG_DEFAULT` from rac_server.h. See the
 /// module doc comment for why this cannot reference the bindgen extern
 /// static directly.
@@ -520,9 +535,8 @@ pub fn register_serve(app: &mut App) {
         cmd.add_option(
             "--gpu-layers,--ngl",
             ValueType::Int,
-            "Layers to offload to the GPU",
-        )
-        .default_val("0");
+            "GPU placement: -1 all, 0 CPU (default auto)",
+        );
         cmd.add_flag(
             "--cors",
             "Allow cross-origin browser requests (off by default)",
@@ -535,7 +549,13 @@ pub fn register_serve(app: &mut App) {
             let port = p.get_u64("--port").unwrap_or(8080) as u16;
             let context = p.get_i64("--context-length").unwrap_or(8192) as i32;
             let threads = p.get_i64("--threads").unwrap_or(4) as i32;
-            let gpu_layers = p.get_i64("--gpu-layers").unwrap_or(0) as i32;
+            let gpu_layers = match serve_gpu_layers(p.get_i64("--gpu-layers")) {
+                Ok(value) => value,
+                Err(message) => {
+                    error_line(message);
+                    return 2;
+                }
+            };
             let cors = p.flag("--cors");
             run_serve(
                 options, &reference, &host, port, context, threads, gpu_layers, cors,
@@ -615,5 +635,20 @@ mod tests {
         assert!(!is_decision_reference("qwen3-4b-instruct-2507"));
         assert!(!is_decision_reference("eve"));
         assert!(!is_decision_reference("no-such-model"));
+    }
+
+    #[test]
+    fn serve_gpu_layers_uses_auto_unless_explicitly_overridden() {
+        assert_eq!(
+            serve_gpu_layers(None),
+            Ok(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO)
+        );
+        assert_eq!(serve_gpu_layers(Some(0)), Ok(0));
+        assert_eq!(serve_gpu_layers(Some(-1)), Ok(-1));
+        assert_eq!(
+            serve_gpu_layers(Some(i64::from(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO))),
+            Ok(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO)
+        );
+        assert!(serve_gpu_layers(Some(20)).is_err());
     }
 }
