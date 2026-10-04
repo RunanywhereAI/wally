@@ -322,16 +322,41 @@ recover_interrupted_install() {
     return 0
 }
 
+# Sets VERSION to the release to install: WALLY_INSTALL_VERSION when given,
+# otherwise the latest GitHub release.
+resolve_version() {
+if [ -n "${WALLY_INSTALL_VERSION:-}" ]; then
+    VERSION="${WALLY_INSTALL_VERSION#v}"
+    printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        || fail "WALLY_INSTALL_VERSION must look like 1.2.3, not '${WALLY_INSTALL_VERSION}'"
+else
+    [ -z "${WALLY_INSTALL_BASE_URL:-}" ] \
+        || fail "WALLY_INSTALL_BASE_URL needs WALLY_INSTALL_VERSION: a mirror has no latest-release lookup"
+    # shellcheck disable=SC2086 # CURL_RETRY is two options, split on purpose
+    latest=$(curl -fsSL $CURL_RETRY "https://api.github.com/repos/${REPO}/releases/latest") \
+        || fail "Could not determine latest release version. Check your internet connection."
+    VERSION=$(printf '%s\n' "$latest" \
+        | grep '"tag_name"' \
+        | sed 's/.*"v\([^"]*\)".*/\1/')
+fi
+[ -n "$VERSION" ] || fail "Could not determine latest release version. Check your internet connection."
+}
+
 main() {
 
 # --- arguments --------------------------------------------------------------
 # The version the caller already has, passed by `wally update` so the script can
 # tell it apart from a fresh install and skip the download when nothing is newer.
 CURRENT_VERSION=""
+CHECK_ONLY=""
 for arg in "$@"; do
     case "$arg" in
         nightly|--nightly) fail "nightly/dev installs are no longer published; this installer only supports production releases" ;;
         --version=*) CURRENT_VERSION="${arg#--version=}" ;;
+        # Print the latest release version on stdout and nothing else, then
+        # exit without installing. `wally update --check-for-updates` and the
+        # update-available notice both read it.
+        --check) CHECK_ONLY=1 ;;
         # Debug-only: print the resolved skill targets and exit before any
         # network work. Exercised by scripts/test/test-install-skill-dirs.sh.
         --print-skill-dirs) skill_target_dirs; exit 0 ;;
@@ -351,27 +376,19 @@ for arg in "$@"; do
     esac
 done
 
+if [ -n "$CHECK_ONLY" ]; then
+    resolve_version
+    printf '%s\n' "$VERSION"
+    exit 0
+fi
+
 CHANNEL="production"
 
 banner
 printf '   %sInstalling the %s%s%s build%s\n\n' "$DIM" "$R$B" "$CHANNEL" "$R$DIM" "$R"
 
 step "Resolving the latest release"
-if [ -n "${WALLY_INSTALL_VERSION:-}" ]; then
-    VERSION="${WALLY_INSTALL_VERSION#v}"
-    printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
-        || fail "WALLY_INSTALL_VERSION must look like 1.2.3, not '${WALLY_INSTALL_VERSION}'"
-else
-    [ -z "${WALLY_INSTALL_BASE_URL:-}" ] \
-        || fail "WALLY_INSTALL_BASE_URL needs WALLY_INSTALL_VERSION: a mirror has no latest-release lookup"
-    # shellcheck disable=SC2086 # CURL_RETRY is two options, split on purpose
-    latest=$(curl -fsSL $CURL_RETRY "https://api.github.com/repos/${REPO}/releases/latest") \
-        || fail "Could not determine latest release version. Check your internet connection."
-    VERSION=$(printf '%s\n' "$latest" \
-        | grep '"tag_name"' \
-        | sed 's/.*"v\([^"]*\)".*/\1/')
-fi
-[ -n "$VERSION" ] || fail "Could not determine latest release version. Check your internet connection."
+resolve_version
 ok "v${VERSION}"
 
 # An update check: the caller told us its version. If nothing newer is out,

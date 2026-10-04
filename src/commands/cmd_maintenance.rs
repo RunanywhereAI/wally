@@ -324,22 +324,14 @@ fn unix_exe_targets(exe: &str) -> Vec<Target> {
 /// `home_override` is the global `--home` flag, so uninstall removes the same
 /// model store the other model commands are pointed at, not just the default
 /// one.
-pub fn run_uninstall(yes: bool, home_override: &str) -> i32 {
+///
+/// Downloaded models are kept unless the person says otherwise: the store is
+/// shared with other RunAnywhere apps, and it is the one thing here that is
+/// slow to get back. Interactively they are asked separately; under `--yes`
+/// only `--delete-models` removes them.
+pub fn run_uninstall(yes: bool, delete_models: bool, home_override: &str) -> i32 {
     let mut targets: Vec<Target> = Vec::new();
-    // Windows cannot delete the program file backing its own running
-    // process (unlike a Unix inode, which stays live under an unlinked
-    // name until the process exits) -- see the note below, where this is
-    // reported instead of attempted.
-    #[cfg(windows)]
-    let mut manual_removal: Option<PathBuf> = None;
 
-    let models = models_directory(home_override);
-    if !models.is_empty() {
-        targets.push(Target {
-            label: "models",
-            path: PathBuf::from(models),
-        });
-    }
     let config = credentials::profile_directory();
     if !config.is_empty() {
         targets.push(Target {
@@ -348,25 +340,20 @@ pub fn run_uninstall(yes: bool, home_override: &str) -> i32 {
         });
     }
 
+    // Windows cannot delete the program files backing its own running
+    // process, so the install folder is handed to a helper that removes it
+    // once this process has exited (see remove_after_exit).
+    #[cfg(windows)]
+    let mut windows_install: Option<PathBuf> = None;
     let exe = self_executable();
     if !exe.is_empty() {
-        // A running exe cannot be deleted on Windows. One that install.ps1
-        // put down is named for the person to remove; any other (a source
-        // build) is left alone, as the C++ build always did there.
         #[cfg(windows)]
         {
-            if let Some(dir) = windows_install_directory(&exe) {
-                manual_removal = Some(dir);
-            }
+            windows_install = windows_install_directory(&exe);
         }
         #[cfg(not(windows))]
         {
             targets.extend(unix_exe_targets(&exe));
-            // Only install.sh's own tree is ever deleted (unix_exe_targets
-            // above); a Homebrew install or an unverified (e.g. source-build)
-            // location is reported instead, the same way the Windows branch
-            // only reports manual_removal rather than deleting an unverified
-            // binary.
             if install_sh_layout(&exe).is_none() {
                 if crate::commands::cmd_update::is_homebrew_managed(&exe) {
                     out::status_line(
@@ -383,54 +370,58 @@ pub fn run_uninstall(yes: bool, home_override: &str) -> i32 {
     }
 
     let present: Vec<Target> = targets.into_iter().filter(|t| t.path.exists()).collect();
+    let models = models_directory(home_override);
+    let models = (!models.is_empty())
+        .then(|| PathBuf::from(models))
+        .filter(|path| path.exists());
     #[cfg(windows)]
-    let has_manual_removal = manual_removal.is_some();
+    let has_install = windows_install.is_some();
     #[cfg(not(windows))]
-    let has_manual_removal = false;
+    let has_install = false;
 
-    if present.is_empty() && !has_manual_removal {
+    if present.is_empty() && !has_install && models.is_none() {
         out::status_line("nothing to uninstall; wally is already gone.");
         return 0;
     }
 
-    if !present.is_empty() {
+    // Models are listed with everything else only when --delete-models
+    // already chose them; otherwise they get a question of their own.
+    let models_listed = models.as_ref().filter(|_| delete_models);
+    let models_asked = models.as_ref().filter(|_| !delete_models);
+    let has_listed = !present.is_empty() || has_install || models_listed.is_some();
+    if has_listed {
         out::status_line("wally uninstall will delete:");
         for target in &present {
-            let size = human_size(&target.path);
-            let size_suffix = if size.is_empty() {
-                String::new()
-            } else {
-                format!("  ({size})")
-            };
             out::status_line(&format!(
-                "  {}  {}{size_suffix}",
+                "  {}  {}{}",
                 target.label,
-                target.path.display()
+                target.path.display(),
+                size_suffix(&target.path)
+            ));
+        }
+        #[cfg(windows)]
+        if let Some(dir) = &windows_install {
+            out::status_line(&format!("  install  {}{}", dir.display(), size_suffix(dir)));
+        }
+        if let Some(models) = models_listed {
+            out::status_line(&format!(
+                "  models  {}{}",
+                display_path(models),
+                size_suffix(models)
             ));
         }
     }
-    #[cfg(windows)]
-    if let Some(dir) = &manual_removal {
-        // Windows will not let a running process delete (or even rename) its
-        // own program file, so there is no safe way to have this process
-        // finish that part of the job itself. Spawning a detached helper
-        // that waits on our pid and deletes behind us is the other option
-        // the C++ never had either, but it trades one guaranteed, honest
-        // message for a background process that can be killed, blocked by
-        // antivirus, or race a relaunch of wally -- worse failure modes than
-        // telling the person the one folder left to remove by hand.
-        out::status_line(&format!(
-            "wally cannot delete its own running program on Windows; close this window, \
-             then delete {} yourself to finish uninstalling.",
-            dir.display()
-        ));
-    }
     out::status_line("your coding tools (claude-code, opencode, ...) are left untouched.");
 
-    if !present.is_empty() && !yes {
-        // Never delete without a real confirmation. A non-interactive shell
-        // (piped or redirected stdin) cannot answer, so it must pass --yes on
-        // purpose rather than have the prompt silently skipped.
+    let mut remove_models = models_listed.is_some();
+    if yes {
+        if let Some(models) = models_asked {
+            out::status_line(&format!(
+                "kept your downloaded models in {} (pass --delete-models to delete them)",
+                display_path(models)
+            ));
+        }
+    } else {
         if !term::stdin_is_tty() {
             out::error_line(
                 "uninstall needs a terminal to confirm; re-run with --yes to delete \
@@ -438,9 +429,17 @@ pub fn run_uninstall(yes: bool, home_override: &str) -> i32 {
             );
             return 1;
         }
-        if !confirm("delete all of the above?") {
+        if has_listed && !confirm("delete all of the above?") {
             out::status_line("aborted; nothing was deleted.");
             return 1;
+        }
+        if let Some(models) = models_asked {
+            out::status_line(&format!(
+                "\nyour downloaded models: {}{}",
+                display_path(models),
+                size_suffix(models)
+            ));
+            remove_models = confirm("delete them too?");
         }
     }
 
@@ -451,42 +450,119 @@ pub fn run_uninstall(yes: bool, home_override: &str) -> i32 {
     // tree out from under it.
     let mut failures = 0;
     let mut deferred: Option<PathBuf> = None;
-    for target in &present {
-        if target.label == "install" {
-            deferred = Some(target.path.clone());
+    let mut removals: Vec<&Path> = present.iter().map(|t| t.path.as_path()).collect();
+    if remove_models {
+        if let Some(models) = &models {
+            removals.push(models.as_path());
+        }
+    }
+    for path in removals {
+        if present
+            .iter()
+            .any(|t| t.label == "install" && t.path == path)
+        {
+            deferred = Some(path.to_path_buf());
             continue;
         }
-        if let Err(e) = remove_all(&target.path) {
-            out::error_line(&format!(
-                "could not delete {}: {}",
-                target.path.display(),
-                os_error_message(&e)
-            ));
-            failures += 1;
-        }
+        failures += report_removal(path);
     }
     if let Some(deferred) = deferred {
-        if let Err(e) = remove_all(&deferred) {
+        failures += report_removal(&deferred);
+    }
+    #[cfg(windows)]
+    if let Some(dir) = &windows_install {
+        if remove_after_exit(dir) {
+            out::status_line(&format!(
+                "{} is removed as soon as this command exits.",
+                dir.display()
+            ));
+        } else {
             out::error_line(&format!(
-                "could not delete {}: {}",
-                deferred.display(),
-                os_error_message(&e)
+                "could not schedule removal of {}; delete it yourself after closing wally.",
+                dir.display()
             ));
             failures += 1;
         }
     }
+
     // Reported above already; counted here so a script checking the exit
     // code sees an incomplete uninstall rather than a clean 0.
-    #[cfg(windows)]
-    if has_manual_removal {
-        failures += 1;
-    }
-
     if failures != 0 {
         return 1;
     }
     out::status_line("wally is uninstalled. thanks for trying it.");
     0
+}
+
+/// `path` with one separator style: the models directory is built with `/`
+/// while the Windows paths around it use `\`.
+fn display_path(path: &Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        text.replace('/', "\\")
+    } else {
+        text
+    }
+}
+
+fn size_suffix(path: &Path) -> String {
+    let size = human_size(path);
+    if size.is_empty() {
+        String::new()
+    } else {
+        format!("  ({size})")
+    }
+}
+
+/// Deletes `path`, printing why when it cannot. Returns the failure count.
+fn report_removal(path: &Path) -> i32 {
+    match remove_all(path) {
+        Ok(()) => 0,
+        Err(e) => {
+            out::error_line(&format!(
+                "could not delete {}: {}",
+                path.display(),
+                os_error_message(&e)
+            ));
+            1
+        }
+    }
+}
+
+/// Starts a hidden PowerShell that waits for this process to exit, deletes
+/// `dir`, and drops it from the user's PATH (install.ps1 added it there). The
+/// helper is a separate process because Windows will not delete the files of
+/// a running program. The paths reach PowerShell as environment variables,
+/// never spliced into the command.
+#[cfg(windows)]
+fn remove_after_exit(dir: &Path) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let script = r#"Wait-Process -Id $env:WALLY_UNINSTALL_PID -ErrorAction SilentlyContinue
+for ($i = 0; $i -lt 20 -and (Test-Path -LiteralPath $env:WALLY_UNINSTALL_DIR); $i++) {
+    Remove-Item -LiteralPath $env:WALLY_UNINSTALL_DIR -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $env:WALLY_UNINSTALL_DIR) { Start-Sleep -Milliseconds 250 }
+}
+$entries = @([Environment]::GetEnvironmentVariable('Path', 'User') -split ';' | Where-Object { $_ -and $_ -ne $env:WALLY_UNINSTALL_DIR })
+[Environment]::SetEnvironmentVariable('Path', ($entries -join ';'), 'User')"#;
+    std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+        ])
+        .arg(script)
+        .env("WALLY_UNINSTALL_PID", std::process::id().to_string())
+        .env("WALLY_UNINSTALL_DIR", dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+        .spawn()
+        .is_ok()
 }
 
 /// `wally help [command]`. Renders the same text `app.get_subcommand(topic)
@@ -544,7 +620,17 @@ pub fn register_help(app: &mut App) -> Rc<RefCell<Option<App>>> {
 pub fn register_uninstall(app: &mut App) {
     let cmd = app.add_subcommand("uninstall", "Remove wally, its models and its config");
     cmd.add_flag("-y,--yes", "Skip the confirmation prompt");
-    cmd.callback(|parsed, options| run_uninstall(parsed.flag("--yes"), &options.home_override));
+    cmd.add_flag(
+        "--delete-models",
+        "Also delete downloaded models (kept by default)",
+    );
+    cmd.callback(|parsed, options| {
+        run_uninstall(
+            parsed.flag("--yes"),
+            parsed.flag("--delete-models"),
+            &options.home_override,
+        )
+    });
 }
 
 #[cfg(test)]

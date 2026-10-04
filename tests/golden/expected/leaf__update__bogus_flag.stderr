@@ -5,4 +5,5 @@ Usage: wally update [OPTIONS]
 
 Options:
   -h, --help                  Show help
-      --nightly               Track the development channel
+  -c, --check-for-updates     Check for a newer release, then ask before
+                              installing it

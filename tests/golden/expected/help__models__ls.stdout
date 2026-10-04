@@ -4,7 +4,10 @@ Usage: wally models list [OPTIONS]
 
 Options:
   -h, --help                  Show help
-  -a, --all                   Include catalog models not yet downloaded
+  -a, --all                   Every local catalog model, plus your account's
+                              cloud models
+      --local                 Every local catalog model, without cloud models
+      --cloud                 Only your account's cloud models
 
 Examples:
   # Browse the whole catalog

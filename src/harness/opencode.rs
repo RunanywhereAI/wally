@@ -195,6 +195,10 @@ pub fn build_open_code_config(
                 "input": model.input_per_mtok as f64 / 1_000_000.0,
                 "output": model.output_per_mtok as f64 / 1_000_000.0,
             });
+            if model.cached_input_per_mtok > 0 {
+                entry["cost"]["cache_read"] =
+                    json!(model.cached_input_per_mtok as f64 / 1_000_000.0);
+            }
         }
         entries[model.id.as_str()] = entry;
     }

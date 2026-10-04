@@ -1,5 +1,7 @@
 //! `wally models list` (alias `wally models ls`) — downloaded models by
-//! default, the whole catalog with --all (port of src/commands/cmd_list.cpp).
+//! default; the whole local catalog with --local; the signed-in account's
+//! cloud models with --cloud; both with --all (port of
+//! src/commands/cmd_list.cpp).
 //!
 //! The registry is refreshed with rescan_local so on-disk artifacts pulled by
 //! previous runs (or by the test rig / playground tooling) are linked before
@@ -7,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use crate::account::{ConsoleClient, ConsoleSession};
 use crate::bootstrap::{bootstrap, GlobalOptions};
 use crate::cli::App;
 use crate::commands::model_labels;
@@ -212,7 +215,78 @@ fn settle_row_id_and_size(row: &mut GroupedRow) {
     }
 }
 
-fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
+// A list command must not sit on a dead network; the cached list is the
+// fallback.
+const CLOUD_LOOKUP_TIMEOUT_MS: i32 = 3_000;
+
+/// Where the cloud rows came from.
+enum CloudModels {
+    Live(Vec<String>),
+    /// The console could not be reached; these are the ids the last
+    /// successful lookup saved (`account::cached_model_ids`).
+    Cached(Vec<String>),
+}
+
+/// The hosted models the signed-in account can use, or why there are none to
+/// show. Ordered as the console lists them.
+fn cloud_models() -> Result<CloudModels, String> {
+    let mut session = ConsoleSession::open(ConsoleClient::default())?;
+    match session
+        .call(|client, url, token| client.fetch_models_within(url, token, CLOUD_LOOKUP_TIMEOUT_MS))
+    {
+        Ok(models) => Ok(CloudModels::Live(
+            models
+                .into_iter()
+                .map(|model| model.id)
+                .filter(|id| !id.is_empty())
+                .collect(),
+        )),
+        Err(reason) => {
+            let cached = crate::account::cached_model_ids();
+            if cached.is_empty() {
+                Err(reason)
+            } else {
+                Ok(CloudModels::Cached(cached))
+            }
+        }
+    }
+}
+
+/// The `[cloud]` tag, blue where stdout takes color.
+fn cloud_tag(no_color: bool) -> String {
+    let color = !no_color
+        && crate::util::term::stdout_is_tty()
+        && crate::util::getenv("NO_COLOR").is_none();
+    if color {
+        "\x1b[34m[cloud]\x1b[0m".to_string()
+    } else {
+        "[cloud]".to_string()
+    }
+}
+
+/// Which rows `models list` shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Downloaded,
+    Local,
+    Cloud,
+    All,
+}
+
+impl Scope {
+    fn local_rows(self) -> bool {
+        self != Scope::Cloud
+    }
+    fn whole_catalog(self) -> bool {
+        matches!(self, Scope::Local | Scope::All)
+    }
+    fn cloud_rows(self) -> bool {
+        matches!(self, Scope::Cloud | Scope::All)
+    }
+}
+
+fn run_list(options: &GlobalOptions, scope: Scope) -> i32 {
+    let show_all = scope.whole_catalog();
     let Ok(_env) = bootstrap(options) else {
         return 1;
     };
@@ -262,7 +336,37 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         }
     }
 
-    let (order, groups) = group_models(&all_models.models, &downloaded_ids, show_all);
+    let (order, groups) = if scope.local_rows() {
+        group_models(&all_models.models, &downloaded_ids, show_all)
+    } else {
+        (Vec::new(), HashMap::new())
+    };
+
+    // Under --all a failure to reach the cloud never fails the local list; it
+    // is one line on stderr saying why they are missing. Under --cloud the
+    // cloud is all that was asked for, so the same failure is the error.
+    let mut cloud_ids: Vec<String> = Vec::new();
+    if scope.cloud_rows() {
+        match cloud_models() {
+            Ok(CloudModels::Live(ids)) => cloud_ids = ids,
+            Ok(CloudModels::Cached(ids)) => {
+                if !options.json {
+                    out::status_line(
+                        "could not reach Wally Cloud; cloud models are from the last time wally did",
+                    );
+                }
+                cloud_ids = ids;
+            }
+            Err(reason) if scope == Scope::Cloud => {
+                out::error_line(&format!("could not list cloud models: {reason}"));
+                return 1;
+            }
+            Err(reason) if !options.json => {
+                out::status_line(&format!("cloud models not shown: {reason}"));
+            }
+            Err(_) => {}
+        }
+    }
 
     if options.json {
         let mut json = out::JsonWriter::new();
@@ -281,6 +385,20 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
                 // the group is downloaded (mirrors the pre-merge shape, which
                 // callers already treat "" as "not downloaded").
                 .field_str("local_path", &row.local_path)
+                .field_bool("cloud", false)
+                .end_object();
+        }
+        for id in &cloud_ids {
+            json.begin_array_object()
+                .field_str("id", id)
+                .field_str("name", id)
+                .field_str("modality", "llm")
+                .field_str("backend", "cloud")
+                .field_i64("size_bytes", 0)
+                .field_bool("downloaded", false)
+                .field_bool("harness_compatible", true)
+                .field_str("local_path", "")
+                .field_bool("cloud", true)
                 .end_object();
         }
         json.end_array().end_object();
@@ -288,7 +406,9 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         return 0;
     }
 
-    print_pull_examples();
+    if scope.local_rows() {
+        print_pull_examples();
+    }
 
     let mut rows: Vec<Vec<String>> = Vec::new();
     for key in &order {
@@ -312,11 +432,25 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
         ]);
     }
 
+    let tag = cloud_tag(options.no_color);
+    for id in &cloud_ids {
+        rows.push(vec![
+            id.clone(),
+            "llm".to_string(),
+            "cloud".to_string(),
+            "-".to_string(),
+            "-".to_string(),
+            tag.clone(),
+        ]);
+    }
+
     if rows.is_empty() {
-        out::result_line(if show_all {
+        out::result_line(if scope == Scope::Cloud {
+            "no cloud models on this account"
+        } else if show_all {
             "no models registered"
         } else {
-            "no models downloaded — try `wally models list --all` then `wally models pull <id>`"
+            "no models downloaded — try `wally models list --local` then `wally models pull <id>`"
         });
         return 0;
     }
@@ -327,12 +461,33 @@ fn run_list(options: &GlobalOptions, show_all: bool) -> i32 {
     0
 }
 
+/// The scope the flags ask for, or why they contradict each other.
+fn list_scope(all: bool, local: bool, cloud: bool) -> Result<Scope, &'static str> {
+    match (all, local, cloud) {
+        (false, false, false) => Ok(Scope::Downloaded),
+        (true, false, false) => Ok(Scope::All),
+        (false, true, false) => Ok(Scope::Local),
+        (false, false, true) => Ok(Scope::Cloud),
+        _ => Err("pick one of --all, --local or --cloud"),
+    }
+}
+
 pub fn configure_models_list(cmd: &mut App) {
-    cmd.add_flag("--all,-a", "Include catalog models not yet downloaded");
-    cmd.callback(|p, g| {
-        let show_all = p.flag("--all");
-        run_list(g, show_all)
-    });
+    cmd.add_flag(
+        "--all,-a",
+        "Every local catalog model, plus your account's cloud models",
+    );
+    cmd.add_flag("--local", "Every local catalog model, without cloud models");
+    cmd.add_flag("--cloud", "Only your account's cloud models");
+    cmd.callback(
+        |p, g| match list_scope(p.flag("--all"), p.flag("--local"), p.flag("--cloud")) {
+            Ok(scope) => run_list(g, scope),
+            Err(message) => {
+                out::error_line(message);
+                2
+            }
+        },
+    );
 }
 
 #[cfg(test)]
@@ -469,5 +624,25 @@ mod tests {
         let downloaded: std::collections::HashSet<String> = std::collections::HashSet::new();
         let (_, groups) = group_models(&models, &downloaded, true);
         assert_eq!(groups["qwen3-4b-instruct-2507"].size_bytes, 0);
+    }
+
+    #[test]
+    fn list_scope_maps_one_flag_to_one_scope() {
+        assert_eq!(list_scope(false, false, false), Ok(Scope::Downloaded));
+        assert_eq!(list_scope(true, false, false), Ok(Scope::All));
+        assert_eq!(list_scope(false, true, false), Ok(Scope::Local));
+        assert_eq!(list_scope(false, false, true), Ok(Scope::Cloud));
+    }
+
+    #[test]
+    fn list_scope_refuses_two_flags_at_once() {
+        assert!(list_scope(true, true, false).is_err());
+        assert!(list_scope(false, true, true).is_err());
+        assert!(list_scope(true, false, true).is_err());
+    }
+
+    #[test]
+    fn cloud_tag_is_plain_when_color_is_off() {
+        assert_eq!(cloud_tag(true), "[cloud]");
     }
 }

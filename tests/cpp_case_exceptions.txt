@@ -1,3 +1,4 @@
 # C++ test cases deliberately not ported as a same-named Rust test, one per line:
 # <C++ file> <case> — <reason>
 test_wally_opencode.cpp config_declares_the_harness — ported as opencode_config_declares_the_harness in tests/test_wally_opencode.rs
+test_wally_unit.cpp reasoning_content_counts_without_an_unsigned_block — replaced by reasoning_content_streams_as_thinking_and_counts_toward_output in tests/test_wally_unit/shim.rs (#99: reasoning now streams as a thinking block)
