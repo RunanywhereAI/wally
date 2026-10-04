@@ -34,7 +34,7 @@ kit_sha256_linux_arm64 = "0f793bbdfd180aa85f1294adf4ce7831cb331df61496bc67ffeb65
 # on their own cadence, distinct from the C++ kit above.
 sdk_package_version = "0.20.37"
 tools_version = "6.0"
-sdk_ci_ref = "b3a2b0147d8c66190c14a53bc04286efd6a4d64a"
+sdk_ci_ref = "v0.20.38"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
