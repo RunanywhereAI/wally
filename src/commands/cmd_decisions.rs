@@ -674,12 +674,13 @@ fn local_request(request: &contract::DecisionsRequest) -> v1::DecisionRequest {
         })
         .collect();
 
-    let options = (request.temperature.is_some() || request.prompt_format_version.is_some()).then(
-        || v1::DecisionOptions {
-            temperature: request.temperature.unwrap_or(0.0) as f32,
-            prompt_format_version: request.prompt_format_version.unwrap_or(0) as u32,
-        },
-    );
+    let options =
+        (request.temperature.is_some() || request.prompt_format_version.is_some()).then(|| {
+            v1::DecisionOptions {
+                temperature: request.temperature.unwrap_or(0.0) as f32,
+                prompt_format_version: request.prompt_format_version.unwrap_or(0) as u32,
+            }
+        });
 
     v1::DecisionRequest {
         state: request.input.clone(),
@@ -692,11 +693,7 @@ fn local_request(request: &contract::DecisionsRequest) -> v1::DecisionRequest {
 /// Score through the local component: resolve the model, load it through the
 /// lifecycle (auto-pull when missing), drive the decision component, and hand
 /// the mapped response back to the shared renderer.
-fn run_local(
-    options: &GlobalOptions,
-    request: &contract::DecisionsRequest,
-    json: bool,
-) -> i32 {
+fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json: bool) -> i32 {
     if bootstrap::bootstrap(options).is_err() {
         return 1;
     }
@@ -1175,12 +1172,8 @@ mod tests {
             confidence: 0.93,
             ..Default::default()
         };
-        refund
-            .probabilities
-            .insert("true".to_string(), 0.93_f32);
-        refund
-            .probabilities
-            .insert("false".to_string(), 0.07_f32);
+        refund.probabilities.insert("true".to_string(), 0.93_f32);
+        refund.probabilities.insert("false".to_string(), 0.07_f32);
         refund.answer = Some(v1::decision_answer::Answer::Noul(0.93));
         let mut urgency = v1::DecisionAnswer {
             id: "urgency".to_string(),
@@ -1242,10 +1235,10 @@ mod tests {
             r#type: v1::DecisionQuestionType::Choice as i32,
             ..Default::default()
         };
+        answer.probabilities.insert("billing".to_string(), 0.97_f32);
         answer
             .probabilities
-            .insert("billing".to_string(), 0.97_f32);
-        answer.probabilities.insert("technical".to_string(), 0.03_f32);
+            .insert("technical".to_string(), 0.03_f32);
         answer.answer = Some(v1::decision_answer::Answer::Choice("billing".to_string()));
         result.answers = vec![answer];
 
