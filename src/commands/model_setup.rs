@@ -158,10 +158,7 @@ pub fn ensure_model_ready(
                     offline: false,
                     ..options.clone()
                 };
-                status_line(&format!(
-                    "model {} not downloaded — pulling",
-                    resolved.model_id
-                ));
+                status_line(&format!("pulling model {} now", resolved.model_id));
                 let pull_code = pull_model_flow(&online, &resolved.model_id);
                 if pull_code != 0 {
                     return Err(pull_code);
