@@ -2500,6 +2500,17 @@ const SHERPA_SUPERTONIC_V3_FILES: &[CatalogFile] = &[
     },
 ];
 
+// LOCAL(decision): single-artifact inventory for the GGUF decision
+// checkpoint, expressed as a file list so it registers through the same
+// category-preserving path as the MLX row.
+const CLEF_FLASH_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
+    url: "https://huggingface.co/ggml-org/Clef-Flash-GGUF/resolve/main/Clef-Flash-Q4_K_M.gguf",
+    filename: "Clef-Flash-Q4_K_M.gguf",
+    required: true,
+    size_bytes: 6486448192,
+    checksum_sha256: None,
+}];
+
 // LOCAL(decision): multi-file inventory for the MLX decision checkpoint.
 // Same file set the Swift MLX loader needs (backbone config + shards +
 // tokenizer + the joint-head config and weights).
@@ -4490,26 +4501,36 @@ const CATALOG: &[CatalogEntry] = &[
     // transliterated C++ catalog block above — if parse_catalog.py runs
     // again, the rows must be carried in its source (the SDK's catalog.cpp).
     CatalogEntry {
-        id: "clef-flash-gguf",
-        alias: Some("clef-gguf"),
-        name: "Clef Flash Q4_K_M (decision, GGUF)",
+        id: "clef-flash-9b",
+        alias: Some("clef-flash"),
+        name: "Clef Flash 9B Q4_K_M (decision, GGUF)",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::LlamaCpp,
         format: v1::ModelFormat::Gguf,
-        url: Some("https://huggingface.co/ggml-org/Clef-Flash-GGUF/resolve/main/Clef-Flash-Q4_K_M.gguf"),
-        files: &[],
+        // One file, but registered through the file-list path: the SDK's
+        // single-file URL factory drops a Decision category (it has no
+        // DECISION arm in model_info_make_proto's proto->C category mapper,
+        // tracked separately on the SDK side), and the list filter then hides
+        // the UNKNOWN row. The file-list path passes the category straight
+        // through, the same way the MLX row registers.
+        url: None,
+        files: CLEF_FLASH_GGUF_FILES,
         download_size_bytes: 6486448192,
         context_length: 0,
         supports_thinking: false,
         memory_required_bytes: 0,
         cua_profile: "",
-        merge_key: Some("clef-flash"),
+        merge_key: Some("clef-flash-9b"),
         harness_compatible: false,
     },
     CatalogEntry {
-        id: "clef-flash-mlx-4bit",
-        alias: Some("clef-mlx"),
-        name: "Clef Flash 4-bit (decision, MLX)",
+        // The `mlx-` prefix is the same backend-variant convention every
+        // other model uses (`mlx-qwen3-0.6b-4bit`). `clef-flash-mlx` is the
+        // short spelling: the id without the prefix would name the llama.cpp
+        // build, so the alias carries the suffix the rest of the CLI docs use.
+        id: "mlx-clef-flash-9b-4bit",
+        alias: Some("clef-flash-mlx"),
+        name: "Clef Flash 9B 4-bit (decision, MLX)",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::Mlx,
         format: v1::ModelFormat::Safetensors,
@@ -4520,7 +4541,7 @@ const CATALOG: &[CatalogEntry] = &[
         supports_thinking: false,
         memory_required_bytes: 0,
         cua_profile: "",
-        merge_key: Some("clef-flash"),
+        merge_key: Some("clef-flash-9b"),
         harness_compatible: false,
     },
 ];

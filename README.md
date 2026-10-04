@@ -118,8 +118,8 @@ Eve is also runnable on this machine. Pull a local checkpoint and point
 SDK's decision component, `--cloud` forces the hosted path:
 
 ```bash
-wally models pull clef-flash-gguf
-wally decisions --local -m clef-flash-gguf \
+wally models pull clef-flash-9b
+wally decisions --local -m clef-flash-9b \
   --input "Checkout is blank after Pay" --ask "Is this a software bug?"
 ```
 

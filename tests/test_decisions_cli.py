@@ -198,8 +198,11 @@ def main():
 
             forbidden = invoke(binary, env, "decisions", "--input", "forbidden", "--ask", "Okay?")
             assert forbidden.returncode == 1
-            assert "not entitled to eve" in forbidden.stderr, forbidden.stderr
-            assert "wally account login" in forbidden.stderr, forbidden.stderr
+            assert "eve is not available on this account" in forbidden.stderr, forbidden.stderr
+            # Entitlement is account-level; re-login cannot change it, so the
+            # message must not send anyone down that path.
+            assert "wally account login" not in forbidden.stderr, forbidden.stderr
+            assert "--local" in forbidden.stderr, forbidden.stderr
 
             too_long = invoke(binary, env, "decisions", "--input", "too-long", "--ask", "Okay?")
             assert too_long.returncode == 1

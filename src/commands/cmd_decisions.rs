@@ -978,7 +978,7 @@ pub fn register_decisions(app: &mut App) {
             "",
         ),
         Example::new(
-            "wally decisions --local -m clef-flash-gguf --input 'Checkout is blank' --ask 'Is this a bug?'",
+            "wally decisions --local -m clef-flash-9b --input 'Checkout is blank' --ask 'Is this a bug?'",
             "",
         ),
     ]));
@@ -1122,7 +1122,7 @@ mod tests {
 
     fn ticket_request() -> contract::DecisionsRequest {
         contract::DecisionsRequest {
-            model: "clef-flash-gguf".to_string(),
+            model: "clef-flash-9b".to_string(),
             input: "ticket".to_string(),
             questions: vec![
                 contract::DecisionQuestion::YesNoQuestion(contract::YesNoQuestion {
@@ -1165,7 +1165,7 @@ mod tests {
     fn local_response_maps_the_proto_result_back_to_the_cloud_shape() {
         let request = ticket_request();
         let mut result = v1::DecisionResult {
-            model_id: "clef-flash-gguf".to_string(),
+            model_id: "clef-flash-9b".to_string(),
             prompt_format_version: 3,
             ..Default::default()
         };
@@ -1196,7 +1196,7 @@ mod tests {
         });
 
         let response = local_response(&result, &request);
-        assert_eq!(response.model, "clef-flash-gguf");
+        assert_eq!(response.model, "clef-flash-9b");
         assert_eq!(response.prompt_format_version, 3);
         assert_eq!(response.usage.total_tokens, 97);
         let refund_answer = &response.answers.0["refund"];
@@ -1215,7 +1215,7 @@ mod tests {
     #[test]
     fn local_response_choice_keeps_the_option_key() {
         let request = contract::DecisionsRequest {
-            model: "clef-flash-gguf".to_string(),
+            model: "clef-flash-9b".to_string(),
             input: "ticket".to_string(),
             questions: vec![contract::DecisionQuestion::ChoiceQuestion(
                 contract::ChoiceQuestion {

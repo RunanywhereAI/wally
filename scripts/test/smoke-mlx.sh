@@ -116,7 +116,7 @@ echo "VLM: SKIP (vlm disabled for llm-only cut)"
 # the GGUF row is the transport every kit can run, so it is the one exercised.
 # Set WALLY_SMOKE_DECISION=0 to skip. This is the only place a real model
 # proves `wally decisions --local` end-to-end.
-DECISION_GGUF="${WALLY_SMOKE_DECISION_GGUF:-clef-flash-gguf}"
+DECISION_GGUF="${WALLY_SMOKE_DECISION_GGUF:-clef-flash-9b}"
 if [[ "${WALLY_SMOKE_DECISION:-1}" == "1" ]]; then
   echo "Decision (local GGUF): $DECISION_GGUF"
   pull_if_enabled "$DECISION_GGUF"

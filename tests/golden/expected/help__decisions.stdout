@@ -25,4 +25,4 @@ Examples:
 
   wally decide --input-file ticket.txt --choice 'Owner=frontend,payments,account'
 
-  wally decisions --local -m clef-flash-gguf --input 'Checkout is blank' --ask 'Is this a bug?'
+  wally decisions --local -m clef-flash-9b --input 'Checkout is blank' --ask 'Is this a bug?'

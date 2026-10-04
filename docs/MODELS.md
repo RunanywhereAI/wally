@@ -44,8 +44,8 @@ local checkpoints run the same questions on-device:
 
 | Id | Backend | Pull |
 |---|---|---|
-| `clef-flash-gguf` | llama.cpp (Q4_K_M) | `wally models pull clef-flash-gguf` |
-| `clef-flash-mlx-4bit` | MLX (Apple) | `wally models pull clef-flash-mlx-4bit` |
+| `clef-flash-9b` | llama.cpp (Q4_K_M) | `wally models pull clef-flash-9b` |
+| `clef-flash-mlx` | MLX (Apple) | `wally models pull clef-flash-mlx` |
 
 `wally decisions --local -m <id>` forces the local path and never touches the
 network; a bare `-m <local id>` selects it automatically. On Apple, MLX
