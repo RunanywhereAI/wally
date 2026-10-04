@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::io::Read;
+use std::io::Write as _;
 use std::time::Instant;
 
 use crate::account::decisions_contract as contract;
@@ -20,6 +21,7 @@ use crate::bootstrap::{self, GlobalOptions};
 use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};
 use crate::commands::model_setup::ensure_model_ready;
+use crate::config::preferences::{self, DecisionsRoute};
 use crate::io::output as out;
 use crate::io::proto::{parse_proto_buffer, serialize, v1, ProtoBuffer};
 use crate::sys;
@@ -167,6 +169,7 @@ fn build_request(p: &crate::cli::Parsed) -> Result<contract::DecisionsRequest, S
             "--score",
             "--temperature",
             "--model",
+            "--route",
         ]
         .into_iter()
         .filter(|name| p.is_set(name))
@@ -504,6 +507,51 @@ fn render_human(
 /// question) dropped.
 fn display_label_line(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The local decision model a bare `wally decisions` runs: the GGUF row where
+/// the linked kit has llama.cpp, the MLX row on Apple builds without it.
+/// `None` where this build cannot score anything on-device.
+fn default_local_model() -> Option<&'static str> {
+    if cfg!(wally_has_llamacpp) {
+        Some("clef-flash-9b")
+    } else if cfg!(target_os = "macos") {
+        Some("clef-flash-mlx")
+    } else {
+        None
+    }
+}
+
+/// Parse a route-menu answer: `1` is cloud, `2` is local, anything else
+/// (including an empty line) takes the suggestion.
+fn parse_route_choice(line: &str, suggested: DecisionsRoute) -> DecisionsRoute {
+    match line.trim_end_matches(['\n', '\r']).trim() {
+        "1" => DecisionsRoute::Cloud,
+        "2" => DecisionsRoute::Local,
+        _ => suggested,
+    }
+}
+
+/// Ask once where bare invocations score. Numbered with local suggested
+/// (the prompt only runs where a local model exists), Enter takes it.
+/// Everything on stderr so `--json` stays clean.
+fn prompt_decisions_route(local_id: &str) -> DecisionsRoute {
+    let signed_in = account::load().map(|c| c.signed_in()).unwrap_or(false);
+    let login_hint = if signed_in {
+        String::new()
+    } else {
+        " (needs `wally account login` first)".to_string()
+    };
+    eprint!(
+        "Where should decisions be scored?\n  1) cloud — hosted {} model{}\n  2) local — on-device {}, data stays on this machine  <-- suggested\nChoice [1/2, Enter=2]: ",
+        DEFAULT_MODEL, login_hint, local_id
+    );
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).unwrap_or(0) == 0 {
+        return DecisionsRoute::Local;
+    }
+    parse_route_choice(&answer, DecisionsRoute::Local)
 }
 
 /// Which transport `wally decisions` should use. `Auto` is resolved by
@@ -858,26 +906,95 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
 }
 
 fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
-    let transport = match transport_from_flags(p) {
+    let mut transport = match transport_from_flags(p) {
         Ok(transport) => transport,
         Err(error) => {
             out::error_line(&error);
             return 2;
         }
     };
-    let request = match build_request(p) {
+    // `--route` saves the default; validated here, persisted after the
+    // request checks out so a failing invocation never saves a preference.
+    // It already selects the route, so the per-run flags and a request file
+    // (which carries its own model) have nothing left to say.
+    let mut forced_route = None;
+    if let Some(route) = p.get_str("--route") {
+        if p.flag("--local") || p.flag("--cloud") || p.is_set("--request") {
+            out::error_line("--route cannot be combined with --local, --cloud, or --request");
+            return 2;
+        }
+        match preferences::parse_decisions_route(Some(&route)) {
+            Some(parsed) => forced_route = Some(parsed),
+            None => {
+                out::error_line(&format!(
+                    "decisions route must be 'local' or 'cloud', not '{route}'"
+                ));
+                return 2;
+            }
+        }
+    }
+    let mut request = match build_request(p) {
         Ok(request) => request,
         Err(error) => {
             out::error_line(&error);
             return 2;
         }
     };
+    if let Some(route) = forced_route {
+        if let Err(error) = preferences::set_decisions_route(route.name()) {
+            out::error_line(&error);
+            return 2;
+        }
+        out::status_line(&format!("saved decisions route: {}", route.name()));
+    }
+    // No flags and no model is the first-run shape: follow the saved route,
+    // ask once when there is none, and stay on today's cloud default where
+    // no answer can come (a pipe) or nothing local can run.
+    if transport == Transport::Auto && !p.is_set("--model") && !p.is_set("--request") {
+        let route = match forced_route.or_else(preferences::saved_decisions_route) {
+            Some(saved) => {
+                out::status_line(&format!("using saved decisions route: {}", saved.name()));
+                saved
+            }
+            None if !term::stdin_is_tty() => DecisionsRoute::Cloud,
+            None => match default_local_model() {
+                None => DecisionsRoute::Cloud,
+                Some(local_id) => {
+                    let choice = prompt_decisions_route(local_id);
+                    match preferences::set_decisions_route(match choice {
+                        DecisionsRoute::Local => "local",
+                        DecisionsRoute::Cloud => "cloud",
+                    }) {
+                        Ok(_) => out::status_line("saved as your decisions default"),
+                        Err(error) => out::status_line(&format!(
+                            "warning: choice not saved ({error}); continuing anyway"
+                        )),
+                    }
+                    choice
+                }
+            },
+        };
+        if route == DecisionsRoute::Local {
+            match default_local_model() {
+                Some(local_id) => {
+                    request.model = local_id.to_string();
+                    transport = Transport::Local;
+                }
+                None => {
+                    out::error_line(
+                        "saved decisions route is 'local' but this build cannot score on-device",
+                    );
+                    return 2;
+                }
+            }
+        }
+    }
     let local = match transport {
         Transport::Local => match resolve_local_transport(&request.model, options) {
             Ok(true) => true,
             Ok(false) => {
                 out::error_line(&format!(
-                    "--local was given but '{}' does not resolve to a model on this machine",
+                    "local scoring was selected but '{}' does not resolve to a model on this machine",
                     request.model
                 ));
                 return 2;
@@ -1045,6 +1162,11 @@ pub fn register_decisions(app: &mut App) {
         "--cloud",
         "Score on your account's hosted endpoint (never a local model)",
     );
+    cmd.add_option(
+        "--route",
+        ValueType::Text,
+        "Save 'local' or 'cloud' as the default route (used when no flags are given)",
+    );
     cmd.add_flag("--no-retry", "Do not retry HTTP 429 or 503");
     cmd.footer(&examples_footer(&[
         Example::new(
@@ -1093,6 +1215,44 @@ mod tests {
     fn defaults_to_the_served_decision_model() {
         assert_eq!(DEFAULT_MODEL, "eve");
         assert!(crate::harness::is_decisions_model(DEFAULT_MODEL));
+    }
+
+    #[test]
+    fn default_local_model_matches_what_this_build_can_run() {
+        // Mirrors the catalog gating the transport test asserts on: GGUF
+        // where llama.cpp is linked, MLX on Apple builds without it, and no
+        // local model where neither exists.
+        if cfg!(wally_has_llamacpp) {
+            assert_eq!(default_local_model(), Some("clef-flash-9b"));
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(default_local_model(), Some("clef-flash-mlx"));
+        } else {
+            assert_eq!(default_local_model(), None);
+        }
+    }
+
+    #[test]
+    fn route_menu_numbers_are_stable_and_blank_takes_the_suggestion() {
+        assert_eq!(
+            parse_route_choice("1", DecisionsRoute::Local),
+            DecisionsRoute::Cloud
+        );
+        assert_eq!(
+            parse_route_choice("2", DecisionsRoute::Cloud),
+            DecisionsRoute::Local
+        );
+        assert_eq!(
+            parse_route_choice("", DecisionsRoute::Local),
+            DecisionsRoute::Local
+        );
+        assert_eq!(
+            parse_route_choice("  \n", DecisionsRoute::Cloud),
+            DecisionsRoute::Cloud
+        );
+        assert_eq!(
+            parse_route_choice("3", DecisionsRoute::Local),
+            DecisionsRoute::Local
+        );
     }
 
     #[test]

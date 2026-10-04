@@ -1,7 +1,8 @@
 //! Non-secret per-profile CLI preferences (port of src/config/preferences.cpp).
 //!
 //! Distinct from the credential store (`account`), which is the secret file at
-//! mode 0600. The only key today is the default model. Resolution precedence,
+//! mode 0600. Two keys today: the default model, and the decisions route
+//! (`wally decisions` without transport flags). Resolution precedence,
 //! highest first:
 //!   1. an explicit model the reader passed
 //!   2. the `WALLY_DEFAULT_MODEL` environment variable (a one-off shell override)
@@ -16,6 +17,7 @@ use crate::io::output;
 
 const FILE_NAME: &str = "preferences.json";
 const DEFAULT_MODEL_KEY: &str = "default_model";
+const DECISIONS_ROUTE_KEY: &str = "decisions_route";
 
 /// {ProfileDirectory}/preferences.json, or empty when $HOME is unresolvable.
 pub fn preferences_path() -> String {
@@ -188,10 +190,60 @@ pub fn clear_default_model() -> Result<(), String> {
     write_file(&document)
 }
 
+/// Where a bare `wally decisions` (no `--local`/`--cloud`, no `--model`)
+/// scores. Saved the first time the command asks, followed silently after.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DecisionsRoute {
+    /// score on the hosted console (`eve`)
+    #[default]
+    Cloud,
+    /// score on this machine (the platform's local decision model)
+    Local,
+}
+
+impl DecisionsRoute {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            DecisionsRoute::Local => "local",
+            DecisionsRoute::Cloud => "cloud",
+        }
+    }
+}
+
+/// The file value for a route, if it names one. Anything else (missing key,
+/// another string) is no saved route, never an error.
+pub(crate) fn parse_decisions_route(raw: Option<&str>) -> Option<DecisionsRoute> {
+    match raw {
+        Some("local") => Some(DecisionsRoute::Local),
+        Some("cloud") => Some(DecisionsRoute::Cloud),
+        _ => None,
+    }
+}
+
+/// The saved decisions route, if the file names one.
+pub fn saved_decisions_route() -> Option<DecisionsRoute> {
+    parse_decisions_route(read_file().get(DECISIONS_ROUTE_KEY)?.as_str())
+}
+
+/// Persist the decisions route. Rejects anything but `local`/`cloud` so a
+/// typo never becomes a silent default.
+pub fn set_decisions_route(route: &str) -> Result<DecisionsRoute, String> {
+    let parsed = parse_decisions_route(Some(route))
+        .ok_or_else(|| format!("decisions route must be 'local' or 'cloud', not '{route}'"))?;
+    let mut document = read_file();
+    if let Value::Object(map) = &mut document {
+        map.insert(
+            DECISIONS_ROUTE_KEY.to_string(),
+            Value::String(route.to_string()),
+        );
+    }
+    write_file(&document)?;
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod write_temp_file_tests {
     use super::write_temp_file;
-
     // An open failure (temp file cannot even be created) must produce
     // "cannot write {temp}", distinct from a write/flush failure.
     #[test]
@@ -212,5 +264,25 @@ mod write_temp_file_tests {
         let temp = dir.path().join("preferences.json.tmp");
         write_temp_file(&temp, "{}\n").expect("write should succeed");
         assert_eq!(std::fs::read_to_string(&temp).unwrap(), "{}\n");
+    }
+}
+
+#[cfg(test)]
+mod decisions_route_tests {
+    use super::{parse_decisions_route, DecisionsRoute};
+
+    #[test]
+    fn only_local_and_cloud_name_a_route() {
+        assert_eq!(
+            parse_decisions_route(Some("local")),
+            Some(DecisionsRoute::Local)
+        );
+        assert_eq!(
+            parse_decisions_route(Some("cloud")),
+            Some(DecisionsRoute::Cloud)
+        );
+        assert_eq!(parse_decisions_route(Some("eve")), None);
+        assert_eq!(parse_decisions_route(Some("")), None);
+        assert_eq!(parse_decisions_route(None), None);
     }
 }
