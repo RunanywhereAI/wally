@@ -53,6 +53,9 @@ if ! gh release download "$RELEASE_TAG" \
 fi
 
 file="${dl}/${asset}"
+if command -v stat >/dev/null 2>&1; then
+  echo "downloaded ${asset}: $(stat -c%s "$file" 2>/dev/null || stat -f%z "$file") bytes" >&2
+fi
 if command -v shasum >/dev/null 2>&1; then
   actual="$(shasum -a 256 "$file" | awk '{print $1}')"
 else

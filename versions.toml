@@ -23,7 +23,7 @@ idl_schema_sha256 = "faca2c22e518f3d41e534399b854bbbc9617d4a76511592a6013a888fdd
 idl_protoc_version = "35.1"
 kit_sha256_macos_arm64 = "2f6ce6c3942cdf413b32c7df7dcc586389fd1837a24eef03c1a8dcfd8b63f355"
 kit_sha256_windows_x64 = "30c2de5c3f76016931b706fbb46c7966e209d0da556db67c62b25c5f757f0aff"
-kit_sha256_windows_arm64 = "51e227a0392cc93e6e6f908aeac1f6636ecb0b2b4cb8483788dde4895"
+kit_sha256_windows_arm64 = "cb44e4f7a3b4211e202d1f5f463b45690cde632c149bb5fc45a580785af811ca"
 kit_sha256_linux_x64 = "6ce52c00e70def9a08c51cf14ba3b6b18db0e67524ceddd2bfda74046ebb20ca"
 kit_sha256_linux_arm64 = "a584652366c23eb63e43ee517aa042e57948729b06bb7e5cd22898759c61a3fa"
 
