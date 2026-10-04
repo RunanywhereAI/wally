@@ -4503,7 +4503,7 @@ const CATALOG: &[CatalogEntry] = &[
     CatalogEntry {
         id: "clef-flash-9b",
         alias: Some("clef-flash"),
-        name: "Clef Flash 9B Q4_K_M (decision, GGUF)",
+        name: "Clef Flash 9B (decision)",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::LlamaCpp,
         format: v1::ModelFormat::Gguf,
@@ -4530,7 +4530,7 @@ const CATALOG: &[CatalogEntry] = &[
         // build, so the alias carries the suffix the rest of the CLI docs use.
         id: "mlx-clef-flash-9b-4bit",
         alias: Some("clef-flash-mlx"),
-        name: "Clef Flash 9B 4-bit (decision, MLX)",
+        name: "Clef Flash 9B (decision)",
         category: v1::ModelCategory::Decision,
         framework: v1::InferenceFramework::Mlx,
         format: v1::ModelFormat::Safetensors,

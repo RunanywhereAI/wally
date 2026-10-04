@@ -43,6 +43,12 @@ pub struct GlobalOptions {
     pub environment: String,
     pub base_url: String,
     pub api_key: String,
+    /// Skip the SDK's network phase entirely (telemetry/auth/device
+    /// registration). Set by commands that promise to never touch the
+    /// network — `wally decisions --local` — so the promise holds even in
+    /// development, where Phase 2 posts anonymous telemetry to the baked
+    /// staging backend.
+    pub offline: bool,
 }
 
 /// Validated control-plane connection resolved from GlobalOptions.
@@ -990,7 +996,13 @@ pub fn bootstrap(options: &GlobalOptions) -> Result<Bootstrapped, sys::rac_resul
                 output::status_line("warning: device info callbacks failed to register");
             }
 
-            initialize_telemetry_auth(&connection);
+            // Offline mode (a command that promises no network) skips the
+            // telemetry/auth/device block wholesale: with it go Phase 2's
+            // anonymous staging POST in development and the auth handshake in
+            // production. Registrations above and below are local-only.
+            if !options.offline {
+                initialize_telemetry_auth(&connection);
+            }
 
             #[cfg(wally_has_llamacpp)]
             // SAFETY: takes no arguments; always safe to call.

@@ -530,21 +530,48 @@ fn transport_from_flags(p: &crate::cli::Parsed) -> Result<Transport, String> {
 /// Whether `reference` is a local model id/alias/path the decision component
 /// can load. A catalog decision row or a path on disk counts; a hosted model
 /// id (`eve`) does not.
+///
+/// A registered, non-catalog id is not enough on its own: an HF-pulled LLM
+/// pulled earlier lives in the same registry, and sending one to the decision
+/// component would fail at load instead of scoring. Its stored category must
+/// say Decision. Paths are different: `register_local_path` labels them
+/// Language by default, so they never pass that check — a path is local by
+/// construction and stays accepted.
 fn model_resolves_locally(reference: &str) -> bool {
-    match crate::catalog::model_ref::resolve(reference, None) {
-        Ok(resolved) => {
-            if resolved.from_catalog {
-                crate::catalog::find(reference)
-                    .map(|entry| entry.category == v1::ModelCategory::Decision)
-                    .unwrap_or(false)
-            } else {
-                // Registered ids (a manifest-restored pull) and local paths
-                // are local artifacts; a hosted id is not registered here.
-                true
-            }
-        }
-        Err(_) => false,
+    if crate::catalog::find(reference).is_some() {
+        return crate::catalog::find(reference)
+            .map(|entry| entry.category == v1::ModelCategory::Decision)
+            .unwrap_or(false);
     }
+    // A path on disk is a local artifact regardless of the registry.
+    if crate::catalog::model_ref::is_local_path(reference) {
+        return true;
+    }
+    // A registered id resolves locally only when the stored category is
+    // Decision (a manifest-restored `clef-flash-9b` pull, say); an LLM row
+    // registered here must keep going to the cloud transport.
+    registered_category(reference) == Some(v1::ModelCategory::Decision)
+}
+
+/// The stored category of a registered model id, if the registry knows it.
+fn registered_category(reference: &str) -> Option<v1::ModelCategory> {
+    let id = CString::new(reference).ok()?;
+    let mut out = ProtoBuffer::new();
+    // SAFETY: `id` is a valid NUL-terminated string for the call; `out` is a
+    // freshly-initialised buffer.
+    let rc = unsafe {
+        sys::rac_model_registry_get_proto_buffer(
+            sys::rac_get_model_registry(),
+            id.as_ptr(),
+            out.as_mut_ptr(),
+        )
+    };
+    if rc != sys::SUCCESS {
+        return None;
+    }
+    parse_proto_buffer::<v1::ModelInfo>(out)
+        .ok()
+        .and_then(|info| v1::ModelCategory::try_from(info.category).ok())
 }
 
 /// The response shape `create_decisions` returns, rebuilt locally so the
@@ -762,7 +789,22 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
     };
     let result = match parse_proto_buffer::<v1::DecisionResult>(out_buffer) {
         Ok(result) if proto_rc == sys::SUCCESS => result,
-        Ok(result) if !result.answers.is_empty() => result,
+        Ok(result) if !result.answers.is_empty() => {
+            // A non-success rc with answers in hand is a partial result: some
+            // question was refused (an over-window prompt, a bad span). The
+            // remaining answers are real but the request as a whole is not,
+            // and reporting exit 0 would tell a script the missing ids are
+            // authoritative "no answer". Fail instead, naming the rc.
+            out::error_line(&format!(
+                "decision failed: {} ({} of {} questions answered)",
+                out::describe_result(proto_rc),
+                result.answers.len(),
+                request.questions.len()
+            ));
+            // SAFETY: handle is the live component created above.
+            unsafe { sys::rac_decision_component_destroy(handle) };
+            return 1;
+        }
         Ok(_) => {
             out::error_line("decision failed: ");
             // SAFETY: handle is the live component created above.
@@ -778,6 +820,16 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
     };
     // SAFETY: handle is the live component created above; not used again.
     unsafe { sys::rac_decision_component_destroy(handle) };
+
+    // Every requested question must carry an answer, whatever the rc said;
+    // a missing id is the same partial failure the arm above rejects.
+    if let Some((missing, _)) = question_views(request)
+        .into_iter()
+        .find(|(id, _)| !result.answers.iter().any(|answer| answer.id == *id))
+    {
+        out::error_line(&format!("decision failed: no answer for question '{missing}'"));
+        return 1;
+    }
 
     let latency_ms = started.elapsed().as_millis();
     let response = local_response(&result, request);
@@ -827,7 +879,14 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
             out::error_line("--no-retry is a cloud-only flag");
             return 2;
         }
-        return run_local(options, &request, json);
+        // The local path promises no network; bootstrap must not run the
+        // SDK's telemetry/auth phase, which posts anonymously to the staging
+        // backend in development.
+        let offline = GlobalOptions {
+            offline: true,
+            ..options.clone()
+        };
+        return run_local(&offline, &request, json);
     }
     // The hosted console takes a model id, not a path; only the local
     // transport accepts a path, so the id-shape rule gates cloud here.
