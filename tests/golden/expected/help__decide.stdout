@@ -18,6 +18,8 @@ Options:
                               (never the network)
       --cloud                 Score on your account's hosted endpoint (never a
                               local model)
+      --route TEXT            Save 'local' or 'cloud' as the default route (used
+                              when no flags are given)
       --no-retry              Do not retry HTTP 429 or 503
 
 Examples:

@@ -59,6 +59,10 @@ decision model" (it named the retired Qwev model) and its `--model` default is
 updated for those two strings only, and the corpus replays byte-exact against
 the Rust binary.
 
+`wally decisions` gained a `--route` option saving `local` or `cloud` as the
+default route for flag-less invocations. `help__decisions` and `help__decide`
+were updated for those two rows only; nothing else about them changed.
+
 Re-capture from a binary (only when behaviour changes on purpose):
 
     python3 scripts/test/golden-capture.py --binary build/wally --out tests/golden --cases tests/golden/cases.json
