@@ -766,7 +766,7 @@ pub fn build_open_claw_config(
             entry["cost"] = json!({
                 "input": model.input_per_mtok as f64 * PER_MICRO,
                 "output": model.output_per_mtok as f64 * PER_MICRO,
-                "cacheRead": 0,
+                "cacheRead": model.cached_input_per_mtok as f64 * PER_MICRO,
                 "cacheWrite": 0,
             });
         }
@@ -878,7 +878,7 @@ pub fn build_prime_agent_extension(
             entry["cost"] = json!({
                 "input": model.input_per_mtok as f64 * PER_MICRO,
                 "output": model.output_per_mtok as f64 * PER_MICRO,
-                "cacheRead": 0,
+                "cacheRead": model.cached_input_per_mtok as f64 * PER_MICRO,
                 "cacheWrite": 0,
             });
         }
@@ -1693,6 +1693,7 @@ mod tests {
             max_output: 16_384,
             input_per_mtok: 0,
             output_per_mtok: 0,
+            cached_input_per_mtok: 0,
         }];
         let built = build_prime_agent_extension("https://example.test/v1", KEY_VARIABLE, &models);
         let json = built

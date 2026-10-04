@@ -46,7 +46,8 @@ wally run qwen3 "Hello"     # one answer and exit
 wally serve qwen3           # OpenAI-compatible API on :8080 (macOS, Linux)
 ```
 
-`wally models list --all` shows everything you can pull. Any Hugging Face GGUF
+`wally models list --local` shows everything you can pull; `--cloud` shows the
+cloud models on your account, and `--all` shows both. Any Hugging Face GGUF
 works too, by its full path:
 
 ```bash
@@ -150,7 +151,7 @@ has the full catalog.
 
 | Models | |
 |---|---|
-| `wally models list --all` | models on this machine, or the whole catalog |
+| `wally models list` | models on this machine; `--local` for the whole catalog, `--cloud` for your cloud models, `--all` for both |
 | `wally models pull` / `rm` | download or delete a model |
 | `wally models show` | size, context window, files |
 | `wally models default` | the model coding tools open with |

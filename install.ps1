@@ -43,6 +43,49 @@ function Fail([string]$Message) {
     throw "Error: $Message"
 }
 
+# Replaces an existing install file by file. Windows will not move a folder
+# whose wally.exe or DLLs are in use (`wally update` runs this installer while
+# wally itself is running, and another terminal may be running wally too), but
+# it will rename each of those files. So every current file is renamed to
+# <name>.old, the new files are moved in beside them, and any failure renames
+# them all back. A .old file still in use cannot be deleted yet; the next
+# update, or the next wally run, removes it.
+function Update-InPlace([string]$Source, [string]$Target) {
+    Get-ChildItem -LiteralPath $Target -Filter '*.old' -Force |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    $Retired = @()
+    $Placed = @()
+    try {
+        foreach ($Item in @(Get-ChildItem -LiteralPath $Target -Force)) {
+            $Aside = "$($Item.FullName).old"
+            if (Test-Path -LiteralPath $Aside) { $Aside = "$($Item.FullName).$PID.old" }
+            Rename-Item -LiteralPath $Item.FullName -NewName (Split-Path $Aside -Leaf) -ErrorAction Stop
+            $Retired += [pscustomobject]@{ Original = $Item.FullName; Aside = $Aside }
+        }
+        foreach ($Item in @(Get-ChildItem -LiteralPath $Source -Force)) {
+            $Destination = Join-Path $Target $Item.Name
+            Move-Item -LiteralPath $Item.FullName -Destination $Destination -ErrorAction Stop
+            $Placed += $Destination
+        }
+    } catch {
+        $Reason = $_.Exception.Message
+        foreach ($Path in $Placed) { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue }
+        foreach ($Entry in $Retired) {
+            Rename-Item -LiteralPath $Entry.Aside -NewName (Split-Path $Entry.Original -Leaf) -ErrorAction SilentlyContinue
+        }
+        Fail "Could not replace the installed files ($Reason); the existing installation was left unchanged."
+    }
+    foreach ($Entry in $Retired) {
+        Remove-Item -LiteralPath $Entry.Aside -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Check mode: print the latest release version and nothing else, then stop
+# without installing. `wally update` and its update-available notice read it.
+# An environment variable rather than a flag, because `irm ... | iex` passes
+# no arguments.
+$CheckOnly = $env:WALLY_INSTALL_CHECK -eq '1'
+
 # Two overrides, for release tests and mirrors rather than everyday use --
 # the same shape and names as install.sh's:
 #   WALLY_INSTALL_VERSION      install that release instead of the latest
@@ -60,12 +103,12 @@ if ($env:WALLY_INSTALL_VERSION) {
         Fail "WALLY_INSTALL_VERSION must look like 1.2.3, not '$($env:WALLY_INSTALL_VERSION)'"
     }
     $Release = $null
-    Write-Info "Installing v$Version"
+    if (-not $CheckOnly) { Write-Info "Installing v$Version" }
 } else {
     if ($env:WALLY_INSTALL_BASE_URL) {
         Fail 'WALLY_INSTALL_BASE_URL needs WALLY_INSTALL_VERSION: a mirror has no latest-release lookup'
     }
-    Write-Info 'Checking latest Wally release...'
+    if (-not $CheckOnly) { Write-Info 'Checking latest Wally release...' }
     try {
         $Release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
     } catch {
@@ -73,7 +116,12 @@ if ($env:WALLY_INSTALL_VERSION) {
     }
     $Version = "$($Release.tag_name)" -replace '^v', ''
     if (-not $Version) { Fail 'Could not determine latest release version. Check your internet connection.' }
-    Write-Info "Latest version: v$Version"
+    if (-not $CheckOnly) { Write-Info "Latest version: v$Version" }
+}
+
+if ($CheckOnly) {
+    Write-Output $Version
+    return
 }
 
 # PROCESSOR_ARCHITECTURE reports the process, not the machine, so a 32-bit host
@@ -187,20 +235,11 @@ try {
 
     $InstallParent = Split-Path $InstallDir -Parent
     New-Item -ItemType Directory -Path $InstallParent -Force | Out-Null
-    $Backup = "$InstallDir.previous"
-    Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $InstallDir) {
-        Move-Item -LiteralPath $InstallDir -Destination $Backup
-    }
-    try {
+        Update-InPlace $Candidate $InstallDir
+    } else {
         Move-Item -LiteralPath $Candidate -Destination $InstallDir
-    } catch {
-        if (Test-Path -LiteralPath $Backup) {
-            Move-Item -LiteralPath $Backup -Destination $InstallDir
-        }
-        throw
     }
-    Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue
 } finally {
     Remove-Item -LiteralPath $Temp -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -217,14 +256,18 @@ $Entries = @()
 if ($UserPath) { $Entries = @($UserPath -split ';' | Where-Object { $_ }) }
 if ($Entries -contains $InstallDir) {
     Write-Ok "$InstallDir is already on your PATH"
+    $PathChanged = $false
 } else {
     [Environment]::SetEnvironmentVariable('Path', (($Entries + $InstallDir) -join ';'), 'User')
     Write-Ok "Added $InstallDir to your PATH"
+    $PathChanged = $true
 }
 
 Write-Ok "Wally v$Version installed successfully"
 Write-Host ''
-Write-Warn 'Open a new terminal before running wally. This one was started with the old PATH.'
+if ($PathChanged) {
+    Write-Warn 'Open a new terminal before running wally. This one was started with the old PATH.'
+}
 Write-Host ''
 Write-Info 'Getting started:'
 Write-Host '    wally models list --all       every model in the catalog'

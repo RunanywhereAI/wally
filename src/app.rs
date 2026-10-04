@@ -175,6 +175,36 @@ fn is_passthrough_command(token: &str) -> bool {
     NAMES.contains(&token)
 }
 
+/// The commands that end with the update-available notice: every command on
+/// the help page except `update` (it is the update) and `uninstall` (there is
+/// nothing left to update). Help pages show it too, from run().
+fn shows_update_notice(path: &[String]) -> bool {
+    const NAMES: &[&str] = &["run", "serve", "models", "account", "about"];
+    path.first()
+        .is_some_and(|name| NAMES.contains(&name.as_str()) || is_passthrough_command(name))
+}
+
+/// The update-available notice, unless `argv` asked for JSON or quiet output.
+fn update_notice(argv: &[String], no_color_requested: bool) {
+    let flags = root_flags_before_passthrough(argv);
+    crate::commands::show_update_notice(
+        flags.contains(&"--json"),
+        flags.iter().any(|f| *f == "-q" || *f == "--quiet"),
+        no_color_requested,
+    );
+}
+
+/// wally's tokens on a parsed command line: everything before the `--` that
+/// hands the rest to a wrapped tool, so the tool's own `--json` or `-q` is not
+/// read as wally's. `argv` includes the program name at index 0.
+fn root_flags_before_passthrough(argv: &[String]) -> Vec<&str> {
+    argv.iter()
+        .skip(1)
+        .take_while(|token| *token != "--")
+        .map(String::as_str)
+        .collect()
+}
+
 /// wally's own flags on those subcommands. `-m`/`--model` take a following
 /// value; the rest are booleans. The `=` forms carry their value inline.
 fn consumes_following_value(token: &str) -> bool {
@@ -289,6 +319,7 @@ fn restore_stale_desktop_gateway(argv: &[String]) {
 /// Run wally with `args` (program name at index 0). Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     restore_stale_desktop_gateway(args);
+    crate::commands::sweep_replaced_files();
 
     // `-u`/`-U` top-level shortcuts, guarded to the one shape that can't be
     // confused with a subcommand's own arguments: the entire command line is
@@ -297,7 +328,7 @@ pub fn run(args: &[String]) -> i32 {
     if args.len() == 2 {
         let only_arg = args[1].as_str();
         if only_arg == "-u" || only_arg == "--update" {
-            let code = crate::commands::run_update(false);
+            let code = crate::commands::run_update();
             bootstrap::shutdown();
             return code;
         }
@@ -305,7 +336,7 @@ pub fn run(args: &[String]) -> i32 {
             // This shortcut is exactly one bare arg (args.len() == 2 above),
             // so it can never carry a `--home` override; an empty string
             // preserves the shortcut's existing default-home behavior.
-            let code = crate::commands::run_uninstall(false, "");
+            let code = crate::commands::run_uninstall(false, false, "");
             bootstrap::shutdown();
             return code;
         }
@@ -356,12 +387,14 @@ pub fn run(args: &[String]) -> i32 {
         {
             let text = app.render_help(&[args[2].clone()], color_enabled(no_color_requested));
             output::result_line(text.trim_end_matches('\n'));
+            update_notice(args, no_color_requested);
             bootstrap::shutdown();
             return 0;
         }
         // No such command (or none given): fall back to the top-level help.
         let text = app.render_help(&[], color_enabled(no_color_requested));
         output::result_line(text.trim_end_matches('\n'));
+        update_notice(args, no_color_requested);
         bootstrap::shutdown();
         return 0;
     }
@@ -382,14 +415,19 @@ pub fn run(args: &[String]) -> i32 {
                 // reproduces the doubled newline exactly.
                 let text = app.render_help(&[], color_enabled(no_color_requested));
                 output::status_line(&text);
+                update_notice(&forwarded, no_color_requested);
                 0
             } else {
+                if shows_update_notice(&path) {
+                    update_notice(&forwarded, no_color_requested);
+                }
                 code
             }
         }
         Outcome::Help { path } => {
             let text = app.render_help(&path, color_enabled(no_color_requested));
             output::result_line(text.trim_end_matches('\n'));
+            update_notice(&forwarded, no_color_requested);
             0
         }
         Outcome::Version { text } => {
@@ -428,4 +466,41 @@ fn print_parse_error_help(app: &App, message: &str, path: &[String], no_color_re
     output::error_line(message);
     let text = app.render_help(path, color_enabled(no_color_requested));
     eprint!("{}", text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(tokens: &[&str]) -> Vec<String> {
+        tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn update_notice_shows_on_help_page_commands_only() {
+        for name in [
+            "run",
+            "serve",
+            "models",
+            "account",
+            "about",
+            "opencode",
+            "claude-code",
+        ] {
+            assert!(shows_update_notice(&argv(&[name])), "{name}");
+        }
+        for name in ["update", "uninstall", "bench", "llm"] {
+            assert!(!shows_update_notice(&argv(&[name])), "{name}");
+        }
+        assert!(!shows_update_notice(&[]));
+    }
+
+    #[test]
+    fn root_flags_stop_at_the_passthrough_separator() {
+        let line = argv(&["wally", "--json", "opencode", "--", "--quiet"]);
+        assert_eq!(
+            root_flags_before_passthrough(&line),
+            vec!["--json", "opencode"]
+        );
+    }
 }

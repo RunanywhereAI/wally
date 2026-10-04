@@ -19,6 +19,8 @@ pub struct CatalogModel {
     pub max_output: i64,
     pub input_per_mtok: i64,
     pub output_per_mtok: i64,
+    /// What a prompt token read from the server's cache costs.
+    pub cached_input_per_mtok: i64,
 }
 
 /// Moves the entry whose id is `primary` to the front, or inserts a bare one
@@ -53,25 +55,26 @@ pub fn catalog_models_with(
 
     let (_, models, _) = console.fetch_models(console_url, access_token);
     let (_, prices, _) = console.fetch_catalog(console_url, access_token);
-    let price_for = |id: &str| -> (i64, i64) {
+    let price_for = |id: &str| -> (i64, i64, i64) {
         prices
             .iter()
             .find(|p| p.id == id)
-            .map(|p| (p.input_per_mtok, p.output_per_mtok))
-            .unwrap_or((0, 0))
+            .map(|p| (p.input_per_mtok, p.output_per_mtok, p.cached_input_per_mtok))
+            .unwrap_or((0, 0, 0))
     };
 
     for info in &models {
         if info.id.is_empty() {
             continue;
         }
-        let (in_price, out_price) = price_for(&info.id);
+        let (in_price, out_price, cached_price) = price_for(&info.id);
         out.push(CatalogModel {
             id: info.id.clone(),
             context_window: info.context_window,
             max_output: info.max_output_tokens,
             input_per_mtok: in_price,
             output_per_mtok: out_price,
+            cached_input_per_mtok: cached_price,
         });
     }
     primary_first(&mut out, primary);
@@ -108,6 +111,7 @@ pub fn catalog_models_for(endpoint: &Endpoint, primary: &str) -> Vec<CatalogMode
             max_output: output,
             input_per_mtok: 0,
             output_per_mtok: 0,
+            cached_input_per_mtok: 0,
         }];
     }
     catalog_models(&endpoint.console_url, &endpoint.api_key, primary)
