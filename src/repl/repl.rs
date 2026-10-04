@@ -21,6 +21,13 @@ pub struct LineEditor {
     history_path: String,
 }
 
+/// Set while a prompt read is in flight and Ctrl-C arrives: the read then
+/// resolves to an empty line (the REPL reprompts) instead of the process
+/// dying with exit 130, which is what Ctrl-C at the `»` prompt used to do.
+#[cfg(windows)]
+static PROMPT_INTERRUPTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// MSVC's <filesystem>/<fstream> decode a narrow std::string through the ANSI
 /// code page in the C++; Rust's std::path is always UTF-8-clean, so no
 /// equivalent conversion is needed here.
@@ -59,13 +66,13 @@ impl LineEditor {
         }
     }
 
-    /// `None` on EOF (Ctrl-D). Empty lines are returned as empty strings.
+    /// `None` on EOF (Ctrl-D). Ctrl-C cancels the line and reprompts, so it
+    /// resolves to an empty line; empty lines are returned as empty strings.
     pub fn read_line(&mut self, prompt: &str) -> Option<String> {
         match self.editor.readline(prompt) {
             Ok(line) => Some(line),
-            // EOF / Ctrl-D and Ctrl-C both return NULL from linenoise; mirror
-            // that here so both keys end the REPL the same way.
-            Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => None,
+            Err(ReadlineError::Eof) => None,
+            Err(ReadlineError::Interrupted) => Some(String::new()),
             Err(_) => None,
         }
     }
@@ -99,22 +106,28 @@ impl LineEditor {
         }
     }
 
-    /// `None` on EOF (Ctrl-D). Empty lines are returned as empty strings.
+    /// `None` on EOF (Ctrl-D). Ctrl-C cancels the line and reprompts: the
+    /// guard below swallows it for the duration of the read (otherwise the
+    /// process dies), and the flag turns it into an empty line. A read error
+    /// with no interrupt is still EOF.
     pub fn read_line(&mut self, prompt: &str) -> Option<String> {
         use std::io::Write;
         eprint!("{prompt}");
         let _ = std::io::stderr().flush();
+        let _prompt_guard = crate::util::interrupt::on_interrupt(|| {
+            PROMPT_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        PROMPT_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
         let mut line = String::new();
-        match std::io::stdin().read_line(&mut line) {
-            Ok(0) => None,
-            Ok(_) => {
-                while line.ends_with('\n') || line.ends_with('\r') {
-                    line.pop();
-                }
-                Some(line)
-            }
-            Err(_) => None,
+        let read = std::io::stdin().read_line(&mut line);
+        while line.ends_with('\n') || line.ends_with('\r') {
+            line.pop();
         }
+        resolve_windows_read(
+            PROMPT_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst),
+            read,
+            line,
+        )
     }
 
     /// Record a line in history (skips empties/duplicates of last entry).
@@ -129,5 +142,55 @@ impl LineEditor {
                 let _ = writeln!(file, "{line}");
             }
         }
+    }
+}
+
+/// What a Windows prompt read resolves to. An interrupt (Ctrl-C) wins over
+/// whatever the read did, even a half-typed line: it becomes the empty line
+/// the REPL loop reprompts on. A clean EOF ends the session; anything else
+/// is the typed line, and a bare read error exits like EOF before it.
+#[cfg(windows)]
+fn resolve_windows_read(
+    interrupted: bool,
+    read: std::io::Result<usize>,
+    line: String,
+) -> Option<String> {
+    if interrupted {
+        return Some(String::new());
+    }
+    match read {
+        Ok(0) => None,
+        Ok(_) => Some(line),
+        Err(_) => None,
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::resolve_windows_read;
+
+    #[test]
+    fn interrupt_discards_even_a_half_typed_line() {
+        assert_eq!(
+            resolve_windows_read(true, Ok(4), "half".to_string()),
+            Some(String::new())
+        );
+        assert_eq!(
+            resolve_windows_read(true, Err(std::io::Error::other("gone")), String::new()),
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn clean_reads_keep_prior_meaning() {
+        assert_eq!(
+            resolve_windows_read(false, Ok(4), "hi".to_string()),
+            Some("hi".to_string())
+        );
+        assert_eq!(resolve_windows_read(false, Ok(0), String::new()), None);
+        assert_eq!(
+            resolve_windows_read(false, Err(std::io::Error::other("gone")), String::new()),
+            None
+        );
     }
 }

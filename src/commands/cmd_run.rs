@@ -732,6 +732,7 @@ fn print_repl_help() {
     status_line("  /set max-output-tokens <n>  set the generation budget");
     status_line("  /show                       show current settings");
     status_line("  /bye                        exit (also Ctrl-D)");
+    status_line("Ctrl-C cancels the current turn");
     status_line("note: turns are independent — no conversation memory yet");
 }
 
