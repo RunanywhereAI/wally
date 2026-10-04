@@ -1349,9 +1349,14 @@ mod tests {
             ..GlobalOptions::default()
         };
 
-        // A catalog decision row is local; an LLM row in the same catalog is
-        // not (it would fail at the decision component).
-        assert_eq!(resolve_local_transport("clef-flash-9b", &options), Ok(true));
+        // A catalog decision row is local on a build whose linked kit can run
+        // it; an LLM row in the same catalog is never local (it would fail at
+        // the decision component). The GGUF row is llama.cpp-gated, so the
+        // commons-only Windows ARM64 kit filters it out.
+        assert_eq!(
+            resolve_local_transport("clef-flash-9b", &options),
+            Ok(cfg!(wally_has_llamacpp))
+        );
         // The MLX row is platform-gated (Apple only), so off-macOS the
         // catalog filter hides it and it does not resolve locally.
         assert_eq!(
