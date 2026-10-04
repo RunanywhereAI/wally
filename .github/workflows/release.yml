@@ -10,6 +10,11 @@ on:
       version:
         description: 'Version to release (e.g. 0.5.0 — no leading v)'
         required: true
+      dry_run:
+        description: 'Build, package and verify everything without creating a tag or release (version must match versions.toml)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -21,8 +26,37 @@ env:
 # production console defaults in credentials.cpp). The configure→build→package
 # sequence lives in .github/actions/build-wally; e2e runs on the binary it
 # produced, so the bottle is built exactly once.
+#
+# Dry run: dispatch with dry_run=true and the current versions.toml version.
+# Everything builds, packages and verifies, but the final release step is
+# skipped, so no tag and no GitHub Release are created.
 jobs:
+  validate-dispatch:
+    # Fails fast on a bad manual input instead of burning five platform
+    # builds. Always runs so `needs` below never sees a skipped job on push.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate dispatch inputs
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be X.Y.Z (no leading v); got '$VERSION'" >&2
+            exit 1
+          fi
+          pinned="$(awk '/^\[product\]/{p=1} p && /^version = "/{gsub(/"/, "", $3); print $3; exit}' versions.toml)"
+          if [[ "$DRY_RUN" == "true" && "$VERSION" != "$pinned" ]]; then
+            echo "::error::dry_run needs version=$pinned (versions.toml [product]); got '$VERSION'" >&2
+            exit 1
+          fi
   macos:
+    needs: [validate-dispatch]
     # SDK Package.swift is swift-tools-version 6.2 (Xcode 26).
     runs-on: macos-26
     timeout-minutes: 90
@@ -93,6 +127,7 @@ jobs:
           path: dist/wally-*-macos-arm64*.tar.gz*
 
   windows-arm64:
+    needs: [validate-dispatch]
     runs-on: windows-11-arm
     timeout-minutes: 60
     strategy:
@@ -167,6 +202,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    needs: [validate-dispatch]
     runs-on: windows-2022
     timeout-minutes: 60
     strategy:
@@ -239,6 +275,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    needs: [validate-dispatch]
     # Release compatibility floor. Ubuntu 24.04 produced a bottle requiring
     # GLIBC_2.38 and GLIBCXX_3.4.31/32, which fails on Ubuntu 22.04.
     runs-on: ubuntu-22.04
@@ -316,6 +353,7 @@ jobs:
           path: dist/wally-*-linux-x86_64*.tar.gz*
 
   linux-arm64:
+    needs: [validate-dispatch]
     # Built on the arm64 compat floor (glibc 2.34) so wally's own code stays
     # low; the kit's Sherpa prebuilt (glibc 2.38) sets the bottle floor. The
     # arm64 kit's cpp-httplib (zstd, brotli) and libarchive (bz2) reference
@@ -455,6 +493,10 @@ jobs:
             ( cd artifacts && shasum -a 256 "$f" > "${f}.sha256" )
           done
       - name: Create the release
+        # Dry runs stop here: bottles and metadata stay workflow artifacts,
+        # no tag and no GitHub Release. On tag pushes `inputs` is empty, so
+        # this still runs for real releases.
+        if: ${{ inputs.dry_run != true }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', github.event.inputs.version) }}
