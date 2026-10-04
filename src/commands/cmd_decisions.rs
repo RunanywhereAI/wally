@@ -543,7 +543,7 @@ fn prompt_decisions_route(local_id: &str) -> DecisionsRoute {
         " (needs `wally account login` first)".to_string()
     };
     eprint!(
-        "How should decisions be scored? One-time question, your answer is saved as the default.\n  1) cloud: hosted {} model{}\n  2) local: on-device {}, data stays on this machine  <-- suggested\nChoice [1/2, Enter=2]: ",
+        "How should decisions be scored? One-time question, your answer is saved as the default.\n  1) cloud: hosted {} model{}\n  2) local: on-device {}, data stays on this machine\nChoice [1/2, Enter=2]: ",
         DEFAULT_MODEL, login_hint, local_id
     );
     let _ = std::io::stderr().flush();
