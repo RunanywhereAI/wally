@@ -86,6 +86,12 @@ fn run_serve(
         return 1;
     }
 
+    // Decision checkpoints get their own endpoint: rac_server is LLM-only,
+    // so a decision model reference serves POST /v1/decisions in-process.
+    if !reference.is_empty() && is_decision_reference(reference) {
+        return run_serve_decisions(options, reference, host, port);
+    }
+
     let model = match ensure_model_ready(
         options,
         if reference.is_empty() {
@@ -208,6 +214,269 @@ fn run_serve(
     exit_code
 }
 
+/// A catalog id or alias naming an on-disk decision model (clef rows). Paths
+/// to GGUF files are not covered: they skip the catalog and stay on the
+/// rac_server path, which refuses them the way it always has.
+#[cfg(wally_has_server)]
+fn is_decision_reference(reference: &str) -> bool {
+    matches!(
+        crate::catalog::find(reference),
+        Some(entry) if entry.category == crate::io::proto::v1::ModelCategory::Decision
+    )
+}
+
+/// Same 1 MiB cap the CLI enforces on request bodies.
+#[cfg(wally_has_server)]
+const MAX_SERVE_BODY_BYTES: usize = 1024 * 1024;
+
+/// Split an HTTP/1 head into method, path (query stripped) and content
+/// length. Header names match case-insensitively; anything unreadable is a
+/// 400 with the reason.
+#[cfg(wally_has_server)]
+fn parse_head(head: &[u8]) -> Result<(String, String, usize), String> {
+    let text = std::str::from_utf8(head).map_err(|_| "unreadable request head".to_string())?;
+    let mut lines = text.split("\r\n");
+    let request_line = lines.next().ok_or_else(|| "empty request".to_string())?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| "bad request line".to_string())?
+        .to_string();
+    let target = parts.next().ok_or_else(|| "bad request line".to_string())?;
+    let path = target.split('?').next().unwrap_or(target).to_string();
+    let mut length: usize = 0;
+    for line in lines {
+        if let Some(value) = line
+            .split_once(':')
+            .filter(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+            .map(|(_, value)| value)
+        {
+            length = value
+                .trim()
+                .parse()
+                .map_err(|_| "bad content-length".to_string())?;
+        }
+    }
+    Ok((method, path, length))
+}
+
+#[cfg(wally_has_server)]
+fn write_response(stream: &mut std::net::TcpStream, status: u16, reason: &str, body: &str) {
+    use std::io::Write;
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.flush();
+}
+
+#[cfg(wally_has_server)]
+fn json_error(message: &str) -> String {
+    let mut json = crate::io::output::JsonWriter::new();
+    json.begin_object().field_str("error", message).end_object();
+    json.str().to_string()
+}
+
+/// One connection, served synchronously: the decision handle is not shared
+/// across threads, so requests queue instead of racing inside the engine.
+#[cfg(wally_has_server)]
+fn handle_decisions_connection(
+    stream: &mut std::net::TcpStream,
+    loaded: &crate::commands::cmd_decisions::LoadedDecisions,
+) {
+    use std::io::Read;
+    let mut raw: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 4096];
+    let head_end = loop {
+        match stream.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => {
+                raw.extend_from_slice(&buf[..n]);
+                if raw.len() > 65536 {
+                    write_response(
+                        stream,
+                        431,
+                        "Request Header Fields Too Large",
+                        &json_error("headers too large"),
+                    );
+                    return;
+                }
+                if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            }
+            Err(_) => return,
+        }
+    };
+    let (method, path, length) = match parse_head(&raw[..head_end]) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            write_response(stream, 400, "Bad Request", &json_error(&message));
+            return;
+        }
+    };
+    if path == "/health" && method == "GET" {
+        let mut json = crate::io::output::JsonWriter::new();
+        json.begin_object().field_str("status", "ok").end_object();
+        write_response(stream, 200, "OK", &json.str());
+        return;
+    }
+    if method != "POST" || path != "/v1/decisions" {
+        write_response(stream, 404, "Not Found", &json_error("not found"));
+        return;
+    }
+    if length > MAX_SERVE_BODY_BYTES {
+        write_response(
+            stream,
+            413,
+            "Content Too Large",
+            &json_error("request body exceeds 1 MiB"),
+        );
+        return;
+    }
+    let mut body = raw[head_end..].to_vec();
+    while body.len() < length {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => body.extend_from_slice(&buf[..n]),
+            Err(_) => break,
+        }
+    }
+    if body.len() < length {
+        write_response(
+            stream,
+            400,
+            "Bad Request",
+            &json_error("truncated request body"),
+        );
+        return;
+    }
+    body.truncate(length);
+    let value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            write_response(
+                stream,
+                400,
+                "Bad Request",
+                &json_error("invalid request JSON"),
+            );
+            return;
+        }
+    };
+    let unknown = crate::commands::cmd_decisions::unknown_request_fields(&value);
+    if !unknown.is_empty() {
+        write_response(
+            stream,
+            400,
+            "Bad Request",
+            &json_error(&format!(
+                "request has fields the decisions contract does not define: {}",
+                unknown.join(", ")
+            )),
+        );
+        return;
+    }
+    let request = match crate::account::decisions_contract::DecisionsRequest::from_json(&value) {
+        Ok(request) => request,
+        Err(error) => {
+            write_response(
+                stream,
+                400,
+                "Bad Request",
+                &json_error(&format!(
+                    "request does not match the decisions contract: {error}"
+                )),
+            );
+            return;
+        }
+    };
+    if let Err(error) = crate::commands::cmd_decisions::validate(&request) {
+        write_response(stream, 400, "Bad Request", &json_error(&error));
+        return;
+    }
+    // The served model answers every request; a body naming another model is
+    // scored by this server's model, the way `serve` owns its one model.
+    match crate::commands::cmd_decisions::score_loaded(loaded, &request) {
+        Ok(response) => {
+            write_response(
+                stream,
+                200,
+                "OK",
+                &crate::io::json::dump(&response.to_json()),
+            );
+        }
+        Err(message) => {
+            write_response(stream, 500, "Internal Server Error", &json_error(&message));
+        }
+    }
+}
+
+/// Serve a local decision checkpoint over HTTP: one model loaded once, then
+/// POST /v1/decisions per request plus GET /health. Mirrors the CLI's
+/// validation so the same body behaves the same in both.
+#[cfg(wally_has_server)]
+fn run_serve_decisions(options: &GlobalOptions, reference: &str, host: &str, port: u16) -> i32 {
+    if bootstrap::bootstrap(options).is_err() {
+        return 1;
+    }
+
+    let model = match ensure_model_ready(options, reference) {
+        Ok(model) => model,
+        Err(code) => return code,
+    };
+    let loaded = match crate::commands::cmd_decisions::load_decisions_component(&model) {
+        Ok(loaded) => loaded,
+        Err(message) => {
+            error_line(&message);
+            return 1;
+        }
+    };
+
+    let listener = match std::net::TcpListener::bind((host, port)) {
+        Ok(listener) => listener,
+        Err(error) => {
+            error_line(&format!("could not bind {host}:{port}: {error}"));
+            return 1;
+        }
+    };
+    if listener.set_nonblocking(true).is_err() {
+        error_line("could not set the listener non-blocking");
+        return 1;
+    }
+
+    status_line(&format!(
+        "serving {} (decision model, single model)",
+        model.model_id
+    ));
+    status_line(&format!("Decisions API: http://{host}:{port}/v1/decisions"));
+    status_line(&format!("health:        http://{host}:{port}/health"));
+    status_line("Ctrl-C to stop");
+
+    SERVE_STOP.store(false, Ordering::SeqCst);
+    let _interrupt = crate::util::interrupt::on_interrupt(serve_signal_handler);
+    loop {
+        if SERVE_STOP.load(Ordering::SeqCst) {
+            break;
+        }
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let _ = stream.set_nonblocking(false);
+                handle_decisions_connection(&mut stream, &loaded);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(error) => {
+                error_line(&format!("accept failed: {error}"));
+                break;
+            }
+        }
+    }
+    0
+}
+
 pub fn register_serve(app: &mut App) {
     let cmd = app.add_subcommand("serve", "Serve a model over an OpenAI-compatible API");
     #[cfg(wally_has_server)]
@@ -312,5 +581,31 @@ mod tests {
         assert_eq!(config.request_timeout_seconds, 300);
         assert_eq!(config.max_concurrent_requests, 4);
         assert_eq!(config.verbose, sys::RAC_FALSE as sys::rac_bool_t);
+    }
+
+    #[test]
+    fn head_parses_method_path_and_length() {
+        let (method, path, length) =
+            parse_head(b"POST /v1/decisions?x=1 HTTP/1.1\r\nHost: a\r\nContent-Length: 12\r\n\r\n")
+                .expect("head parses");
+        assert_eq!(method, "POST");
+        assert_eq!(path, "/v1/decisions");
+        assert_eq!(length, 12);
+    }
+
+    #[test]
+    fn head_rejects_garbage() {
+        assert!(parse_head(b"").is_err());
+        assert!(parse_head(b"GET\r\n\r\n").is_err());
+        assert!(parse_head(b"POST /x HTTP/1.1\r\nContent-Length: lots\r\n\r\n").is_err());
+    }
+
+    #[test]
+    fn decision_ids_route_to_the_decisions_server() {
+        assert!(is_decision_reference("clef-flash-9b"));
+        assert!(is_decision_reference("clef-flash-mlx"));
+        assert!(!is_decision_reference("qwen3-4b-instruct-2507"));
+        assert!(!is_decision_reference("eve"));
+        assert!(!is_decision_reference("no-such-model"));
     }
 }

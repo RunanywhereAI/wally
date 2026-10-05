@@ -78,7 +78,7 @@ fn validate_model_shape(model: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate(request: &contract::DecisionsRequest) -> Result<(), String> {
+pub(crate) fn validate(request: &contract::DecisionsRequest) -> Result<(), String> {
     nonblank(&request.input, "input", 1_000_000)?;
     nonblank(&request.model, "model", 128)?;
     if !(1..=128).contains(&request.questions.len()) {
@@ -354,7 +354,7 @@ fn collect_unknown_fields(
 
 /// Fields of a `--request` document that the contract's DecisionsRequest
 /// does not define, as dotted paths (`questions[0].opitons`).
-fn unknown_request_fields(value: &serde_json::Value) -> Vec<String> {
+pub(crate) fn unknown_request_fields(value: &serde_json::Value) -> Vec<String> {
     let Ok(root) = serde_json::from_str::<serde_json::Value>(CONTRACT) else {
         return Vec::new();
     };
@@ -585,7 +585,10 @@ fn transport_from_flags(p: &crate::cli::Parsed) -> Result<Transport, String> {
 /// registered id is local only when that category is Decision; an HF-pulled
 /// LLM registered earlier must keep going to the hosted transport, and a
 /// hosted decision id (`eve`) is never registered locally at all.
-fn resolve_local_transport(reference: &str, options: &GlobalOptions) -> Result<bool, String> {
+pub(crate) fn resolve_local_transport(
+    reference: &str,
+    options: &GlobalOptions,
+) -> Result<bool, String> {
     if let Some(entry) = crate::catalog::find(reference) {
         return Ok(entry.category == v1::ModelCategory::Decision);
     }
@@ -778,6 +781,106 @@ fn local_request(request: &contract::DecisionsRequest) -> v1::DecisionRequest {
 /// Score through the local component: resolve the model, load it through the
 /// lifecycle (auto-pull when missing), drive the decision component, and hand
 /// the mapped response back to the shared renderer.
+/// A created, model-loaded decision component. Dropping unloads nothing
+/// extra (unload is per-model on reload); destroy always runs exactly once.
+pub(crate) struct LoadedDecisions {
+    handle: sys::rac_handle_t,
+}
+
+impl Drop for LoadedDecisions {
+    fn drop(&mut self) {
+        // SAFETY: handle came from rac_decision_component_create and is
+        // destroyed exactly once here; nothing else touches it afterwards.
+        unsafe { sys::rac_decision_component_destroy(self.handle) };
+    }
+}
+
+/// Create the component and load `model` into it. Error strings match what
+/// run_local printed inline, so both callers report identically.
+pub(crate) fn load_decisions_component(
+    model: &crate::commands::model_setup::ResolvedModelPaths,
+) -> Result<LoadedDecisions, String> {
+    let mut handle: sys::rac_handle_t = std::ptr::null_mut();
+    // SAFETY: `handle` is a valid out-pointer for the duration of the call.
+    let rc = unsafe { sys::rac_decision_component_create(&mut handle) };
+    if rc != sys::SUCCESS || handle.is_null() {
+        return Err("failed to create decision component".to_string());
+    }
+    let loaded = LoadedDecisions { handle };
+
+    let model_path = CString::new(model.primary_path.as_str());
+    let model_id = CString::new(model.model_id.as_str());
+    let model_name = CString::new(model.display_name.as_str());
+    let (model_path, model_id, model_name) = match (model_path, model_id, model_name) {
+        (Ok(path), Ok(id), Ok(name)) => (path, id, name),
+        _ => return Err("model path, id or name contains a NUL byte".to_string()),
+    };
+    // SAFETY: handle is live; the three C strings outlive this call.
+    let rc = unsafe {
+        sys::rac_decision_component_load_model(
+            loaded.handle,
+            model_path.as_ptr(),
+            model_id.as_ptr(),
+            model_name.as_ptr(),
+        )
+    };
+    if rc != sys::SUCCESS {
+        return Err(format!(
+            "failed to load decision model: {}",
+            out::describe_result(rc)
+        ));
+    }
+    Ok(loaded)
+}
+
+/// Score one request on an already-loaded component. Error strings match
+/// what run_local printed inline (partial results fail naming the rc, a
+/// missing answer id fails naming the id).
+pub(crate) fn score_loaded(
+    loaded: &LoadedDecisions,
+    request: &contract::DecisionsRequest,
+) -> Result<contract::DecisionsResponse, String> {
+    let proto_request = local_request(request);
+    let bytes = serialize(&proto_request);
+    let mut out_buffer = ProtoBuffer::new();
+    // SAFETY: handle is live and loaded; bytes/out_buffer are valid for the
+    // duration of the call.
+    let proto_rc = unsafe {
+        sys::rac_decision_component_decide_proto(
+            loaded.handle,
+            bytes.as_ptr(),
+            bytes.len(),
+            out_buffer.as_mut_ptr(),
+        )
+    };
+    let result = match parse_proto_buffer::<v1::DecisionResult>(out_buffer) {
+        Ok(result) if proto_rc == sys::SUCCESS => result,
+        Ok(result) if !result.answers.is_empty() => {
+            return Err(format!(
+                "decision failed: {} ({} of {} questions answered)",
+                out::describe_result(proto_rc),
+                result.answers.len(),
+                request.questions.len()
+            ));
+        }
+        Ok(_) => return Err("decision failed: ".to_string()),
+        Err(error) => return Err(format!("decision failed: {error}")),
+    };
+
+    // Every requested question must carry an answer, whatever the rc said;
+    // a missing id is the same partial failure the arm above rejects.
+    if let Some((missing, _)) = question_views(request)
+        .into_iter()
+        .find(|(id, _)| !result.answers.iter().any(|answer| answer.id == *id))
+    {
+        return Err(format!(
+            "decision failed: no answer for question '{missing}'"
+        ));
+    }
+
+    Ok(local_response(&result, request))
+}
+
 fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json: bool) -> i32 {
     if bootstrap::bootstrap(options).is_err() {
         return 1;
@@ -791,108 +894,23 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
         Err(exit_code) => return exit_code,
     };
 
-    let mut handle: sys::rac_handle_t = std::ptr::null_mut();
-    // SAFETY: `handle` is a valid out-pointer for the duration of the call.
-    let rc = unsafe { sys::rac_decision_component_create(&mut handle) };
-    if rc != sys::SUCCESS || handle.is_null() {
-        out::error_line("failed to create decision component");
-        return 1;
-    }
-
-    let model_path = CString::new(model.primary_path.as_str());
-    let model_id = CString::new(model.model_id.as_str());
-    let model_name = CString::new(model.display_name.as_str());
-    let (model_path, model_id, model_name) = match (model_path, model_id, model_name) {
-        (Ok(path), Ok(id), Ok(name)) => (path, id, name),
-        _ => {
-            out::error_line("model path, id or name contains a NUL byte");
-            // SAFETY: handle was just created above.
-            unsafe { sys::rac_decision_component_destroy(handle) };
+    let loaded = match load_decisions_component(&model) {
+        Ok(loaded) => loaded,
+        Err(message) => {
+            out::error_line(&message);
             return 1;
         }
     };
-    // SAFETY: handle is the live component created above; the three C strings
-    // outlive this call.
-    let rc = unsafe {
-        sys::rac_decision_component_load_model(
-            handle,
-            model_path.as_ptr(),
-            model_id.as_ptr(),
-            model_name.as_ptr(),
-        )
-    };
-    if rc != sys::SUCCESS {
-        out::error_line(&format!(
-            "failed to load decision model: {}",
-            out::describe_result(rc)
-        ));
-        // SAFETY: handle is the live component created above.
-        unsafe { sys::rac_decision_component_destroy(handle) };
-        return 1;
-    }
 
-    let proto_request = local_request(request);
-    let bytes = serialize(&proto_request);
-    let mut out_buffer = ProtoBuffer::new();
     let started = Instant::now();
-    // SAFETY: handle is the live, loaded component; bytes/out_buffer are valid
-    // for the duration of the call.
-    let proto_rc = unsafe {
-        sys::rac_decision_component_decide_proto(
-            handle,
-            bytes.as_ptr(),
-            bytes.len(),
-            out_buffer.as_mut_ptr(),
-        )
-    };
-    let result = match parse_proto_buffer::<v1::DecisionResult>(out_buffer) {
-        Ok(result) if proto_rc == sys::SUCCESS => result,
-        Ok(result) if !result.answers.is_empty() => {
-            // A non-success rc with answers in hand is a partial result: some
-            // question was refused (an over-window prompt, a bad span). The
-            // remaining answers are real but the request as a whole is not,
-            // and reporting exit 0 would tell a script the missing ids are
-            // authoritative "no answer". Fail instead, naming the rc.
-            out::error_line(&format!(
-                "decision failed: {} ({} of {} questions answered)",
-                out::describe_result(proto_rc),
-                result.answers.len(),
-                request.questions.len()
-            ));
-            // SAFETY: handle is the live component created above.
-            unsafe { sys::rac_decision_component_destroy(handle) };
-            return 1;
-        }
-        Ok(_) => {
-            out::error_line("decision failed: ");
-            // SAFETY: handle is the live component created above.
-            unsafe { sys::rac_decision_component_destroy(handle) };
-            return 1;
-        }
-        Err(error) => {
-            out::error_line(&format!("decision failed: {error}"));
-            // SAFETY: handle is the live component created above.
-            unsafe { sys::rac_decision_component_destroy(handle) };
+    let response = match score_loaded(&loaded, request) {
+        Ok(response) => response,
+        Err(message) => {
+            out::error_line(&message);
             return 1;
         }
     };
-    // SAFETY: handle is the live component created above; not used again.
-    unsafe { sys::rac_decision_component_destroy(handle) };
-
-    // Every requested question must carry an answer, whatever the rc said;
-    // a missing id is the same partial failure the arm above rejects.
-    if let Some((missing, _)) = question_views(request)
-        .into_iter()
-        .find(|(id, _)| !result.answers.iter().any(|answer| answer.id == *id))
-    {
-        out::error_line(&format!(
-            "decision failed: no answer for question '{missing}'"
-        ));
-        return 1;
-    }
-
     let latency_ms = started.elapsed().as_millis();
-    let response = local_response(&result, request);
     if json {
         out::result_line(&crate::io::json::dump(&response.to_json()));
     } else {
