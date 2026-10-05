@@ -602,8 +602,16 @@ mod tests {
 
     #[test]
     fn decision_ids_route_to_the_decisions_server() {
-        assert!(is_decision_reference("clef-flash-9b"));
-        assert!(is_decision_reference("clef-flash-mlx"));
+        // Catalog rows are platform-gated (Mlx on macOS only, LlamaCpp where
+        // linked), so the routing test asserts per-build truth, not macOS truth.
+        assert_eq!(
+            is_decision_reference("clef-flash-mlx"),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            is_decision_reference("clef-flash-9b"),
+            cfg!(wally_has_llamacpp)
+        );
         assert!(!is_decision_reference("qwen3-4b-instruct-2507"));
         assert!(!is_decision_reference("eve"));
         assert!(!is_decision_reference("no-such-model"));
