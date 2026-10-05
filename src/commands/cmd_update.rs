@@ -222,6 +222,7 @@ $latest = (Invoke-Expression $script | Out-String).Trim()"#;
 
 /// The latest release version from the installer's check mode, or None when
 /// the lookup failed or answered with something that is not a version.
+#[cfg(windows)]
 fn fetch_latest_version() -> Option<String> {
     #[cfg(not(windows))]
     let mut command = installer_command(&["--check".to_string()], Some(CHECK_TIMEOUT_SECS));
@@ -290,6 +291,7 @@ fn cache_path() -> Option<std::path::PathBuf> {
     Some(std::path::Path::new(&dir).join("update-check"))
 }
 
+#[cfg(windows)]
 fn write_cached_latest(latest: &str) {
     let Some(path) = cache_path() else { return };
     if let Some(parent) = path.parent() {
