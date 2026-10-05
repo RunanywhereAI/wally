@@ -21,11 +21,11 @@ kit_release_tag = "cpp-desktop-v0.20.38-4"
 idl_version = "1.5.0"
 idl_schema_sha256 = "faca2c22e518f3d41e534399b854bbbc9617d4a76511592a6013a888fdd3cf3d"
 idl_protoc_version = "35.1"
-kit_sha256_macos_arm64 = "2f6ce6c3942cdf413b32c7df7dcc586389fd1837a24eef03c1a8dcfd8b63f355"
-kit_sha256_windows_x64 = "30c2de5c3f76016931b706fbb46c7966e209d0da556db67c62b25c5f757f0aff"
-kit_sha256_windows_arm64 = "cb44e4f7a3b4211e202d1f5f463b45690cde632c149bb5fc45a580785af811ca"
-kit_sha256_linux_x64 = "6ce52c00e70def9a08c51cf14ba3b6b18db0e67524ceddd2bfda74046ebb20ca"
-kit_sha256_linux_arm64 = "a584652366c23eb63e43ee517aa042e57948729b06bb7e5cd22898759c61a3fa"
+kit_sha256_macos_arm64 = "99455b85d2b1bb9f801ee28367d6a79cba7174571029423345578404f0bc34ac"
+kit_sha256_windows_x64 = "5844175817a4be207cf0a138417b71f04cdd62f87e24c94fe44825a628380f8b"
+kit_sha256_windows_arm64 = "b796f58cd1b0d198d8325b9d50c7c0d4cbb4f031fd609f41581091254c05b7d7"
+kit_sha256_linux_x64 = "ad94544efa9a250d224b403820dcf6b85af8751d06df0f1f538a13244c41aed7"
+kit_sha256_linux_arm64 = "7fae5feb8ec7bd5d7ce63d064270c07f4e3d8c529378f35cd11204d134cae8f8"
 
 [swift]
 # The Apple MLX host's Swift SDK: sdk_package_version pins swift/Package.swift,
