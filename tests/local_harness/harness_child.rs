@@ -12,6 +12,17 @@ fn env_str(name: &str) -> String {
     env::var(name).unwrap_or_default()
 }
 
+/// Value following `flag` in argv, if present.
+fn argv_value(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2).find_map(|pair| {
+        if pair[0] == flag {
+            Some(pair[1].clone())
+        } else {
+            None
+        }
+    })
+}
+
 fn require(condition: bool, message: &str) -> Result<(), String> {
     if condition {
         Ok(())
@@ -184,7 +195,9 @@ fn run() -> Result<i32, String> {
         model = env_str("HERMES_INFERENCE_MODEL");
     } else if tool == "claude" {
         url = env_str("ANTHROPIC_BASE_URL");
-        model = env_str("ANTHROPIC_MODEL");
+        // The launcher passes the model as a `--model` flag; ANTHROPIC_MODEL
+        // is still honored as a fallback for older launches.
+        model = argv_value(&args, "--model").unwrap_or_else(|| env_str("ANTHROPIC_MODEL"));
         require(
             !env_str("CLAUDE_CODE_MAX_CONTEXT_TOKENS").is_empty(),
             "local context hint missing",
