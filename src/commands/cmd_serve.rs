@@ -319,7 +319,7 @@ fn handle_decisions_connection(
     if path == "/health" && method == "GET" {
         let mut json = crate::io::output::JsonWriter::new();
         json.begin_object().field_str("status", "ok").end_object();
-        write_response(stream, 200, "OK", &json.str());
+        write_response(stream, 200, "OK", json.str());
         return;
     }
     if method != "POST" || path != "/v1/decisions" {
