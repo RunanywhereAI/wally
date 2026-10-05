@@ -277,7 +277,9 @@ pub fn resolve(model: &str, options: &GlobalOptions, harness_command: &str) -> O
             } else {
                 harness_command
             };
-            out::status_line(&format!("Try: wally {command} -m qwen3-4b-instruct-2507"));
+            out::status_line(&format!(
+                "Try: wally {command} (without -m picks a certified default)"
+            ));
             return None;
         }
         // A directory with the manifest but no weights is a pull that did not

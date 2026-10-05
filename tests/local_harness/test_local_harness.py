@@ -128,7 +128,7 @@ def main():
                 "Tool calls or long-context operation may fail."
             ) in rejected.stderr, rejected.stderr
             assert (
-                "Try: wally opencode -m qwen3-4b-instruct-2507"
+                "Try: wally opencode (without -m picks a certified default)"
             ) in rejected.stderr, rejected.stderr
             assert not (root / "child.json").exists()
             if (root / "backend.json").exists():
