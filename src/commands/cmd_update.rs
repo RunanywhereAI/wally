@@ -9,9 +9,9 @@
 //!
 //! The same script answers a check with the latest release version alone:
 //! `install.sh --check`, or `install.ps1` under `WALLY_INSTALL_CHECK=1` (it is
-//! run as `irm | iex`, which passes no arguments). `--check-for-updates` and the
-//! one-line update-available notice both read that, so the version lookup
-//! lives in one place.
+//! run as `irm | iex`, which passes no arguments). The one-line
+//! update-available notice reads that, so the version lookup lives in one
+//! place.
 
 use crate::cli::App;
 use crate::io::output as out;
@@ -32,7 +32,7 @@ const SCRIPT_URL_ENV: &str = "WALLY_UPDATE_SCRIPT_URL";
 // How long a version lookup is trusted before the notice asks again.
 const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
-// Bounds the lookup so a dead network cannot hold `--check-for-updates`, or
+// Bounds the lookup so a dead network cannot hold a version check, or
 // leave a background check running, for long.
 const CHECK_TIMEOUT_SECS: &str = "10";
 
@@ -67,16 +67,8 @@ pub(crate) fn is_homebrew_managed(exe: &str) -> bool {
 
 pub fn register_update(app: &mut App) {
     let cmd = app.add_subcommand("update", "Update wally to the latest release");
-    cmd.add_flag(
-        "-c,--check-for-updates",
-        "Check for a newer release, then ask before installing it",
-    );
-    cmd.callback(|parsed, _options| {
-        let code = if parsed.flag("--check-for-updates") {
-            run_check_for_updates()
-        } else {
-            run_update()
-        };
+    cmd.callback(|_parsed, _options| {
+        let code = run_update();
         if code != 0 {
             return 1;
         }
@@ -173,38 +165,6 @@ pub fn sweep_replaced_files() {
 
 #[cfg(not(windows))]
 pub fn sweep_replaced_files() {}
-
-/// `wally update --check-for-updates`: say what is out, then ask before
-/// installing. Without a terminal to ask on, it reports and stops.
-fn run_check_for_updates() -> i32 {
-    let current = env!("WALLY_VERSION");
-    out::status_line("checking for a newer wally...");
-    let Some(latest) = fetch_latest_version() else {
-        out::error_line("could not check for a newer wally; check your connection and try again");
-        return 1;
-    };
-    write_cached_latest(&latest);
-    if !is_newer(&latest, current) {
-        out::status_line(&format!("wally {current} is the latest"));
-        return 0;
-    }
-    out::status_line(&format!("wally {latest} is out (you have {current})"));
-    if !crate::util::term::stdin_is_tty() || !confirm_install() {
-        return 0;
-    }
-    run_update()
-}
-
-fn confirm_install() -> bool {
-    use std::io::Write;
-    eprint!("install now? [y/N] ");
-    let _ = std::io::stderr().flush();
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).is_err() {
-        return false;
-    }
-    matches!(line.as_bytes().first(), Some(b'y') | Some(b'Y'))
-}
 
 fn install_script_url() -> String {
     getenv(SCRIPT_URL_ENV)
