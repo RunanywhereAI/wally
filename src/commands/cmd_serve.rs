@@ -39,14 +39,13 @@ const DEFAULT_SERVE_MODEL: &str = "qwen3-4b-instruct-2507";
 static SERVE_STOP: AtomicBool = AtomicBool::new(false);
 
 #[cfg(wally_has_server)]
+/// Resolve the documented placement choices without exposing the SDK's AUTO
+/// sentinel as a CLI value.
 fn serve_gpu_layers(value: Option<i64>) -> Result<i32, &'static str> {
     match value {
         None => Ok(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO),
         Some(-1) => Ok(-1),
         Some(0) => Ok(0),
-        Some(value) if value == i64::from(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO) => {
-            Ok(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO)
-        }
         Some(_) => {
             Err("--gpu-layers accepts -1 (GPU) or 0 (CPU); omit it for automatic placement")
         }
@@ -645,10 +644,7 @@ mod tests {
         );
         assert_eq!(serve_gpu_layers(Some(0)), Ok(0));
         assert_eq!(serve_gpu_layers(Some(-1)), Ok(-1));
-        assert_eq!(
-            serve_gpu_layers(Some(i64::from(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO))),
-            Ok(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO)
-        );
+        assert!(serve_gpu_layers(Some(i64::from(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO))).is_err());
         assert!(serve_gpu_layers(Some(20)).is_err());
     }
 }
