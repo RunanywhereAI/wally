@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
@@ -72,12 +73,22 @@ fn main() {
     println!("cargo:rerun-if-changed={}", env_file.display());
     let build_env = match fs::read_to_string(&env_file) {
         Ok(text) => parse_env(&text),
-        Err(_) => panic!(
-            "{} not found. Configure CMake first so the SDK kit is resolved:\n  \
-             cmake -B build -G Ninja -DCMAKE_PREFIX_PATH=/path/to/kit\n\
-             or set WALLY_BUILD_ENV to the wally-build.env of another build dir.",
-            env_file.display()
-        ),
+        Err(_) => {
+            // CMake owns the kit: discovery, auto-fetch, pin checks and the link
+            // closure. An IDE's first sync runs bare `cargo build` without ever
+            // configuring CMake, so kick it once from here. The fetched kit and
+            // the generated env file persist, so later builds never re-enter.
+            self_configure(&manifest);
+            let text = fs::read_to_string(&env_file).unwrap_or_else(|e| {
+                panic!(
+                    "{} still missing after configure: {e}. The kit fetch needs \
+                     `gh` signed in (`gh auth login`), or point WALLY_BUILD_ENV \
+                     at the wally-build.env of another build dir.",
+                    env_file.display()
+                )
+            });
+            parse_env(&text)
+        }
     };
 
     // Capability flags → cfg(wally_has_*), declared so check-cfg knows them.
@@ -111,6 +122,27 @@ fn main() {
     generate_proto(&idl, &versions);
 
     link_native(&build_env);
+}
+
+/// Run the CMake configure that writes the build env file. Only when it is
+/// absent: a normal flow (CMake driving cargo) never lands here, and a failed
+/// fetch leaves the panic above to explain why.
+fn self_configure(manifest: &Path) {
+    let status = Command::new("cmake")
+        .arg("-B")
+        .arg(manifest.join("build"))
+        .arg("-G")
+        .arg("Ninja")
+        .current_dir(manifest)
+        .status();
+    match status {
+        Ok(s) if s.success() => return,
+        Ok(s) => panic!(
+            "cmake configure failed ({s}); run it manually for the full output:\
+             \n  cmake -B build -G Ninja"
+        ),
+        Err(_) => panic!("cmake not found on PATH; install it to build wally"),
+    }
 }
 
 /// `key = "value"` lines from versions.toml (flat by design; see its header).
