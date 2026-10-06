@@ -78,7 +78,7 @@ fn main() {
             // closure. An IDE's first sync runs bare `cargo build` without ever
             // configuring CMake, so kick it once from here. The fetched kit and
             // the generated env file persist, so later builds never re-enter.
-            self_configure(&manifest);
+            self_configure(&manifest, &env_file);
             let text = fs::read_to_string(&env_file).unwrap_or_else(|e| {
                 panic!(
                     "{} still missing after configure: {e}. The kit fetch needs \
@@ -126,10 +126,18 @@ fn main() {
 
 /// Run the CMake configure that writes the build env file. Only when it is
 /// absent: a normal flow (CMake driving cargo) never lands here, and a failed
-/// fetch leaves the panic above to explain why. Ninja is named only when the
-/// build dir is new; CMake refuses to change an existing dir's generator.
-fn self_configure(manifest: &Path) {
-    let build_dir = manifest.join("build");
+/// fetch leaves the panic above to explain why. When the env path follows the
+/// `<build_dir>/generated/wally-build.env` contract, its build dir is the one
+/// configured; anything else points at a tree we cannot configure, so the
+/// default build dir is the best guess. Ninja is named only when that dir is
+/// new; CMake refuses to change an existing dir's generator.
+fn self_configure(manifest: &Path, env_file: &Path) {
+    let build_dir = env_file
+        .parent()
+        .filter(|p| p.ends_with("generated"))
+        .and_then(|generated| generated.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| manifest.join("build"));
     let mut cmd = Command::new("cmake");
     cmd.arg("-B").arg(&build_dir);
     if !build_dir.join("CMakeCache.txt").exists() {
