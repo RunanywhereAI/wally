@@ -3,7 +3,8 @@
 #
 #   scripts/fetch-kit.sh <macos-arm64|linux-x64|linux-arm64|windows-x64|windows-arm64> <dest-dir>
 #
-# Requires: gh, and either shasum or sha256sum.
+# Requires: curl or wget, and either shasum or sha256sum. The kit lives on a
+# public GitHub release, so plain HTTPS works; `gh` is only a fallback.
 # Pins live in versions.toml (the single source; cmake/sdk-pin.cmake reads the
 # same file). SDK_VERSION, if set, must equal kit_version there -- checksums are
 # keyed to that pin, not a repo variable.
@@ -37,25 +38,33 @@ SDK_VERSION="$PINNED_SDK"
 RELEASE_TAG="$(wally_kit_release_tag)"
 
 asset="RunAnywhere-cpp-desktop-${PLATFORM}-v${SDK_VERSION}.tar.gz"
+url="https://github.com/RunanywhereAI/runanywhere-sdks/releases/download/${RELEASE_TAG}/${asset}"
 dl="$(mktemp -d)"
+file="${dl}/${asset}"
 trap 'rm -rf "$dl"' EXIT
 
-# Draft GitHub Releases are invisible to another repo's GITHUB_TOKEN
-# (`release not found`). The pin must point at a published release
-# (prerelease is fine; latest is not required).
-if ! gh release download "$RELEASE_TAG" \
-  --repo RunanywhereAI/runanywhere-sdks \
-  --pattern "$asset" --dir "$dl"; then
+# Draft GitHub Releases are invisible even to a signed-in token (`release not
+# found`); the pin must point at a published release. Plain HTTPS first -- no
+# auth, no gh -- then gh as fallback for networks or tokens that need it. Each
+# attempt writes the same path, so a partial file from a failed attempt is
+# dropped before the next, and gh gets --clobber to overwrite a leftover.
+dl_ok=""
+if curl -fSL --retry 3 -o "$file" "$url"; then
+  dl_ok=1
+elif rm -f "$file" && wget -q -O "$file" "$url"; then
+  dl_ok=1
+elif rm -f "$file" && gh release download "$RELEASE_TAG" \
+    --repo RunanywhereAI/runanywhere-sdks \
+    --pattern "$asset" --dir "$dl" --clobber; then
+  dl_ok=1
+fi
+if [[ -z "$dl_ok" ]]; then
   echo "error: could not download $asset from RunanywhereAI/runanywhere-sdks@${RELEASE_TAG}" >&2
   echo "  that tag must be a published GitHub Release (drafts 404 for this token)." >&2
   gh release view "$RELEASE_TAG" --repo RunanywhereAI/runanywhere-sdks >&2 || true
   exit 1
 fi
 
-file="${dl}/${asset}"
-if command -v stat >/dev/null 2>&1; then
-  echo "downloaded ${asset}: $(stat -c%s "$file" 2>/dev/null || stat -f%z "$file") bytes" >&2
-fi
 if command -v shasum >/dev/null 2>&1; then
   actual="$(shasum -a 256 "$file" | awk '{print $1}')"
 else
