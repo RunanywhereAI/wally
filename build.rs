@@ -137,7 +137,7 @@ fn self_configure(manifest: &Path) {
     }
     let status = cmd.current_dir(manifest).status();
     match status {
-        Ok(s) if s.success() => return,
+        Ok(s) if s.success() => {}
         Ok(s) => panic!(
             "cmake configure failed ({s}); run it manually for the full output:\
              \n  cmake -B build -G Ninja"
