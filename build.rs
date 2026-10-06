@@ -126,15 +126,16 @@ fn main() {
 
 /// Run the CMake configure that writes the build env file. Only when it is
 /// absent: a normal flow (CMake driving cargo) never lands here, and a failed
-/// fetch leaves the panic above to explain why.
+/// fetch leaves the panic above to explain why. Ninja is named only when the
+/// build dir is new; CMake refuses to change an existing dir's generator.
 fn self_configure(manifest: &Path) {
-    let status = Command::new("cmake")
-        .arg("-B")
-        .arg(manifest.join("build"))
-        .arg("-G")
-        .arg("Ninja")
-        .current_dir(manifest)
-        .status();
+    let build_dir = manifest.join("build");
+    let mut cmd = Command::new("cmake");
+    cmd.arg("-B").arg(&build_dir);
+    if !build_dir.join("CMakeCache.txt").exists() {
+        cmd.arg("-G").arg("Ninja");
+    }
+    let status = cmd.current_dir(manifest).status();
     match status {
         Ok(s) if s.success() => return,
         Ok(s) => panic!(

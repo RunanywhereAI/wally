@@ -45,9 +45,11 @@ trap 'rm -rf "$dl"' EXIT
 
 # Draft GitHub Releases are invisible even to a signed-in token (`release not
 # found`); the pin must point at a published release. Plain HTTPS first -- no
-# auth, no gh -- then gh as fallback for networks or tokens that need it.
+# auth, no gh -- then gh as fallback for networks or tokens that need it. Each
+# attempt gets its own output path: a partial file from a failed curl would
+# otherwise make gh refuse to overwrite (--clobber).
 if ! (curl -fSL --retry 3 -o "$file" "$url" || \
-      wget -q -O "$file" "$url" || \
+      wget -q -O "$file.wget" "$url" || \
       gh release download "$RELEASE_TAG" \
         --repo RunanywhereAI/runanywhere-sdks \
         --pattern "$asset" --dir "$dl"); then
@@ -57,6 +59,10 @@ if ! (curl -fSL --retry 3 -o "$file" "$url" || \
   exit 1
 fi
 
+# Whatever attempt landed it, the tarball is named $file for the checksum step.
+if [[ ! -s "$file" && -s "$file.wget" ]]; then
+  mv "$file.wget" "$file"
+fi
 if command -v shasum >/dev/null 2>&1; then
   actual="$(shasum -a 256 "$file" | awk '{print $1}')"
 else
