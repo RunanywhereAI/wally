@@ -76,7 +76,7 @@ fn credentials_load_rejects_a_wrong_typed_field_instead_of_defaulting() {
     env.unset("WALLY_CONSOLE_URL");
 
     let raw = serde_json::json!({
-        "console_url": "https://inference.runanywhere.ai",
+        "console_url": "https://api.example.test",
         "access_token": 12345,
         "refresh_token": "",
         "email": "",

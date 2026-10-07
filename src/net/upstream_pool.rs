@@ -14,9 +14,9 @@ use std::time::Duration;
 /// How a pooled client is built and how long its idle connections are kept.
 #[derive(Debug, Clone)]
 pub struct UpstreamOptions {
-    /// Scheme and authority only, e.g. `https://inference.runanywhere.ai`.
-    /// Any path prefix (e.g. `/api-dev`) is the caller's job to prepend to
-    /// each request path -- the pool only owns the connection.
+    /// Scheme and authority only. Any path prefix (e.g. a deployment's
+    /// `/api-dev`) is the caller's job to prepend to each request path -- the
+    /// pool only owns the connection.
     pub origin: String,
     pub read_timeout: Duration,
     pub connect_timeout: Duration,

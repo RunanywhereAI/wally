@@ -12,10 +12,11 @@
 //!   versions.toml. No protoc runs and nothing generated is committed.
 //! - `HAS_*`: the engine/component capability flags the C++ build got as
 //!   `WALLY_HAS_*` compile definitions; each becomes `cfg(wally_has_*)`.
-//! - `DEFAULT_MODEL_ID`, `BAKED_CONSOLE_API_URL`, `BAKED_CONSOLE_WEB_ORIGIN`:
-//!   exported to the crate as compile-time env values. The endpoints are only ever
-//!   set for a dev-channel build; they live in the build tree, as the generated
-//!   C++ header did, and are never printed.
+//! - `DEFAULT_MODEL_ID`, `CONSOLE_*`: exported to the crate as compile-time env
+//!   values. The console endpoints are required configure inputs; a build with
+//!   none (CI on a fork pull request) exports empty values and resolves no
+//!   default console at runtime. They live in the build tree and are never
+//!   printed.
 //! - `CMAKE_FILE_API_REPLY` / `LINK_PROBE_TARGET`: where CMake recorded the link
 //!   line of `wally_link_probe` — the kit closure the C++ `wally` executable had.
 //!   The static library needs none of it; every binary cargo links does.
@@ -109,7 +110,14 @@ fn main() {
         .cloned()
         .unwrap_or_else(|| "glm-5.3-flash".to_string());
     println!("cargo:rustc-env=WALLY_DEFAULT_MODEL_ID={default_model}");
-    for key in ["BAKED_CONSOLE_API_URL", "BAKED_CONSOLE_WEB_ORIGIN"] {
+    // The console endpoints this binary talks to. Required configure inputs
+    // (CMakeLists.txt); CI passes empty values for fork pull requests, which
+    // WALLY_CONSOLE_API_URL can still override at runtime.
+    for key in [
+        "CONSOLE_API_URL",
+        "CONSOLE_WEB_ORIGIN",
+        "CONSOLE_WEB_ORIGIN_ALT",
+    ] {
         let value = build_env.get(key).cloned().unwrap_or_default();
         println!("cargo:rustc-env=WALLY_{key}={value}");
     }

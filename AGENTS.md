@@ -167,28 +167,36 @@ Two hosts, and they are not the same deployment. The API is the control plane
 and serves all four endpoints above plus `/v1/cli/*`; the web console is only
 the page a person approves the sign-in on.
 
-| | Default | Override |
+Both are **configure inputs, not source constants**. Configure requires:
+
+| | Supplies | Runtime override |
 |---|---|---|
-| API | `https://inference.runanywhere.ai` | `WALLY_CONSOLE_URL` |
-| Approval page | `https://console.runanywhere.ai` | `WALLY_CONSOLE_WEB_URL` |
+| Control plane | `WALLY_BAKED_CONSOLE_API_URL` | `WALLY_CONSOLE_URL` |
+| Approval page | `WALLY_BAKED_CONSOLE_WEB_ORIGIN` (+ optional `…_ALT`) | `WALLY_CONSOLE_WEB_URL` |
 
-Both defaults live together in `src/account/credentials.rs` so they cannot
-drift apart, and `TrustedBrowserOrigins()` is what pairs them: with no override
-it trusts the deployed console, and for any other API origin it trusts only
-that origin. Pointing at a local dev console needs `WALLY_CONSOLE_URL` set
-explicitly, e.g. `WALLY_CONSOLE_URL=http://localhost:8080`.
+Copy `.env.example` to `.env` and fill them in, or export them before
+`cmake -B build`. Configure fails without the first two, so a binary can never
+ship without a control plane; the values live in the build tree, never in
+committed source. `cmake/env-loader.cmake` reads `.env`; real environment
+variables win. CI takes them from repository variables, and a fork pull request
+(which receives none) sets `WALLY_CONSOLE_OPTIONAL=1`, producing a binary that
+resolves no default console until `WALLY_CONSOLE_URL` is set.
 
-The API URL may carry a path, because the deployed development console is one:
-`https://inference.runanywhere.ai/api-dev`, where the load balancer strips the
-prefix and forwards to the dev control plane. Every endpoint is appended to
-whatever is configured, so the prefix follows the whole flow. Its approval page
-is on Railway rather than that host, so dev also needs
-`WALLY_CONSOLE_WEB_URL=https://runanywhere-frontend-development.up.railway.app`.
+`TrustedBrowserOrigins()` pairs the two: it trusts the configured approval
+origins while talking to the configured API, and for any other API origin it
+trusts only that origin. Pointing at a local dev console needs
+`WALLY_CONSOLE_URL` set explicitly, e.g. `WALLY_CONSOLE_URL=http://localhost:8080`.
 
-Do not reach for the dev backend's own Cloud Run hostname instead. It answers,
-but it is behind the load balancer, so `/v1/chat/completions` lands on the
-control plane rather than the gateway and returns 502 — a route no installed
-binary can produce, and a day lost to debugging it.
+A console URL may carry a path: a deployment reached at `https://host/prefix`
+has the load balancer strip the prefix and forward to the control plane behind
+it. Every endpoint is appended to whatever is configured, so the prefix follows
+the whole flow, and the approval page lives on its own origin, so that needs
+`WALLY_CONSOLE_WEB_URL` set too.
+
+Do not reach for a backend's own Cloud Run hostname instead. It answers, but it
+is behind the load balancer, so `/v1/chat/completions` lands on the control
+plane rather than the gateway and returns 502 — a route no installed binary can
+produce, and a day lost to debugging it.
 
 `WALLY_PROFILE_DIR` moves the credential file, which is what lets several
 accounts share one machine.

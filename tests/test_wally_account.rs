@@ -21,24 +21,24 @@ fn json(value: serde_json::Value) -> String {
 fn console_url_validation() {
     let accepted: &[(&str, &str)] = &[
         (
-            "https://console.runanywhere.ai",
-            "https://console.runanywhere.ai",
+            "https://console.example.test",
+            "https://console.example.test",
         ),
         (
-            "HTTPS://CONSOLE.RUNANYWHERE.AI/",
-            "https://console.runanywhere.ai",
+            "HTTPS://CONSOLE.EXAMPLE.TEST/",
+            "https://console.example.test",
         ),
         ("http://localhost:8080", "http://localhost:8080"),
         ("http://127.0.0.1:8002", "http://127.0.0.1:8002"),
         ("http://[::1]:9000", "http://[::1]:9000"),
-        // Development is a path prefix on the production host, not its own one.
+        // A deployment may be a path prefix on its host, not its own one.
         (
-            "https://inference.runanywhere.ai/api-dev",
-            "https://inference.runanywhere.ai/api-dev",
+            "https://api.example.test/api-dev",
+            "https://api.example.test/api-dev",
         ),
         (
-            "https://inference.runanywhere.ai/api-dev/",
-            "https://inference.runanywhere.ai/api-dev",
+            "https://api.example.test/api-dev/",
+            "https://api.example.test/api-dev",
         ),
         (
             "http://localhost:8080/api-dev",
@@ -52,19 +52,19 @@ fn console_url_validation() {
     }
 
     let rejected: &[&str] = &[
-        "http://console.runanywhere.ai",
+        "http://console.example.test",
         "http://localhost.evil.example",
         "http://127.0.0.1.evil.example",
         "http://[::1].evil.example",
         "http://localhost@evil.example",
-        "https://user:password@console.runanywhere.ai",
-        "https://console.runanywhere.ai?query=1",
-        "https://console.runanywhere.ai/api-dev?query=1",
-        "https://console.runanywhere.ai/api-dev#fragment",
-        "https://console.runanywhere.ai//api-dev",
-        "https://console.runanywhere.ai/../api-dev",
-        "https://console.runanywhere.ai/api/../../dev",
-        "https://console.runanywhere.ai:",
+        "https://user:password@console.example.test",
+        "https://console.example.test?query=1",
+        "https://console.example.test/api-dev?query=1",
+        "https://console.example.test/api-dev#fragment",
+        "https://console.example.test//api-dev",
+        "https://console.example.test/../api-dev",
+        "https://console.example.test/api/../../dev",
+        "https://console.example.test:",
         "http://[::1]:",
         "https://",
         "file:///tmp/credentials",
@@ -77,7 +77,7 @@ fn console_url_validation() {
     }
 
     assert!(account::browser_url_is_safe(
-        "https://console.runanywhere.ai/device?code=ABCD-EFGH"
+        "https://console.example.test/device?code=ABCD-EFGH"
     ));
     assert!(account::browser_url_is_safe(
         "http://localhost:8080/device?code=ABCD"
@@ -86,20 +86,20 @@ fn console_url_validation() {
         "http://localhost.evil.example/device"
     ));
     assert!(account::browser_url_matches_console(
-        "https://console.runanywhere.ai/device?code=ABCD-EFGH",
-        "https://console.runanywhere.ai"
+        "https://console.example.test/device?code=ABCD-EFGH",
+        "https://console.example.test"
     ));
     assert!(account::browser_url_matches_console(
-        "https://inference.runanywhere.ai/cloud/cli?code=ABCD",
-        "https://inference.runanywhere.ai/api-dev"
+        "https://api.example.test/cloud/cli?code=ABCD",
+        "https://api.example.test/api-dev"
     ));
     assert!(!account::browser_url_matches_console(
         "https://auth.attacker.example/device",
-        "https://inference.runanywhere.ai/api-dev"
+        "https://api.example.test/api-dev"
     ));
     assert!(!account::browser_url_matches_console(
         "https://auth.attacker.example/device",
-        "https://console.runanywhere.ai"
+        "https://console.example.test"
     ));
 }
 
@@ -112,7 +112,7 @@ fn credential_roundtrip_and_permissions() {
     env.unset("WALLY_CONSOLE_URL");
 
     let expected = Credentials {
-        console_url: "https://CONSOLE.RUNANYWHERE.AI/".to_string(),
+        console_url: "https://CONSOLE.EXAMPLE.TEST/".to_string(),
         email: "dev+\"json\"@example.test".to_string(),
         access_token: "access-secret-that-must-not-be-logged".to_string(),
         refresh_token: "refresh-secret-that-must-not-be-logged".to_string(),
@@ -141,7 +141,7 @@ fn credential_roundtrip_and_permissions() {
     }
 
     let actual = account::load().expect("load");
-    assert_eq!(actual.console_url, "https://console.runanywhere.ai");
+    assert_eq!(actual.console_url, "https://console.example.test");
     assert_eq!(actual.email, expected.email);
     assert_eq!(actual.access_token, expected.access_token);
     assert_eq!(actual.refresh_token, expected.refresh_token);
@@ -309,7 +309,7 @@ fn credentials_round_trip_through_a_non_ascii_profile_path() {
     env.unset("WALLY_CONSOLE_URL");
 
     let saved = Credentials {
-        console_url: "https://inference.runanywhere.ai".to_string(),
+        console_url: "https://api.example.test".to_string(),
         email: "dev@example.test".to_string(),
         access_token: "a-token".to_string(),
         refresh_token: "r-token".to_string(),
@@ -349,7 +349,7 @@ fn credentials_warns_on_exposed_permissions() {
     let home = TempHome::new();
 
     let seed = Credentials {
-        console_url: "https://console.runanywhere.ai".to_string(),
+        console_url: "https://console.example.test".to_string(),
         email: "dev@example.test".to_string(),
         access_token: "a-token".to_string(),
         expires_at: 0,
@@ -425,7 +425,7 @@ fn console_client_contract() {
                 response.body = json(serde_json::json!({
                     "request_code": "ABCD-EFGH",
                     "poll_secret": "poll-secret",
-                    "verification_url": "https://console.runanywhere.ai/device?code=ABCD-EFGH",
+                    "verification_url": "https://console.example.test/device?code=ABCD-EFGH",
                     "expires_in": 300,
                     "interval": 1,
                 }));
@@ -462,19 +462,19 @@ fn console_client_contract() {
 
     let client = ConsoleClient::new(Some(transport));
     let authorization = client
-        .begin_authorization("https://console.runanywhere.ai", "test-host", None)
+        .begin_authorization("https://console.example.test", "test-host", None)
         .expect("authorization response mismatch");
     assert_eq!(authorization.request_code, "ABCD-EFGH");
     assert_eq!(authorization.interval, 1);
 
-    let first = client.poll("https://console.runanywhere.ai", &authorization);
+    let first = client.poll("https://console.example.test", &authorization);
     assert_eq!(
         first.result,
         PollResult::Pending,
         "poll contract mismatch: {}",
         first.error
     );
-    let second = client.poll("https://console.runanywhere.ai", &authorization);
+    let second = client.poll("https://console.example.test", &authorization);
     assert_eq!(
         second.result,
         PollResult::Approved,
@@ -486,7 +486,7 @@ fn console_client_contract() {
     assert_eq!(grant.refresh_token, "refresh-one");
 
     let (identity_result, _identity, identity_error) =
-        client.who_am_i("https://console.runanywhere.ai", &grant.access_token);
+        client.who_am_i("https://console.example.test", &grant.access_token);
     assert_eq!(
         identity_result,
         IdentityResult::Ok,
@@ -494,13 +494,13 @@ fn console_client_contract() {
     );
 
     let refreshed = client
-        .refresh("https://console.runanywhere.ai", &grant.refresh_token)
+        .refresh("https://console.example.test", &grant.refresh_token)
         .expect("refresh contract mismatch");
     assert_eq!(refreshed.access_token, "access-two");
     assert_eq!(refreshed.refresh_token, "refresh-two");
     client
         .revoke(
-            "https://console.runanywhere.ai",
+            "https://console.example.test",
             &refreshed.access_token,
             &refreshed.refresh_token,
         )
@@ -555,7 +555,7 @@ fn console_errors_do_not_echo_secrets() {
         }
     }) as Transport));
     let error = client
-        .begin_authorization("https://console.runanywhere.ai", "host", None)
+        .begin_authorization("https://console.example.test", "host", None)
         .expect_err("HTTP error must not succeed");
     assert!(
         !error.contains(secret),
@@ -577,7 +577,7 @@ fn console_errors_do_not_echo_secrets() {
         }
     }) as Transport));
     let error = malformed
-        .begin_authorization("https://console.runanywhere.ai", "host", None)
+        .begin_authorization("https://console.example.test", "host", None)
         .expect_err("malformed JSON must not succeed");
     assert!(
         !error.contains(secret),
@@ -601,7 +601,7 @@ fn a_401_still_says_the_session_is_no_longer_valid() {
     ) as Transport));
     let error = client
         .revoke(
-            "https://console.runanywhere.ai",
+            "https://console.example.test",
             "access-token",
             "refresh-token",
         )
@@ -633,7 +633,7 @@ fn a_403_is_reported_as_a_refusal_not_a_stale_session() {
     ) as Transport));
     let error = client
         .revoke(
-            "https://console.runanywhere.ai",
+            "https://console.example.test",
             "access-token",
             "refresh-token",
         )
@@ -661,7 +661,7 @@ fn a_403_is_reported_as_a_refusal_not_a_stale_session() {
     ) as Transport));
     let error = no_body
         .revoke(
-            "https://console.runanywhere.ai",
+            "https://console.example.test",
             "access-token",
             "refresh-token",
         )
@@ -694,7 +694,7 @@ fn login_never_retries_sooner_than_the_server_asked() {
         },
     ) as Transport));
     let error = patient
-        .begin_authorization("https://console.runanywhere.ai", "host", None)
+        .begin_authorization("https://console.example.test", "host", None)
         .expect_err("a 429 must not look like a successful authorization");
     assert_eq!(
         *long_delay_requests.lock().unwrap(),
@@ -726,7 +726,7 @@ fn login_never_retries_sooner_than_the_server_asked() {
                 body: json(serde_json::json!({
                     "request_code": "ABCD-EFGH",
                     "poll_secret": "poll-secret",
-                    "verification_url": "https://console.runanywhere.ai/device",
+                    "verification_url": "https://console.example.test/device",
                     "expires_in": 300,
                     "interval": 1,
                 })),
@@ -735,7 +735,7 @@ fn login_never_retries_sooner_than_the_server_asked() {
         },
     ) as Transport));
     brief
-        .begin_authorization("https://console.runanywhere.ai", "host", None)
+        .begin_authorization("https://console.example.test", "host", None)
         .expect("a short Retry-After should be waited out and retried");
     assert_eq!(*short_delay_requests.lock().unwrap(), 2);
 }
@@ -803,7 +803,7 @@ fn a_rate_limited_poll_reports_the_backoff() {
         poll_secret: "poll-secret".to_string(),
         ..Authorization::default()
     };
-    let outcome = client.poll("https://console.runanywhere.ai", &authorization);
+    let outcome = client.poll("https://console.example.test", &authorization);
     assert_eq!(
         outcome.result,
         PollResult::Pending,
@@ -836,7 +836,7 @@ fn a_poll_requiring_a_card_reports_card_required() {
         poll_secret: "poll-secret".to_string(),
         ..Authorization::default()
     };
-    let outcome = client.poll("https://console.runanywhere.ai", &authorization);
+    let outcome = client.poll("https://console.example.test", &authorization);
     assert_eq!(
         outcome.result,
         PollResult::CardRequired,
@@ -872,7 +872,7 @@ fn a_refresh_requiring_a_card_reports_card_required() {
         },
     ) as Transport));
     let failure = client
-        .refresh("https://inference.runanywhere.ai", "refresh-token")
+        .refresh("https://api.example.test", "refresh-token")
         .expect_err("a card_required refresh must fail");
     assert!(
         failure.card_required,
@@ -883,9 +883,9 @@ fn a_refresh_requiring_a_card_reports_card_required() {
         "Wally Cloud refused the refresh: Add a card to sign in from the terminal."
     );
     assert_eq!(
-        account::console_billing_url("https://inference.runanywhere.ai"),
-        "https://console.runanywhere.ai/cloud/billing",
-        "the billing URL refresh_session appends comes from the production API's own web origin"
+        account::console_billing_url("https://api.example.test"),
+        "https://api.example.test/cloud/billing",
+        "a console that is not the configured one is its own web origin"
     );
 }
 
@@ -911,12 +911,12 @@ fn a_card_required_message_is_filtered_like_any_refusal() {
         poll_secret: "poll-secret".to_string(),
         ..Authorization::default()
     };
-    let outcome = client.poll("https://console.runanywhere.ai", &authorization);
+    let outcome = client.poll("https://console.example.test", &authorization);
     assert_eq!(outcome.result, PollResult::CardRequired);
     assert_eq!(outcome.error, "Wally Cloud refused the poll");
 
     let failure = client
-        .refresh("https://inference.runanywhere.ai", "refresh-token")
+        .refresh("https://api.example.test", "refresh-token")
         .expect_err("a card_required refresh must fail");
     assert!(failure.card_required);
     assert_eq!(failure.message, "Wally Cloud refused the refresh");
@@ -938,7 +938,7 @@ fn a_rate_limit_surfaces_its_retry_after() {
         },
     ) as Transport));
     let error = with_hint
-        .begin_authorization("https://console.runanywhere.ai", "host", None)
+        .begin_authorization("https://console.example.test", "host", None)
         .expect_err("a 429 must not succeed");
     assert!(
         error.contains("try again in 30s"),
@@ -959,7 +959,7 @@ fn a_rate_limit_surfaces_its_retry_after() {
         },
     ) as Transport));
     let error = no_hint
-        .begin_authorization("https://console.runanywhere.ai", "host", None)
+        .begin_authorization("https://console.example.test", "host", None)
         .expect_err("a 429 must not succeed");
     assert!(
         error.contains("busy"),
@@ -1003,7 +1003,7 @@ fn console_rejects_header_injection() {
                 response.body = json(serde_json::json!({
                     "request_code": "ABCD\nEFGH",
                     "poll_secret": "poll-secret",
-                    "verification_url": "https://console.runanywhere.ai/device",
+                    "verification_url": "https://console.example.test/device",
                 }));
             }
             Ok(response)
@@ -1011,7 +1011,7 @@ fn console_rejects_header_injection() {
     ) as Transport));
 
     let error = client
-        .begin_authorization("https://console.runanywhere.ai", "host", None)
+        .begin_authorization("https://console.example.test", "host", None)
         .expect_err("terminal control characters were accepted in an authorization code");
     assert_eq!(error, "console returned an invalid authorization request");
 
@@ -1020,7 +1020,7 @@ fn console_rejects_header_injection() {
         poll_secret: "poll-secret".to_string(),
         ..Authorization::default()
     };
-    let outcome = client.poll("https://console.runanywhere.ai", &authorization);
+    let outcome = client.poll("https://console.example.test", &authorization);
     assert_eq!(
         outcome.result,
         PollResult::Failed,
@@ -1029,12 +1029,10 @@ fn console_rejects_header_injection() {
     assert_eq!(outcome.error, "console returned an invalid cloud session");
 }
 
-// The API host and the browser approval host are two deployments. Collapsing
-// them, or pointing the API at the console's Railway host, is the regression
-// this pins: measured 2026-09-04, console.runanywhere.ai answers
-// /auth/cli/start and /v1/me with 404 and its own SPA HTML, while
-// inference.runanywhere.ai answers 422 and 405 -- the endpoints rejecting a bad
-// body and a wrong verb, which is how you know they exist.
+// The API host and the browser approval host are two deployments, and both are
+// configure-time inputs now (CMakeLists.txt). Collapsing them, or trusting the
+// approval origins while pointed at some other API, is the regression this
+// pins.
 #[test]
 fn the_api_host_and_the_browser_host_stay_apart() {
     let _lock = env_lock();
@@ -1046,43 +1044,43 @@ fn the_api_host_and_the_browser_host_stay_apart() {
     let api = account::default_console_url();
     let browser = account::trusted_browser_origins(&api);
 
-    assert_ne!(
-        api, "https://console.runanywhere.ai",
-        "the API default is the web console, which serves no /auth/cli or /v1 route"
-    );
+    if api.is_empty() {
+        // A build configured with no endpoints. Nothing to compare; the trust
+        // rules below still have to hold.
+        assert!(browser.is_empty() || browser.iter().all(|o| o == &api));
+        return;
+    }
     assert_eq!(
-        api, "https://inference.runanywhere.ai",
-        "the API default moved; confirm the new host serves /auth/cli/* and /v1/me"
+        api,
+        account::configured_console_api_url(),
+        "the default console is not the one this build was configured against"
     );
-    for origin in &browser {
+    let configured_web = account::configured_console_web_origins();
+    for origin in &configured_web {
         assert_ne!(
             origin, &api,
             "one host cannot be both the control plane and the approval page"
         );
+        assert!(
+            account::browser_url_is_trusted(&format!("{origin}/cloud/cli?code=abc"), &browser),
+            "a configured approval origin must pass the origin check"
+        );
     }
-    // The origin the control plane actually puts in verification_url today. Drop
-    // this once that config names the custom domain; until then, removing it
-    // refuses every production sign-in.
-    assert!(
-        account::browser_url_is_trusted(
-            "https://runanywhere-frontend-production.up.railway.app/cloud/cli?code=abc",
-            &browser
-        ),
-        "production's own approval URL must pass the origin check"
-    );
-    assert!(
-        account::browser_url_is_trusted(
-            "https://console.runanywhere.ai/cloud/cli?code=abc",
-            &browser
-        ),
-        "the console's custom domain must pass the origin check"
-    );
     assert!(
         !account::browser_url_is_trusted(
-            "https://console.runanywhere.ai.evil.test/cloud/cli",
+            "https://console.example.test.evil.test/cloud/cli",
             &browser
         ),
         "a lookalike host must not pass on a prefix match"
+    );
+    // The configured approval origins are honored only while talking to the
+    // configured API.
+    assert!(
+        !account::browser_url_is_trusted(
+            &format!("{}/cloud/cli", configured_web[0]),
+            &account::trusted_browser_origins("https://other.example.test")
+        ),
+        "a configured origin must not be trusted for another console"
     );
 }
 
@@ -1106,14 +1104,14 @@ fn the_trusted_browser_origin_is_never_empty() {
         "an empty trusted origin list pins nothing"
     );
     assert!(
-        !account::browser_url_is_trusted("https://console.runanywhere.ai/cloud/cli", &loopback),
+        !account::browser_url_is_trusted("https://console.example.test/cloud/cli", &loopback),
         "the production console must not be trusted for a dev API"
     );
 
     // A declared origin still wins, and replaces the pair rather than adding
     // to it, which is what points sign-in at a console served somewhere else.
     env.set("WALLY_CONSOLE_WEB_URL", "https://console.dev.example.test");
-    let overridden = account::trusted_browser_origins("https://inference.runanywhere.ai");
+    let overridden = account::trusted_browser_origins("https://api.example.test");
     assert_eq!(
         overridden,
         vec!["https://console.dev.example.test".to_string()]
@@ -1130,27 +1128,31 @@ fn effective_console_web_origin_follows_the_same_trust_order() {
     env.unset("WALLY_CONSOLE_WEB_URL");
     env.unset("RCLI_CONSOLE_WEB_URL");
 
-    assert_eq!(
-        account::effective_console_web_origin("https://inference.runanywhere.ai"),
-        "https://console.runanywhere.ai",
-        "the production API's account pages live on the production web console"
-    );
+    let api = account::configured_console_api_url();
+    let web = account::configured_console_web_origins();
+    if !api.is_empty() && !web.is_empty() {
+        assert_eq!(
+            account::effective_console_web_origin(&api),
+            web[0],
+            "the configured API's account pages live on its configured web origin"
+        );
+    }
     assert_eq!(
         account::effective_console_web_origin("http://localhost:8080"),
         "http://localhost:8080",
         "a custom API is its own web origin absent an override, same as trusted_browser_origins"
     );
     assert_eq!(
-        account::effective_console_web_origin("https://inference.runanywhere.ai/api-dev"),
-        "https://inference.runanywhere.ai/api-dev",
+        account::effective_console_web_origin("https://api.example.test/api-dev"),
+        "https://api.example.test/api-dev",
         "a path-prefixed dev API is trusted at its own origin, same as trusted_browser_origins"
     );
 
     env.set("WALLY_CONSOLE_WEB_URL", "https://console.dev.example.test");
     assert_eq!(
-        account::effective_console_web_origin("https://inference.runanywhere.ai"),
+        account::effective_console_web_origin(&api),
         "https://console.dev.example.test",
-        "an explicit override wins even against the production API"
+        "an explicit override wins even against the configured API"
     );
 }
 
@@ -1161,14 +1163,16 @@ fn console_billing_url_is_the_web_origins_sibling_of_cloud_cli() {
     env.unset("WALLY_CONSOLE_WEB_URL");
     env.unset("RCLI_CONSOLE_WEB_URL");
 
+    // A console that is not the configured one is its own web origin, so its
+    // billing page is its own sibling.
     assert_eq!(
-        account::console_billing_url("https://inference.runanywhere.ai"),
-        "https://console.runanywhere.ai/cloud/billing"
+        account::console_billing_url("https://api.example.test"),
+        "https://api.example.test/cloud/billing"
     );
 
     env.set("WALLY_CONSOLE_WEB_URL", "http://localhost:9000");
     assert_eq!(
-        account::console_billing_url("https://inference.runanywhere.ai"),
+        account::console_billing_url("https://api.example.test"),
         "http://localhost:9000/cloud/billing"
     );
 }
@@ -2047,14 +2051,14 @@ fn an_unreachable_poll_keeps_waiting() {
         poll_secret: "poll-secret".to_string(),
         ..Authorization::default()
     };
-    let first = client.poll("https://console.runanywhere.ai", &authorization);
+    let first = client.poll("https://console.example.test", &authorization);
     assert_eq!(
         first.result,
         PollResult::Pending,
         "a dropped poll must read as still-waiting, not a failed login: {}",
         first.error
     );
-    let second = client.poll("https://console.runanywhere.ai", &authorization);
+    let second = client.poll("https://console.example.test", &authorization);
     assert_eq!(second.result, PollResult::Approved);
     assert_eq!(second.grant.expect("grant").access_token, "access-one");
 }
@@ -2100,14 +2104,14 @@ fn a_rate_limited_poll_keeps_waiting() {
         poll_secret: "poll-secret".to_string(),
         ..Authorization::default()
     };
-    let first = client.poll("https://console.runanywhere.ai", &authorization);
+    let first = client.poll("https://console.example.test", &authorization);
     assert_eq!(
         first.result,
         PollResult::Pending,
         "a 429 poll must read as still-waiting, not a failed login: {}",
         first.error
     );
-    let second = client.poll("https://console.runanywhere.ai", &authorization);
+    let second = client.poll("https://console.example.test", &authorization);
     assert_eq!(
         second.result,
         PollResult::Approved,
@@ -2151,7 +2155,7 @@ fn cancel_request_speaks_the_contract() {
     let client = ConsoleClient::new(Some(transport));
 
     let (outcome, error) = client.cancel_request(
-        "https://inference.runanywhere.ai/api-dev",
+        "https://api.example.test/api-dev",
         "sess-token",
         "abc 123/../x",
         3000,
@@ -2167,7 +2171,7 @@ fn cancel_request_speaks_the_contract() {
         assert_eq!(requests[0].method, "POST");
         assert_eq!(
             requests[0].url,
-            "https://inference.runanywhere.ai/api-dev/v1/requests/abc%20123%2F..%2Fx/cancel"
+            "https://api.example.test/api-dev/v1/requests/abc%20123%2F..%2Fx/cancel"
         );
         assert_eq!(requests[0].bearer_token, "sess-token");
         assert!(requests[0].body.is_empty());
@@ -2175,25 +2179,17 @@ fn cancel_request_speaks_the_contract() {
     }
 
     *answer.lock().unwrap() = 404;
-    let (outcome, _) = client.cancel_request(
-        "https://inference.runanywhere.ai",
-        "sess-token",
-        "abc-123",
-        3000,
-    );
+    let (outcome, _) =
+        client.cancel_request("https://api.example.test", "sess-token", "abc-123", 3000);
     assert_eq!(outcome, CancelOutcome::NotFound, "a 404 must be NotFound");
     assert_eq!(
         requests.lock().unwrap().last().unwrap().url,
-        "https://inference.runanywhere.ai/v1/requests/abc-123/cancel"
+        "https://api.example.test/v1/requests/abc-123/cancel"
     );
 
     *answer.lock().unwrap() = 500;
-    let (outcome, error) = client.cancel_request(
-        "https://inference.runanywhere.ai",
-        "sess-token",
-        "abc-123",
-        3000,
-    );
+    let (outcome, error) =
+        client.cancel_request("https://api.example.test", "sess-token", "abc-123", 3000);
     assert_eq!(
         outcome,
         CancelOutcome::Failed,
@@ -2202,12 +2198,8 @@ fn cancel_request_speaks_the_contract() {
     assert!(!error.is_empty());
 
     *reachable.lock().unwrap() = false;
-    let (outcome, _) = client.cancel_request(
-        "https://inference.runanywhere.ai",
-        "sess-token",
-        "abc-123",
-        3000,
-    );
+    let (outcome, _) =
+        client.cancel_request("https://api.example.test", "sess-token", "abc-123", 3000);
     assert_eq!(
         outcome,
         CancelOutcome::Failed,
@@ -2216,10 +2208,8 @@ fn cancel_request_speaks_the_contract() {
 
     // No id, no token: refused before any transport call.
     let before = requests.lock().unwrap().len();
-    let (outcome_a, _) =
-        client.cancel_request("https://inference.runanywhere.ai", "sess-token", "", 3000);
-    let (outcome_b, _) =
-        client.cancel_request("https://inference.runanywhere.ai", "", "abc-123", 3000);
+    let (outcome_a, _) = client.cancel_request("https://api.example.test", "sess-token", "", 3000);
+    let (outcome_b, _) = client.cancel_request("https://api.example.test", "", "abc-123", 3000);
     assert_eq!(outcome_a, CancelOutcome::Failed);
     assert_eq!(outcome_b, CancelOutcome::Failed);
     assert_eq!(
@@ -2277,7 +2267,7 @@ fn the_cancel_worker_sends_in_order_with_the_current_bearer() {
 
     let drained = {
         let worker = account::CancelWorker::new(
-            "https://inference.runanywhere.ai",
+            "https://api.example.test",
             Arc::new(move || bearer_read.lock().unwrap().clone()),
             3000,
             Arc::new(move |id: &str, outcome: CancelOutcome, _error: &str| {
@@ -2369,7 +2359,7 @@ fn concurrent_stop_calls_both_wait_for_the_worker_to_finish() {
     );
 
     let worker = Arc::new(account::CancelWorker::new(
-        "https://inference.runanywhere.ai",
+        "https://api.example.test",
         Arc::new(|| "token".to_string()),
         3000,
         Arc::new(|_id: &str, _outcome: CancelOutcome, _error: &str| {}),

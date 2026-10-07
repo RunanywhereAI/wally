@@ -21,11 +21,11 @@ use crate::util::getenv;
 /// afterwards, only from the environment, and only with an origin that passes
 /// the same rules -- the path and request code stay exactly as sent.
 ///
-/// The baked origin is paired with the baked API and is used only when that API
-/// is the one being contacted. It used to apply to any API, so a dev build
-/// pointed at another console rewrote that console's approval URL to the baked
-/// origin and then refused it as off-origin -- `WALLY_CONSOLE_URL` alone could
-/// not sign in to a local console (#91).
+/// The configured origin is paired with the configured API and is used only
+/// when that API is the one being contacted. It used to apply to any API, so a
+/// build pointed at another console rewrote that console's approval URL to the
+/// configured origin and then refused it as off-origin -- `WALLY_CONSOLE_URL`
+/// alone could not sign in to a local console (#91).
 fn console_web_origin(console_url: &str) -> String {
     let configured = getenv("WALLY_CONSOLE_WEB_URL")
         // rcli-era override, still honored so it doesn't go silently unread
@@ -34,14 +34,16 @@ fn console_web_origin(console_url: &str) -> String {
     let configured = match configured {
         Some(value) => value,
         None => {
-            // A dev build carries its approval console compiled in (see
-            // baked_endpoints.h.in) -- empty in production builds, and the env
+            // The configure-time origin (see credentials.rs), and the env
             // overrides above always win. Pairwise, exactly as
             // account::trusted_browser_origins pairs them.
-            let baked_api = account::baked_console_api_url();
-            let baked_web = env!("WALLY_BAKED_CONSOLE_WEB_ORIGIN");
-            if !baked_api.is_empty() && console_url == baked_api && !baked_web.is_empty() {
-                baked_web.to_string()
+            let configured_api = account::configured_console_api_url();
+            let configured_web = env!("WALLY_CONSOLE_WEB_ORIGIN");
+            if !configured_api.is_empty()
+                && console_url == configured_api
+                && !configured_web.is_empty()
+            {
+                configured_web.to_string()
             } else {
                 return String::new();
             }
@@ -496,8 +498,8 @@ pub fn register_account(app: &mut App) {
         Example::new("wally account login", ""),
         Example::new("wally account login --no-browser", ""),
     ]));
-    // The console origin is not a user-facing flag: it comes from the baked
-    // default, or WALLY_CONSOLE_URL for a dev build (read directly in
+    // The console origin is not a user-facing flag: it comes from the build's
+    // configured endpoint, or WALLY_CONSOLE_URL (read directly in
     // credentials.rs). login() falls back to that when handed an empty string.
     login_cmd.callback(|p, _g| login("", !p.flag("--no-browser")));
 
@@ -611,11 +613,11 @@ mod tests {
         let saved = std::env::var_os("WALLY_CONSOLE_WEB_URL");
         // SAFETY: `_lock` serializes every test in this process that touches
         // WALLY_CONSOLE_WEB_URL.
-        unsafe { std::env::set_var("WALLY_CONSOLE_WEB_URL", "https://console.runanywhere.ai") };
+        unsafe { std::env::set_var("WALLY_CONSOLE_WEB_URL", "https://console.example.test") };
 
         let result = rebase_approval_url(
-            "https://runanywhere-frontend-production.up.railway.app?code=abc",
-            "https://inference.runanywhere.ai",
+            "https://console-alt.example.test?code=abc",
+            "https://api.example.test",
         );
 
         match saved {
@@ -624,7 +626,7 @@ mod tests {
             None => unsafe { std::env::remove_var("WALLY_CONSOLE_WEB_URL") },
         }
 
-        assert_eq!(result, "https://console.runanywhere.ai?code=abc");
+        assert_eq!(result, "https://console.example.test?code=abc");
     }
 
     // #137: refresh_session must not string-match the console's message to
@@ -657,7 +659,7 @@ mod tests {
             },
         ) as Transport));
         let mut credentials = Credentials {
-            console_url: "https://inference.runanywhere.ai".to_string(),
+            console_url: "https://api.example.test".to_string(),
             refresh_token: "refresh-token".to_string(),
             ..Credentials::default()
         };
@@ -679,8 +681,11 @@ mod tests {
             ),
             "the console's own message must still lead: {failure}"
         );
+        // The console here is not the one this test binary was configured
+        // against (a test build has none, or another deployment's), so its
+        // billing page is its own sibling origin.
         assert!(
-            failure.contains("https://console.runanywhere.ai/cloud/billing"),
+            failure.contains("https://api.example.test/cloud/billing"),
             "the refresh failure must name the billing URL: {failure}"
         );
     }

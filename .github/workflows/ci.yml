@@ -18,6 +18,17 @@ on:
 permissions:
   contents: read
 
+# The console endpoints configure and bake into the binary. They are repository
+# variables, not secrets: nothing here grants access, and a fork pull request
+# receives neither. WALLY_CONSOLE_OPTIONAL lets a fork PR build without them
+# (the binary then resolves no default console); every build on this repo gets
+# the real values.
+env:
+  WALLY_BAKED_CONSOLE_API_URL: ${{ vars.WALLY_CONSOLE_API_URL }}
+  WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ vars.WALLY_CONSOLE_WEB_ORIGIN }}
+  WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT: ${{ vars.WALLY_CONSOLE_WEB_ORIGIN_ALT }}
+  WALLY_CONSOLE_OPTIONAL: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && '1' || '' }}
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

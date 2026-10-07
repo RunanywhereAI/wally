@@ -8,9 +8,8 @@
 #
 #   generated/wally-build.env  written here at configure time; build.rs reads it
 #                              for the kit IDL dir, the engine capability flags,
-#                              the default model and (dev channel only) the
-#                              baked console endpoints — values never go on a
-#                              command line.
+#                              the default model and the console endpoints —
+#                              values never go on a command line.
 #   the CMake file API reply   the exact link line of `wally_link_probe`, an
 #                              executable that is configured but never built.
 #                              build.rs turns its link fragments into linker
@@ -109,8 +108,9 @@ KIT_ROOT=${WALLY_SDK_ROOT}
 KIT_IDL_DIR=${RunAnywhere_IDL_DIR}
 KIT_THIRD_PARTY_DIR=${RunAnywhere_THIRD_PARTY_DIR}
 ${_wally_caps}DEFAULT_MODEL_ID=${WALLY_DEFAULT_MODEL_ID}
-BAKED_CONSOLE_API_URL=${WALLY_BAKED_CONSOLE_API_URL}
-BAKED_CONSOLE_WEB_ORIGIN=${WALLY_BAKED_CONSOLE_WEB_ORIGIN}
+CONSOLE_API_URL=${WALLY_BAKED_CONSOLE_API_URL}
+CONSOLE_WEB_ORIGIN=${WALLY_BAKED_CONSOLE_WEB_ORIGIN}
+CONSOLE_WEB_ORIGIN_ALT=${WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT}
 CMAKE_FILE_API_REPLY=${CMAKE_BINARY_DIR}/.cmake/api/v1/reply
 LINK_PROBE_TARGET=wally_link_probe
 LINK_PROBE_CONFIG=${CMAKE_BUILD_TYPE}

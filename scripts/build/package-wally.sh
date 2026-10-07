@@ -17,14 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
-BUILD="${1:?usage: package-wally.sh <build-dir> <platform-tag> [channel]}"
-PLATFORM="${2:?usage: package-wally.sh <build-dir> <platform-tag> [channel]}"
-# channel: empty/prod for the production bottle, "dev" for the dev-endpoint
-# bottle. Only the archive filename changes (-dev); the staged tree and its
-# single root stay wally-<platform> so install scripts extract both the same.
-CHANNEL="${3:-}"
-SUFFIX=""
-[[ "${CHANNEL}" == dev ]] && SUFFIX="-dev"
+BUILD="${1:?usage: package-wally.sh <build-dir> <platform-tag>}"
+PLATFORM="${2:?usage: package-wally.sh <build-dir> <platform-tag>}"
 [[ "${BUILD}" = /* ]] || BUILD="${ROOT}/${BUILD}"
 
 VERSION="${WALLY_VERSION:-$(wally_version)}"
@@ -53,7 +47,7 @@ fi
 DIST="${ROOT}/dist"
 STAGE_ROOT="${DIST}/stage"
 STAGE="${STAGE_ROOT}/wally-${PLATFORM}"
-TARBALL="${DIST}/wally-${VERSION}-${PLATFORM}${SUFFIX}.tar.gz"
+TARBALL="${DIST}/wally-${VERSION}-${PLATFORM}.tar.gz"
 
 rm -rf "${STAGE}"
 mkdir -p "${STAGE}/bin" "${STAGE}/lib"
@@ -223,8 +217,8 @@ smoke_out="$("${STAGE}/bin/wally" version 2>&1)" || smoke_rc=$?
 if [ "${smoke_rc}" -ne 0 ]; then
     if printf '%s' "${smoke_out}" | grep -qE "version .(GLIBC|GLIBCXX|CXXABI)_[0-9]"; then
         echo "note: this build host cannot start the bottle (its floor is newer than" >&2
-        echo "      the host glibc/libstdc++); skipping the run-time smoke and channel" >&2
-        echo "      checks. check-linux-abi.py and the install matrix cover the target." >&2
+        echo "      the host glibc/libstdc++); skipping the run-time smoke. check-linux-abi.py" >&2
+        echo "      and the install matrix cover the target." >&2
         skip_runtime_checks=1
     else
         echo "error: wally failed to start during packaging:" >&2
@@ -233,29 +227,21 @@ if [ "${smoke_rc}" -ne 0 ]; then
     fi
 fi
 
-# The archive name says which flavour this is; the binary has to agree. A dev
-# job whose endpoint variables were unset used to produce a `-dev` archive that
-# defaults to production, and nothing anywhere noticed (wally #87).
-#
-# Asked in an empty profile with the runtime overrides cleared, so a signed-in
-# account or a stray WALLY_CONSOLE_URL on the build machine cannot answer for
-# the bake.
+# A binary that resolves no console cannot sign anyone in. Configure requires
+# the endpoints (CMakeLists.txt); CI discards them for fork pull requests, so
+# this is only reachable for a bottle built that way. Asked in an empty profile
+# with the runtime overrides cleared, so a signed-in account or a stray
+# WALLY_CONSOLE_URL on the build machine cannot answer for the build.
 if [ "${skip_runtime_checks}" -ne 1 ]; then
     probe_profile="$(mktemp -d)"
     about="$(env -u WALLY_CONSOLE_URL -u WALLY_CONSOLE_WEB_URL -u RCLI_CONSOLE_URL \
         -u RCLI_CONSOLE_WEB_URL WALLY_PROFILE_DIR="${probe_profile}" \
         "${STAGE}/bin/wally" about --json)"
     rm -rf "${probe_profile}"
-    built_channel="$(printf '%s' "$about" | sed -nE 's/.*"channel":"([^"]*)".*/\1/p')"
-    case "${CHANNEL}" in
-        dev)  want_channel="development" ;;
-        *)    want_channel="production" ;;
-    esac
-    if [ "${built_channel}" != "${want_channel}" ]; then
-        echo "error: packaging a '${CHANNEL:-prod}' archive from a '${built_channel}' binary." >&2
-        echo "       Expected channel '${want_channel}'. Set WALLY_CHANNEL and the baked" >&2
-        echo "       endpoint variables in the configure environment, or package the" >&2
-        echo "       matching build." >&2
+    built_console="$(printf '%s' "$about" | sed -nE 's/.*"console":"([^"]*)".*/\1/p')"
+    if [ -z "${built_console}" ]; then
+        echo "error: this bottle resolves no console; it was configured without" >&2
+        echo "       WALLY_BAKED_CONSOLE_API_URL / WALLY_BAKED_CONSOLE_WEB_ORIGIN." >&2
         exit 1
     fi
 fi

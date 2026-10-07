@@ -25,7 +25,7 @@ fn now_seconds() -> i64 {
 /// EnvGuard held for the test's whole body).
 fn seed(expires_at: i64) -> Result<(), String> {
     let credentials = Credentials {
-        console_url: "https://console.runanywhere.ai".to_string(),
+        console_url: "https://console.example.test".to_string(),
         email: "developer@example.test".to_string(),
         access_token: "old-access-token".to_string(),
         refresh_token: "refresh-token".to_string(),
@@ -88,7 +88,7 @@ fn ephemeral_config_and_passthrough() {
         let provider = &config["provider"]["runanywhere"];
         if config["model"] != json!("runanywhere/glm-5.3")
             || provider["npm"] != json!("@ai-sdk/openai-compatible")
-            || provider["options"]["baseURL"] != json!("https://console.runanywhere.ai/v1")
+            || provider["options"]["baseURL"] != json!("https://console.example.test/v1")
             || provider["options"]["apiKey"] != json!("old-access-token")
             || provider["models"]["glm-5.3"]["name"] != json!("glm-5.3")
         {
@@ -343,7 +343,7 @@ fn opencode_config_declares_the_harness() {
         harness::build_open_code_config("glm-5.3-flash", "http://127.0.0.1:52431/v1", "", &catalog),
         harness::build_open_code_cloud_config(
             "glm-5.3-flash",
-            "https://inference.runanywhere.ai/v1",
+            "https://api.example.test/v1",
             "tok",
             &catalog,
         ),

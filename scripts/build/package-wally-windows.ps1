@@ -13,15 +13,8 @@ param(
     # that spelling or the native archive is never found.
     [Parameter(Mandatory = $false)]
     [ValidateSet("windows-x86_64", "windows-arm64")]
-    [string]$Platform = "windows-x86_64",
-
-    # "prod" for the production bottle, "dev" for the dev-endpoint bottle. Only
-    # the archive filename changes (-dev); the staged tree stays wally-<platform>.
-    [Parameter(Mandatory = $false)]
-    [ValidateSet("prod", "dev")]
-    [string]$Channel = "prod"
+    [string]$Platform = "windows-x86_64"
 )
-$Suffix = if ($Channel -eq "dev") { "-dev" } else { "" }
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
@@ -66,7 +59,7 @@ $DistDir = Join-Path $CliRoot "dist"
 $StageRoot = Join-Path $DistDir "stage"
 $Stage = Join-Path $StageRoot "wally-$Platform"
 $BinDir = Join-Path $Stage "bin"
-$Zip = Join-Path $DistDir "wally-$Version-$Platform$Suffix.zip"
+$Zip = Join-Path $DistDir "wally-$Version-$Platform.zip"
 
 Remove-Item $Stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item $BinDir -ItemType Directory -Force | Out-Null
@@ -94,11 +87,11 @@ try {
     & (Join-Path $BinDir "wally.exe") version
     if ($LASTEXITCODE -ne 0) { throw "packaged wally version smoke failed" }
 
-    # The archive name says which flavour this is; the binary has to agree. A dev
-    # job whose endpoint variables were unset used to produce a `-dev` archive
-    # that defaults to production, and nothing noticed (wally #87). Asked in an
-    # empty profile with the runtime overrides cleared, so a signed-in account or
-    # a stray WALLY_CONSOLE_URL on the build machine cannot answer for the bake.
+    # A binary that resolves no console cannot sign anyone in. Configure requires the
+    # endpoints (CMakeLists.txt); CI discards them for fork pull requests, so this
+    # is only reachable for an archive built that way. Asked in an empty profile
+    # with the runtime overrides cleared, so a signed-in account or a stray
+    # WALLY_CONSOLE_URL on the build machine cannot answer for the build.
     $ProbeProfile = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
     New-Item $ProbeProfile -ItemType Directory -Force | Out-Null
     $SavedEnv = @{}
@@ -118,12 +111,10 @@ try {
         }
         Remove-Item $ProbeProfile -Recurse -Force -ErrorAction SilentlyContinue
     }
-    $BuiltChannel = ([regex]::Match(($About -join ""), '"channel":"([^"]*)"')).Groups[1].Value
-    $WantChannel = if ($Channel -eq "dev") { "development" } else { "production" }
-    if ($BuiltChannel -ne $WantChannel) {
-        throw ("packaging a '$Channel' archive from a '$BuiltChannel' binary; expected " +
-               "channel '$WantChannel'. Set WALLY_CHANNEL and the baked endpoint variables " +
-               "in the configure environment, or package the matching build.")
+    $BuiltConsole = ([regex]::Match(($About -join ""), '"console":"([^"]*)"')).Groups[1].Value
+    if ([string]::IsNullOrWhiteSpace($BuiltConsole)) {
+        throw ("this archive resolves no console; it was configured without " +
+               "WALLY_BAKED_CONSOLE_API_URL / WALLY_BAKED_CONSOLE_WEB_ORIGIN.")
     }
 } finally {
     $env:PATH = $OldPath

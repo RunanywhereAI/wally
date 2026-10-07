@@ -30,6 +30,9 @@ deps/
 BEST_PRACTISES.md
 BEST_PRACTICES.md
 
+# Local build configuration (copy .env.example; see cmake/WallyRust.cmake).
+.env
+
 # IDE / editor caches
 .cache/
 .vscode/

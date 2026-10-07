@@ -26,7 +26,7 @@ fn now_seconds() -> i64 {
 /// an isolated directory (an EnvGuard held for the test's whole body).
 fn seed(access_token: &str, refresh_token: &str, expires_at: i64) -> Result<(), String> {
     let credentials = Credentials {
-        console_url: "https://console.runanywhere.ai".to_string(),
+        console_url: "https://console.example.test".to_string(),
         email: "developer@example.test".to_string(),
         access_token: access_token.to_string(),
         refresh_token: refresh_token.to_string(),
@@ -367,7 +367,7 @@ fn openclaw_config_selects_our_provider_and_model() {
     let config: Value = serde_json::from_str(&harness::build_open_claw_config(
         "",
         "gemma-4-31b-it",
-        "https://inference.runanywhere.ai/v1",
+        "https://api.example.test/v1",
         "sk-live-xyz",
         &catalog,
     ))
@@ -384,10 +384,7 @@ fn openclaw_config_selects_our_provider_and_model() {
         "merge mode, so the person's own providers survive the run"
     );
     let provider = &config["models"]["providers"]["runanywhere"];
-    assert_eq!(
-        provider["baseUrl"],
-        json!("https://inference.runanywhere.ai/v1")
-    );
+    assert_eq!(provider["baseUrl"], json!("https://api.example.test/v1"));
     assert_eq!(provider["apiKey"], json!("sk-live-xyz"));
     assert_eq!(provider["api"], json!("openai-completions"));
     let models = provider["models"].as_array().expect("models array");
@@ -473,7 +470,7 @@ fn openclaw_config_preserves_the_existing_document() {
     let config: Value = serde_json::from_str(&harness::build_open_claw_config(
         existing,
         "glm-5.3-flash",
-        "https://inference.runanywhere.ai/api-dev/v1",
+        "https://api.example.test/api-dev/v1",
         "sk-live",
         &catalog,
     ))
@@ -525,7 +522,7 @@ fn openclaw_config_lists_every_catalog_model() {
     let config: Value = serde_json::from_str(&harness::build_open_claw_config(
         "",
         "glm-5.3-flash",
-        "https://inference.runanywhere.ai/v1",
+        "https://api.example.test/v1",
         "sk-live",
         &catalog,
     ))
@@ -555,9 +552,15 @@ fn openclaw_config_lists_every_catalog_model() {
 // means the key is silently dropped and the call goes out unauthenticated.
 #[test]
 fn hermes_key_variable_follows_the_host() {
+    // The registrable label, uppercased, with the scheme, path and a leading
+    // `api.` stripped.
     assert_eq!(
-        harness::hermes_key_variable("https://inference.runanywhere.ai/api-dev/v1"),
-        "RUNANYWHERE_API_KEY"
+        harness::hermes_key_variable("https://api.vendor-a.test/api-dev/v1"),
+        "VENDOR_A_API_KEY"
+    );
+    assert_eq!(
+        harness::hermes_key_variable("https://vendor-b.test/v1"),
+        "VENDOR_B_API_KEY"
     );
     assert!(
         harness::hermes_key_variable("http://127.0.0.1:52431/v1").is_empty(),
@@ -603,7 +606,7 @@ fn hermes_context_hint_surfaces_the_real_window() {
 #[test]
 fn deepseek_settings_carry_the_route() {
     let upstream: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
-        "https://inference.runanywhere.ai/api-dev/v1",
+        "https://api.example.test/api-dev/v1",
         "RUNANYWHERE_API_KEY",
         &[CatalogModel {
             id: "glm-5.3-flash".to_string(),
@@ -617,7 +620,7 @@ fn deepseek_settings_carry_the_route() {
     assert_eq!(provider["api"], json!("openai-completions"));
     assert_eq!(
         provider["baseURL"],
-        json!("https://inference.runanywhere.ai/api-dev/v1"),
+        json!("https://api.example.test/api-dev/v1"),
         "the route must carry our endpoint and protocol"
     );
     assert_eq!(
@@ -650,7 +653,7 @@ fn deepseek_settings_carry_the_route() {
 
     // The whole catalog reaches dsh's settings, not just the launched model.
     let many: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
-        "https://inference.runanywhere.ai/api-dev/v1",
+        "https://api.example.test/api-dev/v1",
         "RUNANYWHERE_API_KEY",
         &[
             CatalogModel {
@@ -1181,10 +1184,7 @@ fn declare_catalog() -> Vec<CatalogModel> {
 
 #[test]
 fn openclaw_config_declares_the_harness() {
-    for base in [
-        "https://inference.runanywhere.ai/v1",
-        "http://127.0.0.1:52431/v1",
-    ] {
+    for base in ["https://api.example.test/v1", "http://127.0.0.1:52431/v1"] {
         let config: Value = serde_json::from_str(&harness::build_open_claw_config(
             "",
             "glm-5.3-flash",
@@ -1205,7 +1205,7 @@ fn openclaw_config_declares_the_harness() {
     let replaced: Value = serde_json::from_str(&harness::build_open_claw_config(
         r#"{"models":{"providers":{"runanywhere":{"headers":{"X-RA-Harness":"sdk"}}}}}"#,
         "glm-5.3-flash",
-        "https://inference.runanywhere.ai/v1",
+        "https://api.example.test/v1",
         "k",
         &declare_catalog(),
     ))
@@ -1221,7 +1221,7 @@ fn deepseek_settings_declare_the_harness() {
     // dsh reads the provider from the `llm-pi-ai` row's own config, which
     // build_deep_seek_llm_config returns with `providers` at its top level.
     let settings: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
-        "https://inference.runanywhere.ai/v1",
+        "https://api.example.test/v1",
         "RUNANYWHERE_API_KEY",
         &declare_catalog(),
     ))

@@ -2,9 +2,9 @@ name: Build wally
 description: >-
   Configure, build, and optionally package a wally bottle from a pinned C++
   desktop kit. The configure→build sequence is identical across ci.yml and
-  release.yml and every platform; this is the one place it lives. The dev/prod
-  bake is read from the WALLY_BAKED_CONSOLE_* environment the caller sets (empty
-  for prod), so nothing endpoint-shaped is passed here.
+  release.yml and every platform; this is the one place it lives. The console
+  endpoints are read from the WALLY_BAKED_CONSOLE_* environment the caller sets,
+  so nothing endpoint-shaped is passed here.
 
 inputs:
   platform:
@@ -13,10 +13,6 @@ inputs:
   kit-dir:
     description: Path to the fetched kit (CMAKE_PREFIX_PATH).
     required: true
-  variant:
-    description: prod | dev — only affects the packaged filename (-dev).
-    required: false
-    default: prod
   package:
     description: 'true to also produce the release bottle; false to only build.'
     required: false
@@ -29,13 +25,14 @@ runs:
       with:
         platform: ${{ inputs.platform }}
 
-    - name: Configure + build (${{ inputs.variant }})
+    - name: Configure + build
       shell: bash
-      env:
-        # Declared so configure can refuse a dev build whose endpoint variables
-        # never arrived, instead of quietly producing a production binary under
-        # a -dev name (wally #87).
-        WALLY_CHANNEL: ${{ inputs.variant }}
+      # WALLY_BAKED_CONSOLE_* and WALLY_CONSOLE_OPTIONAL come from the caller's
+      # job environment; composite steps inherit job-level env. Configure
+      # requires the endpoints so a binary can never silently ship with no
+      # control plane; a fork pull request receives no repository variables, so
+      # the caller sets WALLY_CONSOLE_OPTIONAL=1 there and the resulting binary
+      # resolves no default console.
       run: |
         set -euo pipefail
         prefix="${{ inputs.kit-dir }}"
@@ -59,7 +56,7 @@ runs:
           *)           cmake --build build --config Release ;;
         esac
 
-    - name: Package (${{ inputs.variant }})
+    - name: Package
       if: ${{ inputs.package == 'true' }}
       shell: bash
       env:
@@ -69,13 +66,13 @@ runs:
         ver="${WALLY_VERSION#v}"
         case "${{ inputs.platform }}" in
           macos-arm64)
-            WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build macos-arm64 "${{ inputs.variant }}" ;;
+            WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build macos-arm64 ;;
           linux-x64)
-            WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build linux-x86_64 "${{ inputs.variant }}" ;;
+            WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build linux-x86_64 ;;
           linux-arm64)
-            WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build linux-arm64 "${{ inputs.variant }}" ;;
+            WALLY_VERSION="$ver" bash scripts/build/package-wally.sh build linux-arm64 ;;
           windows-x64)
-            pwsh -File scripts/build/package-wally-windows.ps1 -BuildDir build -Version "$ver" -KitDir "${{ inputs.kit-dir }}" -Channel "${{ inputs.variant }}" ;;
+            pwsh -File scripts/build/package-wally-windows.ps1 -BuildDir build -Version "$ver" -KitDir "${{ inputs.kit-dir }}" ;;
           windows-arm64)
-            pwsh -File scripts/build/package-wally-windows.ps1 -BuildDir build -Version "$ver" -KitDir "${{ inputs.kit-dir }}" -Platform windows-arm64 -Channel "${{ inputs.variant }}" ;;
+            pwsh -File scripts/build/package-wally-windows.ps1 -BuildDir build -Version "$ver" -KitDir "${{ inputs.kit-dir }}" -Platform windows-arm64 ;;
         esac

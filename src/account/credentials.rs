@@ -54,43 +54,31 @@ impl Credentials {
     }
 }
 
-// Two hosts, two jobs, two different deployments. Keep them adjacent: the bug
-// they replace was one constant doing both, and it broke every command that
-// talks to the console.
-//
-// The API is the control plane -- /auth/cli/start, /auth/cli/poll,
-// /auth/cli/refresh, /v1/me, /v1/cli/* -- and it is served by Cloud Run. The web
-// console is the page a person approves a sign-in on, and it is served by
-// Railway. Measured 2026-09-04:
-//
-//   inference.runanywhere.ai  /auth/cli/start 422  /v1/me 405  Google Frontend
-//   console.runanywhere.ai    /auth/cli/start 404  /v1/me 404  railway-hikari
-//
-// 422 and 405 are those endpoints rejecting a bad body and a wrong verb, which
-// is how you know they are there. 404 with the console's own SPA HTML is how
-// you know they are not. Point the API constant at the Railway host -- which is
-// what it used to be -- and login, whoami and usage all 404.
-const PRODUCTION_CONSOLE_API: &str = "https://inference.runanywhere.ai";
+// The console this build talks to. Both values are required configure inputs
+// (CMakeLists.txt): the API is the control plane -- /auth/cli/start,
+// /auth/cli/poll, /auth/cli/refresh, /v1/me, /v1/cli/* -- and the web origin is
+// the page a person approves a sign-in on. They live in the build tree, never
+// in source, so this binary's endpoints are a deployment fact rather than a
+// constant in the repository. A CI build with no repository configuration (a
+// fork pull request) compiles both empty; `WALLY_CONSOLE_URL` still names a
+// console at runtime, and `wally about --json` reports an empty default.
+const CONSOLE_API: &str = env!("WALLY_CONSOLE_API_URL");
 
-// The approval page, under both names it answers to. One deployment: measured
-// 2026-09-04, both return `server: railway-hikari` and the same `etag:
-// "nqkdmw"` for /cloud/cli, so this is two DNS names for one build and not two
-// origins' worth of trust.
-//
-// The raw Railway name is here because it is what the control plane actually
-// hands out today:
-//
-//   POST https://inference.runanywhere.ai/auth/cli/start
-//     -> verification_url: https://runanywhere-frontend-production.up.railway.app/cloud/cli?code=...
-//
-// Trusting only the custom domain would refuse every real sign-in. Delete the
-// Railway entry once the control plane's configured console origin is the
-// custom domain -- that is a one-line config change on the API side, and this
-// list is the thing waiting on it.
-const PRODUCTION_CONSOLE_WEB: [&str; 2] = [
-    "https://console.runanywhere.ai",
-    "https://runanywhere-frontend-production.up.railway.app",
+// Every browser origin allowed to host the approval page. One is required; the
+// second is optional, for a deployment the control plane hands out under a name
+// of its own while the custom domain is also live.
+const CONSOLE_WEB: [&str; 2] = [
+    env!("WALLY_CONSOLE_WEB_ORIGIN"),
+    env!("WALLY_CONSOLE_WEB_ORIGIN_ALT"),
 ];
+
+fn console_web_origins() -> Vec<&'static str> {
+    CONSOLE_WEB
+        .iter()
+        .copied()
+        .filter(|s| !s.is_empty())
+        .collect()
+}
 
 const MAXIMUM_CREDENTIAL_BYTES: u64 = 1024 * 1024;
 
@@ -130,13 +118,13 @@ struct ParsedUrl {
 /// Reduces a console URL's path to the prefix every endpoint hangs off, or
 /// fails if it is not one.
 ///
-/// A console is not always at the root of its host. Development is reached at
-/// `https://inference.runanywhere.ai/api-dev`, where the load balancer strips
-/// the prefix and forwards to the dev control plane; the same host without it
-/// is production. Refusing the path -- which this did until it was found --
-/// leaves no way to name the dev console at all, so `--console-url` had to be
-/// given the backend's own Cloud Run hostname, which bypasses the load balancer
-/// and therefore reaches different code than any real client does.
+/// A console is not always at the root of its host. A deployment can be reached
+/// at `https://host/prefix`, where the load balancer strips the prefix and
+/// forwards to the control plane behind it. Refusing the path -- which this did
+/// until it was found -- leaves no way to name that console at all, and
+/// `--console-url` had to be given the backend's own Cloud Run hostname, which
+/// bypasses the load balancer and therefore reaches different code than any
+/// real client does.
 ///
 /// A query or fragment is still refused. Every caller builds an endpoint by
 /// appending to this string, and `?a=1` + `/v1/me` is not a URL.
@@ -892,23 +880,25 @@ pub fn default_console_url() -> String {
     if !configured.is_empty() {
         return configured;
     }
-    // A dev build carries its control plane compiled in (see
-    // baked_endpoints.h.in): the env override above still wins, production
-    // builds generate an empty macro and fall through unchanged.
-    let baked = env!("WALLY_BAKED_CONSOLE_API_URL");
-    if !baked.is_empty() {
-        return baked.to_string();
-    }
-    PRODUCTION_CONSOLE_API.to_string()
+    CONSOLE_API.to_string()
 }
 
-/// The baked development control plane, normalised, or empty when none baked.
-pub fn baked_console_api_url() -> String {
-    let baked = env!("WALLY_BAKED_CONSOLE_API_URL");
-    if baked.is_empty() {
+/// The control plane this build was configured against, normalised, or empty
+/// when it was configured with none (a CI build without repository config).
+pub fn configured_console_api_url() -> String {
+    if CONSOLE_API.is_empty() {
         return String::new();
     }
-    normalize_console_url(baked).unwrap_or_default()
+    normalize_console_url(CONSOLE_API).unwrap_or_default()
+}
+
+/// The approval origins this build was configured against, normalised, in
+/// configure order. Empty when the build was configured with none.
+pub fn configured_console_web_origins() -> Vec<String> {
+    console_web_origins()
+        .into_iter()
+        .filter_map(|origin| normalize_console_url(origin).ok())
+        .collect()
 }
 
 /// The browser origins allowed to host the approval page for `console_url`.
@@ -922,21 +912,20 @@ pub fn trusted_browser_origins(console_url: &str) -> Vec<String> {
             return vec![normalized];
         }
     }
-    if console_url == PRODUCTION_CONSOLE_API {
-        return PRODUCTION_CONSOLE_WEB
-            .iter()
-            .map(|s| s.to_string())
+    // Held pairwise: the configured web origins are honored only while talking
+    // to the configured API, never for an arbitrary --base-url. Trusting them
+    // for any console would let an attacker-controlled API redirect a sign-in
+    // to a page we would then accept a code from.
+    if !CONSOLE_API.is_empty() && console_url == CONSOLE_API {
+        let mut origins: Vec<String> = console_web_origins()
+            .into_iter()
+            .filter_map(|origin| normalize_console_url(origin).ok())
             .collect();
-    }
-    // A dev build that baked its control plane also baked which browser
-    // console may approve sign-ins for it (a local console on loopback,
-    // typically). Trust holds pairwise: the baked web origin is honored only
-    // while talking to the baked API, never for an arbitrary --base-url.
-    let baked_web = env!("WALLY_BAKED_CONSOLE_WEB_ORIGIN");
-    let baked_api = baked_console_api_url();
-    if !baked_web.is_empty() && !baked_api.is_empty() && console_url == baked_api {
-        if let Ok(normalized) = normalize_console_url(baked_web) {
-            return vec![normalized, console_url.to_string()];
+        if !origins.is_empty() {
+            if !origins.iter().any(|origin| origin == console_url) {
+                origins.push(console_url.to_string());
+            }
+            return origins;
         }
     }
     // Anything else -- a dev console, a loopback stub -- is trusted only at its
@@ -956,14 +945,12 @@ pub fn effective_console_web_origin(console_url: &str) -> String {
             return normalized;
         }
     }
-    if console_url == PRODUCTION_CONSOLE_API {
-        return PRODUCTION_CONSOLE_WEB[0].to_string();
-    }
-    let baked_web = env!("WALLY_BAKED_CONSOLE_WEB_ORIGIN");
-    let baked_api = baked_console_api_url();
-    if !baked_web.is_empty() && !baked_api.is_empty() && console_url == baked_api {
-        if let Ok(normalized) = normalize_console_url(baked_web) {
-            return normalized;
+    if !CONSOLE_API.is_empty() && console_url == CONSOLE_API {
+        if let Some(origin) = console_web_origins()
+            .into_iter()
+            .find_map(|origin| normalize_console_url(origin).ok())
+        {
+            return origin;
         }
     }
     console_url.to_string()

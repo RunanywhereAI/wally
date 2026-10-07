@@ -90,17 +90,8 @@ pub fn register_about(app: &mut App) {
 
         let engines = collect_llm_backend_rows();
 
-        // Which bottle this binary is: WALLY_BAKED_CONSOLE_API_URL is compiled
-        // in empty for a production build and non-empty for a dev one (see
-        // baked_endpoints.h.in) -- the same compile-time fact
-        // default_console_url() itself keys on. console_url is the *effective*
-        // target though, since an env override still wins over the bake.
-        let dev_channel = !env!("WALLY_BAKED_CONSOLE_API_URL").is_empty();
-        let channel = if dev_channel {
-            "development"
-        } else {
-            "production"
-        };
+        // console_url is the *effective* target: an env override still wins
+        // over the configure-time endpoint.
         let console_url = credentials::default_console_url();
 
         let loaded = credentials::load().ok();
@@ -114,7 +105,6 @@ pub fn register_about(app: &mut App) {
                 .field_str("idl_version", env!("WALLY_IDL_VERSION"))
                 .field_str("idl_schema_sha256", env!("WALLY_IDL_SCHEMA_SHA256"))
                 .field_str("platform", PLATFORM)
-                .field_str("channel", channel)
                 .field_str("console", &console_url)
                 .field_str("os", &device.os_version)
                 .field_str("cpu", &device.chip)
@@ -171,11 +161,10 @@ pub fn register_about(app: &mut App) {
             ),
         );
         row("platform", PLATFORM);
-        row("channel", channel);
         // The console URL is deliberately NOT printed here. It is an internal
-        // endpoint (today `/api-dev`), it means nothing to the person reading
-        // `wally about`, and it was shown twice. It stays in `--json` so
-        // support and tooling can still read it.
+        // endpoint, it means nothing to the person reading `wally about`, and it
+        // was shown twice. It stays in `--json` so support and tooling can still
+        // read it.
 
         heading(&pal, "System");
         row(

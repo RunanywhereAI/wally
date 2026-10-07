@@ -21,9 +21,14 @@ permissions:
 
 env:
   WALLY_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+  # Required at configure time; a release never falls back to an un-configured
+  # binary, so these must be set as repository variables before tagging.
+  WALLY_BAKED_CONSOLE_API_URL: ${{ vars.WALLY_CONSOLE_API_URL }}
+  WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ vars.WALLY_CONSOLE_WEB_ORIGIN }}
+  WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT: ${{ vars.WALLY_CONSOLE_WEB_ORIGIN_ALT }}
 
-# Every platform builds one bottle from one kit: `prod` (empty bake -> the
-# production console defaults in credentials.cpp). The configure→build→package
+# Every platform builds one bottle from one kit, with the console endpoints from
+# the repository variables above compiled in. The configure→build→package
 # sequence lives in .github/actions/build-wally; e2e runs on the binary it
 # produced, so the bottle is built exactly once.
 #
@@ -60,10 +65,6 @@ jobs:
     # SDK Package.swift is swift-tools-version 6.2 (Xcode 26).
     runs-on: macos-26
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [prod]
     env:
       WALLY_SDK_SWIFT_PATH: ${{ github.workspace }}/.deps/runanywhere-sdks
     steps:
@@ -109,7 +110,6 @@ jobs:
         with:
           platform: macos-arm64
           kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
           package: 'true'
       - name: Product e2e
         env:
@@ -123,17 +123,13 @@ jobs:
             "dist/wally-${VERSION}-macos-arm64.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: wally-macos-arm64-${{ matrix.variant }}
+          name: wally-macos-arm64
           path: dist/wally-*-macos-arm64*.tar.gz*
 
   windows-arm64:
     needs: [validate-dispatch]
     runs-on: windows-11-arm
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [prod]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,7 +170,6 @@ jobs:
         with:
           platform: windows-arm64
           kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
           package: 'true'
       - name: Product e2e
         shell: bash
@@ -195,7 +190,7 @@ jobs:
             "dist/wally-$ver-windows-arm64.zip.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: wally-windows-arm64-${{ matrix.variant }}
+          name: wally-windows-arm64
           path: |
             dist/*.zip
             dist/*.zip.sha256
@@ -205,10 +200,6 @@ jobs:
     needs: [validate-dispatch]
     runs-on: windows-2022
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [prod]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -247,7 +238,6 @@ jobs:
         with:
           platform: windows-x64
           kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
           package: 'true'
       - name: Product e2e
         shell: bash
@@ -268,7 +258,7 @@ jobs:
             "dist/wally-$ver-windows-x86_64.zip.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: wally-windows-x64-${{ matrix.variant }}
+          name: wally-windows-x64
           path: |
             dist/*.zip
             dist/*.zip.sha256
@@ -280,10 +270,6 @@ jobs:
     # GLIBC_2.38 and GLIBCXX_3.4.31/32, which fails on Ubuntu 22.04.
     runs-on: ubuntu-22.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [prod]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -322,7 +308,6 @@ jobs:
         with:
           platform: linux-x64
           kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
           package: 'true'
       - name: Product e2e
         env:
@@ -349,7 +334,7 @@ jobs:
           bash scripts/test/linux-install-matrix.sh dist "${VERSION}"
       - uses: actions/upload-artifact@v4
         with:
-          name: wally-linux-x86_64-${{ matrix.variant }}
+          name: wally-linux-x86_64
           path: dist/wally-*-linux-x86_64*.tar.gz*
 
   linux-arm64:
@@ -365,10 +350,6 @@ jobs:
     # floor from the ELF files instead.
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [prod]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -408,7 +389,6 @@ jobs:
         with:
           platform: linux-arm64
           kit-dir: ${{ github.workspace }}/kit
-          variant: ${{ matrix.variant }}
           package: 'true'
       - name: Verify archive
         run: |
@@ -426,7 +406,7 @@ jobs:
             "dist/wally-${VERSION}-linux-arm64.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
-          name: wally-linux-arm64-${{ matrix.variant }}
+          name: wally-linux-arm64
           path: dist/wally-*-linux-arm64*.tar.gz*
 
   publish:

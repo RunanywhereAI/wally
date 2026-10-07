@@ -1353,16 +1353,13 @@ mod tests {
             Some(("http://127.0.0.1:8080".to_string(), "/v1".to_string()))
         );
         assert_eq!(
-            split_base_url("https://inference.runanywhere.ai"),
-            Some((
-                "https://inference.runanywhere.ai".to_string(),
-                String::new()
-            ))
+            split_base_url("https://api.example.test"),
+            Some(("https://api.example.test".to_string(), String::new()))
         );
         assert_eq!(
-            split_base_url("https://inference.runanywhere.ai/api-dev"),
+            split_base_url("https://api.example.test/api-dev"),
             Some((
-                "https://inference.runanywhere.ai".to_string(),
+                "https://api.example.test".to_string(),
                 "/api-dev".to_string()
             ))
         );

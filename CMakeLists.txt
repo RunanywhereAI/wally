@@ -34,54 +34,59 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(RunAnywhereSDK)
 find_package(Threads REQUIRED)
 
-# Dev endpoint bake. The values come from the ENVIRONMENT of the configure
-# step, never from -D flags: nothing endpoint-shaped lands on the command
-# line, in CMakeCache.txt, or in this log (only ON/off is printed). They reach
-# the Rust crate through generated/wally-build.env, which lives in the build
-# tree and is gitignored — no endpoint ever enters committed source. Empty env
-# (the normal case) bakes nothing and the production resolution order is
-# untouched.
+include(env-loader)
+
+# Console endpoints. Required at configure time: the control plane this build
+# talks to, and the browser origin(s) allowed to host the approval page. Values
+# come from the ENVIRONMENT of the configure step (or the repo-local .env that
+# cmake/env-loader.cmake loads), never from -D flags: nothing endpoint-shaped
+# lands on the command line, in CMakeCache.txt, or in this log. They reach the
+# Rust crate through generated/wally-build.env in the build tree, which is
+# gitignored — no endpoint enters committed source. A configure without them is
+# refused, so a binary can never resolve a console it does not know;
+# WALLY_CONSOLE_OPTIONAL=1 opts out for CI runs that have no repository
+# configuration (pull requests from forks), and that binary reports no default
+# console at runtime.
 set(WALLY_BAKED_CONSOLE_API_URL "$ENV{WALLY_BAKED_CONSOLE_API_URL}")
 set(WALLY_BAKED_CONSOLE_WEB_ORIGIN "$ENV{WALLY_BAKED_CONSOLE_WEB_ORIGIN}")
-# WALLY_CHANNEL states what is being built. A release job that means to build a
-# dev bottle but whose endpoint variables are unset would otherwise produce a
-# `-dev` archive that quietly defaults to production, because an empty bake is
-# indistinguishable from an ordinary production build (wally #87). Declaring the
-# intent is what lets that be caught here rather than by a person wondering why
-# nightly is billing them.
-set(WALLY_CHANNEL "$ENV{WALLY_CHANNEL}")
-if(WALLY_CHANNEL STREQUAL "dev")
-    if(NOT WALLY_BAKED_CONSOLE_API_URL OR NOT WALLY_BAKED_CONSOLE_WEB_ORIGIN)
+set(WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT "$ENV{WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT}")
+set(WALLY_CONSOLE_OPTIONAL "$ENV{WALLY_CONSOLE_OPTIONAL}")
+
+if(NOT WALLY_BAKED_CONSOLE_API_URL OR NOT WALLY_BAKED_CONSOLE_WEB_ORIGIN)
+    if(WALLY_CONSOLE_OPTIONAL STREQUAL "1")
+        message(WARNING
+            "wally: building with no console endpoints (WALLY_CONSOLE_OPTIONAL=1). "
+            "This binary resolves no control plane until WALLY_CONSOLE_URL is set.")
+    else()
         message(FATAL_ERROR
-            "WALLY_CHANNEL=dev needs both WALLY_BAKED_CONSOLE_API_URL and "
-            "WALLY_BAKED_CONSOLE_WEB_ORIGIN in the configure environment. "
-            "Without them this builds a production binary under a -dev name.")
+            "wally: console endpoints are required to configure.\n"
+            "  Set WALLY_BAKED_CONSOLE_API_URL (the control plane) and "
+            "WALLY_BAKED_CONSOLE_WEB_ORIGIN (the approval page's origin) in the "
+            "configure environment, or in a repo-local .env (copy .env.example).\n"
+            "  WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT is optional: one more browser "
+            "origin allowed to host the approval page.")
     endif()
 endif()
-# Half a pair is a configuration mistake in either direction: an API with no
-# approval origin cannot complete a login, and an origin with no API is trusted
-# for nothing.
+# A half a pair is a configuration mistake when one of them is set: an API
+# with no approval origin cannot complete a login, and an origin with no API
+# is trusted for nothing.
 if(WALLY_BAKED_CONSOLE_API_URL AND NOT WALLY_BAKED_CONSOLE_WEB_ORIGIN)
     message(FATAL_ERROR "WALLY_BAKED_CONSOLE_API_URL is set without "
                         "WALLY_BAKED_CONSOLE_WEB_ORIGIN; `wally login` could not "
                         "trust any approval page.")
 endif()
-if(WALLY_BAKED_CONSOLE_WEB_ORIGIN AND NOT WALLY_BAKED_CONSOLE_API_URL)
-    message(FATAL_ERROR "WALLY_BAKED_CONSOLE_WEB_ORIGIN is set without "
-                        "WALLY_BAKED_CONSOLE_API_URL; the origin is paired with "
-                        "an API that was not baked.")
-endif()
-foreach(_baked_url "${WALLY_BAKED_CONSOLE_API_URL}" "${WALLY_BAKED_CONSOLE_WEB_ORIGIN}")
+foreach(_baked_url "${WALLY_BAKED_CONSOLE_API_URL}" "${WALLY_BAKED_CONSOLE_WEB_ORIGIN}"
+        "${WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT}")
     if(_baked_url AND NOT _baked_url MATCHES "^https?://[^/ ]+")
         message(FATAL_ERROR
-            "a baked endpoint is not an http(s) origin. Values are withheld from "
+            "a console endpoint is not an http(s) origin. Values are withheld from "
             "this log; check the configure environment.")
     endif()
 endforeach()
 if(WALLY_BAKED_CONSOLE_API_URL)
-    message(STATUS "wally: dev endpoint bake ON (values withheld from log)")
+    message(STATUS "wally: console endpoints configured (values withheld from log)")
 else()
-    message(STATUS "wally: dev endpoint bake off (production defaults)")
+    message(STATUS "wally: no console endpoints (WALLY_CONSOLE_OPTIONAL)")
 endif()
 
 # The model a harness launch falls back to when the reader passes no -m and set
