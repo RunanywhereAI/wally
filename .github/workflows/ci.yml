@@ -22,10 +22,10 @@ permissions:
 # variables, not secrets: nothing here grants access, and a fork pull request
 # receives neither. WALLY_CONSOLE_OPTIONAL lets a fork PR build without them
 # (the binary then resolves no default console). Builds on this repo use the
-# existing dev-console variables. The alt origin is optional and unset here.
+# production console variables. The alt origin is optional and unset here.
 env:
-  WALLY_BAKED_CONSOLE_API_URL: ${{ vars.WALLY_DEV_CONSOLE_API_URL }}
-  WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ vars.WALLY_DEV_CONSOLE_WEB_ORIGIN }}
+  WALLY_BAKED_CONSOLE_API_URL: ${{ vars.WALLY_PROD_CONSOLE_API_URL }}
+  WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ vars.WALLY_PROD_CONSOLE_WEB_ORIGIN }}
   WALLY_CONSOLE_OPTIONAL: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && '1' || '' }}
 
 concurrency:
