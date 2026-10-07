@@ -597,7 +597,12 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         // `ANTHROPIC_MODEL` is read before the `model` settings key, and
         // `--model` or `/model` still override it, which is correct -- a reader
         // who asks for something else inside the session should get it.
-        let _selected_model = ScopedEnv::new("ANTHROPIC_MODEL", model);
+        // Carry the model as a `--model` flag instead of ANTHROPIC_MODEL, so
+        // the real id is never renamed and labels stay correct. If the reader
+        // already passed their own --model, theirs wins and nothing is
+        // prepended. ANTHROPIC_MODEL is deliberately unset here: when both
+        // are present the env value shadows the flag, which would defeat this.
+        let _no_selected_model = ScopedUnsetEnv::new("ANTHROPIC_MODEL");
         // Claude Code's picker is Anthropic-family (Opus/Sonnet/Haiku), not a model
         // list, so each catalog model is bound to a family slot: they all then show
         // in the picker, labelled with their real ids. The launched model is first,
@@ -612,7 +617,25 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         for (index, catalog_model) in catalog.iter().take(3).enumerate() {
             _family_slots.push(ScopedEnv::new(FAMILY_SLOTS[index], &catalog_model.id));
         }
-        status = harness::launch(editor.command, "", args, options);
+        // The picker renders each bound slot as "Custom <Family> model"
+        // unless its description override is set, so label all three with
+        // the provider. The label keeps the real id; only this suffix changes.
+        const SLOT_DESCRIPTIONS: [&str; 3] = [
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
+        ];
+        let mut _slot_descriptions: Vec<ScopedEnv> = Vec::new();
+        for name in SLOT_DESCRIPTIONS {
+            _slot_descriptions.push(ScopedEnv::new(name, "RunAnywhere model"));
+        }
+        let mut launch_args = Vec::with_capacity(args.len() + 2);
+        if !args.iter().any(|a| a == "--model") {
+            launch_args.push("--model".to_string());
+            launch_args.push(model.to_string());
+        }
+        launch_args.extend(args.iter().cloned());
+        status = harness::launch(editor.command, "", &launch_args, options);
     }
 
     anthropic::stop(&mut shim);

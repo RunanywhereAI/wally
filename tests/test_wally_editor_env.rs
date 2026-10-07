@@ -71,6 +71,16 @@ fn the_model_is_carried_to_a_bundle() {
         env_value(&args, "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
         "glm-5.3-flash"
     );
+
+    // Picker labels: without these the rows render as "Custom <Family>
+    // model". The label keeps the real id; only this suffix is overridden.
+    for name in [
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
+    ] {
+        assert_eq!(env_value(&args, name), "RunAnywhere model");
+    }
 }
 
 #[test]

@@ -39,6 +39,16 @@ pub fn open_args(bundle: &str, shim: &Shim, passthrough: &[String], model: &str)
             args.push(format!("ANTHROPIC_MODEL={model}"));
             args.push("--env".to_string());
             args.push(format!("ANTHROPIC_DEFAULT_HAIKU_MODEL={model}"));
+            // Picker labels, mirroring the terminal path in cmd_editors.rs:
+            // without these the rows render as "Custom <Family> model".
+            for name in [
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL_DESCRIPTION",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL_DESCRIPTION",
+            ] {
+                args.push("--env".to_string());
+                args.push(format!("{name}=RunAnywhere model"));
+            }
         }
     }
     args.push("-a".to_string());
