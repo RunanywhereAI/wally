@@ -21,11 +21,10 @@ permissions:
 
 env:
   WALLY_VERSION: ${{ github.event.inputs.version || github.ref_name }}
-  # Required at configure time; a release never falls back to an un-configured
-  # binary, so these must be set as repository variables before tagging.
-  WALLY_BAKED_CONSOLE_API_URL: ${{ vars.WALLY_CONSOLE_API_URL }}
-  WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ vars.WALLY_CONSOLE_WEB_ORIGIN }}
-  WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT: ${{ vars.WALLY_CONSOLE_WEB_ORIGIN_ALT }}
+  # Required at configure time. Same existing dev-console variables CI uses.
+  # There is no alt-origin variable; that input stays unset.
+  WALLY_BAKED_CONSOLE_API_URL: ${{ vars.WALLY_DEV_CONSOLE_API_URL }}
+  WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ vars.WALLY_DEV_CONSOLE_WEB_ORIGIN }}
 
 # Every platform builds one bottle from one kit, with the console endpoints from
 # the repository variables above compiled in. The configure→build→package
