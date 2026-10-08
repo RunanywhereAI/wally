@@ -46,9 +46,7 @@ fn serve_gpu_layers(value: Option<i64>) -> Result<i32, &'static str> {
         None => Ok(sys::RAC_LLM_LLAMACPP_GPU_LAYERS_AUTO),
         Some(-1) => Ok(-1),
         Some(0) => Ok(0),
-        Some(_) => {
-            Err("--gpu-layers accepts -1 (GPU) or 0 (CPU); omit it for automatic placement")
-        }
+        Some(_) => Err("--gpu-layers accepts -1 (GPU) or 0 (CPU); omit it for automatic placement"),
     }
 }
 
