@@ -13,6 +13,7 @@ allowed is decided by guards.py, never by a probability here.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -39,6 +40,32 @@ GATE_DONE = "gate_done"
 GATE_THRESHOLD = 0.5  # only ever used to ADD a stop or hand-off
 OTHER_TEXT = "none of these: other text"
 HISTORY_KEEP = 10
+_TYPED_INTO = re.compile(r"typed into \[(\d+)\]")
+_CLICKED = re.compile(r"chose to click \[(\d+)\]")
+
+
+def fields_typed_but_still_empty(history: list[str], elements: list[Element]) -> list[Element]:
+    """A field we already typed into that still has no value. Typing it again
+    does not operate a combobox; the suggestion is a click."""
+    typed: set[int] = set()
+    for line in history:
+        match = _TYPED_INTO.search(line)
+        if match:
+            typed.add(int(match.group(1)))
+    if not typed:
+        return []
+    return [element for element in elements if element.index in typed and not (element.value or "").strip()]
+
+
+def clicks_already_taken(history: list[str]) -> set[int]:
+    """Indexes already clicked. A dialog opener stays on the page after it has
+    done its job, and clicking it again never reaches the controls inside."""
+    taken: set[int] = set()
+    for line in history:
+        match = _CLICKED.search(line)
+        if match:
+            taken.add(int(match.group(1)))
+    return taken
 
 
 @dataclass
@@ -71,6 +98,20 @@ class Decision:
     probabilities: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
+def _stuck_type_note(obs: Observation) -> str:
+    stuck = fields_typed_but_still_empty(obs.history, obs.elements)
+    if not stuck:
+        return ""
+    names = ", ".join(el.label(element) for element in stuck[:3])
+    return f"Typing did not stick in {names}. Do not type there again; click the matching suggestion."
+
+
+def _open_dialog_note(obs: Observation) -> str:
+    if not any(element.context_text for element in obs.elements):
+        return ""
+    return "A dialog is open. Click a control inside it, or its close button. Do not click the button that opened it."
+
+
 def _state_text(obs: Observation, table_budget: int) -> str:
     tabs = "; ".join(f"{tid}: {title[:40]}" for tid, title in obs.tabs) if len(obs.tabs) > 1 else ""
     parts = [
@@ -81,6 +122,8 @@ def _state_text(obs: Observation, table_budget: int) -> str:
         "Recent actions:\n" + "\n".join(f"- {h}" for h in obs.history[-HISTORY_KEEP:]) if obs.history else "",
         "Notes:\n" + "\n".join(f"- {n}" for n in obs.notes[-5:]) if obs.notes else "",
         "Interactive elements (in page order):\n" + el.table(obs.elements, table_budget),
+        _stuck_type_note(obs),
+        _open_dialog_note(obs),
         "Rules: never pay, never type card, UPI or OTP details, and stop when the payment page is reached.",
     ]
     return "\n".join(p for p in parts if p)
@@ -96,11 +139,15 @@ class EvePolicy:
 
     def _heads(self, obs: Observation) -> tuple[list[Question], dict]:
         """Round-1 questions, and how each target head maps back to elements."""
+        stuck = {element.index for element in fields_typed_but_still_empty(obs.history, obs.elements)}
+        clicked = clicks_already_taken(obs.history)
         by_kind: dict[str, list[Element]] = {"click": [], "type": [], "select": []}
         for element in obs.elements:
             kind = el.kind_of(element)
-            if kind == "type" and never_type_reason(element):
-                continue  # never offered; guards.py would refuse it anyway
+            if kind == "type" and (element.index in stuck or never_type_reason(element)):
+                continue  # never offered; a stuck field needs a click, and guards.py would refuse the rest
+            if kind == "click" and element.index in clicked:
+                continue  # the opener already ran; the dialog's own controls are other indexes
             by_kind[kind].append(element)
 
         operations = ["CLICK", "SCROLL_DOWN", "SCROLL_UP", "GO_BACK", "WAIT", "ASK_USER", "DONE"]
