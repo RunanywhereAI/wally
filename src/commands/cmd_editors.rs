@@ -210,7 +210,10 @@ fn without_gateway_env(text: &str) -> String {
     let Ok(mut doc) = serde_json::from_str::<serde_json::Value>(text) else {
         return text.to_string();
     };
-    let Some(env) = doc.get_mut("env").and_then(serde_json::Value::as_object_mut) else {
+    let Some(env) = doc
+        .get_mut("env")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
         return text.to_string();
     };
     let before = env.len();
