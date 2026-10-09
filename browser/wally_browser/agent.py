@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -27,6 +29,17 @@ from .text import TextError, TextModel
 from .tools import GuardContext
 
 CONTACT_FIELD = re.compile(r"e-?mail|\bmail\b|phone|mobile|\btel\b|contact", re.I)
+
+
+def _page_image(state) -> str | None:
+    """The page screenshot as the data URL the decisions contract accepts."""
+    raw = getattr(state, "screenshot", None)
+    if not raw:
+        return None
+    raw = str(raw)
+    if raw.startswith("data:"):
+        return raw
+    return "data:image/png;base64," + raw
 
 
 def short(element: Element) -> str:
@@ -172,6 +185,39 @@ class EveAgent(Agent):
         """Close the last step's timing (call after the run)."""
         self._close_previous_step(time.perf_counter())
 
+    async def _leave_the_address_bar(self, url: str) -> None:
+        """A new window or tab focuses Chrome's address bar. One click in the page
+        moves that focus off it. Not the top of the page: that is where search boxes sit."""
+        if getattr(self, "_wally_unfocused_url", None) == url:
+            return
+        self._wally_unfocused_url = url
+        try:
+            cdp = await self.browser_session.get_or_create_cdp_session(focus=True)
+            point = await cdp.cdp_client.send.Runtime.evaluate(
+                params={"expression": "({x: Math.floor(window.innerWidth / 2), y: Math.max(80, window.innerHeight - 40)})",
+                        "returnByValue": True},
+                session_id=cdp.session_id,
+            )
+            value = (point.get("result") or {}).get("value") or {"x": 400, "y": 500}
+            x, y = value["x"], value["y"]
+            for kind in ("mousePressed", "mouseReleased"):
+                await cdp.cdp_client.send.Input.dispatchMouseEvent(
+                    params={"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1},
+                    session_id=cdp.session_id,
+                )
+            await cdp.cdp_client.send.Runtime.evaluate(
+                params={"expression": "document.activeElement && document.activeElement.blur()"},
+                session_id=cdp.session_id,
+            )
+        except Exception:
+            pass
+
+    def _say(self, text: str) -> None:
+        if os.environ.get("WALLY_BROWSER_CLEAN") != "1":
+            return
+        sys.stderr.write(f"  {len(self._wally_steps):>2}  {text}\n")
+        sys.stderr.flush()
+
     def _output(self, action: dict, next_goal: str):
         name, params = next(iter(action.items()))
         return self.AgentOutput(evaluation_previous_goal="", memory=self._wally_plan[:500] or None,
@@ -179,6 +225,7 @@ class EveAgent(Agent):
 
     def _done(self, text: str, success: bool):
         self.stop_reason = text
+        self._say(f"done    {text}")
         return self._output({"done": {"text": text, "success": success}}, "stop")
 
     async def get_model_output(self, input_messages):  # noqa: ARG002 - eve reads the page, not the messages
@@ -195,7 +242,11 @@ class EveAgent(Agent):
             except TextError as error:
                 self._wally_notes.append(f"no plan: {error}")
             self.plan_ms = round((time.perf_counter() - started) * 1000)
+            if self._wally_plan and os.environ.get("WALLY_BROWSER_CLEAN") == "1":
+                sys.stderr.write(f"\nplan:\n{self._wally_plan}\n\n")
+                sys.stderr.flush()
 
+        await self._leave_the_address_bar(state.url)
         self._absorb_results()
         elements = elements_from_selector_map(state.dom_state.selector_map)
         try:
@@ -234,7 +285,8 @@ class EveAgent(Agent):
         offered = [e for e in elements if e.name not in self._wally_refused]
         obs = Observation(goal=goal, url=state.url, title=state.title, elements=offered,
                           tabs=[(t.target_id[-4:], t.title) for t in state.tabs], plan=self._wally_plan,
-                          history=self._wally_history, notes=self._wally_notes)
+                          history=self._wally_history, notes=self._wally_notes,
+                          image=_page_image(state))
         decision = await asyncio.to_thread(self._wally_policy.decide, obs)
         self._wally_last_target = decision.target
         record.operation = decision.operation
@@ -276,6 +328,7 @@ class EveAgent(Agent):
         op, target = decision.operation, decision.target
         if op == "CLICK" and target is not None:
             self._wally_history.append(f"chose to click {short(target)}")
+            self._say(f"click   {short(target)}")
             return self._output({"click": {"index": target.index}}, f"click {target.name}")
         if op in ("TYPE", "SELECT") and target is not None:
             value, source = await self._value_for(decision, obs, record)
@@ -285,14 +338,18 @@ class EveAgent(Agent):
             note_value_source(self._wally_guard, source, value)
             self._wally_history.append(f"{'typed' if op == 'TYPE' else 'selected'} into {short(target)}")
             if op == "TYPE":
+                self._say(f"type    {value}  →  {short(target)}")
                 return self._output({"input": {"index": target.index, "text": value, "clear": True}},
                                     f"fill {target.name}")
+            self._say(f"select  {value}  →  {short(target)}")
             return self._output({"select_dropdown": {"index": target.index, "text": value}}, f"choose {target.name}")
         if op in ("SCROLL_DOWN", "SCROLL_UP"):
             self._wally_history.append(op.lower())
+            self._say("scroll  down" if op == "SCROLL_DOWN" else "scroll  up")
             return self._output({"scroll": {"down": op == "SCROLL_DOWN", "pages": 1}}, op.lower())
         if op == "GO_BACK":
             self._wally_history.append("went back")
+            self._say("back")
             return self._output({"go_back": {}}, "go back")
         if op == "SWITCH_TAB" and decision.tab_id:
             for tab in self._wally_state.tabs:
