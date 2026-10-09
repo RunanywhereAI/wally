@@ -74,6 +74,8 @@ pub fn configure_app(app: &mut App) {
 
     crate::commands::register_editors(app);
     crate::commands::register_harness(app); // coding agents
+                                            // Not in a --help section yet (hidden, still parses): see the draft PR.
+    crate::commands::register_browser_use(app);
     crate::commands::register_default_models(app);
 
     crate::commands::register_account(app); // account login/logout/whoami/usage
