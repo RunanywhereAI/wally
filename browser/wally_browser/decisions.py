@@ -108,7 +108,13 @@ class DecisionClient:
         started = time.perf_counter()
         while True:
             attempts += 1
-            response = self._client.post(self.url, content=payload, headers=self._headers)
+            try:
+                response = self._client.post(self.url, content=payload, headers=self._headers)
+            except httpx.TransportError as error:
+                if attempts <= MAX_RETRIES:
+                    self._sleep(min(MAX_RETRY_WAIT_S, 1))
+                    continue
+                raise DecisionError("decision request failed after transport retries") from error
             if response.status_code in RETRY_STATUSES and attempts <= MAX_RETRIES:
                 wait = _retry_after(response)
                 self._sleep(min(MAX_RETRY_WAIT_S, wait if wait is not None else 1))
@@ -117,7 +123,10 @@ class DecisionClient:
         latency_ms = round((time.perf_counter() - started) * 1000)
         if response.status_code != 200:
             raise _error(response)
-        document = response.json()
+        try:
+            document = response.json()
+        except ValueError as error:
+            raise DecisionError("decision response was not valid JSON", response.status_code) from error
         answers = {qid: Answer(probabilities=dict(answer.get("probabilities") or {}),
                                label_mass=float(answer.get("label_mass", 1.0)))
                    for qid, answer in (document.get("answers") or {}).items()}
