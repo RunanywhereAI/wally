@@ -32,6 +32,7 @@ pub struct Request {
     pub cdp_url: Option<String>,
     pub start_url: Option<String>,
     pub max_steps: u64,
+    pub clean_output: bool,
 }
 
 /// Reads the words and options into a Request. A leading word that is a
@@ -95,6 +96,7 @@ pub fn parse_request(
         cdp_url: None,
         start_url: None,
         max_steps: DEFAULT_MAX_STEPS,
+        clean_output: false,
     })
 }
 
@@ -127,6 +129,9 @@ pub fn child_environment(
         ("ANONYMIZED_TELEMETRY".to_string(), "false".to_string()),
         ("BROWSER_USE_CLOUD_SYNC".to_string(), "false".to_string()),
     ];
+    if request.clean_output {
+        env.push(("WALLY_BROWSER_CLEAN".to_string(), "1".to_string()));
+    }
     if let Some(profile) = &request.profile {
         env.push(("WALLY_BROWSER_PROFILE".to_string(), profile.clone()));
     }
@@ -349,12 +354,12 @@ pub fn register_browser_use(app: &mut App) {
     );
     cmd.footer(&examples_footer(&[
         Example::new(
-            "wally browser-use eve \"find a one-way flight Delhi to Bangalore next Friday\"",
-            "eve picks each step; the run stops at the payment page",
+            "wally browser-use --start-url \"https://docs.oracle.com/en/java/javase/21/docs/api/index.html\" eve \"Open the Java 21 docs\"",
+            "start at a URL; no payment page involved",
         ),
         Example::new(
-            "wally browser-use --profile ~/traveller.toml \"book a window seat to Goa\"",
-            "Passenger details come from the profile file",
+            "wally browser-use eve \"Open the Wikipedia article about Bengaluru\"",
+            "no URL given; the text model picks the site, or asks for one",
         ),
     ]));
     cmd.add_option(
@@ -383,6 +388,10 @@ pub fn register_browser_use(app: &mut App) {
         "With --chrome attach: the running Chrome's DevTools URL",
     );
     cmd.add_option("--start-url", ValueType::Text, "Open this page first");
+    cmd.add_flag(
+        "--clean-output",
+        "Print the plan and one line per step, without browser-use's own log",
+    );
     cmd.add_option(
         "--max-steps",
         ValueType::UInt,
@@ -407,6 +416,7 @@ pub fn register_browser_use(app: &mut App) {
         request.profile = p.get_str("--profile");
         request.cdp_url = p.get_str("--cdp-url");
         request.start_url = p.get_str("--start-url");
+        request.clean_output = p.flag("--clean-output");
         if let Some(steps) = p.get_u64("--max-steps") {
             request.max_steps = steps;
         }
@@ -518,6 +528,9 @@ mod tests {
         assert!(!status.success());
         std::thread::sleep(std::time::Duration::from_millis(50));
         let still_there = process_parents().iter().any(|(pid, _)| *pid == grandchild);
-        assert!(!still_there, "grandchild {grandchild} survived the tree signal");
+        assert!(
+            !still_there,
+            "grandchild {grandchild} survived the tree signal"
+        );
     }
 }

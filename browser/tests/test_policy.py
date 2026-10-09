@@ -23,7 +23,7 @@ class FakeClient:
         self.picks = picks or {}
         self.window_failures = window_failures
 
-    def ask(self, input_text, questions, temperature=None):
+    def ask(self, input_text, questions, temperature=None, images=None):
         from wally_browser.decisions import Answer, Result
 
         self.requests.append((input_text, questions))

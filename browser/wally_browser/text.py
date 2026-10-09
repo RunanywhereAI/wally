@@ -10,8 +10,17 @@ import httpx
 
 PLAN_PROMPT = (
     "You plan a web task for a browser agent. Reply with 3 to 8 short numbered steps, one line each, "
-    "and nothing else. The agent must stop at the payment page and never pay. Task: {goal}"
+    "and nothing else. The agent must stop at the payment page and never pay. "
+    "The task may include the conversation so far. Do what the person just asked, "
+    "using the earlier turns. If they reject the page already open, leave it. Task:\n{goal}"
 )
+URL_PROMPT = (
+    "A browser agent was given this task and no web address.\n"
+    "Task: {goal}\n"
+    "Reply with exactly one https URL where the task should start, and nothing else. "
+    "If you cannot know the site without the person naming it, reply with exactly: ASK"
+)
+
 FIELD_PROMPT = (
     "A browser agent is doing this task: {goal}\n"
     "Plan:\n{plan}\n"
@@ -24,6 +33,16 @@ FIELD_PROMPT = (
 
 class TextError(RuntimeError):
     pass
+
+
+def parse_opening_url(text: str) -> str | None:
+    text = text.strip().strip('"').strip()
+    if not text or text.upper() == "ASK":
+        return None
+    url = text.split()[0]
+    if url.startswith("https://") or url.startswith("http://"):
+        return url
+    return None
 
 
 class TextModel:
@@ -60,6 +79,10 @@ class TextModel:
 
     def plan(self, goal: str) -> str:
         return self._complete(PLAN_PROMPT.format(goal=goal), 300)
+
+    def opening_url(self, goal: str) -> str | None:
+        """A start URL, or None when the person has to name the site."""
+        return parse_opening_url(self._complete(URL_PROMPT.format(goal=goal), 80))
 
     def field_text(self, goal: str, plan: str, page: str, field: str) -> str | None:
         """The text to type, or None when the task does not say (ask the user)."""

@@ -78,6 +78,7 @@ class Observation:
     plan: str = ""
     history: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)  # dialogs, user answers, last errors
+    image: str | None = None  # data URL of the page, sent with every decision round
 
 
 @dataclass
@@ -209,8 +210,9 @@ class EvePolicy:
 
     # -- asking -------------------------------------------------------------
 
-    def _ask(self, state: str, questions: list[Question], decision: Decision) -> Result:
-        result = self.client.ask(state, questions)
+    def _ask(self, state: str, questions: list[Question], decision: Decision,
+             image: str | None = None) -> Result:
+        result = self.client.ask(state, questions, images=[image] if image else None)
         decision.decision_ms += result.latency_ms
         decision.prompt_tokens += result.prompt_tokens
         for q in questions:
@@ -224,7 +226,7 @@ class EvePolicy:
         while True:
             state, questions, mapping = self.build(obs, shrink)
             try:
-                result = self._ask(state, questions, decision)
+                result = self._ask(state, questions, decision, obs.image)
                 break
             except WindowExceeded:
                 decision.window_retries += 1
@@ -278,7 +280,7 @@ class EvePolicy:
         question = Question(head, "choice", f"Which element? ({head.split('_')[0].upper()})",
                             [el.label(m) for m in region.members])
         decision.rounds += 1
-        result = self._ask(state, [question], decision)
+        result = self._ask(state, [question], decision, obs.image)
         chosen, p2 = result.answers[head].top()
         for member in region.members:
             if el.label(member) == chosen:
@@ -293,7 +295,7 @@ class EvePolicy:
         state = f"Goal: {obs.goal}\nPage: {obs.title[:120]}\nThe field to fill: {field_text}"
         question = Question("value", "choice", "Which traveller detail belongs in this field?", options)
         decision.rounds += 1
-        result = self._ask(state, [question], decision)
+        result = self._ask(state, [question], decision, obs.image)
         chosen, _ = result.answers["value"].top()
         key = chosen.split(":", 1)[0]
         return key if key in keys else None
