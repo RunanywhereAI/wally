@@ -157,6 +157,9 @@ fi
 
 case "${PLATFORM}" in
   macos-*)
+    # Ship the Homebrew openssl@3/brotli/zstd the binary links, so a Mac
+    # without Homebrew can launch it.
+    "${SCRIPT_DIR}/bundle-macos-dylibs.sh" "${STAGE}"
     if [[ -d "${STAGE}/lib" ]] && compgen -G "${STAGE}/lib/*.dylib" >/dev/null; then
       install_name_tool -add_rpath "@loader_path/../lib" "${STAGE}/bin/wally" 2>/dev/null || true
       for lib in "${STAGE}/lib/"*.dylib; do

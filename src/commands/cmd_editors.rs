@@ -192,6 +192,37 @@ fn copy_recursive_overwrite(src: &Path, dst: &Path) {
     }
 }
 
+/// Variables wally sets for the Claude Code it launches.
+const GATEWAY_ENV: &[&str] = &[
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+];
+
+/// `settings.json` with the gateway variables dropped from its `env` block.
+///
+/// Claude Code applies `env` from settings over the process environment, so a
+/// reader whose own settings pin `ANTHROPIC_BASE_URL` (another gateway, a
+/// proxy) would see wally's endpoint silently ignored: the launched Claude Code
+/// talks to their gateway, not the model wally resolved. Text that is not a JSON
+/// object is returned unchanged.
+fn without_gateway_env(text: &str) -> String {
+    let Ok(mut doc) = serde_json::from_str::<serde_json::Value>(text) else {
+        return text.to_string();
+    };
+    let Some(env) = doc.get_mut("env").and_then(serde_json::Value::as_object_mut) else {
+        return text.to_string();
+    };
+    let before = env.len();
+    for name in GATEWAY_ENV {
+        env.remove(*name);
+    }
+    if env.len() == before {
+        return text.to_string();
+    }
+    serde_json::to_string_pretty(&doc).unwrap_or_else(|_| text.to_string())
+}
+
 /// A wally-owned config directory for the Claude Code we launch, seeded from the
 /// reader's real `~/.claude` so their settings, agents, rules, skills and memory
 /// come along, but WITHOUT the login: a separate dir has no claude.ai session to
@@ -253,11 +284,13 @@ fn prepare_claude_config_dir() -> Option<String> {
     // A cheap refresh every run so edits to the real settings and memory flow
     // through without re-copying the heavy trees.
     if let Some(og_dir) = &og_dir {
-        for file in ["settings.json", "CLAUDE.md"] {
-            let src = og_dir.join(file);
-            if src.exists() {
-                let _ = fs::copy(&src, ours.join(file));
-            }
+        let settings = og_dir.join("settings.json");
+        if let Ok(text) = fs::read_to_string(&settings) {
+            let _ = fs::write(ours.join("settings.json"), without_gateway_env(&text));
+        }
+        let memory = og_dir.join("CLAUDE.md");
+        if memory.exists() {
+            let _ = fs::copy(&memory, ours.join("CLAUDE.md"));
         }
     }
     if let Some(og_json) = &og_json {
@@ -737,6 +770,23 @@ pub fn register_editors(app: &mut App) {
 mod tests {
     use super::*;
     use crate::util::env_lock::lock as env_lock;
+
+    #[test]
+    fn without_gateway_env_drops_only_the_gateway_variables() {
+        let out = without_gateway_env(
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://other","ANTHROPIC_AUTH_TOKEN":"t","KEEP":"1"},"model":"sonnet"}"#,
+        );
+        let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(doc["env"], serde_json::json!({"KEEP": "1"}));
+        assert_eq!(doc["model"], "sonnet");
+    }
+
+    #[test]
+    fn without_gateway_env_leaves_other_text_alone() {
+        for text in ["not json", "{}", r#"{"env":{"KEEP":"1"}}"#, "[1]"] {
+            assert_eq!(without_gateway_env(text), text);
+        }
+    }
 
     // With no usable HOME or XDG state dir, `prepare_claude_config_dir` used
     // to build the root-level "/claude" and export it, so Claude Code
