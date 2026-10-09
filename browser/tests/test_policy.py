@@ -7,7 +7,7 @@ import pytest
 from wally_browser import elements as el
 from wally_browser.decisions import DecisionClient, DecisionError, Question, WindowExceeded
 from wally_browser.guards import Element
-from wally_browser.policy import EvePolicy, Observation
+from wally_browser.policy import EvePolicy, Observation, fields_typed_but_still_empty
 from wally_browser.profile import Profile
 
 
@@ -83,6 +83,40 @@ def test_a_head_with_one_candidate_is_not_asked():
     asked = {q.id for _, qs in client.requests for q in qs}
     assert "type_target" not in asked
     assert decision.operation == "TYPE" and decision.target.index == 9
+
+
+def test_a_field_typed_that_is_still_empty_is_not_offered_again():
+    box = Element(index=16, tag="input", role="combobox", name="Where to")
+    suggestion = Element(index=20, tag="button", role="option", name="Bengaluru (BLR)")
+    history = ["typed into [16] Where to"]
+    assert [element.index for element in fields_typed_but_still_empty(history, [box, suggestion])] == [16]
+    client = FakeClient()
+    EvePolicy(client).decide(obs([box, suggestion], history=history))
+    state, questions = client.requests[0]
+    operation = next(q for q in questions if q.id == "operation")
+    assert not any(option.startswith("TYPE") for option in operation.options)
+    assert any(option.startswith("CLICK") for option in operation.options)
+    assert "did not stick" in state
+    assert "Bengaluru" in state
+
+
+def test_a_button_already_clicked_is_not_offered_again():
+    opener = Element(index=3083, tag="button", name="All filters")
+    inside = Element(index=4000, tag="button", role="radio", name="Nonstop only",
+                     context_text="Filters Stops Nonstop only")
+    client = FakeClient()
+    decision = EvePolicy(client).decide(obs([opener, inside], history=["chose to click [3083] All filters"]))
+    state, questions = client.requests[0]
+    operation = next(q for q in questions if q.id == "operation")
+    assert any(option.startswith("CLICK") for option in operation.options)
+    assert "A dialog is open" in state
+    assert decision.operation == "CLICK"
+    assert decision.target is not None and decision.target.index == 4000
+
+
+def test_a_field_that_kept_its_value_can_still_be_typed():
+    box = Element(index=16, tag="input", role="combobox", name="Where to", value="Bangalore")
+    assert fields_typed_but_still_empty(["typed into [16] Where to"], [box]) == []
 
 
 def test_payment_fields_are_never_offered_as_type_targets():
