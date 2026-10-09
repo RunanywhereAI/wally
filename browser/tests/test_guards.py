@@ -82,7 +82,7 @@ def test_a_button_inside_a_gateway_frame_is_payment_whatever_it_says():
 def test_card_fields_make_the_payment_page():
     page = check_page("https://www.example-air.in/payment", "Payment", [
         field(1, name="Card number", autocomplete="cc-number"), button("Pay ₹4,532", 2)])
-    assert page.payment_page and "card" in page.payment_page.lower() or "cc-" in page.payment_page
+    assert page.payment_page and ("card" in page.payment_page.lower() or "cc-" in page.payment_page)
 
 
 def test_a_gateway_frame_makes_the_payment_page():

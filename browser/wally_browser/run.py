@@ -314,9 +314,10 @@ async def run(goal: str, start_url: str | None) -> int:
             done, _pending = await asyncio.wait(
                 {agent_task, closed_task}, return_when=asyncio.FIRST_COMPLETED
             )
-            # The watcher ends the process itself. Reaching here means the agent finished
-            # and the browser is still the one the person left open.
             if agent_task not in done:
+                agent_task.cancel()
+                await asyncio.gather(agent_task, return_exceptions=True)
+                await closed_task
                 return 0
             history = await agent_task
             reason = agent.stop_reason or (stop_messages[-1] if stop_messages else "")
