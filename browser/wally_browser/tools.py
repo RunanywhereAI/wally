@@ -65,6 +65,9 @@ class GuardContext:
     personal_typed: bool = False
     # Set after the person has had the browser window (a bot-check hand-off): they may have signed in.
     person_used_browser: bool = False
+    # The ordinary run does not stop to ask. A payment control is still never
+    # clicked; that refusal does not go through this flag.
+    auto: bool = True
 
     def confirm_reason(self) -> str | None:
         if self.attach:
@@ -271,7 +274,7 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
         reason = never_type_reason(element) or refused_value(str(params.get("text", "")), element)
         if reason:
             return ActionResult(error=f"wally refused to type into [{index}]: {reason}")
-        if context.attach:
+        if context.attach and not context.auto:
             refusal = await _ask_or_refuse(ask, f"Type into {label(element)!r} in your own browser? [y/N]",
                                            f"the person did not confirm typing into [{index}]", context)
             if refusal:
@@ -301,7 +304,7 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
         why = "it may book or confirm" if tier is ControlTier.COMMIT else context.confirm_reason()
         if why is None and shown is None:
             why = "the option it would pick could not be read"  # fail closed
-        if why:
+        if why and not context.auto:
             return await _ask_or_refuse(ask, f"Choose {option.name!r} in {label(element)!r} ({why})? [y/N]",
                                         f"the person did not confirm choosing {option.name!r}", context)
         return None
@@ -319,7 +322,7 @@ async def check_action(name: str, params: dict, session, ask, on_stop,
     why = "it may book or confirm" if tier is ControlTier.COMMIT else context.confirm_reason()
     if why is None and live is None and element.frame_url:
         why = "its current text could not be read inside a frame"  # fail closed
-    if why:
+    if why and not context.auto:
         return await _ask_or_refuse(ask, f"The next click is {label(element)!r} ({why}). Click it? [y/N]",
                                     f"the person did not confirm clicking [{index}] {element.name!r}; "
                                     "do not try it again", context)

@@ -73,6 +73,20 @@ if [[ "$(uname -s)" == Darwin ]]; then
   cp "${BUILD}/mlx.metallib" "${STAGE}/bin/mlx.metallib"
 fi
 
+# The browser agent is the locked Python project. The binary looks for it at
+# ../share/wally/browser next to itself. The local uv environment and the tests
+# stay out; uv run --frozen builds the environment on first launch.
+browser_src="${ROOT}/browser"
+if [[ ! -f "${browser_src}/pyproject.toml" || ! -f "${browser_src}/uv.lock" ]]; then
+  echo "error: bottle requires browser/pyproject.toml and browser/uv.lock" >&2
+  exit 1
+fi
+mkdir -p "${STAGE}/share/wally/browser"
+tar -C "${browser_src}" \
+  --exclude .venv --exclude '__pycache__' --exclude .pytest_cache --exclude tests \
+  -cf - pyproject.toml uv.lock .python-version wally_browser \
+  | tar -C "${STAGE}/share/wally/browser" -xf -
+
 copy_kit_runtime() {
   local src="$1"
   [[ -n "${src}" && -e "${src}" ]] || return 0

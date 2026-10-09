@@ -223,22 +223,123 @@ fn run(request: Request) -> i32 {
         request.decision_model, request.text_model
     ));
 
-    let status = std::process::Command::new(&uv)
+    let mut command = std::process::Command::new(&uv);
+    command
         .args(child_arguments(&request, &project))
         .envs(child_environment(
             &request,
             &api_base,
             &credentials.access_token,
             credentials.expires_at,
-        ))
-        .status();
+        ));
+    // Stay in the foreground terminal job. A new process group is stopped by
+    // the kernel (SIGTTIN) the moment Python reads a confirmation, and Chrome,
+    // in that same group, freezes with it.
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            out::error_line(&format!("could not start uv: {error}"));
+            return 1;
+        }
+    };
+    let pid = child.id();
+    let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&interrupted);
+    let _interrupt = crate::util::interrupt::on_interrupt(move || {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        let pid = pid;
+        std::thread::spawn(move || {
+            signal_process_tree(pid, terminate_signal());
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            signal_process_tree(pid, kill_signal());
+        });
+    });
+    let status = child.wait();
+    if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
+        return 130;
+    }
     match status {
         Ok(status) => status.code().unwrap_or(1),
         Err(error) => {
-            out::error_line(&format!("could not start uv: {error}"));
+            out::error_line(&format!("browser-use ended without a status: {error}"));
             1
         }
     }
+}
+
+fn terminate_signal() -> i32 {
+    #[cfg(unix)]
+    {
+        libc::SIGTERM
+    }
+    #[cfg(not(unix))]
+    {
+        15
+    }
+}
+
+fn kill_signal() -> i32 {
+    #[cfg(unix)]
+    {
+        libc::SIGKILL
+    }
+    #[cfg(not(unix))]
+    {
+        9
+    }
+}
+
+/// Signals `pid` and every process descended from it. The agent stays in the
+/// foreground terminal job, so this cannot be a process-group signal: that
+/// group also contains the shell.
+fn signal_process_tree(pid: u32, signal: i32) {
+    #[cfg(unix)]
+    {
+        let mut pending = vec![pid];
+        let mut seen = vec![pid];
+        let parents = process_parents();
+        let mut index = 0;
+        while index < pending.len() {
+            let parent = pending[index];
+            index += 1;
+            for (child, ppid) in &parents {
+                if *ppid == parent && !seen.contains(child) {
+                    seen.push(*child);
+                    pending.push(*child);
+                }
+            }
+        }
+        for process in seen.iter().rev() {
+            // SAFETY: kill with a positive pid signals that one process. A
+            // process that has already exited returns an error, ignored.
+            unsafe {
+                libc::kill(*process as libc::pid_t, signal);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, signal);
+    }
+}
+
+/// `(pid, parent)` for every process `ps` can see. Empty when it cannot.
+fn process_parents() -> Vec<(u32, u32)> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut columns = line.split_whitespace();
+            let pid = columns.next()?.parse().ok()?;
+            let parent = columns.next()?.parse().ok()?;
+            Some((pid, parent))
+        })
+        .collect()
 }
 
 pub fn register_browser_use(app: &mut App) {
@@ -390,5 +491,33 @@ mod tests {
         assert_eq!(args[..2], ["run".to_string(), "--frozen".to_string()]);
         assert_eq!(args.last().unwrap(), "book a flight");
         assert_eq!(args[args.len() - 2], "--");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signalling_the_tree_kills_a_grandchild_without_a_new_process_group() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30 & wait")
+            .spawn()
+            .unwrap();
+        let root = child.id();
+        let grandchild = (0..50).find_map(|_| {
+            let found = process_parents()
+                .into_iter()
+                .find(|(_, parent)| *parent == root)
+                .map(|(pid, _)| pid);
+            if found.is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            found
+        });
+        let grandchild = grandchild.expect("sleep should be a child of the shell");
+        signal_process_tree(root, libc::SIGKILL);
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let still_there = process_parents().iter().any(|(pid, _)| *pid == grandchild);
+        assert!(!still_there, "grandchild {grandchild} survived the tree signal");
     }
 }

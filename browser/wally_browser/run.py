@@ -24,9 +24,11 @@ import asyncio
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from . import dialogs  # noqa: F401  (package __init__ has already turned telemetry off)
+from . import leave_the_dock
 from .decisions import DecisionClient
 from .policy import EvePolicy
 from .profile import ProfileError, load
@@ -35,6 +37,74 @@ from .tools import GuardContext, build_tools, terminal_ask
 
 
 HUMAN_STEP_TIMEOUT_S = 1800
+# Closing the last window can leave Chrome running with no pages for a moment.
+# Three polls is long enough to ignore that gap and short enough to feel immediate.
+EMPTY_PAGE_POLLS = 3
+BROWSER_POLL_S = 0.4
+
+
+def browser_should_stop(
+    process_running: bool | None, page_count: int | None, seen_page: bool, empty_polls: int
+) -> tuple[bool, bool, int]:
+    """Whether the browser the person was looking at is gone.
+
+    `process_running` is None when this run did not launch Chrome (attach).
+    `page_count` is None when the page list could not be read. A dead process
+    stops at once. Pages have to be gone for a few polls, so a navigation that
+    briefly reports no pages does not end the run.
+    """
+    if process_running is False:
+        return True, seen_page, empty_polls
+    if page_count is None:
+        if not seen_page:
+            return False, seen_page, empty_polls
+        page_count = 0
+    if page_count > 0:
+        return False, True, 0
+    if not seen_page:
+        return False, False, 0
+    empty_polls += 1
+    return empty_polls >= EMPTY_PAGE_POLLS, seen_page, empty_polls
+
+
+def chrome_process_running(session) -> bool | None:
+    """True/False for a Chrome this run launched. None when it did not (attach)."""
+    watchdog = getattr(session, "_local_browser_watchdog", None)
+    process = getattr(watchdog, "_subprocess", None) if watchdog is not None else None
+    if process is None:
+        return None
+    try:
+        return bool(process.is_running())
+    except Exception:
+        return False
+
+
+async def watch_until_browser_closes(session) -> None:
+    """Ends this process once the person closes the browser.
+
+    `os._exit` is deliberate. AppKit, imported for the screen size, keeps a
+    non-daemon thread that would hold the interpreter open after the agent
+    stopped, which is the Dock icon that survives Ctrl-C and a closed window.
+    """
+    seen_page = False
+    empty_polls = 0
+    while True:
+        await asyncio.sleep(BROWSER_POLL_S)
+        running = chrome_process_running(session)
+        try:
+            pages: int | None = len(session.get_page_targets())
+        except Exception:
+            pages = None
+        stop, seen_page, empty_polls = browser_should_stop(running, pages, seen_page, empty_polls)
+        if not stop:
+            continue
+        sys.stderr.write("\nbrowser closed\n")
+        if running is not None:
+            try:
+                await asyncio.wait_for(session.kill(), timeout=2)
+            except Exception:
+                pass
+        os._exit(0)
 
 
 class ConfigError(ValueError):
@@ -52,6 +122,15 @@ def _state_dir() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
     return Path(base) / "wally" / "browser"
 
+
+# Chrome's bad-flags infobar (chrome/browser/ui/startup/bad_flags_prompt.cc)
+# names these two. The first only lets an extension run on chrome:// pages.
+# The second is a developer Blink switch; with a fixed DevTools port Chrome
+# does not turn AutomationControlled on, so disabling it only draws the bar.
+CHROME_ARGS_TO_DROP = [
+    "--extensions-on-chrome-urls",
+    "--disable-blink-features=AutomationControlled",
+]
 
 PROFILE_PREFIX = "wally-browser-"
 PROFILE_MAX_AGE_S = 24 * 3600
@@ -86,7 +165,8 @@ def build_browser(chrome: str):
         user_data_dir = Path(kept) if kept else fresh_profile_dir()
         user_data_dir.mkdir(parents=True, exist_ok=True)
         profile = BrowserProfile(user_data_dir=str(user_data_dir), headless=False, keep_alive=True,
-                                 executable_path=_env("WALLY_BROWSER_EXECUTABLE"))
+                                 executable_path=_env("WALLY_BROWSER_EXECUTABLE"),
+                                 ignore_default_args=CHROME_ARGS_TO_DROP)
     else:
         raise ConfigError(f"WALLY_BROWSER_CHROME must be dedicated or attach, not {chrome!r}")
     return BrowserSession(browser_profile=profile)
@@ -119,6 +199,7 @@ async def run(goal: str, start_url: str | None) -> int:
     guard = GuardContext(attach=chrome == "attach" or bool(_env("WALLY_BROWSER_USER_DATA_DIR")))
     tools = build_tools(ask=terminal_ask, on_stop=stop_messages.append, context=guard)
     session = build_browser(chrome)
+    leave_the_dock()
     task = goal if not start_url else f"{goal} (start at {start_url})"
     # browser-use's own model slot: GLM on the same API. eve chooses the actions;
     # this is set so any browser-use path that still calls a model stays on our API.
@@ -137,11 +218,24 @@ async def run(goal: str, start_url: str | None) -> int:
         # defaults would time them out and leave a stdin reader behind. The decision and text calls
         # carry their own 60 s HTTP timeouts.
         llm_timeout=HUMAN_STEP_TIMEOUT_S, step_timeout=HUMAN_STEP_TIMEOUT_S,
+        # browser-use's own Ctrl-C pauses and, when the tab detaches, opens a new
+        # about:blank. wally already ends the process; that recovery must not run.
+        enable_signal_handler=False,
         initial_actions=[{"navigate": {"url": start_url}}] if start_url else None,
     )
     started = time.perf_counter()
+    agent_task = asyncio.create_task(agent.run(max_steps=max_steps))
+    closed_task = asyncio.create_task(watch_until_browser_closes(session))
     try:
-        history = await agent.run(max_steps=max_steps)
+        done, _pending = await asyncio.wait(
+            {agent_task, closed_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        # The watcher ends the process itself. Reaching here means the agent finished
+        # and the browser is still the one the person left open.
+        if agent_task not in done:
+            return 0
+        closed_task.cancel()
+        history = await agent_task
     finally:
         agent.finish()
         decisions.close()
@@ -174,11 +268,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("goal", help="what to do, in plain words")
     parser.add_argument("--start-url", help="open this page first")
     args = parser.parse_args(argv)
+    code = 1
     try:
-        return asyncio.run(run(args.goal, args.start_url))
+        code = asyncio.run(run(args.goal, args.start_url))
     except (ConfigError, ProfileError) as error:
         sys.stderr.write(f"Error: {error}\n")
-        return 2
+        code = 2
     except KeyboardInterrupt:
         sys.stderr.write("\nstopped by the person\n")
-        return 130
+        code = 130
+    except Exception:
+        sys.stderr.write(traceback.format_exc())
+        code = 1
+    # Same reason as watch_until_browser_closes: a normal return would leave
+    # the AppKit thread, and the Dock icon, behind.
+    os._exit(code)
