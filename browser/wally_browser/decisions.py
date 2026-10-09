@@ -87,18 +87,22 @@ class DecisionClient:
     def close(self) -> None:
         self._client.close()
 
-    def body(self, input_text: str, questions: list[Question], temperature: float | None = None) -> dict:
+    def body(self, input_text: str, questions: list[Question], temperature: float | None = None,
+             images: list[str] | None = None) -> dict:
         if not 1 <= len(questions) <= MAX_QUESTIONS:
             raise ValueError(f"1 to {MAX_QUESTIONS} questions per request, got {len(questions)}")
         body: dict = {"model": self.model, "input": input_text, "questions": [q.to_json() for q in questions]}
+        if images:
+            body["images"] = images
         if temperature is not None:
             body["temperature"] = temperature
         if self.prompt_format_version is not None:
             body["prompt_format_version"] = self.prompt_format_version
         return body
 
-    def ask(self, input_text: str, questions: list[Question], temperature: float | None = None) -> Result:
-        body = self.body(input_text, questions, temperature)
+    def ask(self, input_text: str, questions: list[Question], temperature: float | None = None,
+            images: list[str] | None = None) -> Result:
+        body = self.body(input_text, questions, temperature, images)
         payload = json.dumps(body).encode()
         attempts = 0
         started = time.perf_counter()

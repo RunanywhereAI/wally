@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 import time
 import traceback
@@ -33,6 +34,7 @@ from .decisions import DecisionClient
 from .policy import EvePolicy
 from .profile import ProfileError, load
 from .text import TextModel
+from . import install_log_filter, quiet_library_logs
 from .tools import GuardContext, build_tools, terminal_ask
 
 
@@ -154,22 +156,64 @@ def fresh_profile_dir() -> Path:
     return Path(tempfile.mkdtemp(prefix=PROFILE_PREFIX))
 
 
-def build_browser(chrome: str):
+_DEBUG_PORT = re.compile(r"--remote-debugging-port=(\d+)")
+
+
+def cdp_from_command_lines(lines: list[str]) -> str | None:
+    """The DevTools address of a Chrome this agent already launched.
+
+    Only a process whose profile directory is `wally-browser-*` counts. The
+    person's own Chrome, Brave, or Edge is left alone. Helper processes
+    (`--type=`) are not the browser.
+    """
+    for line in lines:
+        if "wally-browser-" not in line or "--type=" in line:
+            continue
+        match = _DEBUG_PORT.search(line)
+        if match:
+            return f"http://127.0.0.1:{match.group(1)}"
+    return None
+
+
+def running_wally_cdp() -> str | None:
+    import subprocess
+    import urllib.request
+
+    try:
+        listed = subprocess.check_output(["ps", "-axww", "-o", "command="], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    url = cdp_from_command_lines(listed.splitlines())
+    if not url:
+        return None
+    try:
+        urllib.request.urlopen(url + "/json/version", timeout=0.4)
+    except OSError:
+        return None
+    return url
+
+
+def build_browser(chrome: str) -> tuple[object, bool]:
+    """The session, and whether it is an existing Wally Chrome (a new tab, not a new app)."""
     from browser_use import BrowserProfile, BrowserSession
 
     if chrome == "attach":
         cdp_url = _env("WALLY_BROWSER_CDP_URL", "http://127.0.0.1:9222")
         profile = BrowserProfile(cdp_url=cdp_url, keep_alive=True)
-    elif chrome == "dedicated":
-        kept = _env("WALLY_BROWSER_USER_DATA_DIR")
-        user_data_dir = Path(kept) if kept else fresh_profile_dir()
-        user_data_dir.mkdir(parents=True, exist_ok=True)
-        profile = BrowserProfile(user_data_dir=str(user_data_dir), headless=False, keep_alive=True,
-                                 executable_path=_env("WALLY_BROWSER_EXECUTABLE"),
-                                 ignore_default_args=CHROME_ARGS_TO_DROP)
-    else:
+        return BrowserSession(browser_profile=profile), True
+    if chrome != "dedicated":
         raise ConfigError(f"WALLY_BROWSER_CHROME must be dedicated or attach, not {chrome!r}")
-    return BrowserSession(browser_profile=profile)
+    existing = None if _env("WALLY_BROWSER_USER_DATA_DIR") else running_wally_cdp()
+    if existing:
+        profile = BrowserProfile(cdp_url=existing, keep_alive=True)
+        return BrowserSession(browser_profile=profile), True
+    kept = _env("WALLY_BROWSER_USER_DATA_DIR")
+    user_data_dir = Path(kept) if kept else fresh_profile_dir()
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+    profile = BrowserProfile(user_data_dir=str(user_data_dir), headless=False, keep_alive=True,
+                             executable_path=_env("WALLY_BROWSER_EXECUTABLE"),
+                             ignore_default_args=CHROME_ARGS_TO_DROP)
+    return BrowserSession(browser_profile=profile), False
 
 
 async def run(goal: str, start_url: str | None) -> int:
@@ -189,16 +233,42 @@ async def run(goal: str, start_url: str | None) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"run-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
 
+    if os.environ.get("WALLY_BROWSER_CLEAN") == "1":
+        quiet_library_logs()
+    else:
+        install_log_filter()
     dialogs.install()
+    loop = asyncio.get_running_loop()
+
+    def _ignore_shutdown_noise(loop, context):  # noqa: ARG001
+        text = f"{context.get('message', '')} {context.get('exception', '')}"
+        if "aclose" in text or "asynchronous generator" in text or "CDP" in text:
+            return
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_ignore_shutdown_noise)
     decisions = DecisionClient(base, key, decision_model, prompt_format_version=None)
     text = TextModel(base, key, text_model)
+    if not start_url:
+        try:
+            start_url = text.opening_url(goal)
+        except Exception as error:
+            sys.stderr.write(f"could not choose a start address: {error}\n")
+            start_url = None
+        if not start_url:
+            typed = terminal_ask("Can you paste the site address or the URL, so I can start?")
+            if not typed:
+                decisions.close()
+                text.close()
+                return 2
+            start_url = typed.strip()
     stop_messages: list[str] = []
     chrome = _env("WALLY_BROWSER_CHROME", "dedicated")
     # A kept profile collects logins and saved payment methods like the person's own Chrome, so it
     # gets the same confirm-everything rule.
     guard = GuardContext(attach=chrome == "attach" or bool(_env("WALLY_BROWSER_USER_DATA_DIR")))
     tools = build_tools(ask=terminal_ask, on_stop=stop_messages.append, context=guard)
-    session = build_browser(chrome)
+    session, reused = build_browser(chrome)
     leave_the_dock()
     task = goal if not start_url else f"{goal} (start at {start_url})"
     # browser-use's own model slot: GLM on the same API. eve chooses the actions;
@@ -211,7 +281,7 @@ async def run(goal: str, start_url: str | None) -> int:
     agent = EveAgent(
         task=task, llm=llm, browser_session=session, tools=tools,
         policy=EvePolicy(decisions, profile), text_model=text, profile=profile, ask=terminal_ask,
-        log_path=log_path, guard_context=guard, use_vision=False, use_judge=False, enable_planning=False, message_compaction=False,
+        log_path=log_path, guard_context=guard, use_vision=True, use_judge=False, enable_planning=False, message_compaction=False,
         final_response_after_failure=False, max_actions_per_step=1, calculate_cost=False,
         include_tool_call_examples=False, register_should_stop_callback=should_stop,
         # A step can include the person (a CAPTCHA, a y/N, a missing detail); browser-use's 180 s
@@ -221,45 +291,114 @@ async def run(goal: str, start_url: str | None) -> int:
         # browser-use's own Ctrl-C pauses and, when the tab detaches, opens a new
         # about:blank. wally already ends the process; that recovery must not run.
         enable_signal_handler=False,
-        initial_actions=[{"navigate": {"url": start_url}}] if start_url else None,
+        initial_actions=[{"navigate": {"url": start_url, "new_tab": reused}}] if start_url else None,
     )
+    agent._wally_chat = [f"Person: {goal}"]
     started = time.perf_counter()
-    agent_task = asyncio.create_task(agent.run(max_steps=max_steps))
     closed_task = asyncio.create_task(watch_until_browser_closes(session))
+    history = None
+    # browser-use closes its event queue at the end of every run(). A follow-up
+    # task then dies with QueueShutDown and the shell sits there. Hold the real
+    # close until the person presses Enter.
+    real_stop = agent.eventbus.stop
+    real_close = agent.close
+
+    async def _keep_open(*_args, **_kwargs):
+        return None
+
+    agent.eventbus.stop = _keep_open
+    agent.close = _keep_open
     try:
-        done, _pending = await asyncio.wait(
-            {agent_task, closed_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-        # The watcher ends the process itself. Reaching here means the agent finished
-        # and the browser is still the one the person left open.
-        if agent_task not in done:
-            return 0
-        closed_task.cancel()
-        history = await agent_task
+        while True:
+            agent_task = asyncio.create_task(agent.run(max_steps=max_steps))
+            done, _pending = await asyncio.wait(
+                {agent_task, closed_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            # The watcher ends the process itself. Reaching here means the agent finished
+            # and the browser is still the one the person left open.
+            if agent_task not in done:
+                return 0
+            history = await agent_task
+            reason = agent.stop_reason or (stop_messages[-1] if stop_messages else "")
+            if "payment" in reason.lower():
+                prompt = ("\nStopped at payment. Finish it in the browser, then press Enter "
+                          "and I will continue from here.\n> ")
+            else:
+                prompt = f"\n{reason}\nWhat should I do next? Press Enter to stop.\n> "
+            sys.stderr.write(prompt)
+            sys.stderr.flush()
+            answer = await asyncio.to_thread(sys.stdin.readline)
+            if not answer.strip():
+                break
+            if "payment" not in reason.lower():
+                page = ""
+                try:
+                    page = await agent.browser_session.get_current_page_url()
+                except Exception:
+                    page = ""
+                agent._wally_chat.append(f"Stopped: {reason}. Page: {page}")
+                agent._wally_chat.append(f"Person: {answer.strip()}")
+                agent.task = (
+                    "Conversation so far:\n" + "\n".join(agent._wally_chat) +
+                    "\nDo the person's latest message. The open page is what they are reacting to. "
+                    "If they reject it, leave it."
+                )
+                agent._wally_plan = ""
+                # A second run() replays initial_actions, which are already ActionModel
+                # objects, and browser-use rejects them. This is a follow-up on the open page.
+                agent.initial_actions = None
+                if getattr(agent, "state", None) is not None:
+                    agent.state.follow_up_task = True
+                try:
+                    nxt = text.opening_url(agent.task)
+                except Exception:
+                    nxt = None
+                if nxt and nxt != page:
+                    await agent.browser_session.navigate_to(nxt, new_tab=True)
+            agent.stop_reason = ""
+            stop_messages.clear()
+            if getattr(agent, "state", None) is not None:
+                agent.state.stopped = False
     finally:
+        closed_task.cancel()
+        install_log_filter()
+        agent.eventbus.stop = real_stop
+        agent.close = real_close
+        try:
+            await real_stop(clear=True, timeout=1.0)
+        except Exception:
+            pass
+        try:
+            await real_close()
+        except Exception:
+            pass
         agent.finish()
         decisions.close()
         text.close()
     wall = time.perf_counter() - started
 
     steps = agent._wally_steps
-    decided = [s for s in steps if s.decision_ms]
-    sys.stderr.write("\n— wally browser-use —\n")
     reason = agent.stop_reason or (stop_messages[-1] if stop_messages else
                                    ("ran out of time" if deadline and time.time() > deadline - 60 else
                                     f"stopped after {len(steps)} steps"))
-    sys.stderr.write(f"result: {reason}\n")
-    if decided:
-        avg_decision = sum(s.decision_ms for s in decided) / len(decided)
-        timed = [s.step_ms for s in steps if s.step_ms]
-        avg_step = sum(timed) / len(timed) if timed else 0
-        sys.stderr.write(f"steps: {len(steps)}  decision avg {avg_decision:.0f} ms  step avg {avg_step:.0f} ms  "
-                         f"wall {wall:.1f} s  plan {agent.plan_ms} ms\n")
-    sys.stderr.write(f"log: {log_path}\n")
-    sys.stderr.write("The browser stays open on the last page.\n")
-    final = history.final_result() if history else None
-    if final:
-        print(final)
+    if os.environ.get("WALLY_BROWSER_CLEAN") == "1":
+        sys.stderr.write("\n")
+        sys.stderr.write(f"result  {reason}\n")
+        sys.stderr.write(f"steps   {len(steps)}   {wall:.0f}s\n")
+        sys.stderr.write(f"log     {log_path}\n")
+        sys.stderr.write("The browser stays open.\n")
+    else:
+        decided = [s for s in steps if s.decision_ms]
+        sys.stderr.write("\n— wally browser-use —\n")
+        sys.stderr.write(f"result: {reason}\n")
+        if decided:
+            avg_decision = sum(s.decision_ms for s in decided) / len(decided)
+            timed = [s.step_ms for s in steps if s.step_ms]
+            avg_step = sum(timed) / len(timed) if timed else 0
+            sys.stderr.write(f"steps: {len(steps)}  decision avg {avg_decision:.0f} ms  "
+                             f"step avg {avg_step:.0f} ms  wall {wall:.1f} s  plan {agent.plan_ms} ms\n")
+        sys.stderr.write(f"log: {log_path}\n")
+        sys.stderr.write("The browser stays open on the last page.\n")
     return 0 if history and history.is_successful() else 1
 
 

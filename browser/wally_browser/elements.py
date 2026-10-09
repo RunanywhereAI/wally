@@ -95,17 +95,27 @@ def _head_and_tail(text: str, limit: int) -> str:
     return text[:half] + " … " + text[-half:]
 
 
+_DIALOG_CLASSES = {"modal", "dialog", "popup", "overlay", "drawer", "bottom-sheet"}
+
+
+def marks_dialog(node_name: str, attributes: dict) -> bool:
+    """A real dialog ancestor. Class names are whole tokens: a class that merely
+    contains 'dialog' or 'overlay' is not one, or the whole page becomes the
+    context and a Search button reads as a pay button."""
+    attributes = attributes or {}
+    classes = set((attributes.get("class") or "").lower().split())
+    name = (node_name or "").upper()
+    return (name == "DIALOG" or attributes.get("role") in ("dialog", "alertdialog")
+            or attributes.get("aria-modal") == "true" or bool(classes & _DIALOG_CLASSES))
+
+
 def _dialog_context(node) -> str:
     """Text of the nearest dialog or modal ancestor, so a bare "Yes" is read in context."""
     current = getattr(node, "parent_node", None)
     depth = 0
     while current is not None and depth < 60:
         attributes = getattr(current, "attributes", None) or {}
-        name = (getattr(current, "node_name", "") or "").upper()
-        classes = (attributes.get("class") or "").lower()
-        if (name == "DIALOG" or attributes.get("role") in ("dialog", "alertdialog")
-                or attributes.get("aria-modal") == "true"
-                or any(word in classes for word in ("modal", "dialog", "popup", "overlay", "drawer", "bottom-sheet"))):
+        if marks_dialog(getattr(current, "node_name", "") or "", attributes):
             return " ".join(_all_text(current, 4000).split())[:CONTEXT_MAX]
         current = getattr(current, "parent_node", None)
         depth += 1
