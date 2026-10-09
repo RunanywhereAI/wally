@@ -1,7 +1,7 @@
 //! Port of src/commands/cmd_editors.cpp.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::account;
 use crate::anthropic::{self, ModelAliases, Shim};
@@ -190,6 +190,43 @@ fn copy_recursive_overwrite(src: &Path, dst: &Path) {
     } else if src.is_file() {
         let _ = fs::copy(src, dst);
     }
+}
+
+/// `settings.json` text that pins the gateway for one launch.
+fn endpoint_settings_json(base_url: &str, auth_token: &str) -> String {
+    serde_json::json!({
+        "env": {
+            "ANTHROPIC_BASE_URL": base_url,
+            "ANTHROPIC_AUTH_TOKEN": auth_token,
+        }
+    })
+    .to_string()
+}
+
+/// Writes [`endpoint_settings_json`] to a private file for `--settings`, or
+/// returns None when there is no state dir or the write fails (the launch then
+/// proceeds on the environment alone). The token is the per-launch loopback
+/// one, so the file is `0600` and removed when Claude Code exits.
+fn write_endpoint_settings(base_url: &str, auth_token: &str) -> Option<PathBuf> {
+    let state_dir = cli_paths::state_dir();
+    if state_dir.is_empty() {
+        return None;
+    }
+    let dir = Path::new(&state_dir).join("claude");
+    fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("endpoint-{}.settings.json", std::process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).ok()?;
+    use std::io::Write;
+    file.write_all(endpoint_settings_json(base_url, auth_token).as_bytes())
+        .ok()?;
+    Some(path)
 }
 
 /// Variables wally sets for the Claude Code it launches.
@@ -670,8 +707,25 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
             launch_args.push("--model".to_string());
             launch_args.push(model.to_string());
         }
+        // Pin the endpoint on the command line. Claude Code reads project
+        // settings from ./.claude/settings.json, and from a home directory that
+        // is the reader's own ~/.claude/settings.json -- the file the config-dir
+        // copy above cleaned. Its `env` would still win over our process
+        // environment; `--settings` outranks project settings.
+        let endpoint_settings = if args.iter().any(|a| a == "--settings") {
+            None
+        } else {
+            write_endpoint_settings(&shim.base_url, &shim.auth_token)
+        };
+        if let Some(path) = &endpoint_settings {
+            launch_args.push("--settings".to_string());
+            launch_args.push(path.display().to_string());
+        }
         launch_args.extend(args.iter().cloned());
         status = harness::launch(editor.command, "", &launch_args, options);
+        if let Some(path) = &endpoint_settings {
+            let _ = fs::remove_file(path);
+        }
     }
 
     anthropic::stop(&mut shim);
@@ -773,6 +827,14 @@ pub fn register_editors(app: &mut App) {
 mod tests {
     use super::*;
     use crate::util::env_lock::lock as env_lock;
+
+    #[test]
+    fn endpoint_settings_pin_both_gateway_variables() {
+        let doc: serde_json::Value =
+            serde_json::from_str(&endpoint_settings_json("http://127.0.0.1:1", "tok")).unwrap();
+        assert_eq!(doc["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:1");
+        assert_eq!(doc["env"]["ANTHROPIC_AUTH_TOKEN"], "tok");
+    }
 
     #[test]
     fn without_gateway_env_drops_only_the_gateway_variables() {
