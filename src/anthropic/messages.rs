@@ -153,10 +153,6 @@ struct Runtime {
     /// alias): a request naming one of these is forwarded as-is, which lets
     /// Claude Code's family-slot picker route each slot to its own model.
     catalog: Vec<String>,
-    /// The ids among them whose catalog entry takes image input
-    /// (`CatalogModel::image_input`): a request carrying an image for any
-    /// other model is refused here, never forwarded with the image dropped.
-    image_models: Vec<String>,
     /// (Anthropic family name -> real id) for Claude Desktop, whose picker
     /// is family-based: a request naming a family is routed to the mapped
     /// id, and the discovery endpoint advertises the family names.
@@ -1033,11 +1029,15 @@ fn handle_messages_route(
             effective_model(runtime, &parsed)
         ));
     }
-    // An image for a model that does not take one (MiMo, a local model) is
-    // refused before anything goes upstream, in the gateway's words, rather
-    // than flattened away so the model answers about a picture it never saw.
+    // An image is never flattened away (the model would answer about a
+    // picture it never saw). Hosted, it goes upstream: the gateway is the one
+    // that knows which models take images, and refuses an image for any
+    // other (MiMo) with a 400 this relays as invalid_request_error, in its
+    // own words. A local server reached through here takes none, so an image
+    // for it is refused here, in the same words; and an image whose source
+    // cannot be sent is refused either way.
     let effective = effective_model(runtime, &parsed);
-    let takes_images = runtime.image_models.iter().any(|id| *id == effective);
+    let takes_images = !runtime.api_key.is_empty();
     if let Some(problem) = translate::image_input_problem(&parsed, &effective, takes_images) {
         let payload = translate::error_body("invalid_request_error", &problem);
         let _ = writer.send_full(
@@ -1239,8 +1239,7 @@ fn stop_running_instance() {
 /// `declared` (Claude Code or Claude Desktop) on every upstream request so the
 /// endpoint attributes the traffic to it. `advertised` is the
 /// model name reported to the tool (defaults to `model`); `aliases` map names
-/// the tool may send onto upstream ids; `image_models` are the ids that take
-/// image input (any other refuses an image). C++ defaulted verbose=false,
+/// the tool may send onto upstream ids. C++ defaulted verbose=false,
 /// advertised="" and aliases={}. Like the C++ (which returned bool), it reports
 /// its own failures on stderr and returns None.
 pub fn start(
@@ -1250,7 +1249,6 @@ pub fn start(
     verbose: bool,
     advertised: &str,
     aliases: &ModelAliases,
-    image_models: &[String],
 ) -> Option<Shim> {
     stop_running_instance();
 
@@ -1314,7 +1312,6 @@ pub fn start(
         // The real routable ids, for effective_model. Reads a local file,
         // no network.
         catalog: cached_model_ids(),
-        image_models: image_models.to_vec(),
         aliases: aliases.clone(),
         local_token: local_token.clone(),
         verbose,
