@@ -117,7 +117,7 @@ fn flatten_content(content: &Value) -> String {
 
 /// An Anthropic image block as an OpenAI `image_url` part: a data URL for a
 /// base64 source (its `media_type` and `data`), the URL itself for a url
-/// source; None for any other source, which `image_input_problem` refuses
+/// source; None for any other source, which `image_source_problem` refuses
 /// before a request is translated.
 fn image_part(block: &Value) -> Option<Value> {
     let source = block.get("source")?;
@@ -166,19 +166,21 @@ fn message_content(content: &Value) -> Value {
     Value::Array(parts)
 }
 
-/// Why `anthropic` cannot go to `model` as it is, or None: an image (a user
-/// turn's, or one inside a tool result, which is how Claude Code's Read tool
-/// returns a picture) for a model that takes none (`takes_images` false) is
-/// refused with the gateway's wording rather than dropped; and an image whose
-/// source is neither base64 nor a url cannot be sent at all.
-pub fn image_input_problem(anthropic: &Value, model: &str, takes_images: bool) -> Option<String> {
-    let mut images: Vec<&Value> = Vec::new();
-    for message in anthropic
+/// Every image block in `anthropic`'s messages: at the top of a turn's content
+/// (pasted) or inside a tool result (how Claude Code's Read tool returns a
+/// picture), each with whether it sits at the top of the latest user turn.
+fn image_blocks(anthropic: &Value) -> Vec<(&Value, bool)> {
+    let messages: Vec<&Value> = anthropic
         .get("messages")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-    {
+        .collect();
+    let latest_user = messages
+        .iter()
+        .rposition(|m| m.is_object() && matches!(field(m, "role").as_str(), "user" | ""));
+    let mut images = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
         for block in message
             .get("content")
             .and_then(Value::as_array)
@@ -186,33 +188,75 @@ pub fn image_input_problem(anthropic: &Value, model: &str, takes_images: bool) -
             .flatten()
         {
             match field(block, "type").as_str() {
-                "image" => images.push(block),
+                "image" => images.push((block, Some(index) == latest_user)),
                 "tool_result" => images.extend(
                     block
                         .get("content")
                         .and_then(Value::as_array)
                         .into_iter()
                         .flatten()
-                        .filter(|inner| field(inner, "type") == "image"),
+                        .filter(|inner| field(inner, "type") == "image")
+                        .map(|inner| (inner, false)),
                 ),
                 _ => {}
             }
         }
     }
-    if images.is_empty() {
-        return None;
+    images
+}
+
+/// The refusal for a model that takes no images, or None: only an image the
+/// person just pasted (at the top of the latest user turn) is refused, in the
+/// gateway's words. Every other image, in a tool result or earlier history, is
+/// `without_images`' note instead, so a session whose history holds a picture
+/// can go on.
+pub fn pasted_image_refusal(anthropic: &Value, model: &str) -> Option<String> {
+    image_blocks(anthropic)
+        .iter()
+        .any(|(_, pasted_now)| *pasted_now)
+        .then(|| format!("{model} does not take image input. Send text only."))
+}
+
+/// `anthropic` with every image block (pasted in an earlier turn, or in any
+/// tool result) replaced by a text note saying it was omitted for `model`, for
+/// a model that takes no images. Unchanged when it holds none.
+pub fn without_images(anthropic: &Value, model: &str) -> Value {
+    let mut copy = anthropic.clone();
+    let note = json!({"type": "text", "text": format!("[image omitted: {model} does not take image input]")});
+    let replace = |blocks: &mut Vec<Value>| {
+        for block in blocks.iter_mut() {
+            if field(block, "type") == "image" {
+                *block = note.clone();
+            }
+        }
+    };
+    if let Some(messages) = copy.get_mut("messages").and_then(Value::as_array_mut) {
+        for message in messages {
+            if let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) {
+                replace(blocks);
+                for block in blocks.iter_mut() {
+                    if field(block, "type") == "tool_result" {
+                        if let Some(inner) = block.get_mut("content").and_then(Value::as_array_mut)
+                        {
+                            replace(inner);
+                        }
+                    }
+                }
+            }
+        }
     }
-    if !takes_images {
-        return Some(format!(
-            "{model} does not take image input. Send text only."
-        ));
-    }
-    if images.iter().any(|block| image_part(block).is_none()) {
-        return Some(
-            "An image must be sent as base64 data with its media_type, or as a URL.".to_string(),
-        );
-    }
-    None
+    copy
+}
+
+/// Why an image in `anthropic` cannot be sent at all, or None: its source is
+/// neither base64 (with a media type) nor a url.
+pub fn image_source_problem(anthropic: &Value) -> Option<String> {
+    image_blocks(anthropic)
+        .iter()
+        .any(|(block, _)| image_part(block).is_none())
+        .then(|| {
+            "An image must be sent as base64 data with its media_type, or as a URL.".to_string()
+        })
 }
 
 /// Best-effort JSON-string -> object parse; an empty object on any failure,
@@ -1277,29 +1321,73 @@ mod tests {
         );
     }
 
-    /// A model the catalog does not list as taking images is told so, in the
-    /// gateway's words, for a pasted image and for one in a tool result alike;
-    /// a model that takes them is refused only a source it cannot be sent.
+    /// For a model that takes no images, only an image pasted in the latest
+    /// user turn is refused, in the gateway's words; a tool result's image
+    /// (Claude Code's Read) and one pasted earlier are not.
     #[test]
-    fn image_input_is_refused_where_the_model_takes_none() {
-        let pasted = json!({"messages": [{"role": "user", "content": [png_block()]}]});
+    fn only_an_image_pasted_in_the_latest_turn_is_refused() {
+        let refusal = Some("mimo-v2.6-pro does not take image input. Send text only.".to_string());
+        let pasted_now = json!({"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": [{"type": "text", "text": "what is this?"}, png_block()]}
+        ]});
+        assert_eq!(pasted_image_refusal(&pasted_now, "mimo-v2.6-pro"), refusal);
         let read = json!({"messages": [{"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [png_block()]}
         ]}]});
-        let text = json!({"messages": [{"role": "user", "content": "hi"}]});
-        let refusal = Some("mimo-v2.6-pro does not take image input. Send text only.".to_string());
+        assert_eq!(pasted_image_refusal(&read, "mimo-v2.6-pro"), None);
+        let pasted_earlier = json!({"messages": [
+            {"role": "user", "content": [png_block()]},
+            {"role": "assistant", "content": "I can't see images."},
+            {"role": "user", "content": "ok, then list the files"}
+        ]});
+        assert_eq!(pasted_image_refusal(&pasted_earlier, "mimo-v2.6-pro"), None);
         assert_eq!(
-            image_input_problem(&pasted, "mimo-v2.6-pro", false),
-            refusal
+            pasted_image_refusal(
+                &json!({"messages": [{"role": "user", "content": "hi"}]}),
+                "m"
+            ),
+            None
         );
-        assert_eq!(image_input_problem(&read, "mimo-v2.6-pro", false), refusal);
-        assert_eq!(image_input_problem(&text, "mimo-v2.6-pro", false), None);
-        assert_eq!(image_input_problem(&pasted, "glm-5.3-flash", true), None);
-        assert_eq!(image_input_problem(&read, "glm-5.3-flash", true), None);
+    }
+
+    /// The session goes on: a tool result's image and an earlier pasted one
+    /// become a note the model can read, and nothing else changes.
+    #[test]
+    fn a_text_only_models_other_images_become_a_note() {
+        let note = json!({"type": "text", "text": "[image omitted: mimo-v2.6-pro does not take image input]"});
+        let history = json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "look"}, png_block()]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "red.png"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [png_block()]}, {"type": "text", "text": "and now?"}]}
+        ]});
+        let cleaned = without_images(&history, "mimo-v2.6-pro");
+        assert_eq!(
+            cleaned["messages"][0]["content"],
+            json!([{"type": "text", "text": "look"}, note.clone()])
+        );
+        assert_eq!(
+            cleaned["messages"][2]["content"][0]["content"],
+            json!([note])
+        );
+        assert_eq!(cleaned["messages"][1], history["messages"][1]);
+        let text = json!({"messages": [{"role": "user", "content": "hi"}]});
+        assert_eq!(without_images(&text, "m"), text);
+    }
+
+    #[test]
+    fn an_image_source_that_cannot_be_sent_is_named() {
         let file = json!({"messages": [{"role": "user", "content": [
             {"type": "image", "source": {"type": "file", "file_id": "f1"}}
         ]}]});
-        assert!(image_input_problem(&file, "glm-5.3-flash", true).is_some());
+        assert!(image_source_problem(&file).is_some());
+        assert_eq!(
+            image_source_problem(
+                &json!({"messages": [{"role": "user", "content": [png_block()]}]})
+            ),
+            None
+        );
     }
 
     #[test]
