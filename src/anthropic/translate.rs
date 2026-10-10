@@ -168,10 +168,9 @@ fn message_content(content: &Value) -> Value {
 
 /// Why `anthropic` cannot go to `model` as it is, or None: an image (a user
 /// turn's, or one inside a tool result, which is how Claude Code's Read tool
-/// returns a picture) for a model the catalog does not list as taking images
-/// (`takes_images` false) is refused with the gateway's wording rather than
-/// dropped; and an image whose source is neither base64 nor a url cannot be
-/// sent at all.
+/// returns a picture) for a model that takes none (`takes_images` false) is
+/// refused with the gateway's wording rather than dropped; and an image whose
+/// source is neither base64 nor a url cannot be sent at all.
 pub fn image_input_problem(anthropic: &Value, model: &str, takes_images: bool) -> Option<String> {
     let mut images: Vec<&Value> = Vec::new();
     for message in anthropic
