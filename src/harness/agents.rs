@@ -713,6 +713,18 @@ fn iso_now() -> String {
 /// C++ called `.dump()`); key order is not hand-controlled here because
 /// nlohmann's default object is a `std::map` — the same alphabetical order
 /// `io::json::dump` produces.
+/// The input modalities a harness declares for `model`: text, and image when
+/// the catalog lists it (`CatalogModel::image_input`), so the harness attaches
+/// an image the person gives it instead of refusing it or describing it in
+/// text. Never image for a model the catalog does not say takes one.
+fn input_modalities(model: &CatalogModel) -> Value {
+    if model.image_input {
+        json!(["text", "image"])
+    } else {
+        json!(["text"])
+    }
+}
+
 pub fn build_open_claw_config(
     existing: &str,
     primary: &str,
@@ -737,7 +749,7 @@ pub fn build_open_claw_config(
         let mut entry = json!({
             "id": model.id,
             "name": model.id,
-            "input": ["text"],
+            "input": input_modalities(model),
             // Only capabilities checked against this gateway. It returns
             // usage on the final streaming chunk when
             // `stream_options.include_usage` is set, and it takes
@@ -857,7 +869,7 @@ pub fn build_prime_agent_extension(
         let mut entry = json!({
             "id": model.id,
             "name": model.id,
-            "input": ["text"],
+            "input": input_modalities(model),
             // The capabilities checked against this gateway, as for OpenClaw.
             "compat": {
                 "supportsUsageInStreaming": true,
@@ -1694,6 +1706,7 @@ mod tests {
             input_per_mtok: 0,
             output_per_mtok: 0,
             cached_input_per_mtok: 0,
+            image_input: false,
         }];
         let built = build_prime_agent_extension("https://example.test/v1", KEY_VARIABLE, &models);
         let json = built
@@ -1707,6 +1720,41 @@ mod tests {
         assert_eq!(provider["models"][0]["id"], "glm-5.3-flash");
         assert_eq!(provider["models"][0]["contextWindow"], 200_000);
         assert_eq!(provider["models"][0]["maxTokens"], 16_384);
+    }
+
+    #[test]
+    fn openclaw_and_prime_agent_declare_image_input_only_where_the_catalog_lists_it() {
+        let models = [
+            CatalogModel {
+                id: "deepseek-v4.1-flash".to_string(),
+                image_input: true,
+                ..Default::default()
+            },
+            CatalogModel {
+                id: "mimo-v2.6-pro".to_string(),
+                ..Default::default()
+            },
+        ];
+        let claw: Value = serde_json::from_str(&build_open_claw_config(
+            "",
+            "deepseek-v4.1-flash",
+            "https://example.test/v1",
+            "k",
+            &models,
+        ))
+        .unwrap();
+        let claw_models = &claw["models"]["providers"]["runanywhere"]["models"];
+        assert_eq!(claw_models[0]["input"], json!(["text", "image"]));
+        assert_eq!(claw_models[1]["input"], json!(["text"]));
+
+        let built = build_prime_agent_extension("https://example.test/v1", KEY_VARIABLE, &models);
+        let json = built
+            .strip_prefix("export default function (pi) {\n  pi.registerProvider(\"runanywhere\", ")
+            .and_then(|rest| rest.strip_suffix(");\n}\n"))
+            .expect("the extension wraps one registerProvider call");
+        let provider: Value = serde_json::from_str(json).unwrap();
+        assert_eq!(provider["models"][0]["input"], json!(["text", "image"]));
+        assert_eq!(provider["models"][1]["input"], json!(["text"]));
     }
 
     #[test]
