@@ -1454,3 +1454,68 @@ fn images_reach_a_model_that_takes_them_and_never_stick_one_that_does_not() {
         "local-model does not take image input. Send text only."
     );
 }
+
+/// Claude Code retries a refused request, then keeps the refused turn and
+/// folds the next prompt into it (both seen live). A retry of the same turn,
+/// however it is re-serialized, is refused again, so the refusal is what the
+/// person sees; once the turn has grown, the refused picture goes as the note
+/// and the follow-up is answered instead of every later turn being refused.
+#[test]
+fn a_refused_paste_does_not_refuse_the_next_prompt() {
+    let _shim_guard = shim_lock::shim_lock();
+    let (port, bodies, _handle) = image_upstream();
+    let endpoint = Endpoint {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        api_key: "test-upstream-key".to_string(),
+        ..Default::default()
+    };
+    let mimo = vec!["mimo-v2.6-pro".to_string()];
+    let mut shim = anthropic::start(
+        &endpoint,
+        "mimo-v2.6-pro",
+        DeclaredHarness::KClaudeCode,
+        false,
+        "",
+        &ModelAliases::new(),
+        &mimo,
+    )
+    .expect("start the translator");
+    let source: serde_json::Value = serde_json::from_str(PNG_SOURCE).unwrap();
+    let first = pasted("mimo-v2.6-pro");
+    let mut resent: serde_json::Value = serde_json::from_str(&first).unwrap();
+    resent["messages"][0]["content"][1]["cache_control"] = serde_json::json!({"type": "ephemeral"});
+    let resent = resent.to_string();
+    let folded = serde_json::json!({"model": "mimo-v2.6-pro", "max_tokens": 16, "messages": [
+        {"role": "user", "content": [
+            {"type": "text", "text": "what colour?"},
+            {"type": "image", "source": source},
+            {"type": "text", "text": "ok, forget the image: say hello"}
+        ]}
+    ]})
+    .to_string();
+    let mut statuses = Vec::new();
+    for body in [first.clone(), first, resent, folded] {
+        let mut client = Client::new(
+            &shim.base_url,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+        )
+        .expect("client");
+        let post = Request::post("/v1/messages", body.into_bytes())
+            .header("Authorization", format!("Bearer {}", shim.auth_token))
+            .header("Content-Type", "application/json");
+        statuses.push(client.send(&post, None, None).expect("a reply").status);
+    }
+    anthropic::stop(&mut shim);
+    assert_eq!(
+        statuses,
+        [400, 400, 400, 200],
+        "every retry refused, then the session goes on"
+    );
+    let sent = bodies.lock().unwrap().clone();
+    assert_eq!(1, sent.len());
+    assert_eq!(
+        sent[0]["messages"][0]["content"],
+        "what colour?[image omitted: mimo-v2.6-pro does not take image input]ok, forget the image: say hello"
+    );
+}
