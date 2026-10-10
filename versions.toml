@@ -7,7 +7,7 @@
 
 [product]
 # wally's own release version; git tag is v<version> (auto-tag.yml reads it here).
-version = "0.8.5"
+version = "0.8.6"
 
 [contracts]
 # Vendored from InferenceInfra at this exact revision.
