@@ -346,6 +346,17 @@ fn settings_args(args: &[String], path: Option<&str>) -> Vec<String> {
     }
 }
 
+/// A per-session file removed when this goes out of scope, a panic included.
+struct RemovedOnDrop(Option<String>);
+
+impl Drop for RemovedOnDrop {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 /// Writes `contents` to `path` readable by its owner only (it carries the
 /// translator's token).
 fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -714,7 +725,21 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         for name in SLOT_DESCRIPTIONS {
             endpoint_env.push((name.to_string(), "RunAnywhere model".to_string()));
         }
-        let settings_file = config_dir.as_ref().and_then(|dir| {
+        // A cloud-provider switch in the reader's settings would skip the
+        // base URL altogether; Claude Code reads only 1/true/yes/on as set.
+        for name in [
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+        ] {
+            endpoint_env.push((name.to_string(), "0".to_string()));
+        }
+        // Their settings' ANTHROPIC_MODEL would shadow the --model passed
+        // below; the reader's own --model is theirs, so only alongside ours.
+        if !args.iter().any(|a| a == "--model") {
+            endpoint_env.push(("ANTHROPIC_MODEL".to_string(), model.to_string()));
+        }
+        let settings_file = RemovedOnDrop(config_dir.as_ref().and_then(|dir| {
             let path = Path::new(dir).join(format!("wally-endpoint-{}.json", std::process::id()));
             match write_private(&path, &endpoint_settings(&endpoint_env)) {
                 Ok(()) => Some(path.to_string_lossy().into_owned()),
@@ -725,18 +750,15 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
                     None
                 }
             }
-        });
+        }));
         let mut launch_args = Vec::with_capacity(args.len() + 4);
         if !args.iter().any(|a| a == "--model") {
             launch_args.push("--model".to_string());
             launch_args.push(model.to_string());
         }
-        launch_args.extend(settings_args(args, settings_file.as_deref()));
+        launch_args.extend(settings_args(args, settings_file.0.as_deref()));
         launch_args.extend(args.iter().cloned());
         status = harness::launch(editor.command, "", &launch_args, options);
-        if let Some(path) = &settings_file {
-            let _ = fs::remove_file(path);
-        }
     }
 
     anthropic::stop(&mut shim);
@@ -872,6 +894,15 @@ mod tests {
         assert!(settings_args(&args(&["--settings", "mine.json"]), path).is_empty());
         assert!(settings_args(&args(&["--settings={}"]), path).is_empty());
         assert!(settings_args(&args(&["-p", "hi"]), None).is_empty());
+    }
+
+    #[test]
+    fn the_endpoint_settings_file_goes_when_the_session_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wally-endpoint-1.json");
+        write_private(&path, "{}").unwrap();
+        drop(RemovedOnDrop(Some(path.to_string_lossy().into_owned())));
+        assert!(!path.exists());
     }
 
     /// The file carries the translator's token: its owner alone may read it.
