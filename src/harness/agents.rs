@@ -1707,6 +1707,7 @@ mod tests {
             output_per_mtok: 0,
             cached_input_per_mtok: 0,
             image_input: false,
+            text_only: false,
         }];
         let built = build_prime_agent_extension("https://example.test/v1", KEY_VARIABLE, &models);
         let json = built
