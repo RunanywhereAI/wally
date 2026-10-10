@@ -88,8 +88,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "packaged wally version smoke failed" }
 
     # A binary that resolves no console cannot sign anyone in. Configure requires the
-    # endpoints (CMakeLists.txt); CI discards them for fork pull requests, so this
-    # is only reachable for an archive built that way. Asked in an empty profile
+    # endpoints (CMakeLists.txt) unless WALLY_CONSOLE_OPTIONAL=1, which is how a
+    # fork without those variables builds. Asked in an empty profile
     # with the runtime overrides cleared, so a signed-in account or a stray
     # WALLY_CONSOLE_URL on the build machine cannot answer for the build.
     $ProbeProfile = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
@@ -113,8 +113,12 @@ try {
     }
     $BuiltConsole = ([regex]::Match(($About -join ""), '"console":"([^"]*)"')).Groups[1].Value
     if ([string]::IsNullOrWhiteSpace($BuiltConsole)) {
-        throw ("this archive resolves no console; it was configured without " +
-               "WALLY_BAKED_CONSOLE_API_URL / WALLY_BAKED_CONSOLE_WEB_ORIGIN.")
+        if ($env:WALLY_CONSOLE_OPTIONAL -eq "1") {
+            Write-Host "note: this archive resolves no console (WALLY_CONSOLE_OPTIONAL=1)."
+        } else {
+            throw ("this archive resolves no console; it was configured without " +
+                   "WALLY_BAKED_CONSOLE_API_URL / WALLY_BAKED_CONSOLE_WEB_ORIGIN.")
+        }
     }
 } finally {
     $env:PATH = $OldPath
