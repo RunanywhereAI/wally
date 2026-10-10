@@ -316,6 +316,62 @@ fn cloud_context_window(model: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// Claude Code command-line settings carrying `env`: the variables that point
+/// it at this translator, which then outrank any the reader's own settings
+/// files set.
+fn endpoint_settings(env: &[(String, String)]) -> String {
+    let variables: serde_json::Map<String, serde_json::Value> = env
+        .iter()
+        .map(|(name, value)| (name.clone(), serde_json::Value::String(value.clone())))
+        .collect();
+    serde_json::json!({ "env": variables }).to_string()
+}
+
+/// `--settings <path>` ahead of the reader's own arguments, unless they passed
+/// their own `--settings`: that one is theirs to decide, and Claude Code reads
+/// one.
+fn settings_args(args: &[String], path: Option<&str>) -> Vec<String> {
+    let theirs = args
+        .iter()
+        .any(|a| a == "--settings" || a.starts_with("--settings="));
+    match path {
+        Some(path) if !theirs => vec!["--settings".to_string(), path.to_string()],
+        Some(_) => {
+            out::status_line(
+                "--settings was passed, so it decides Claude Code's endpoint, not wally",
+            );
+            Vec::new()
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Writes `contents` to `path` readable by its owner only (it carries the
+/// translator's token).
+fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)?.write_all(contents.as_bytes())
+}
+
+/// The ids in `catalog` known to take no image input, for the translator: an
+/// image the person pastes for one is refused there, and any other becomes a
+/// note. Empty when the catalog could not be read, so nothing is refused on a
+/// guess and the gateway judges.
+fn text_only_ids(catalog: &[harness::CatalogModel]) -> Vec<String> {
+    catalog
+        .iter()
+        .filter(|model| model.text_only)
+        .map(|model| model.id.clone())
+        .collect()
+}
+
 /// Starts the translator and holds it open, printing what to point at it.
 ///
 /// Worth having beyond debugging: it is how anything that speaks the Anthropic
@@ -334,6 +390,7 @@ fn serve(editor: &Editor, model: &str, options: &GlobalOptions) -> i32 {
         options.verbose,
         "",
         &ModelAliases::new(),
+        &text_only_ids(&harness::catalog_models_for(&endpoint, model)),
     ) else {
         harness::release(&endpoint);
         return 1;
@@ -417,9 +474,10 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
     // offered under a family name and the shim routes a request naming that
     // family back to the real id. The launched model is first, so it stays the
     // default (Sonnet). The CLI path takes real ids directly and needs none of it.
+    // Read once: it names the picker's models and which of them take no images.
+    let catalog = harness::catalog_models_for(&endpoint, model);
     let mut desktop_aliases: ModelAliases = Vec::new();
     if editor.wiring == Wiring::ClaudeProfile {
-        let catalog = harness::catalog_models_for(&endpoint, model);
         const FAMILIES: [&str; 3] = [
             "claude-sonnet-4-5",
             "claude-opus-5",
@@ -437,6 +495,7 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         options.verbose,
         &advertised,
         &desktop_aliases,
+        &text_only_ids(&catalog),
     ) else {
         harness::release(&endpoint);
         return 1;
@@ -548,8 +607,10 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         // settings and memory still apply. See prepare_claude_config_dir. With no
         // usable state dir (no HOME/XDG_STATE_HOME), leave CLAUDE_CONFIG_DIR
         // unset rather than forcing Claude Code onto an unwritable root path.
-        let _config_dir =
-            prepare_claude_config_dir().map(|dir| ScopedEnv::new("CLAUDE_CONFIG_DIR", &dir));
+        let config_dir = prepare_claude_config_dir();
+        let _config_dir = config_dir
+            .as_ref()
+            .map(|dir| ScopedEnv::new("CLAUDE_CONFIG_DIR", dir));
         // Claude Code budgets against the local server's configured window, or
         // the hosted catalog when available.
         let mut _context_window = None;
@@ -607,7 +668,6 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         // list, so each catalog model is bound to a family slot: they all then show
         // in the picker, labelled with their real ids. The launched model is first,
         // so it stays on Haiku, the background-task default.
-        let catalog = harness::catalog_models_for(&endpoint, model);
         const FAMILY_SLOTS: [&str; 3] = [
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
@@ -629,13 +689,54 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         for name in SLOT_DESCRIPTIONS {
             _slot_descriptions.push(ScopedEnv::new(name, "RunAnywhere model"));
         }
-        let mut launch_args = Vec::with_capacity(args.len() + 2);
+        // A settings file's `env` block outranks the environment a process
+        // starts with, so a reader whose ~/.claude/settings.json (seeded into
+        // the dir above) or project settings point Claude Code at another
+        // endpoint would bypass this translator entirely: verified with an env
+        // block naming a relay. The same variables therefore also go in as
+        // command-line settings, which Claude Code ranks above user and project
+        // settings, in a 0600 file wally owns for this session only (the token
+        // never on a command line, where any local user can read it). The
+        // reader's own settings files are never written.
+        let mut endpoint_env: Vec<(String, String)> = vec![
+            ("ANTHROPIC_BASE_URL".to_string(), shim.base_url.clone()),
+            ("ANTHROPIC_AUTH_TOKEN".to_string(), shim.auth_token.clone()),
+        ];
+        if context > 0 {
+            endpoint_env.push((
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS".to_string(),
+                context.to_string(),
+            ));
+        }
+        for (index, catalog_model) in catalog.iter().take(3).enumerate() {
+            endpoint_env.push((FAMILY_SLOTS[index].to_string(), catalog_model.id.clone()));
+        }
+        for name in SLOT_DESCRIPTIONS {
+            endpoint_env.push((name.to_string(), "RunAnywhere model".to_string()));
+        }
+        let settings_file = config_dir.as_ref().and_then(|dir| {
+            let path = Path::new(dir).join(format!("wally-endpoint-{}.json", std::process::id()));
+            match write_private(&path, &endpoint_settings(&endpoint_env)) {
+                Ok(()) => Some(path.to_string_lossy().into_owned()),
+                Err(error) => {
+                    out::status_line(&format!(
+                        "could not write wally's endpoint settings ({error}); a settings.json env block may override them"
+                    ));
+                    None
+                }
+            }
+        });
+        let mut launch_args = Vec::with_capacity(args.len() + 4);
         if !args.iter().any(|a| a == "--model") {
             launch_args.push("--model".to_string());
             launch_args.push(model.to_string());
         }
+        launch_args.extend(settings_args(args, settings_file.as_deref()));
         launch_args.extend(args.iter().cloned());
         status = harness::launch(editor.command, "", &launch_args, options);
+        if let Some(path) = &settings_file {
+            let _ = fs::remove_file(path);
+        }
     }
 
     anthropic::stop(&mut shim);
@@ -737,6 +838,56 @@ pub fn register_editors(app: &mut App) {
 mod tests {
     use super::*;
     use crate::util::env_lock::lock as env_lock;
+
+    /// A ~/.claude/settings.json `env` block naming a relay outranks the
+    /// environment wally launches Claude Code with, so wally's endpoint goes in
+    /// as command-line settings, which outrank it: every variable, as `env`.
+    #[test]
+    fn endpoint_settings_carry_wallys_variables_as_env() {
+        let env = vec![
+            (
+                "ANTHROPIC_BASE_URL".to_string(),
+                "http://127.0.0.1:5000".to_string(),
+            ),
+            (
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                "loopback-token".to_string(),
+            ),
+        ];
+        let settings: serde_json::Value = serde_json::from_str(&endpoint_settings(&env)).unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:5000", "ANTHROPIC_AUTH_TOKEN": "loopback-token"}})
+        );
+    }
+
+    #[test]
+    fn settings_go_ahead_of_the_readers_args_unless_they_pass_their_own() {
+        let path = Some("/state/claude/wally-endpoint-1.json");
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            settings_args(&args(&["-p", "hi"]), path),
+            args(&["--settings", "/state/claude/wally-endpoint-1.json"])
+        );
+        assert!(settings_args(&args(&["--settings", "mine.json"]), path).is_empty());
+        assert!(settings_args(&args(&["--settings={}"]), path).is_empty());
+        assert!(settings_args(&args(&["-p", "hi"]), None).is_empty());
+    }
+
+    /// The file carries the translator's token: its owner alone may read it.
+    #[cfg(unix)]
+    #[test]
+    fn the_endpoint_settings_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wally-endpoint-1.json");
+        write_private(&path, "{}").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}");
+    }
 
     // With no usable HOME or XDG state dir, `prepare_claude_config_dir` used
     // to build the root-level "/claude" and export it, so Claude Code
