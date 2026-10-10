@@ -364,6 +364,7 @@ fn openclaw_config_selects_our_provider_and_model() {
         output_per_mtok: 1200000,
         cached_input_per_mtok: 75000,
         image_input: false,
+        text_only: false,
     }];
     let config: Value = serde_json::from_str(&harness::build_open_claw_config(
         "",
@@ -1207,6 +1208,19 @@ fn catalog_carries_image_input_from_the_model_list() {
         ],
         "image input must come from input_modalities, and only there"
     );
+    let text_only: Vec<(&str, bool)> = catalog
+        .iter()
+        .map(|m| (m.id.as_str(), m.text_only))
+        .collect();
+    assert_eq!(
+        text_only,
+        [
+            ("deepseek-v4.1-flash", false),
+            ("mimo-v2.6-pro", true),
+            ("bare-model", false)
+        ],
+        "text-only only where the catalog lists modalities without image, never on a guess"
+    );
 }
 
 // wally launches these agents, so each config it writes declares which one
@@ -1220,6 +1234,7 @@ fn declare_catalog() -> Vec<CatalogModel> {
         output_per_mtok: 0,
         cached_input_per_mtok: 0,
         image_input: false,
+        text_only: false,
     }]
 }
 
