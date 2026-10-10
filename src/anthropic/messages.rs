@@ -153,6 +153,11 @@ struct Runtime {
     /// alias): a request naming one of these is forwarded as-is, which lets
     /// Claude Code's family-slot picker route each slot to its own model.
     catalog: Vec<String>,
+    /// The catalog ids known to take no image input (`CatalogModel::text_only`):
+    /// for them an image the person just pasted is refused, and any other in
+    /// the request becomes a text note. A model not known to be text-only
+    /// (the catalog could not be read) is sent as is, for the gateway to judge.
+    text_only_models: Vec<String>,
     /// (Anthropic family name -> real id) for Claude Desktop, whose picker
     /// is family-based: a request naming a family is routed to the mapped
     /// id, and the discovery endpoint advertises the family names.
@@ -1029,16 +1034,27 @@ fn handle_messages_route(
             effective_model(runtime, &parsed)
         ));
     }
-    // An image is never flattened away (the model would answer about a
-    // picture it never saw). Hosted, it goes upstream: the gateway is the one
-    // that knows which models take images, and refuses an image for any
-    // other (MiMo) with a 400 this relays as invalid_request_error, in its
-    // own words. A local server reached through here takes none, so an image
-    // for it is refused here, in the same words; and an image whose source
-    // cannot be sent is refused either way.
+    // An image is never silently flattened away (the model would answer about
+    // a picture it never saw). For a model known to take none (a local server
+    // reached through here, or a hosted model the catalog lists as text-only,
+    // MiMo) an image the person just pasted is refused, in the gateway's
+    // words, and any other image (a Read tool's result, one pasted earlier)
+    // becomes a note, so a session whose history holds a picture goes on.
+    // Any other model is sent the images: the gateway judges them, and an
+    // image whose source cannot be sent is refused here.
     let effective = effective_model(runtime, &parsed);
-    let takes_images = !runtime.api_key.is_empty();
-    if let Some(problem) = translate::image_input_problem(&parsed, &effective, takes_images) {
+    let text_only = runtime.api_key.is_empty() || runtime.text_only_models.contains(&effective);
+    let problem = if text_only {
+        translate::pasted_image_refusal(&parsed, &effective)
+    } else {
+        translate::image_source_problem(&parsed)
+    };
+    let parsed = if text_only {
+        translate::without_images(&parsed, &effective)
+    } else {
+        parsed
+    };
+    if let Some(problem) = problem {
         let payload = translate::error_body("invalid_request_error", &problem);
         let _ = writer.send_full(
             400,
@@ -1239,7 +1255,8 @@ fn stop_running_instance() {
 /// `declared` (Claude Code or Claude Desktop) on every upstream request so the
 /// endpoint attributes the traffic to it. `advertised` is the
 /// model name reported to the tool (defaults to `model`); `aliases` map names
-/// the tool may send onto upstream ids. C++ defaulted verbose=false,
+/// the tool may send onto upstream ids; `text_only_models` take no image
+/// input (see `Runtime::text_only_models`). C++ defaulted verbose=false,
 /// advertised="" and aliases={}. Like the C++ (which returned bool), it reports
 /// its own failures on stderr and returns None.
 pub fn start(
@@ -1249,6 +1266,7 @@ pub fn start(
     verbose: bool,
     advertised: &str,
     aliases: &ModelAliases,
+    text_only_models: &[String],
 ) -> Option<Shim> {
     stop_running_instance();
 
@@ -1312,6 +1330,7 @@ pub fn start(
         // The real routable ids, for effective_model. Reads a local file,
         // no network.
         catalog: cached_model_ids(),
+        text_only_models: text_only_models.to_vec(),
         aliases: aliases.clone(),
         local_token: local_token.clone(),
         verbose,
