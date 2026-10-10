@@ -205,23 +205,72 @@ fn image_blocks(anthropic: &Value) -> Vec<(&Value, bool)> {
     images
 }
 
-/// The refusal for a model that takes no images, or None: only an image the
-/// person just pasted (at the top of the latest user turn) is refused, in the
-/// gateway's words. Every other image, in a tool result or earlier history, is
-/// `without_images`' note instead, so a session whose history holds a picture
-/// can go on.
-pub fn pasted_image_refusal(anthropic: &Value, model: &str) -> Option<String> {
+/// The images the person just pasted (at the top of the latest user turn),
+/// each as its source's data or URL: what a model that takes no images refuses
+/// (`pasted_image_refusal`). Every other image, in a tool result or earlier
+/// history, is `without_images`' note instead, so a session whose history
+/// holds a picture can go on.
+pub fn pasted_images(anthropic: &Value) -> Vec<String> {
     image_blocks(anthropic)
+        .into_iter()
+        .filter(|(_, pasted_now)| *pasted_now)
+        .map(|(block, _)| {
+            let source = block.get("source").cloned().unwrap_or(Value::Null);
+            let data = field(&source, "data");
+            if data.is_empty() {
+                field(&source, "url")
+            } else {
+                data
+            }
+        })
+        .collect()
+}
+
+/// The latest user turn's top-level blocks as what a person sees of them: each
+/// text, each image's data or URL, and the type of anything else; what a
+/// resend of the same turn shares and a turn the person has added to does not
+/// (fields such as `cache_control` left out).
+pub fn latest_turn_shape(anthropic: &Value) -> Vec<String> {
+    let messages: Vec<&Value> = anthropic
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    let Some(latest) = messages
         .iter()
-        .any(|(_, pasted_now)| *pasted_now)
-        .then(|| format!("{model} does not take image input. Send text only."))
+        .rev()
+        .find(|m| m.is_object() && matches!(field(m, "role").as_str(), "user" | ""))
+    else {
+        return Vec::new();
+    };
+    let content = latest.get("content").cloned().unwrap_or(Value::Null);
+    let Some(blocks) = content.as_array() else {
+        return vec![format!("text:{}", flatten_content(&content))];
+    };
+    blocks
+        .iter()
+        .map(|block| match field(block, "type").as_str() {
+            "text" => format!("text:{}", field(block, "text")),
+            "image" => {
+                let source = block.get("source").cloned().unwrap_or(Value::Null);
+                format!("image:{}{}", field(&source, "data"), field(&source, "url"))
+            }
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+/// The refusal of a pasted image for `model`, in the gateway's words.
+pub fn pasted_image_refusal(model: &str) -> String {
+    format!("{model} does not take image input. Send text only.")
 }
 
 /// `anthropic` with every image block (pasted in an earlier turn, or in any
 /// tool result) replaced by a text note saying it was omitted for `model`, for
 /// a model that takes no images. Unchanged when it holds none.
-pub fn without_images(anthropic: &Value, model: &str) -> Value {
-    let mut copy = anthropic.clone();
+pub fn without_images(anthropic: Value, model: &str) -> Value {
+    let mut copy = anthropic;
     let note = json!({"type": "text", "text": format!("[image omitted: {model} does not take image input]")});
     let replace = |blocks: &mut Vec<Value>| {
         for block in blocks.iter_mut() {
@@ -1326,29 +1375,28 @@ mod tests {
     /// (Claude Code's Read) and one pasted earlier are not.
     #[test]
     fn only_an_image_pasted_in_the_latest_turn_is_refused() {
-        let refusal = Some("mimo-v2.6-pro does not take image input. Send text only.".to_string());
         let pasted_now = json!({"messages": [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
             {"role": "user", "content": [{"type": "text", "text": "what is this?"}, png_block()]}
         ]});
-        assert_eq!(pasted_image_refusal(&pasted_now, "mimo-v2.6-pro"), refusal);
+        assert_eq!(pasted_images(&pasted_now), [PNG]);
+        assert_eq!(
+            pasted_image_refusal("mimo-v2.6-pro"),
+            "mimo-v2.6-pro does not take image input. Send text only."
+        );
         let read = json!({"messages": [{"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": [png_block()]}
         ]}]});
-        assert_eq!(pasted_image_refusal(&read, "mimo-v2.6-pro"), None);
+        assert!(pasted_images(&read).is_empty());
         let pasted_earlier = json!({"messages": [
             {"role": "user", "content": [png_block()]},
             {"role": "assistant", "content": "I can't see images."},
             {"role": "user", "content": "ok, then list the files"}
         ]});
-        assert_eq!(pasted_image_refusal(&pasted_earlier, "mimo-v2.6-pro"), None);
-        assert_eq!(
-            pasted_image_refusal(
-                &json!({"messages": [{"role": "user", "content": "hi"}]}),
-                "m"
-            ),
-            None
+        assert!(pasted_images(&pasted_earlier).is_empty());
+        assert!(
+            pasted_images(&json!({"messages": [{"role": "user", "content": "hi"}]})).is_empty()
         );
     }
 
@@ -1362,7 +1410,7 @@ mod tests {
             {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "red.png"}}]},
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [png_block()]}, {"type": "text", "text": "and now?"}]}
         ]});
-        let cleaned = without_images(&history, "mimo-v2.6-pro");
+        let cleaned = without_images(history.clone(), "mimo-v2.6-pro");
         assert_eq!(
             cleaned["messages"][0]["content"],
             json!([{"type": "text", "text": "look"}, note.clone()])
@@ -1373,7 +1421,7 @@ mod tests {
         );
         assert_eq!(cleaned["messages"][1], history["messages"][1]);
         let text = json!({"messages": [{"role": "user", "content": "hi"}]});
-        assert_eq!(without_images(&text, "m"), text);
+        assert_eq!(without_images(text.clone(), "m"), text);
     }
 
     #[test]
