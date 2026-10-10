@@ -25,6 +25,11 @@ pub struct CatalogModel {
     /// harness may attach an image to a prompt for it. False for a local
     /// model and for a model the catalog does not describe.
     pub image_input: bool,
+    /// The catalog lists the model's input modalities and "image" is not
+    /// among them. False when that is not known (a failed catalog read, a
+    /// local model, a model the catalog does not describe), so nothing is
+    /// treated as text-only on a guess.
+    pub text_only: bool,
 }
 
 /// Moves the entry whose id is `primary` to the front, or inserts a bare one
@@ -80,6 +85,8 @@ pub fn catalog_models_with(
             output_per_mtok: out_price,
             cached_input_per_mtok: cached_price,
             image_input: info.input_modalities.iter().any(|m| m == "image"),
+            text_only: !info.input_modalities.is_empty()
+                && !info.input_modalities.iter().any(|m| m == "image"),
         });
     }
     primary_first(&mut out, primary);
@@ -118,6 +125,7 @@ pub fn catalog_models_for(endpoint: &Endpoint, primary: &str) -> Vec<CatalogMode
             output_per_mtok: 0,
             cached_input_per_mtok: 0,
             image_input: false,
+            text_only: false,
         }];
     }
     catalog_models(&endpoint.console_url, &endpoint.api_key, primary)
