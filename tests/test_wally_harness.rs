@@ -363,6 +363,7 @@ fn openclaw_config_selects_our_provider_and_model() {
         input_per_mtok: 300000,
         output_per_mtok: 1200000,
         cached_input_per_mtok: 75000,
+        image_input: false,
     }];
     let config: Value = serde_json::from_str(&harness::build_open_claw_config(
         "",
@@ -1169,6 +1170,45 @@ fn launch_open_code_cloud_with_refreshes_before_the_catalog_cache_gate() {
     );
 }
 
+/// A model takes images in a harness exactly when the console's /v1/models
+/// lists "image" among its `input_modalities` (OpenRouter's legacy field), as
+/// production lists deepseek-v4.1-flash and glm-5.3-flash and not mimo-v2.6-pro.
+#[test]
+fn catalog_carries_image_input_from_the_model_list() {
+    let mut server = Server::new();
+    server.route("GET", "/v1/models", |_req, writer, _stream| {
+        let _ = writer.send_full(
+            200,
+            &[("Content-Type", "application/json")],
+            br#"{"object":"list","data":[
+                {"id":"deepseek-v4.1-flash","object":"model","owned_by":"runanywhere","input_modalities":["text","image"]},
+                {"id":"mimo-v2.6-pro","object":"model","owned_by":"runanywhere","input_modalities":["text"]},
+                {"id":"bare-model","object":"model","owned_by":"runanywhere"}]}"#,
+        );
+    });
+    let (_handle, port) = server.bind_and_run("127.0.0.1").expect("bind mock console");
+    let console_url = format!("http://127.0.0.1:{port}");
+    let catalog = harness::catalog_models_with(
+        &ConsoleClient::new(None),
+        &console_url,
+        "access-token",
+        "deepseek-v4.1-flash",
+    );
+    let image: Vec<(&str, bool)> = catalog
+        .iter()
+        .map(|m| (m.id.as_str(), m.image_input))
+        .collect();
+    assert_eq!(
+        image,
+        [
+            ("deepseek-v4.1-flash", true),
+            ("mimo-v2.6-pro", false),
+            ("bare-model", false)
+        ],
+        "image input must come from input_modalities, and only there"
+    );
+}
+
 // wally launches these agents, so each config it writes declares which one
 // every request came from (`X-RA-Harness`), hosted and local alike.
 fn declare_catalog() -> Vec<CatalogModel> {
@@ -1179,6 +1219,7 @@ fn declare_catalog() -> Vec<CatalogModel> {
         input_per_mtok: 0,
         output_per_mtok: 0,
         cached_input_per_mtok: 0,
+        image_input: false,
     }]
 }
 
