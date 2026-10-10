@@ -187,6 +187,15 @@ pub fn build_open_code_config(
             };
             entry["limit"] = json!({ "context": model.context_window, "output": output });
         }
+        // Image input exactly where the catalog lists it. opencode 1.18 reads
+        // a configured model's image support from `modalities.input` (text
+        // must be listed too) and its file attachments from `attachment`;
+        // both default to off, so without them `-f image.png` is refused
+        // ("this model doesn't support image input") or never attached.
+        if model.image_input {
+            entry["attachment"] = json!(true);
+            entry["modalities"] = json!({ "input": ["text", "image"], "output": ["text"] });
+        }
         // The real price, so opencode shows spend instead of $0.00.
         // opencode's cost is USD per million tokens; the catalog is
         // micro-dollars per million, so a million micros is one dollar.
