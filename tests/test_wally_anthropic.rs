@@ -48,7 +48,6 @@ impl RunningShim {
             false,
             "",
             &ModelAliases::new(),
-            &[],
         ) {
             Some(shim) => RunningShim {
                 shim,
@@ -256,7 +255,6 @@ fn overload_headers_survive_streaming() {
         false,
         "",
         &ModelAliases::new(),
-        &[],
     );
     let mut okay = started.is_some();
     if let Some(shim) = &started {
@@ -892,7 +890,6 @@ fn a_dead_upstream_answers_502_with_the_did_not_answer_message() {
         false,
         "",
         &ModelAliases::new(),
-        &[],
     );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
@@ -968,7 +965,6 @@ fn a_1000_byte_cut_that_splits_a_utf8_character_falls_back_to_the_generic_500() 
         false,
         "",
         &ModelAliases::new(),
-        &[],
     );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
@@ -1039,7 +1035,6 @@ fn a_non_boolean_stream_field_answers_the_generic_500_not_a_silent_false() {
         false,
         "",
         &ModelAliases::new(),
-        &[],
     );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
@@ -1118,7 +1113,6 @@ fn a_non_object_top_level_body_answers_the_generic_500_and_never_reaches_upstrea
         false,
         "",
         &ModelAliases::new(),
-        &[],
     );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
@@ -1204,7 +1198,6 @@ fn an_invalid_utf8_sse_data_line_is_a_malformed_frame_not_a_silently_repaired_ch
         false,
         "",
         &ModelAliases::new(),
-        &[],
     );
     let shim = started.expect("translator did not start");
     let mut client = Client::new(
@@ -1278,19 +1271,27 @@ fn bridge_declares_claude_desktop() {
     );
 }
 
-/// Through the running translator: with the model listed as taking images,
-/// Claude Code's Read result (an image block in a tool result) reaches the
-/// upstream as an image_url part; without, the request is refused 400
-/// invalid_request_error in the gateway's words and nothing goes upstream.
+/// Through the running translator. Hosted, Claude Code's Read result (an image
+/// block in a tool result) reaches the gateway as an image_url part, and the
+/// gateway's own refusal of an image (MiMo) comes back as a 400
+/// invalid_request_error in its words. Local, an image is refused here, in the
+/// same words, and nothing goes to the server.
 #[test]
 fn an_image_goes_upstream_as_a_part_or_is_refused_before_it() {
+    const GATEWAY_REFUSAL: &str =
+        "mimo-v2.6-pro does not take image, audio, video or file input. Send text only.";
     let _shim_guard = shim_lock::shim_lock();
     let bodies: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
     let record = bodies.clone();
     let mut server = Server::new();
     server.route("POST", "/v1/chat/completions", move |req, res, _peer| {
-        if let Ok(body) = serde_json::from_slice(&req.body) {
-            record.lock().unwrap().push(body);
+        let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or_default();
+        let refuse = body["model"] == "mimo-v2.6-pro";
+        record.lock().unwrap().push(body);
+        if refuse {
+            let refusal = serde_json::json!({"error": {"message": GATEWAY_REFUSAL, "type": "invalid_request_error", "code": "bad_request"}});
+            let _ = res.send_full(400, &[("Content-Type", "application/json")], refusal.to_string().as_bytes());
+            return;
         }
         let _ = res.send_full(
             200,
@@ -1299,29 +1300,34 @@ fn an_image_goes_upstream_as_a_part_or_is_refused_before_it() {
         );
     });
     let (_handle, port) = server.bind_and_run("127.0.0.1").expect("bind upstream");
-    let request = serde_json::json!({"model": "glm-5.3", "max_tokens": 16, "messages": [
-        {"role": "user", "content": "Read red.png"},
-        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "red.png"}}]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
-        ]}]}
-    ]})
-    .to_string();
+    let request = |model: &str| {
+        serde_json::json!({"model": model, "max_tokens": 16, "messages": [
+            {"role": "user", "content": "Read red.png"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "red.png"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+            ]}]}
+        ]})
+        .to_string()
+    };
     let mut replies = Vec::new();
-    for image_models in [vec!["glm-5.3".to_string()], Vec::new()] {
+    for (model, api_key) in [
+        ("glm-5.3", "test-upstream-key"),
+        ("mimo-v2.6-pro", "test-upstream-key"),
+        ("local-model", ""),
+    ] {
         let endpoint = Endpoint {
             base_url: format!("http://127.0.0.1:{port}/v1"),
-            api_key: "test-upstream-key".to_string(),
+            api_key: api_key.to_string(),
             ..Default::default()
         };
         let mut shim = anthropic::start(
             &endpoint,
-            "glm-5.3",
+            model,
             DeclaredHarness::KClaudeCode,
             false,
             "",
             &ModelAliases::new(),
-            &image_models,
         )
         .expect("start the translator");
         let mut client = Client::new(
@@ -1330,32 +1336,32 @@ fn an_image_goes_upstream_as_a_part_or_is_refused_before_it() {
             Duration::from_secs(10),
         )
         .expect("client");
-        let post = Request::post("/v1/messages", request.clone().into_bytes())
+        let post = Request::post("/v1/messages", request(model).into_bytes())
             .header("Authorization", format!("Bearer {}", shim.auth_token))
             .header("Content-Type", "application/json");
         let reply = client.send(&post, None, None).expect("a reply");
-        replies.push((
-            reply.status,
-            String::from_utf8_lossy(&reply.body).to_string(),
-        ));
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap_or_default();
+        replies.push((reply.status, body));
         anthropic::stop(&mut shim);
     }
-    assert_eq!(200, replies[0].0, "{}", replies[0].1);
     let sent = bodies.lock().unwrap().clone();
     assert_eq!(
-        1,
+        2,
         sent.len(),
-        "only the model that takes images is sent anything"
+        "both hosted requests go upstream, the local one does not"
     );
     assert_eq!(
         sent[0]["messages"][2]["content"],
         serde_json::json!([{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}])
     );
-    assert_eq!(400, replies[1].0);
-    let refusal: serde_json::Value = serde_json::from_str(&replies[1].1).expect("a JSON error");
-    assert_eq!(refusal["error"]["type"], "invalid_request_error");
+    assert_eq!(200, replies[0].0, "{:?}", replies[0].1);
+    for (status, body) in &replies[1..] {
+        assert_eq!(400, *status, "{body:?}");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+    assert_eq!(replies[1].1["error"]["message"], GATEWAY_REFUSAL);
     assert_eq!(
-        refusal["error"]["message"],
-        "glm-5.3 does not take image input. Send text only."
+        replies[2].1["error"]["message"],
+        "local-model does not take image input. Send text only."
     );
 }
