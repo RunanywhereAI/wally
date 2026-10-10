@@ -249,6 +249,9 @@ pub struct ModelInfo {
     pub id: String,
     pub context_window: i64,
     pub max_output_tokens: i64,
+    /// The input modalities the model list declares (OpenRouter's
+    /// `input_modalities` on /v1/models: "text", "image"); empty when absent.
+    pub input_modalities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1994,6 +1997,7 @@ impl ConsoleClient {
                 id: model.id,
                 context_window: model.max_input_tokens.unwrap_or(0),
                 max_output_tokens: model.max_output_tokens.unwrap_or(0),
+                input_modalities: model.input_modalities.unwrap_or_default(),
             })
             .collect();
         (IdentityResult::Ok, models, String::new())
