@@ -1015,7 +1015,7 @@ mod tests {
                 opt(
                     &["--gpu-layers", "--ngl"],
                     ValueType::Int,
-                    "Layers to offload to the GPU",
+                    "GPU placement: -1 all, 0 CPU (default auto)",
                     "",
                 ),
                 opt_flag(
