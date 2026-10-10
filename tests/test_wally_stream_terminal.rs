@@ -139,6 +139,7 @@ fn stream_terminal_contract() {
             false,
             "",
             &ModelAliases::new(),
+            &[],
         );
         let started_ok = started_shim.is_some();
         let reply = match &started_shim {

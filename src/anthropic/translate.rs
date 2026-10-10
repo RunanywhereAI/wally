@@ -115,6 +115,199 @@ fn flatten_content(content: &Value) -> String {
     text
 }
 
+/// An Anthropic image block as an OpenAI `image_url` part: a data URL for a
+/// base64 source (its `media_type` and `data`), the URL itself for a url
+/// source; None for any other source, which `image_source_problem` refuses
+/// before a request is translated.
+fn image_part(block: &Value) -> Option<Value> {
+    let source = block.get("source")?;
+    let url = match field(source, "type").as_str() {
+        "base64" => {
+            let (media_type, data) = (field(source, "media_type"), field(source, "data"));
+            if media_type.is_empty() || data.is_empty() {
+                return None;
+            }
+            format!("data:{media_type};base64,{data}")
+        }
+        "url" => field(source, "url"),
+        _ => return None,
+    };
+    if url.is_empty() {
+        return None;
+    }
+    Some(json!({"type": "image_url", "image_url": {"url": url}}))
+}
+
+/// True when `content` is a block array holding an image block.
+fn has_image(content: &Value) -> bool {
+    content
+        .as_array()
+        .is_some_and(|blocks| blocks.iter().any(|block| field(block, "type") == "image"))
+}
+
+/// An OpenAI message's `content` for `content`: the flattened text, exactly
+/// as before images existed, when it holds no image; otherwise its text and
+/// image blocks as OpenAI content parts, in order (tool_use and tool_result
+/// blocks are carried elsewhere).
+fn message_content(content: &Value) -> Value {
+    if !has_image(content) {
+        return json!(flatten_content(content));
+    }
+    let parts: Vec<Value> = content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|block| match field(block, "type").as_str() {
+            "text" => Some(json!({"type": "text", "text": field(block, "text")})),
+            "image" => image_part(block),
+            _ => None,
+        })
+        .collect();
+    Value::Array(parts)
+}
+
+/// Every image block in `anthropic`'s messages: at the top of a turn's content
+/// (pasted) or inside a tool result (how Claude Code's Read tool returns a
+/// picture), each with whether it sits at the top of the latest user turn.
+fn image_blocks(anthropic: &Value) -> Vec<(&Value, bool)> {
+    let messages: Vec<&Value> = anthropic
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    let latest_user = messages
+        .iter()
+        .rposition(|m| m.is_object() && matches!(field(m, "role").as_str(), "user" | ""));
+    let mut images = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        for block in message
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            match field(block, "type").as_str() {
+                "image" => images.push((block, Some(index) == latest_user)),
+                "tool_result" => images.extend(
+                    block
+                        .get("content")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter(|inner| field(inner, "type") == "image")
+                        .map(|inner| (inner, false)),
+                ),
+                _ => {}
+            }
+        }
+    }
+    images
+}
+
+/// The images the person just pasted (at the top of the latest user turn),
+/// each as its source's data or URL: what a model that takes no images refuses
+/// (`pasted_image_refusal`). Every other image, in a tool result or earlier
+/// history, is `without_images`' note instead, so a session whose history
+/// holds a picture can go on.
+pub fn pasted_images(anthropic: &Value) -> Vec<String> {
+    image_blocks(anthropic)
+        .into_iter()
+        .filter(|(_, pasted_now)| *pasted_now)
+        .map(|(block, _)| {
+            let source = block.get("source").cloned().unwrap_or(Value::Null);
+            let data = field(&source, "data");
+            if data.is_empty() {
+                field(&source, "url")
+            } else {
+                data
+            }
+        })
+        .collect()
+}
+
+/// The latest user turn's top-level blocks as what a person sees of them: each
+/// text, each image's data or URL, and the type of anything else; what a
+/// resend of the same turn shares and a turn the person has added to does not
+/// (fields such as `cache_control` left out).
+pub fn latest_turn_shape(anthropic: &Value) -> Vec<String> {
+    let messages: Vec<&Value> = anthropic
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    let Some(latest) = messages
+        .iter()
+        .rev()
+        .find(|m| m.is_object() && matches!(field(m, "role").as_str(), "user" | ""))
+    else {
+        return Vec::new();
+    };
+    let content = latest.get("content").cloned().unwrap_or(Value::Null);
+    let Some(blocks) = content.as_array() else {
+        return vec![format!("text:{}", flatten_content(&content))];
+    };
+    blocks
+        .iter()
+        .map(|block| match field(block, "type").as_str() {
+            "text" => format!("text:{}", field(block, "text")),
+            "image" => {
+                let source = block.get("source").cloned().unwrap_or(Value::Null);
+                format!("image:{}{}", field(&source, "data"), field(&source, "url"))
+            }
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+/// The refusal of a pasted image for `model`, in the gateway's words.
+pub fn pasted_image_refusal(model: &str) -> String {
+    format!("{model} does not take image input. Send text only.")
+}
+
+/// `anthropic` with every image block (pasted in an earlier turn, or in any
+/// tool result) replaced by a text note saying it was omitted for `model`, for
+/// a model that takes no images. Unchanged when it holds none.
+pub fn without_images(anthropic: Value, model: &str) -> Value {
+    let mut copy = anthropic;
+    let note = json!({"type": "text", "text": format!("[image omitted: {model} does not take image input]")});
+    let replace = |blocks: &mut Vec<Value>| {
+        for block in blocks.iter_mut() {
+            if field(block, "type") == "image" {
+                *block = note.clone();
+            }
+        }
+    };
+    if let Some(messages) = copy.get_mut("messages").and_then(Value::as_array_mut) {
+        for message in messages {
+            if let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) {
+                replace(blocks);
+                for block in blocks.iter_mut() {
+                    if field(block, "type") == "tool_result" {
+                        if let Some(inner) = block.get_mut("content").and_then(Value::as_array_mut)
+                        {
+                            replace(inner);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    copy
+}
+
+/// Why an image in `anthropic` cannot be sent at all, or None: its source is
+/// neither base64 (with a media type) nor a url.
+pub fn image_source_problem(anthropic: &Value) -> Option<String> {
+    image_blocks(anthropic)
+        .iter()
+        .any(|(block, _)| image_part(block).is_none())
+        .then(|| {
+            "An image must be sent as base64 data with its media_type, or as a URL.".to_string()
+        })
+}
+
 /// Best-effort JSON-string -> object parse; an empty object on any failure,
 /// same as the C++ (tool_use blocks must always have *some* `input` object).
 fn parse_arguments(arguments: &str) -> Value {
@@ -220,7 +413,7 @@ fn append_message(message: &Value, out: &mut Vec<Value>) {
         out.push(json!({
             "role": "tool",
             "tool_call_id": field(block, "tool_use_id"),
-            "content": flatten_content(&inner),
+            "content": message_content(&inner),
         }));
     }
 
@@ -247,6 +440,11 @@ fn append_message(message: &Value, out: &mut Vec<Value>) {
             "content": if text.is_empty() { Value::Null } else { json!(text) },
             "tool_calls": calls,
         }));
+        return;
+    }
+    // A pasted image rides with the turn's text as OpenAI content parts.
+    if has_image(&content) {
+        out.push(json!({"role": role, "content": message_content(&content)}));
         return;
     }
     if !text.is_empty() {
@@ -1091,6 +1289,153 @@ mod tests {
     #[test]
     fn estimate_request_tokens_empty() {
         assert_eq!(estimate_request_tokens(&json!({})), 0);
+    }
+
+    /// A text-only Claude Code turn: system blocks, user text, an assistant
+    /// tool call, a tool result in both string and block form. Pinned against
+    /// the translation before image input existed, so a request carrying no
+    /// image reaches the gateway byte for byte as it did.
+    #[test]
+    fn a_text_only_request_translates_byte_for_byte_as_before_images() {
+        let request = json!({
+            "model": "glm-5.3-flash",
+            "max_tokens": 1024,
+            "stream": true,
+            "system": [{"type": "text", "text": "You are Claude Code."}, {"type": "text", "text": "Be brief."}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "list the files"}, {"type": "text", "text": " please"}]},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "Listing."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt\nb.txt"},
+                    {"type": "tool_result", "tool_use_id": "toolu_2", "content": [{"type": "text", "text": "ok"}]},
+                    {"type": "text", "text": "now read a.txt"}
+                ]},
+                {"role": "user", "content": "plain string turn"}
+            ],
+            "tools": [{"name": "Bash", "description": "run", "input_schema": {"type": "object"}}]
+        });
+        let expected = r#"{"max_tokens":1024,"messages":[{"content":"You are Claude Code.Be brief.","role":"system"},{"content":"list the files please","role":"user"},{"content":"Listing.","role":"assistant","tool_calls":[{"function":{"arguments":"{\"command\":\"ls\"}","name":"Bash"},"id":"toolu_1","type":"function"}]},{"content":"a.txt\nb.txt","role":"tool","tool_call_id":"toolu_1"},{"content":"ok","role":"tool","tool_call_id":"toolu_2"},{"content":"now read a.txt","role":"user"},{"content":"plain string turn","role":"user"}],"model":"glm-5.3-flash","stream":true,"stream_options":{"include_usage":true},"tools":[{"function":{"description":"run","name":"Bash","parameters":{"type":"object"}},"type":"function"}]}"#;
+        assert_eq!(
+            request_to_openai(&request, "glm-5.3-flash").to_string(),
+            expected
+        );
+    }
+
+    const PNG: &str = "iVBORw0KGgo=";
+
+    fn png_block() -> Value {
+        json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG}})
+    }
+
+    /// Claude Code's Read tool returns a picture as an image block inside the
+    /// tool result; it reaches the gateway as an image_url part in the tool
+    /// message, beside any text, in order.
+    #[test]
+    fn a_tool_results_image_becomes_an_image_url_part() {
+        let request = json!({"messages": [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "red.png"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [
+                {"type": "text", "text": "red.png:"}, png_block()
+            ]}]}
+        ]});
+        let messages = &request_to_openai(&request, "glm-5.3-flash")["messages"];
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(
+            messages[1]["content"],
+            json!([
+                {"type": "text", "text": "red.png:"},
+                {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{PNG}")}}
+            ])
+        );
+    }
+
+    /// A pasted image rides with its turn's text; a url source stays a URL.
+    #[test]
+    fn a_user_turns_images_become_image_url_parts_with_its_text() {
+        let request = json!({"messages": [{"role": "user", "content": [
+            {"type": "text", "text": "what colour?"},
+            png_block(),
+            {"type": "image", "source": {"type": "url", "url": "https://example.test/a.png"}}
+        ]}]});
+        assert_eq!(
+            request_to_openai(&request, "m")["messages"][0]["content"],
+            json!([
+                {"type": "text", "text": "what colour?"},
+                {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{PNG}")}},
+                {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}
+            ])
+        );
+    }
+
+    /// For a model that takes no images, only an image pasted in the latest
+    /// user turn is refused, in the gateway's words; a tool result's image
+    /// (Claude Code's Read) and one pasted earlier are not.
+    #[test]
+    fn only_an_image_pasted_in_the_latest_turn_is_refused() {
+        let pasted_now = json!({"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": [{"type": "text", "text": "what is this?"}, png_block()]}
+        ]});
+        assert_eq!(pasted_images(&pasted_now), [PNG]);
+        assert_eq!(
+            pasted_image_refusal("mimo-v2.6-pro"),
+            "mimo-v2.6-pro does not take image input. Send text only."
+        );
+        let read = json!({"messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": [png_block()]}
+        ]}]});
+        assert!(pasted_images(&read).is_empty());
+        let pasted_earlier = json!({"messages": [
+            {"role": "user", "content": [png_block()]},
+            {"role": "assistant", "content": "I can't see images."},
+            {"role": "user", "content": "ok, then list the files"}
+        ]});
+        assert!(pasted_images(&pasted_earlier).is_empty());
+        assert!(
+            pasted_images(&json!({"messages": [{"role": "user", "content": "hi"}]})).is_empty()
+        );
+    }
+
+    /// The session goes on: a tool result's image and an earlier pasted one
+    /// become a note the model can read, and nothing else changes.
+    #[test]
+    fn a_text_only_models_other_images_become_a_note() {
+        let note = json!({"type": "text", "text": "[image omitted: mimo-v2.6-pro does not take image input]"});
+        let history = json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "look"}, png_block()]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "red.png"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [png_block()]}, {"type": "text", "text": "and now?"}]}
+        ]});
+        let cleaned = without_images(history.clone(), "mimo-v2.6-pro");
+        assert_eq!(
+            cleaned["messages"][0]["content"],
+            json!([{"type": "text", "text": "look"}, note.clone()])
+        );
+        assert_eq!(
+            cleaned["messages"][2]["content"][0]["content"],
+            json!([note])
+        );
+        assert_eq!(cleaned["messages"][1], history["messages"][1]);
+        let text = json!({"messages": [{"role": "user", "content": "hi"}]});
+        assert_eq!(without_images(text.clone(), "m"), text);
+    }
+
+    #[test]
+    fn an_image_source_that_cannot_be_sent_is_named() {
+        let file = json!({"messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "file", "file_id": "f1"}}
+        ]}]});
+        assert!(image_source_problem(&file).is_some());
+        assert_eq!(
+            image_source_problem(
+                &json!({"messages": [{"role": "user", "content": [png_block()]}]})
+            ),
+            None
+        );
     }
 
     #[test]

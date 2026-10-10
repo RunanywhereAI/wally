@@ -16,6 +16,9 @@ use crate::net::loopback_auth::{constant_time_equals, generate_loopback_token};
 use crate::net::upstream_call::{self, WatchedCall, WatchedResult};
 use crate::net::upstream_pool::{retry_on_fresh_connection, UpstreamOptions, UpstreamPool};
 use serde_json::{json, Value};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -153,6 +156,19 @@ struct Runtime {
     /// alias): a request naming one of these is forwarded as-is, which lets
     /// Claude Code's family-slot picker route each slot to its own model.
     catalog: Vec<String>,
+    /// The catalog ids known to take no image input (`CatalogModel::text_only`):
+    /// for them an image the person just pasted is refused, and any other in
+    /// the request becomes a text note. A model not known to be text-only
+    /// (the catalog could not be read) is sent as is, for the gateway to judge.
+    text_only_models: Vec<String>,
+    /// What was refused this session: pasted images (by a hash of their data)
+    /// and the latest turns that carried them (`translate::latest_turn_shape`).
+    /// Claude Code retries a refused request, so the same turn is refused
+    /// again and the refusal is what it shows; but it also keeps a refused
+    /// turn and folds the next prompt into it, so a turn that has grown holds
+    /// an image already refused, which then becomes the note like any other
+    /// and the session goes on (both seen live).
+    refused: Mutex<(HashSet<u64>, HashSet<u64>)>,
     /// (Anthropic family name -> real id) for Claude Desktop, whose picker
     /// is family-based: a request naming a family is routed to the mapped
     /// id, and the discovery endpoint advertises the family names.
@@ -185,20 +201,39 @@ struct RunningInstance {
 
 static CURRENT: Mutex<Option<RunningInstance>> = Mutex::new(None);
 
-// The token the wrapped tool presents, read from either header Claude Code
-// may send it in: Authorization: Bearer <t> (from ANTHROPIC_AUTH_TOKEN) or
-// x-api-key: <t> (from ANTHROPIC_API_KEY). Both carry the same value.
-fn presented_token(request: &ServerRequest) -> String {
+/// A session-local fingerprint of `value`, for remembering what was refused.
+fn digest<T: Hash + ?Sized>(value: &T) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+// The tokens the wrapped tool presents, from either header Claude Code may
+// send one in: x-api-key: <t> (from ANTHROPIC_API_KEY, or a reader's
+// apiKeyHelper) and Authorization: Bearer <t> (from ANTHROPIC_AUTH_TOKEN).
+// Both can arrive at once, the helper's key beside wally's bearer token.
+fn presented_tokens(request: &ServerRequest) -> Vec<String> {
+    let mut tokens = Vec::new();
     if let Some(value) = request.header("x-api-key") {
-        return value.to_string();
+        tokens.push(value.to_string());
     }
     if let Some(authorization) = request.header("Authorization") {
         const BEARER: &str = "Bearer ";
         if let Some(rest) = authorization.strip_prefix(BEARER) {
-            return rest.to_string();
+            tokens.push(rest.to_string());
         }
     }
-    String::new()
+    tokens
+}
+
+/// The request carries this session's token in either header. Each is
+/// compared in constant time; a reader's own key in x-api-key (an
+/// apiKeyHelper in their settings) beside wally's bearer token is not a
+/// refusal.
+fn presents_token(request: &ServerRequest, token: &str) -> bool {
+    presented_tokens(request)
+        .iter()
+        .any(|presented| constant_time_equals(presented, token))
 }
 
 /// What the abandon path does once the id is known (or known to be
@@ -990,7 +1025,7 @@ fn handle_messages_route(
     writer: &mut ResponseWriter<'_>,
     stream: &TcpStream,
 ) {
-    if !constant_time_equals(&presented_token(request), &runtime.local_token) {
+    if !presents_token(request, &runtime.local_token) {
         let payload = translate::error_body(
             "authentication_error",
             "this local endpoint only serves the tool wally launched",
@@ -1028,6 +1063,52 @@ fn handle_messages_route(
             requested,
             effective_model(runtime, &parsed)
         ));
+    }
+    // An image is never silently flattened away (the model would answer about
+    // a picture it never saw). For a model known to take none (a local server
+    // reached through here, or a hosted model the catalog lists as text-only,
+    // MiMo) an image the person just pasted is refused, in the gateway's
+    // words, and any other image (a Read tool's result, one pasted earlier)
+    // becomes a note, so a session whose history holds a picture goes on.
+    // Any other model is sent the images: the gateway judges them, and an
+    // image whose source cannot be sent is refused here.
+    let effective = effective_model(runtime, &parsed);
+    let text_only = runtime.api_key.is_empty() || runtime.text_only_models.contains(&effective);
+    let problem = if text_only {
+        let pasted: Vec<u64> = translate::pasted_images(&parsed)
+            .iter()
+            .map(digest)
+            .collect();
+        let turn = digest(&translate::latest_turn_shape(&parsed));
+        let mut refused = runtime
+            .refused
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (images, turns) = &mut *refused;
+        let new_paste = pasted.iter().any(|hash| !images.contains(hash));
+        if !pasted.is_empty() && (new_paste || turns.contains(&turn)) {
+            images.extend(pasted);
+            turns.insert(turn);
+            Some(translate::pasted_image_refusal(&effective))
+        } else {
+            None
+        }
+    } else {
+        translate::image_source_problem(&parsed)
+    };
+    let parsed = if text_only {
+        translate::without_images(parsed, &effective)
+    } else {
+        parsed
+    };
+    if let Some(problem) = problem {
+        let payload = translate::error_body("invalid_request_error", &problem);
+        let _ = writer.send_full(
+            400,
+            &[("Content-Type", "application/json")],
+            payload.as_bytes(),
+        );
+        return;
     }
     // A panic leaving here would otherwise kill just this connection's
     // thread silently; answer a clean 500 instead, matching the C++'s
@@ -1221,7 +1302,8 @@ fn stop_running_instance() {
 /// `declared` (Claude Code or Claude Desktop) on every upstream request so the
 /// endpoint attributes the traffic to it. `advertised` is the
 /// model name reported to the tool (defaults to `model`); `aliases` map names
-/// the tool may send onto upstream ids. C++ defaulted verbose=false,
+/// the tool may send onto upstream ids; `text_only_models` take no image
+/// input (see `Runtime::text_only_models`). C++ defaulted verbose=false,
 /// advertised="" and aliases={}. Like the C++ (which returned bool), it reports
 /// its own failures on stderr and returns None.
 pub fn start(
@@ -1231,6 +1313,7 @@ pub fn start(
     verbose: bool,
     advertised: &str,
     aliases: &ModelAliases,
+    text_only_models: &[String],
 ) -> Option<Shim> {
     stop_running_instance();
 
@@ -1294,6 +1377,8 @@ pub fn start(
         // The real routable ids, for effective_model. Reads a local file,
         // no network.
         catalog: cached_model_ids(),
+        text_only_models: text_only_models.to_vec(),
+        refused: Mutex::new((HashSet::new(), HashSet::new())),
         aliases: aliases.clone(),
         local_token: local_token.clone(),
         verbose,
@@ -1387,21 +1472,40 @@ mod tests {
     }
 
     #[test]
-    fn presented_token_prefers_x_api_key() {
+    fn presented_tokens_read_x_api_key() {
         let request = request_with_header("x-api-key", "secret");
-        assert_eq!(presented_token(&request), "secret");
+        assert_eq!(presented_tokens(&request), ["secret"]);
     }
 
     #[test]
-    fn presented_token_reads_bearer_authorization() {
+    fn presented_tokens_read_bearer_authorization() {
         let request = request_with_header("Authorization", "Bearer secret");
-        assert_eq!(presented_token(&request), "secret");
+        assert_eq!(presented_tokens(&request), ["secret"]);
     }
 
     #[test]
-    fn presented_token_is_empty_without_a_recognized_header() {
+    fn presented_tokens_are_empty_without_a_recognized_header() {
         let request = request_with_header("X-Other", "value");
-        assert_eq!(presented_token(&request), "");
+        assert!(presented_tokens(&request).is_empty());
+    }
+
+    /// A reader's apiKeyHelper sends its key in x-api-key beside wally's
+    /// bearer token: the request is still this session's (it got a 401 under a
+    /// settings.json with a helper). Neither alone of a wrong token passes.
+    #[test]
+    fn either_header_may_carry_the_token() {
+        let mut both = request_with_header("x-api-key", "their-helper-key");
+        both.headers
+            .push(("Authorization".to_string(), "Bearer secret".to_string()));
+        assert!(presents_token(&both, "secret"));
+        assert!(!presents_token(
+            &request_with_header("x-api-key", "their-helper-key"),
+            "secret"
+        ));
+        assert!(!presents_token(
+            &request_with_header("Authorization", "Bearer wrong"),
+            "secret"
+        ));
     }
 
     #[test]

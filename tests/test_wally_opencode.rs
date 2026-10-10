@@ -266,6 +266,8 @@ fn config_injects_limit_and_cost() {
             input_per_mtok: 600000,
             output_per_mtok: 2200000,
             cached_input_per_mtok: 0,
+            image_input: false,
+            text_only: false,
         }],
     ))
     .expect("parse config");
@@ -338,6 +340,8 @@ fn opencode_config_declares_the_harness() {
         input_per_mtok: 0,
         output_per_mtok: 0,
         cached_input_per_mtok: 0,
+        image_input: false,
+        text_only: false,
     }];
     let configs = [
         harness::build_open_code_config("glm-5.3-flash", "http://127.0.0.1:52431/v1", "", &catalog),
@@ -371,6 +375,8 @@ fn config_prices_cache_reads_only_when_the_catalog_has_a_cached_price() {
                 input_per_mtok: 600000,
                 output_per_mtok: 2200000,
                 cached_input_per_mtok: cached,
+                image_input: false,
+                text_only: false,
             }],
         ))
         .expect("parse config");
@@ -378,4 +384,42 @@ fn config_prices_cache_reads_only_when_the_catalog_has_a_cached_price() {
     };
     assert_eq!(config(110000)["cache_read"], json!(0.11));
     assert!(config(0).get("cache_read").is_none());
+}
+
+/// opencode 1.18 reads a configured model's image support from
+/// `modalities.input` and its file attachments from `attachment`, both off by
+/// default: without them `opencode run -f image.png` answers "this model
+/// doesn't support image input". Declared exactly where the catalog lists
+/// image input, and nowhere else (MiMo stays text-only).
+#[test]
+fn config_declares_image_input_only_where_the_catalog_lists_it() {
+    let config: Value = serde_json::from_str(&harness::build_open_code_cloud_config(
+        "deepseek-v4.1-flash",
+        "https://x/v1",
+        "tok",
+        &[
+            CatalogModel {
+                id: "deepseek-v4.1-flash".to_string(),
+                image_input: true,
+                ..Default::default()
+            },
+            CatalogModel {
+                id: "mimo-v2.6-pro".to_string(),
+                ..Default::default()
+            },
+        ],
+    ))
+    .expect("parse config");
+    let models = &config["provider"]["runanywhere"]["models"];
+    let image = &models["deepseek-v4.1-flash"];
+    assert_eq!(image["attachment"], json!(true));
+    assert_eq!(
+        image["modalities"],
+        json!({ "input": ["text", "image"], "output": ["text"] })
+    );
+    let text = &models["mimo-v2.6-pro"];
+    assert!(
+        text.get("attachment").is_none() && text.get("modalities").is_none(),
+        "a text-only model declares no image input: {text:?}"
+    );
 }
