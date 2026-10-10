@@ -316,16 +316,6 @@ fn cloud_context_window(model: &str) -> i64 {
         .unwrap_or(0)
 }
 
-/// The ids in `catalog` that take image input, for the translator: an image
-/// for any other model is refused there rather than dropped.
-fn image_model_ids(catalog: &[harness::CatalogModel]) -> Vec<String> {
-    catalog
-        .iter()
-        .filter(|model| model.image_input)
-        .map(|model| model.id.clone())
-        .collect()
-}
-
 /// Starts the translator and holds it open, printing what to point at it.
 ///
 /// Worth having beyond debugging: it is how anything that speaks the Anthropic
@@ -344,7 +334,6 @@ fn serve(editor: &Editor, model: &str, options: &GlobalOptions) -> i32 {
         options.verbose,
         "",
         &ModelAliases::new(),
-        &image_model_ids(&harness::catalog_models_for(&endpoint, model)),
     ) else {
         harness::release(&endpoint);
         return 1;
@@ -428,10 +417,9 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
     // offered under a family name and the shim routes a request naming that
     // family back to the real id. The launched model is first, so it stays the
     // default (Sonnet). The CLI path takes real ids directly and needs none of it.
-    // Read once: it names the picker's models and which of them take images.
-    let catalog = harness::catalog_models_for(&endpoint, model);
     let mut desktop_aliases: ModelAliases = Vec::new();
     if editor.wiring == Wiring::ClaudeProfile {
+        let catalog = harness::catalog_models_for(&endpoint, model);
         const FAMILIES: [&str; 3] = [
             "claude-sonnet-4-5",
             "claude-opus-5",
@@ -449,7 +437,6 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         options.verbose,
         &advertised,
         &desktop_aliases,
-        &image_model_ids(&catalog),
     ) else {
         harness::release(&endpoint);
         return 1;
@@ -620,6 +607,7 @@ fn run(editor: &Editor, model: &str, args: &[String], options: &GlobalOptions) -
         // list, so each catalog model is bound to a family slot: they all then show
         // in the picker, labelled with their real ids. The launched model is first,
         // so it stays on Haiku, the background-task default.
+        let catalog = harness::catalog_models_for(&endpoint, model);
         const FAMILY_SLOTS: [&str; 3] = [
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
