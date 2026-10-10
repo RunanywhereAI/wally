@@ -21,6 +21,10 @@ pub struct CatalogModel {
     pub output_per_mtok: i64,
     /// What a prompt token read from the server's cache costs.
     pub cached_input_per_mtok: i64,
+    /// The catalog lists "image" among the model's input modalities, so a
+    /// harness may attach an image to a prompt for it. False for a local
+    /// model and for a model the catalog does not describe.
+    pub image_input: bool,
 }
 
 /// Moves the entry whose id is `primary` to the front, or inserts a bare one
@@ -75,6 +79,7 @@ pub fn catalog_models_with(
             input_per_mtok: in_price,
             output_per_mtok: out_price,
             cached_input_per_mtok: cached_price,
+            image_input: info.input_modalities.iter().any(|m| m == "image"),
         });
     }
     primary_first(&mut out, primary);
@@ -112,6 +117,7 @@ pub fn catalog_models_for(endpoint: &Endpoint, primary: &str) -> Vec<CatalogMode
             input_per_mtok: 0,
             output_per_mtok: 0,
             cached_input_per_mtok: 0,
+            image_input: false,
         }];
     }
     catalog_models(&endpoint.console_url, &endpoint.api_key, primary)
