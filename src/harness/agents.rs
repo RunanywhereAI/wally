@@ -708,11 +708,6 @@ fn iso_now() -> String {
     crate::util::format_utc(epoch)
 }
 
-/// The OpenClaw config naming `model` at `base_url`, merged onto whatever the
-/// person already has in `openclaw.json`. Built through `io::json::dump` (the
-/// C++ called `.dump()`); key order is not hand-controlled here because
-/// nlohmann's default object is a `std::map` — the same alphabetical order
-/// `io::json::dump` produces.
 /// The input modalities a harness declares for `model`: text, and image when
 /// the catalog lists it (`CatalogModel::image_input`), so the harness attaches
 /// an image the person gives it instead of refusing it or describing it in
@@ -725,6 +720,11 @@ fn input_modalities(model: &CatalogModel) -> Value {
     }
 }
 
+/// The OpenClaw config naming `model` at `base_url`, merged onto whatever the
+/// person already has in `openclaw.json`. Built through `io::json::dump` (the
+/// C++ called `.dump()`); key order is not hand-controlled here because
+/// nlohmann's default object is a `std::map` — the same alphabetical order
+/// `io::json::dump` produces.
 pub fn build_open_claw_config(
     existing: &str,
     primary: &str,
