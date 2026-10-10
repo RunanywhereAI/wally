@@ -178,8 +178,8 @@ Copy `.env.example` to `.env` and fill them in, or export them before
 `cmake -B build`. Configure fails without the first two, so a binary can never
 ship without a control plane; the values live in the build tree, never in
 committed source. `cmake/env-loader.cmake` reads `.env`; real environment
-variables win. CI takes them from repository variables, and a fork pull request
-(which receives none) sets `WALLY_CONSOLE_OPTIONAL=1`, producing a binary that
+variables win. CI takes them from repository variables, and a fork that has
+not defined them sets `WALLY_CONSOLE_OPTIONAL=1`, producing a binary that
 resolves no default console until `WALLY_CONSOLE_URL` is set.
 
 `TrustedBrowserOrigins()` pairs the two: it trusts the configured approval

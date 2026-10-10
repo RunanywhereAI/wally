@@ -37,7 +37,10 @@ env:
 jobs:
   validate-dispatch:
     # Fails fast on a bad manual input instead of burning five platform
-    # builds. Always runs so `needs` below never sees a skipped job on push.
+    # builds. Always runs on this repo so `needs` below never sees a skipped
+    # job on push. A fork that has not defined the console variables skips
+    # the release instead of failing configure; defining them runs it.
+    if: ${{ !github.event.repository.fork || (vars.WALLY_PROD_CONSOLE_API_URL != '' && vars.WALLY_PROD_CONSOLE_WEB_ORIGIN != '') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

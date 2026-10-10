@@ -227,8 +227,8 @@ if [ "${smoke_rc}" -ne 0 ]; then
 fi
 
 # A binary that resolves no console cannot sign anyone in. Configure requires
-# the endpoints (CMakeLists.txt); CI discards them for fork pull requests, so
-# this is only reachable for a bottle built that way. Asked in an empty profile
+# the endpoints (CMakeLists.txt) unless WALLY_CONSOLE_OPTIONAL=1, which is how
+# a fork without those variables builds. Asked in an empty profile
 # with the runtime overrides cleared, so a signed-in account or a stray
 # WALLY_CONSOLE_URL on the build machine cannot answer for the build.
 if [ "${skip_runtime_checks}" -ne 1 ]; then
@@ -239,9 +239,13 @@ if [ "${skip_runtime_checks}" -ne 1 ]; then
     rm -rf "${probe_profile}"
     built_console="$(printf '%s' "$about" | sed -nE 's/.*"console":"([^"]*)".*/\1/p')"
     if [ -z "${built_console}" ]; then
-        echo "error: this bottle resolves no console; it was configured without" >&2
-        echo "       WALLY_BAKED_CONSOLE_API_URL / WALLY_BAKED_CONSOLE_WEB_ORIGIN." >&2
-        exit 1
+        if [ "${WALLY_CONSOLE_OPTIONAL:-}" = "1" ]; then
+            echo "note: this bottle resolves no console (WALLY_CONSOLE_OPTIONAL=1)." >&2
+        else
+            echo "error: this bottle resolves no console; it was configured without" >&2
+            echo "       WALLY_BAKED_CONSOLE_API_URL / WALLY_BAKED_CONSOLE_WEB_ORIGIN." >&2
+            exit 1
+        fi
     fi
 fi
 

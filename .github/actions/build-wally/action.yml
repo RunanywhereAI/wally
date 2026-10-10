@@ -30,8 +30,8 @@ runs:
       # WALLY_BAKED_CONSOLE_* and WALLY_CONSOLE_OPTIONAL come from the caller's
       # job environment; composite steps inherit job-level env. Configure
       # requires the endpoints so a binary can never silently ship with no
-      # control plane; a fork pull request receives no repository variables, so
-      # the caller sets WALLY_CONSOLE_OPTIONAL=1 there and the resulting binary
+      # control plane; a fork that has not defined the repository variables
+      # sets WALLY_CONSOLE_OPTIONAL=1 and the resulting binary
       # resolves no default console.
       run: |
         set -euo pipefail

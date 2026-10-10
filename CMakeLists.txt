@@ -45,8 +45,8 @@ include(env-loader)
 # gitignored — no endpoint enters committed source. A configure without them is
 # refused, so a binary can never resolve a console it does not know;
 # WALLY_CONSOLE_OPTIONAL=1 opts out for CI runs that have no repository
-# configuration (pull requests from forks), and that binary reports no default
-# console at runtime.
+# configuration (a fork that has not defined the console variables), and that
+# binary reports no default console at runtime.
 set(WALLY_BAKED_CONSOLE_API_URL "$ENV{WALLY_BAKED_CONSOLE_API_URL}")
 set(WALLY_BAKED_CONSOLE_WEB_ORIGIN "$ENV{WALLY_BAKED_CONSOLE_WEB_ORIGIN}")
 set(WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT "$ENV{WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT}")
