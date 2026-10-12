@@ -1,23 +1,43 @@
 """What `wally browser-use` runs. Jev Ultrafast owns the loop. Eve decides. DeepSeek types."""
 
 import argparse
+import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from jev_ultrafast import Agent
 
 CHROME_PORT = 9334
+# This profile keeps cookies and logged-in sessions between runs.
 CHROME_PROFILE = Path.home() / ".cache" / "wally-browser" / "chrome"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 
+def chrome_on_our_port(url: str) -> bool:
+    """The listener is Chrome, on this machine, on the port this command uses."""
+    try:
+        with urllib.request.urlopen(url + "/json/version", timeout=0.5) as response:
+            data = json.loads(response.read().decode())
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    browser = data.get("Browser") or ""
+    socket_url = data.get("webSocketDebuggerUrl") or ""
+    return "Chrome" in browser and socket_url.startswith(f"ws://127.0.0.1:{CHROME_PORT}")
+
+
 def chrome_ready() -> None:
-    """Browser Harness attaches to a Chrome with remote debugging. Start one if none is up."""
+    """Browser Harness attaches to a Chrome with remote debugging. Start one if none is up.
+
+    The profile at CHROME_PROFILE persists login sessions. Debugging is bound to
+    127.0.0.1. An existing listener is reused only when /json/version says it is
+    Chrome on that port.
+    """
     if os.environ.get("BU_CDP_URL") or os.environ.get("BU_CDP_WS"):
         return
     url = f"http://127.0.0.1:{CHROME_PORT}"
@@ -35,8 +55,8 @@ def chrome_ready() -> None:
             raise RuntimeError("Chrome is not installed.")
         CHROME_PROFILE.mkdir(parents=True, exist_ok=True)
         subprocess.Popen(
-            [binary, f"--remote-debugging-port={CHROME_PORT}", f"--user-data-dir={CHROME_PROFILE}",
-             "--no-first-run", "--no-default-browser-check", "about:blank"],
+            [binary, f"--remote-debugging-port={CHROME_PORT}", "--remote-debugging-address=127.0.0.1",
+             f"--user-data-dir={CHROME_PROFILE}", "--no-first-run", "--no-default-browser-check", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         deadline = time.monotonic() + 20
@@ -44,6 +64,8 @@ def chrome_ready() -> None:
             if time.monotonic() > deadline:
                 raise RuntimeError(f"Chrome did not open port {CHROME_PORT}.")
             time.sleep(0.1)
+    if not chrome_on_our_port(url):
+        raise RuntimeError(f"Port {CHROME_PORT} is open, but it is not this command's Chrome.")
     os.environ["BU_CDP_URL"] = url
 
 
