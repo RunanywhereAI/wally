@@ -118,16 +118,24 @@ def chosen_target(result, operation, candidates, limit=MAX_OPTIONS):
     if len(parts) == 1:
         return validate_choice(result["answers"].get(name, {}), {i: candidates[i] for i in parts[0]})
     best = None
+    fallback = None
     for n, part in enumerate(parts, 1):
         allowed = {i: candidates[i] for i in part}
         allowed[NONE] = {}
         answer = validate_choice(result["answers"].get(f"{name}_{n}", {}), allowed)
+        ranked = {i: p for i, p in answer["probabilities"].items() if i != NONE}
+        if ranked:
+            top = max(ranked, key=ranked.get)
+            if fallback is None or ranked[top] > fallback["probabilities"][fallback["choice"]]:
+                fallback = {**answer, "choice": top, "probabilities": ranked}
         if answer["choice"] == NONE:
             continue
         if best is None or answer["probabilities"][answer["choice"]] > best["probabilities"][best["choice"]]:
             best = answer
     if best is None:
-        raise ValueError(f"Eve found no target for {operation}; no action executed.")
+        if fallback is None:
+            raise ValueError(f"Eve found no target for {operation}; no action executed.")
+        best = fallback
     best["probabilities"] = {i: p for i, p in best["probabilities"].items() if i != NONE}
     return best
 
@@ -249,9 +257,6 @@ def field_context(goal, action, page, history):
     }
 
 
-EXPLICIT_NULL = object()
-
-
 def parse_field_value(content):
     if not isinstance(content, str):
         return None
@@ -268,8 +273,6 @@ def parse_field_value(content):
         return text if text and len(text) <= 200 else None
     if not isinstance(output, dict):
         return None
-    if "text" in output and output["text"] is None:
-        return EXPLICIT_NULL
     value = output.get("text")
     if not isinstance(value, str) or not value.strip() or len(value) > 2000:
         return None
@@ -361,8 +364,6 @@ def field_text(context):
     content = result.get("choices", [{}])[0].get("message", {}).get("content")
     snippets.append(str(content)[:240])
     value = parse_field_value(content)
-    if value is EXPLICIT_NULL:
-        raise ValueError("Text helper refused the field; nothing typed.")
     if not value:
         value = text_from_goal(context, key, base, today)
         if value:
