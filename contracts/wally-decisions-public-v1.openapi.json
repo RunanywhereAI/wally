@@ -106,11 +106,11 @@
             "$ref": "#/components/schemas/QuestionId"
           },
           "options": {
-            "description": "Up to 255 options, in order. The decider labels them A through JT.",
+            "description": "Labelled A to Z in order.",
             "items": {
               "$ref": "#/components/schemas/DecisionOption"
             },
-            "maxItems": 255,
+            "maxItems": 26,
             "minItems": 2,
             "type": "array"
           },
@@ -473,7 +473,7 @@
           "$ref": "#/components/schemas/LabelProbability"
         },
         "description": "Keyed by the question's labels -- a choice question's option names, a score question's level indices \"0\" to \"9\", or \"yes\" and \"no\" -- each the probability of that label. They sum to 1.",
-        "maxProperties": 255,
+        "maxProperties": 26,
         "minProperties": 2,
         "propertyNames": {
           "maxLength": 256,
@@ -677,8 +677,8 @@
         "additionalProperties": {
           "$ref": "#/components/schemas/SystemOneGuidance"
         },
-        "description": "Option label to guidance, in order. This API takes 2 to 255 options, each label one line of at most 256 characters, distinct ignoring case and surrounding space.",
-        "maxProperties": 255,
+        "description": "Option label to guidance, in order. This API takes 2 to 26 options (System One allows 1 to 255), each label one line of at most 256 characters, distinct ignoring case and surrounding space.",
+        "maxProperties": 26,
         "minProperties": 2,
         "propertyNames": {
           "maxLength": 256,
@@ -735,7 +735,7 @@
           "$ref": "#/components/schemas/SystemOneProbability"
         },
         "description": "Keyed by the question's labels (a choice question's option labels, a score question's level indices \"0\" to \"9\"), each the probability of that label as scored, which is not renormalised.",
-        "maxProperties": 255,
+        "maxProperties": 26,
         "minProperties": 2,
         "propertyNames": {
           "maxLength": 256,
@@ -1250,7 +1250,7 @@
     },
     "/systemone": {
       "post": {
-        "description": "The System One request and response shape (OpenRouter, TypeSafe, Liquid) over the same decision models: noul questions answer the probability of yes, choice questions a label with its probabilities, score questions a weighted level. Served, billed, limited and refused exactly as POST /decisions; this API's limits match System One's choice width (128 questions, 2 to 255 options, 2 to 10 score levels).",
+        "description": "The System One request and response shape (OpenRouter, TypeSafe, Liquid) over the same decision models: noul questions answer the probability of yes, choice questions a label with its probabilities, score questions a weighted level. Served, billed, limited and refused exactly as POST /decisions; this API's limits are narrower than System One's (128 questions, 2 to 26 options, 2 to 10 score levels).",
         "operationId": "createSystemOne",
         "requestBody": {
           "content": {
