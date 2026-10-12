@@ -181,8 +181,8 @@ pub(crate) fn validate(request: &contract::DecisionsRequest) -> Result<(), Strin
                 (&value.id, &value.question, 2)
             }
             contract::DecisionQuestion::ChoiceQuestion(value) => {
-                if !(2..=26).contains(&value.options.len()) {
-                    return Err(format!("choice {} needs 2 to 26 options", value.id));
+                if !(2..=255).contains(&value.options.len()) {
+                    return Err(format!("choice {} needs 2 to 255 options", value.id));
                 }
                 let mut names = BTreeSet::new();
                 for option in &value.options {
@@ -1377,6 +1377,34 @@ mod tests {
         let mut invalid = request;
         invalid.temperature = Some(0.0);
         assert!(validate(&invalid).is_err());
+    }
+
+    #[test]
+    fn a_choice_accepts_255_options_and_refuses_256() {
+        let options = |count: usize| {
+            (0..count)
+                .map(|i| contract::DecisionOption {
+                    name: format!("opt{i}"),
+                    ..Default::default()
+                })
+                .collect()
+        };
+        let request = |count: usize| contract::DecisionsRequest {
+            model: DEFAULT_MODEL.to_string(),
+            input: "ticket".to_string(),
+            questions: vec![contract::DecisionQuestion::ChoiceQuestion(
+                contract::ChoiceQuestion {
+                    id: "q1".to_string(),
+                    question: "Which one?".to_string(),
+                    r#type: "choice".to_string(),
+                    options: options(count),
+                },
+            )],
+            ..Default::default()
+        };
+        assert!(validate(&request(255)).is_ok());
+        let error = validate(&request(256)).unwrap_err();
+        assert!(error.contains("2 to 255"));
     }
 
     #[test]
