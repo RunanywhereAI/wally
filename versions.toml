@@ -33,15 +33,15 @@ kit_sha256_linux_arm64 = "8f26773884c84bd0e041f215fc3206381931e549ac3f125a8a1c4b
 # used by ci.yml/release.yml. Both move on their own cadence, distinct from the
 # C++ kit above.
 #
-# sdk_ci_ref is the cpp-desktop-v0.20.43 source commit
-# (siddhesh/mlx-local-headers), not a tag name: release tags on
-# that repo are not protected or immutable, and this checkout supplies the
-# Swift code compiled into the Apple bottle, so a retargeted tag would change
-# what ships. The SHA is what the tag resolved to when this pin was made.
-# ff824676 refreshes the Apple XCFramework checksums for the zips on v0.20.37.
+# sdk_ci_ref is the 0.20.39 commit on siddhesh/decision-text-models, not a tag:
+# that release was published as cpp-desktop-v0.20.39 and there is no v0.20.39
+# tag. Release tags on that repo are not protected or immutable, and this
+# checkout supplies the Swift code compiled into the Apple bottle, so a
+# retargeted tag would change what ships. sdk_package_version stays 0.20.37
+# because that is the newest tag on runanywhere-swift.
 sdk_package_version = "0.20.37"
 tools_version = "6.0"
-sdk_ci_ref = "ff824676b8175c048bd9256012ddff2f592fbffd"
+sdk_ci_ref = "f86ab3a602a8a27e93ca2870b507d442a96786df"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
