@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from .browser import Browser, StalePage
+from .guards import refuses
 from .model import action_space, choose, field_context, field_text
 from .questions import MAX_STEPS
 
@@ -16,7 +17,7 @@ def suppress_repeated(actions, history):
     fingerprint changes and the unchanged-page stop never fires.
     """
     counts = {}
-    for item in history:
+    for item in history[-6:]:
         key = (item.get("action"), item.get("text"))
         counts[key] = counts.get(key, 0) + 1
     banned = {label for (label, _text), count in counts.items() if count >= 2}
@@ -120,6 +121,10 @@ class Agent:
                 state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
                 return self.snapshot()
             action = next(a for a in page["actions"] if a["id"] == selected)
+            if refuses(action, page):
+                state["status"] = "blocked"
+                state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
+                return self.snapshot()
             if len(state["history"]) >= MAX_STEPS:
                 state["status"] = "blocked"
                 raise ValueError(f"Stopped at the {MAX_STEPS}-action demo budget")

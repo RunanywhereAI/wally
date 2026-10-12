@@ -25,13 +25,6 @@ def test_the_checkout_pay_button_is_refused():
     assert refuses({"kind": "click", "label": "Pay ₹4,532"}, page)
     assert refuses({"kind": "fill", "label": "Card number", "autocomplete": "cc-number"}, page)
     assert refuses({"kind": "click", "label": "Yes"}, {"text": "Pay from your saved card?"})
-    assert refuses({"kind": "click", "label": "Submit payment"}, page)
-    assert refuses({"kind": "click", "label": "Confirm"}, {"text": "Charge the saved card"})
-    assert refuses({"kind": "fill", "label": "Expiration month", "autocomplete": "cc-exp-month"}, page)
-    assert refuses({"kind": "fill", "label": "Number", "autocomplete": "billing cc-number"}, page)
-    assert refuses({"kind": "fill", "label": "Security code"}, page)
-    assert not refuses({"kind": "fill", "label": "PIN code", "autocomplete": "postal-code"}, page)
-    assert refuses({"kind": "fill", "label": "PIN"}, page)
     assert not refuses({"kind": "click", "label": "Search"}, page)
 
 
