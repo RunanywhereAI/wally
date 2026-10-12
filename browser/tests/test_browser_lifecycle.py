@@ -6,7 +6,13 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from wally_browser.run import browser_should_stop, cdp_from_command_lines
+from wally_browser.run import browser_should_stop, cdp_from_command_lines, local_decision_host
+
+
+def test_a_loopback_decision_host_is_local():
+    assert local_decision_host("http://127.0.0.1:8091/v1") is True
+    assert local_decision_host("http://localhost:8091/v1") is True
+    assert local_decision_host("https://inference.runanywhere.ai/v1") is False
 
 
 def test_only_a_wally_chrome_is_reused():
