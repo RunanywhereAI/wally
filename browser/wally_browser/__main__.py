@@ -1,5 +1,96 @@
+"""What `wally browser-use` runs. Jev Ultrafast owns the loop. Eve decides. DeepSeek types."""
+
+import argparse
+import os
+import shutil
+import socket
+import subprocess
 import sys
+import time
+from pathlib import Path
 
-from .run import main
+from jev_ultrafast import Agent
 
-sys.exit(main())
+CHROME_PORT = 9334
+CHROME_PROFILE = Path.home() / ".cache" / "wally-browser" / "chrome"
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def chrome_ready() -> None:
+    """Browser Harness attaches to a Chrome with remote debugging. Start one if none is up."""
+    if os.environ.get("BU_CDP_URL") or os.environ.get("BU_CDP_WS"):
+        return
+    url = f"http://127.0.0.1:{CHROME_PORT}"
+
+    def listening() -> bool:
+        try:
+            socket.create_connection(("127.0.0.1", CHROME_PORT), timeout=0.3).close()
+            return True
+        except OSError:
+            return False
+
+    if not listening():
+        binary = CHROME if Path(CHROME).exists() else shutil.which("google-chrome")
+        if not binary:
+            raise RuntimeError("Chrome is not installed.")
+        CHROME_PROFILE.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(
+            [binary, f"--remote-debugging-port={CHROME_PORT}", f"--user-data-dir={CHROME_PROFILE}",
+             "--no-first-run", "--no-default-browser-check", "about:blank"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        deadline = time.monotonic() + 20
+        while not listening():
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"Chrome did not open port {CHROME_PORT}.")
+            time.sleep(0.1)
+    os.environ["BU_CDP_URL"] = url
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="wally browser-use")
+    parser.add_argument("goal")
+    parser.add_argument("--start-url")
+    args = parser.parse_args(argv)
+    if not args.start_url:
+        sys.stderr.write("pass --start-url\n")
+        return 2
+    os.environ["TEXT_MODEL"] = "deepseek-v4.1-flash"
+    os.environ["TEXT_MODEL_REASONING"] = "none"
+    chrome_ready()
+    try:
+        with Agent(args.start_url, args.goal) as agent:
+            last = None
+            shown = 0
+            for state in agent.run():
+                last = state
+                if len(state["history"]) == shown and state["status"] == "ready":
+                    continue
+                count = len(state["history"])
+                done = state["history"][-1] if state["history"] else None
+                line = f"{state['elapsed_ms']:>5} ms  {count} actions  {state['status']}"
+                if state["status"] in {"done", "blocked"} and count == shown:
+                    line += f"  stopped  {state['page']['url']}"
+                elif done:
+                    line += f"  {done['kind']}  {done['action']}"
+                    if done.get("text"):
+                        line += f"  {done['text']!r}  text {done.get('text_latency_ms', 0)} ms"
+                    line += f"  eve {done.get('latency_ms', 0)} ms"
+                shown = count
+                print(line, flush=True)
+    except KeyboardInterrupt:
+        sys.stderr.write("\nstopped\n")
+        return 130
+    if last is None:
+        return 1
+    if last["status"] == "done":
+        print("Done. The page stays open. Continue from here.")
+        print(last["page"]["url"])
+        return 0
+    print("Stopped. The page stays open.")
+    print(last["page"]["url"])
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

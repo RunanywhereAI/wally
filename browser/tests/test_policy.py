@@ -7,7 +7,7 @@ import pytest
 from wally_browser import elements as el
 from wally_browser.decisions import DecisionClient, DecisionError, Question, WindowExceeded
 from wally_browser.guards import Element
-from wally_browser.policy import EvePolicy, Observation, fields_typed_but_still_empty
+from wally_browser.policy import EvePolicy, Observation, clicking_without_progress, fields_typed_but_still_empty
 from wally_browser.profile import Profile
 
 
@@ -48,12 +48,20 @@ def obs(elements, **kw):
 
 def test_every_question_has_2_to_26_options_and_fits_the_window():
     client = FakeClient()
-    EvePolicy(client).decide(obs(buttons(300)))
+    policy = EvePolicy(client)
+    policy.decide(obs(buttons(300)))
     for input_text, questions in client.requests:
         for q in questions:
             if q.kind == "choice":
-                assert 2 <= len(q.options) <= el.MAX_OPTIONS, (q.id, len(q.options))
+                assert 2 <= len(q.options) <= policy.max_options, (q.id, len(q.options))
             assert el.question_tokens(input_text, q.text, q.options) <= el.MAX_QUESTION_TOKENS
+
+
+def test_a_local_decider_keeps_forty_targets_in_one_question():
+    client = FakeClient()
+    EvePolicy(client, max_options=el.MAX_OPTIONS).decide(obs(buttons(40)))
+    click = [q for _, questions in client.requests for q in questions if q.id == "click_target"]
+    assert len(click) == 1 and len(click[0].options) == 40
 
 
 def test_more_than_26_targets_take_a_region_round_then_a_target_round():
@@ -112,6 +120,18 @@ def test_a_button_already_clicked_is_not_offered_again():
     assert "A dialog is open" in state
     assert decision.operation == "CLICK"
     assert decision.target is not None and decision.target.index == 4000
+
+
+def test_eight_clicks_without_typing_are_not_offered_again():
+    history = [f"chose to click [{i}] Search" for i in range(8)]
+    assert clicking_without_progress(history)
+    assert not clicking_without_progress(history + ["typed into [3] From"])
+    client = FakeClient()
+    EvePolicy(client).decide(obs(buttons(4), history=history))
+    _, questions = client.requests[0]
+    operation = next(q for q in questions if q.id == "operation")
+    assert not any(option.startswith("CLICK") for option in operation.options)
+    assert any(option.startswith("ASK_USER") for option in operation.options)
 
 
 def test_a_field_that_kept_its_value_can_still_be_typed():

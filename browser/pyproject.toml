@@ -1,21 +1,20 @@
 [project]
 name = "wally-browser"
 version = "0.1.0"
-description = "The browser agent behind `wally browser-use`: browser-use driven by a decision model, with hard stops in code."
-requires-python = ">=3.11"
+description = "wally browser-use runs Jev Ultrafast. Eve chooses each step. DeepSeek types."
+requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
-    # Pinned: browser-use's internals (Agent.get_model_output, the watchdogs,
-    # the action registry) move fast, and this package overrides them.
-    "browser-use==0.13.10",
+    "browser-harness==0.1.13",
+    "httpx[http2]>=0.28,<1",
 ]
-
-[project.optional-dependencies]
-test = ["pytest>=8"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["wally_browser"]
+packages = ["wally_browser", "jev_ultrafast"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"jev_ultrafast/snapshot.js" = "jev_ultrafast/snapshot.js"
