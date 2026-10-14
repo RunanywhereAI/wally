@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "b9902ce66d30e292851a3007378cde5486b70cde98d39883b0bbfea0a886799b";
+    "e87dfcbeb8603a4174168dfeff8caf0ff49fbaf1212a8524bf928944d029d946";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -51,6 +51,36 @@ pub enum ApiErrorCode {
     KReconciliationUnverified,
     KRetentionManagedByRunanywhere,
     KCardRequired,
+    KInvalidAccountId,
+    KAccountNotFound,
+    KIdentityEmailInUse,
+    KRoleForbidden,
+    KOrganizationPlaygroundUnavailable,
+    KOperatorUnknown,
+    KOperatorForbidden,
+    KOperatorScope,
+    KEmailNotConfirmed,
+    KInvitationNotFound,
+    KInvitationExpired,
+    KAlreadyAMember,
+    KLastOwner,
+    KRoleNotAvailable,
+    KPersonalAccount,
+    KInvitationPending,
+    KTooManyPendingInvitations,
+    KMemberNotFound,
+    KAccountHasPaidCredit,
+    KAccountHasLiveReservation,
+    KAccountHasDedicatedPool,
+    KAlreadyAPartner,
+    KNotAPartner,
+    KGatewayTaken,
+    KUnknownPriceVersion,
+    KModelNotPriced,
+    KGoLiveEvidenceMissing,
+    KNoticeTooShort,
+    KStopScopeInvalid,
+    KOperationNotRetryable,
 }
 
 impl ApiErrorCode {
@@ -92,6 +122,38 @@ impl ApiErrorCode {
             ApiErrorCode::KReconciliationUnverified => "reconciliation_unverified",
             ApiErrorCode::KRetentionManagedByRunanywhere => "retention_managed_by_runanywhere",
             ApiErrorCode::KCardRequired => "card_required",
+            ApiErrorCode::KInvalidAccountId => "invalid_account_id",
+            ApiErrorCode::KAccountNotFound => "account_not_found",
+            ApiErrorCode::KIdentityEmailInUse => "identity_email_in_use",
+            ApiErrorCode::KRoleForbidden => "role_forbidden",
+            ApiErrorCode::KOrganizationPlaygroundUnavailable => {
+                "organization_playground_unavailable"
+            }
+            ApiErrorCode::KOperatorUnknown => "operator_unknown",
+            ApiErrorCode::KOperatorForbidden => "operator_forbidden",
+            ApiErrorCode::KOperatorScope => "operator_scope",
+            ApiErrorCode::KEmailNotConfirmed => "email_not_confirmed",
+            ApiErrorCode::KInvitationNotFound => "invitation_not_found",
+            ApiErrorCode::KInvitationExpired => "invitation_expired",
+            ApiErrorCode::KAlreadyAMember => "already_a_member",
+            ApiErrorCode::KLastOwner => "last_owner",
+            ApiErrorCode::KRoleNotAvailable => "role_not_available",
+            ApiErrorCode::KPersonalAccount => "personal_account",
+            ApiErrorCode::KInvitationPending => "invitation_pending",
+            ApiErrorCode::KTooManyPendingInvitations => "too_many_pending_invitations",
+            ApiErrorCode::KMemberNotFound => "member_not_found",
+            ApiErrorCode::KAccountHasPaidCredit => "account_has_paid_credit",
+            ApiErrorCode::KAccountHasLiveReservation => "account_has_live_reservation",
+            ApiErrorCode::KAccountHasDedicatedPool => "account_has_dedicated_pool",
+            ApiErrorCode::KAlreadyAPartner => "already_a_partner",
+            ApiErrorCode::KNotAPartner => "not_a_partner",
+            ApiErrorCode::KGatewayTaken => "gateway_taken",
+            ApiErrorCode::KUnknownPriceVersion => "unknown_price_version",
+            ApiErrorCode::KModelNotPriced => "model_not_priced",
+            ApiErrorCode::KGoLiveEvidenceMissing => "go_live_evidence_missing",
+            ApiErrorCode::KNoticeTooShort => "notice_too_short",
+            ApiErrorCode::KStopScopeInvalid => "stop_scope_invalid",
+            ApiErrorCode::KOperationNotRetryable => "operation_not_retryable",
         }
     }
 
@@ -133,6 +195,38 @@ impl ApiErrorCode {
             "reconciliation_unverified" => Ok(ApiErrorCode::KReconciliationUnverified),
             "retention_managed_by_runanywhere" => Ok(ApiErrorCode::KRetentionManagedByRunanywhere),
             "card_required" => Ok(ApiErrorCode::KCardRequired),
+            "invalid_account_id" => Ok(ApiErrorCode::KInvalidAccountId),
+            "account_not_found" => Ok(ApiErrorCode::KAccountNotFound),
+            "identity_email_in_use" => Ok(ApiErrorCode::KIdentityEmailInUse),
+            "role_forbidden" => Ok(ApiErrorCode::KRoleForbidden),
+            "organization_playground_unavailable" => {
+                Ok(ApiErrorCode::KOrganizationPlaygroundUnavailable)
+            }
+            "operator_unknown" => Ok(ApiErrorCode::KOperatorUnknown),
+            "operator_forbidden" => Ok(ApiErrorCode::KOperatorForbidden),
+            "operator_scope" => Ok(ApiErrorCode::KOperatorScope),
+            "email_not_confirmed" => Ok(ApiErrorCode::KEmailNotConfirmed),
+            "invitation_not_found" => Ok(ApiErrorCode::KInvitationNotFound),
+            "invitation_expired" => Ok(ApiErrorCode::KInvitationExpired),
+            "already_a_member" => Ok(ApiErrorCode::KAlreadyAMember),
+            "last_owner" => Ok(ApiErrorCode::KLastOwner),
+            "role_not_available" => Ok(ApiErrorCode::KRoleNotAvailable),
+            "personal_account" => Ok(ApiErrorCode::KPersonalAccount),
+            "invitation_pending" => Ok(ApiErrorCode::KInvitationPending),
+            "too_many_pending_invitations" => Ok(ApiErrorCode::KTooManyPendingInvitations),
+            "member_not_found" => Ok(ApiErrorCode::KMemberNotFound),
+            "account_has_paid_credit" => Ok(ApiErrorCode::KAccountHasPaidCredit),
+            "account_has_live_reservation" => Ok(ApiErrorCode::KAccountHasLiveReservation),
+            "account_has_dedicated_pool" => Ok(ApiErrorCode::KAccountHasDedicatedPool),
+            "already_a_partner" => Ok(ApiErrorCode::KAlreadyAPartner),
+            "not_a_partner" => Ok(ApiErrorCode::KNotAPartner),
+            "gateway_taken" => Ok(ApiErrorCode::KGatewayTaken),
+            "unknown_price_version" => Ok(ApiErrorCode::KUnknownPriceVersion),
+            "model_not_priced" => Ok(ApiErrorCode::KModelNotPriced),
+            "go_live_evidence_missing" => Ok(ApiErrorCode::KGoLiveEvidenceMissing),
+            "notice_too_short" => Ok(ApiErrorCode::KNoticeTooShort),
+            "stop_scope_invalid" => Ok(ApiErrorCode::KStopScopeInvalid),
+            "operation_not_retryable" => Ok(ApiErrorCode::KOperationNotRetryable),
             other => Err(format!("unknown ApiErrorCode: {other}")),
         }
     }
@@ -375,6 +469,7 @@ pub enum Harness {
     KLangchain,
     KLlamaindex,
     KCurl,
+    KCodex,
 }
 
 impl Harness {
@@ -401,6 +496,7 @@ impl Harness {
             Harness::KLangchain => "langchain",
             Harness::KLlamaindex => "llamaindex",
             Harness::KCurl => "curl",
+            Harness::KCodex => "codex",
         }
     }
 
@@ -427,6 +523,7 @@ impl Harness {
             "langchain" => Ok(Harness::KLangchain),
             "llamaindex" => Ok(Harness::KLlamaindex),
             "curl" => Ok(Harness::KCurl),
+            "codex" => Ok(Harness::KCodex),
             other => Err(format!("unknown Harness: {other}")),
         }
     }

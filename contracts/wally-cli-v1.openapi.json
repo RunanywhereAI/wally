@@ -329,7 +329,37 @@
           "gateway_operation_pending",
           "reconciliation_unverified",
           "retention_managed_by_runanywhere",
-          "card_required"
+          "card_required",
+          "invalid_account_id",
+          "account_not_found",
+          "identity_email_in_use",
+          "role_forbidden",
+          "organization_playground_unavailable",
+          "operator_unknown",
+          "operator_forbidden",
+          "operator_scope",
+          "email_not_confirmed",
+          "invitation_not_found",
+          "invitation_expired",
+          "already_a_member",
+          "last_owner",
+          "role_not_available",
+          "personal_account",
+          "invitation_pending",
+          "too_many_pending_invitations",
+          "member_not_found",
+          "account_has_paid_credit",
+          "account_has_live_reservation",
+          "account_has_dedicated_pool",
+          "already_a_partner",
+          "not_a_partner",
+          "gateway_taken",
+          "unknown_price_version",
+          "model_not_priced",
+          "go_live_evidence_missing",
+          "notice_too_short",
+          "stop_scope_invalid",
+          "operation_not_retryable"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -947,7 +977,8 @@
           "openai_sdk",
           "langchain",
           "llamaindex",
-          "curl"
+          "curl",
+          "codex"
         ],
         "title": "Harness",
         "type": "string"
@@ -1147,7 +1178,7 @@
       },
       "ModelReasoning": {
         "additionalProperties": false,
-        "description": "How this model reasons (docs/reference/gateway.md, Reasoning budget). levels: the native reasoning_effort levels, empty for a model that only switches thinking on or off; default_level: the level a request naming none runs at; thinking_off: whether reasoning_effort none turns thinking off; thinking_ceiling_tokens: the safety ceiling on thinking; budget_enforced: whether max_tokens caps the answer with thinking budgeted separately (reasoning.max_tokens a hard thinking limit).",
+        "description": "How this model reasons (docs/reference/models.md, Reasoning levels and thinking ceilings). levels: the native reasoning_effort levels, empty for a model that only switches thinking on or off; default_level: the level a request naming none runs at; thinking_off: whether reasoning_effort none turns thinking off; thinking_ceiling_tokens: the safety ceiling on thinking; budget_enforced: whether max_tokens caps the answer with thinking budgeted separately (reasoning.max_tokens a hard thinking limit).",
         "properties": {
           "budget_enforced": {
             "type": "boolean"
@@ -2312,7 +2343,7 @@
     },
     "/v1/me": {
       "get": {
-        "description": "`rcli whoami`. Authenticated by the API key the CLI was issued, because\nthat is the only credential it has.\n\nThe contract declares that key as `BearerAuth`. The same Authorization\nheader also carries the console's signed PropelAuth session token, and\nwhere PropelAuth is not configured, never in production, the `X-User-Id`\nand `X-User-Email` development identity headers are accepted instead.\nNeither is a separate security scheme: this contract declares no console\nsession scheme on any operation, and the development headers are not a\ncredential.",
+        "description": "`rcli whoami`. Authenticated by the API key the CLI was issued, because\nthat is the only credential it has.\n\nThe contract declares that key as `BearerAuth`. The same Authorization\nheader also carries the console session token, and where no identity\nprovider is configured, never in production, the `X-User-Id`\nand `X-User-Email` development identity headers are accepted instead.\nNeither is a separate security scheme: this contract declares no console\nsession scheme on any operation, and the development headers are not a\ncredential.",
         "operationId": "getCurrentIdentity",
         "parameters": [
           {
@@ -2366,7 +2397,15 @@
                 }
               }
             },
-            "description": "Available model aliases"
+            "description": "Available model aliases",
+            "headers": {
+              "x-request-id": {
+                "description": "Request correlation id",
+                "schema": {
+                  "$ref": "#/components/schemas/RequestId"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -2416,7 +2455,7 @@
     },
     "/v1/requests/{request_id}/cancel": {
       "post": {
-        "description": "End an in-flight request the caller's key started (#440).\n\n`request_id` is the `x-request-id` the customer received on the response\nbeing cancelled. The GPU nodes are asked on this service's behalf with the\ncredential they already hold for this ledger (see services/cancel.py), and\neach ends the request only if that key started it. Anything else -- an id\nnobody is serving, a request that already finished, someone else's -- is\nthe same 404, so this route cannot be used to learn about other customers'\nrequests. A successful cancel is 202: the node has told the engine to stop;\nthe stream's end and its settlement follow on their own path.",
+        "description": "End an in-flight request the caller's key started (#440).\n\n`request_id` is the `x-request-id` the customer received on the response\nbeing cancelled. In `push` mode (the default) the meters are asked on this\nservice's behalf with an ID token for their own address (see services/cancel.py). In `pull`\nmode (`RA_CANCEL_MODE`, ADR 0449) this service calls nothing: it writes a cancel intent that\neach registered cell fetches, and waits up to 3 seconds for the cell's answer. Either way each\nnode ends the request only if that key started it, and anything else -- an id nobody is\nserving, a request that already finished, someone else's, or (pull) a cancel no\ncell confirmed in time -- is the same 404, so this route cannot be used to learn\nabout other customers' requests. A successful cancel is 202: the node has told\nthe engine to stop; the stream's end and its settlement follow on their own path.",
         "operationId": "cancelRequest",
         "parameters": [
           {
@@ -2440,6 +2479,23 @@
           "422": {
             "$ref": "#/components/responses/ValidationFailed"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "The key has made 30 cancel calls in the last minute, or too many of its calls (4) or this instance's (64) are waiting (only when cancel_mode is pull); ask again after the Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/ApiError"
           }
@@ -2458,8 +2514,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "fix/reasoning-budget",
-    "commit": "d4b4877a5650c591ce0ffa2a5b2450af54c3593e",
+    "branch": "mig/devsync/wally-pin-source",
+    "commit": "78fbc52a76b0d3d200813ef5c35ccd25dc09261c",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
