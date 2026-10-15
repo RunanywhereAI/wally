@@ -178,7 +178,7 @@ const RUNTIME_ENTRIES: &[&str] = &[
 /// Recursive copy, overwriting an existing destination — `std::filesystem::copy`
 /// with `recursive | overwrite_existing`, discarding errors the way the C++
 /// `std::error_code` overload does.
-pub(crate) fn copy_recursive_overwrite(src: &Path, dst: &Path) {
+fn copy_recursive_overwrite(src: &Path, dst: &Path) {
     if src.is_dir() {
         let _ = fs::create_dir_all(dst);
         let Ok(entries) = fs::read_dir(src) else {

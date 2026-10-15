@@ -453,7 +453,9 @@ fn reasoning_streams_as_a_summary_closed_before_the_text() {
     let reasoning = &list[5].1["item"];
     assert_eq!(reasoning["type"], "reasoning");
     assert_eq!(reasoning["summary"][0]["text"], "think");
-    assert_eq!(reasoning["encrypted_content"], "think");
+    // Codex sends the item back to whichever provider continues the thread,
+    // and OpenAI refuses an `encrypted_content` it did not write.
+    assert!(reasoning.get("encrypted_content").is_none());
     assert_eq!(list[6].1["item"]["type"], "message");
     assert_eq!(list[6].1["output_index"], 1);
 }

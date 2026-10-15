@@ -21,7 +21,7 @@ tool starts the way you already have it configured, and wally wires nothing.
 | Tool | How it is wired |
 | --- | --- |
 | `claude-code` | `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in the process |
-| `codex` | `-c` overrides on its command line naming a `wally` provider at the translator, plus a model catalog file for the run; the loopback token is in `WALLY_CODEX_API_KEY`. It runs in a Codex home of wally's own, seeded from yours (settings, `AGENTS.md`, skills, rules, agents), so its threads never appear in your own Codex and `~/.codex` is never written |
+| `codex` | `-c` overrides on its command line naming a `wally` provider at the translator, plus a model catalog file for the run; the loopback token is in `WALLY_CODEX_API_KEY`. It runs on your own `~/.codex`, so threads are shared, and nothing in your config or sign-in is written |
 | `opencode` | a temporary provider in `OPENCODE_CONFIG_CONTENT`, with the local or hosted endpoint and context limits |
 | `claude-desktop` | a gateway profile in Claude Desktop's third party mode, covering the chat and Cowork tabs |
 | `hermes` | `CUSTOM_BASE_URL`, `HERMES_INFERENCE_PROVIDER=custom`, the model in `HERMES_INFERENCE_MODEL`, and the key under the name its host gates on |
@@ -44,6 +44,15 @@ translator too: Responses in, chat completions out, and the stream back as
 Responses events, each text or argument fragment passed on as it arrives.
 `opencode`, `hermes` and `openclaw` speak OpenAI's chat completions already, so
 they talk to the endpoint directly.
+
+Threads move both ways. Continue one of your own in wally with
+`wally codex -m <model> -- resume <id>`, and a wally thread in plain Codex with
+`codex resume <id>`, where it carries on with your default model. Codex's
+picker lists only threads last used with the current provider, so a thread
+shows up on the side it was last used on; resuming by id works from either.
+The model's reasoning is kept as a summary only. Codex sends reasoning back to
+whichever provider continues a thread, and OpenAI refuses any it did not
+encrypt itself, so a thread wally wrote would otherwise stop working there.
 
 Codex is told the model's context window through the catalog file, so its
 context meter and auto-compaction work against the real limit. Its hosted web

@@ -788,14 +788,17 @@ impl StreamState {
                 "text": item.text,
             })),
         );
-        // `encrypted_content` holds the plain summary: Codex asked for it
-        // (`include`) and keeps the item whole. It is dropped again when the
-        // history comes back.
+        // No `encrypted_content`, although Codex asks for it (`include`).
+        // Codex keeps the item in the thread and sends it back as it is to
+        // whichever provider continues the thread, and OpenAI refuses the
+        // whole request when that field holds anything it did not encrypt
+        // itself ("The encrypted content for item rs_... could not be
+        // verified"). Without it the thread continues on OpenAI as it does
+        // here, where reasoning is dropped on the way in.
         let done = json!({
             "id": item.id,
             "type": "reasoning",
             "summary": [{"type": "summary_text", "text": item.text}],
-            "encrypted_content": item.text,
         });
         out += &self.event(
             "response.output_item.done",
