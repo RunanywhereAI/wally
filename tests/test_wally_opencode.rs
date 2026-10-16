@@ -268,6 +268,7 @@ fn config_injects_limit_and_cost() {
             cached_input_per_mtok: 0,
             image_input: false,
             text_only: false,
+            reasoning: None,
         }],
     ))
     .expect("parse config");
@@ -342,6 +343,7 @@ fn opencode_config_declares_the_harness() {
         cached_input_per_mtok: 0,
         image_input: false,
         text_only: false,
+        reasoning: None,
     }];
     let configs = [
         harness::build_open_code_config("glm-5.3-flash", "http://127.0.0.1:52431/v1", "", &catalog),
@@ -377,6 +379,7 @@ fn config_prices_cache_reads_only_when_the_catalog_has_a_cached_price() {
                 cached_input_per_mtok: cached,
                 image_input: false,
                 text_only: false,
+                reasoning: None,
             }],
         ))
         .expect("parse config");

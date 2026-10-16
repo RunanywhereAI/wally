@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use fake_upstream::{describe, FakeUpstream, HalfOpenUpstream};
 use wally::anthropic::{self, ModelAliases, Shim};
-use wally::harness::{DeclaredHarness, Endpoint};
+use wally::harness::{CatalogModel, DeclaredHarness, Endpoint};
 use wally::net::http1::{Client, Request, Server, StopHandle};
 use wally::net::upstream_pool::{retry_on_fresh_connection, UpstreamOptions, UpstreamPool};
 
@@ -1337,7 +1337,7 @@ fn through_translator(
     port: u16,
     model: &str,
     api_key: &str,
-    text_only: &[String],
+    text_only: &[CatalogModel],
     body: String,
 ) -> (i32, serde_json::Value) {
     let endpoint = Endpoint {
@@ -1384,7 +1384,11 @@ fn images_reach_a_model_that_takes_them_and_never_stick_one_that_does_not() {
     let _shim_guard = shim_lock::shim_lock();
     let (port, bodies, _handle) = image_upstream();
     let key = "test-upstream-key";
-    let mimo = vec!["mimo-v2.6-pro".to_string()];
+    let mimo = vec![CatalogModel {
+        id: "mimo-v2.6-pro".to_string(),
+        text_only: true,
+        ..Default::default()
+    }];
     // A note alone is text, so the tool message carries it as a plain string.
     let note = serde_json::json!("[image omitted: mimo-v2.6-pro does not take image input]");
 
@@ -1469,7 +1473,11 @@ fn a_refused_paste_does_not_refuse_the_next_prompt() {
         api_key: "test-upstream-key".to_string(),
         ..Default::default()
     };
-    let mimo = vec!["mimo-v2.6-pro".to_string()];
+    let mimo = vec![CatalogModel {
+        id: "mimo-v2.6-pro".to_string(),
+        text_only: true,
+        ..Default::default()
+    }];
     let mut shim = anthropic::start(
         &endpoint,
         "mimo-v2.6-pro",

@@ -253,6 +253,35 @@ pub struct ModelInfo {
     /// The input modalities the model list declares (OpenRouter's
     /// `input_modalities` on /v1/models: "text", "image"); empty when absent.
     pub input_modalities: Vec<String>,
+    /// How the model reasons (`reasoning` on /v1/models); None when absent.
+    pub reasoning: Option<ReasoningSupport>,
+}
+
+/// A hosted model's reasoning, as /v1/models describes it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReasoningSupport {
+    /// The `reasoning_effort` levels it grades by, lowest first; empty for a
+    /// model that only switches thinking on or off.
+    pub levels: Vec<&'static str>,
+    /// The level a request that names none runs at.
+    pub default_level: Option<&'static str>,
+    /// Whether `reasoning_effort: none` turns its thinking off. When false the
+    /// gateway refuses `none` outright.
+    pub thinking_off: bool,
+}
+
+impl From<&contract::ModelReasoning> for ReasoningSupport {
+    fn from(reasoning: &contract::ModelReasoning) -> Self {
+        ReasoningSupport {
+            levels: reasoning
+                .levels
+                .iter()
+                .map(|level| level.as_str())
+                .collect(),
+            default_level: reasoning.default_level.map(|level| level.as_str()),
+            thinking_off: reasoning.thinking_off,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2072,6 +2101,7 @@ impl ConsoleClient {
                 context_window: model.max_input_tokens.unwrap_or(0),
                 max_output_tokens: model.max_output_tokens.unwrap_or(0),
                 input_modalities: model.input_modalities.unwrap_or_default(),
+                reasoning: model.reasoning.as_ref().map(ReasoningSupport::from),
             })
             .collect();
         (IdentityResult::Ok, models, String::new())

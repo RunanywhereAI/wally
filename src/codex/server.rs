@@ -11,7 +11,7 @@ use crate::anthropic::translate::{
     UpstreamFailureBody, MAX_IMAGES_PER_REQUEST,
 };
 use crate::codex::translate::{self, error_body, failure_code, StreamState};
-use crate::harness::Endpoint;
+use crate::harness::{fit_reasoning_effort, text_only_ids, CatalogModel, Endpoint};
 use crate::io::output::{error_line, status_line};
 use crate::net::decompress::Decoder;
 use crate::net::http1::{ResponseWriter, Server, ServerHandle, ServerRequest};
@@ -53,6 +53,8 @@ struct Runtime {
     catalog: Vec<String>,
     /// Catalog ids known to take no image input; their images become notes.
     text_only_models: Vec<String>,
+    /// The catalog's models, for what each takes as `reasoning_effort`.
+    models: Vec<CatalogModel>,
     local_token: String,
     verbose: bool,
     /// Numbers the responses this session, for their ids.
@@ -257,6 +259,7 @@ fn handle_responses_route(
     // A local server, or a hosted model the catalog lists as text-only, gets
     // notes in place of images rather than a refusal for a picture pasted
     // earlier; any other model gets the newest images, for the gateway to judge.
+    fit_reasoning_effort(&mut chat.body, &runtime.models, &effective);
     let text_only =
         runtime.upstream.api_key.is_empty() || runtime.text_only_models.contains(&effective);
     chat.body = if text_only {
@@ -372,7 +375,7 @@ pub fn start(
     upstream: &Endpoint,
     model: &str,
     verbose: bool,
-    text_only_models: &[String],
+    models: &[CatalogModel],
 ) -> Option<CodexShim> {
     stop_running_instance();
 
@@ -406,7 +409,8 @@ pub fn start(
         },
         model: model.to_string(),
         catalog: cached_model_ids(),
-        text_only_models: text_only_models.to_vec(),
+        text_only_models: text_only_ids(models),
+        models: models.to_vec(),
         local_token: local_token.clone(),
         verbose,
         responses: AtomicU64::new(0),

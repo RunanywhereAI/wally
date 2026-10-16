@@ -1,7 +1,7 @@
 //! Port of src/commands/cmd_editors.cpp.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::account;
 use crate::anthropic::{self, ModelAliases, Shim};
@@ -12,7 +12,7 @@ use crate::commands::editor_env;
 use crate::commands::resolve_default_model;
 use crate::config::cli_paths;
 use crate::desktop;
-use crate::harness;
+use crate::harness::{self, claude_effort};
 use crate::io::json::dump_pretty;
 use crate::io::output as out;
 use crate::util::getenv;
@@ -354,13 +354,64 @@ pub(crate) fn cloud_context_window(model: &str) -> i64 {
 
 /// Claude Code command-line settings carrying `env`: the variables that point
 /// it at this translator, which then outrank any the reader's own settings
-/// files set.
-fn endpoint_settings(env: &[(String, String)]) -> String {
+/// files set. With `models` (the catalog, launched model first) they also
+/// carry `modelPicker`, one row per model, so `/model` lists every model the
+/// account can use rather than the three family slots; the rows replace the
+/// built-in Claude lineup, which nothing here serves.
+fn endpoint_settings(env: &[(String, String)], models: &[harness::CatalogModel]) -> String {
     let variables: serde_json::Map<String, serde_json::Value> = env
         .iter()
         .map(|(name, value)| (name.clone(), serde_json::Value::String(value.clone())))
         .collect();
-    serde_json::json!({ "env": variables }).to_string()
+    let mut settings = serde_json::json!({ "env": variables });
+    if !models.is_empty() {
+        let options: Vec<serde_json::Value> = models
+            .iter()
+            .map(|model| {
+                let mut row = serde_json::json!({
+                    "model": model.id,
+                    "label": model.id,
+                    "description": "RunAnywhere model",
+                });
+                // The Claude model whose effort menu is closest to this
+                // model's own levels; without one Claude Code shows the same
+                // menu for every model.
+                if let Some(claude) = claude_effort::behaves_as(model) {
+                    row["behavesAs"] = serde_json::json!(claude);
+                }
+                row
+            })
+            .collect();
+        settings["modelPicker"] = serde_json::json!({
+            "options": options,
+            "replaceBuiltInOptions": true,
+        });
+    }
+    settings.to_string()
+}
+
+/// Whether a settings file Claude Code will read sets `ANTHROPIC_MODEL` in
+/// its `env`: the user settings in `config_dir`, and the project settings
+/// of the working directory.
+fn settings_name_a_model(config_dir: Option<&str>) -> bool {
+    let mut files: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = config_dir {
+        files.push(Path::new(dir).join("settings.json"));
+    }
+    files.push(Path::new(".claude").join("settings.json"));
+    files.push(Path::new(".claude").join("settings.local.json"));
+    files.iter().any(|file| {
+        fs::read_to_string(file)
+            .map(|text| settings_text_names_model(&text))
+            .unwrap_or(false)
+    })
+}
+
+fn settings_text_names_model(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|settings| settings.get("env")?.get("ANTHROPIC_MODEL").cloned())
+        .is_some_and(|value| value.as_str().is_some_and(|model| !model.is_empty()))
 }
 
 /// `--settings <path>` ahead of the reader's own arguments, unless they passed
@@ -405,18 +456,6 @@ pub(crate) fn write_private(path: &Path, contents: &str) -> std::io::Result<()> 
         options.mode(0o600);
     }
     options.open(path)?.write_all(contents.as_bytes())
-}
-
-/// The ids in `catalog` known to take no image input, for the translator: an
-/// image the person pastes for one is refused there, and any other becomes a
-/// note. Empty when the catalog could not be read, so nothing is refused on a
-/// guess and the gateway judges.
-pub(crate) fn text_only_ids(catalog: &[harness::CatalogModel]) -> Vec<String> {
-    catalog
-        .iter()
-        .filter(|model| model.text_only)
-        .map(|model| model.id.clone())
-        .collect()
 }
 
 /// The 1M-token window Claude Desktop can be told a model holds.
@@ -541,7 +580,7 @@ fn serve(editor: &Editor, model: &str, options: &GlobalOptions) -> i32 {
         options.verbose,
         "",
         &ModelAliases::new(),
-        &text_only_ids(&harness::catalog_models_for(&endpoint, model)),
+        &harness::catalog_models_for(&endpoint, model),
     ) else {
         harness::release(&endpoint);
         return 1;
@@ -634,12 +673,25 @@ fn run(
     // Read once: it names the picker's models and which of them take no images.
     let catalog = harness::catalog_models_for(&endpoint, model);
     let mut desktop_aliases: ModelAliases = Vec::new();
+    let mut desktop_max_effort: Vec<(String, &'static str)> = Vec::new();
     if editor.wiring == Wiring::ClaudeProfile {
-        for (index, catalog_model) in catalog.iter().take(3).enumerate() {
-            desktop_aliases.push((
-                desktop_family(index, catalog_model, context_override).to_string(),
-                catalog_model.id.clone(),
-            ));
+        // Every catalog model, each under the Claude id whose effort menu is
+        // closest to its own levels (`claude_effort`). A model the list does
+        // not describe takes a slot by place, and only the first three do; a
+        // model left without a free Claude id is not listed.
+        let names = claude_effort::desktop_names(&catalog);
+        for (index, (catalog_model, name)) in catalog.iter().zip(names).enumerate() {
+            let name = match name {
+                Some(name) => name,
+                None if index < 3 && claude_effort::effort_menu(catalog_model).is_none() => {
+                    desktop_family(index, catalog_model, context_override).to_string()
+                }
+                None => continue,
+            };
+            if let Some(cap) = claude_effort::max_effort(catalog_model) {
+                desktop_max_effort.push((name.clone(), cap));
+            }
+            desktop_aliases.push((name, catalog_model.id.clone()));
         }
     }
 
@@ -650,7 +702,7 @@ fn run(
         options.verbose,
         &advertised,
         &desktop_aliases,
-        &text_only_ids(&catalog),
+        &catalog,
     ) else {
         harness::release(&endpoint);
         return 1;
@@ -731,6 +783,7 @@ fn run(
                 &shim.auth_token,
                 &desktop_aliases,
                 &desktop_million_token(&desktop_aliases, &catalog, context_override),
+                &desktop_max_effort,
                 &format!("RunAnywhere \u{b7} {model}"),
             ) {
                 out::error_line(&failure);
@@ -948,13 +1001,15 @@ fn run(
             endpoint_env.push((name.to_string(), "0".to_string()));
         }
         // Their settings' ANTHROPIC_MODEL would shadow the --model passed
-        // below; the reader's own --model is theirs, so only alongside ours.
-        if !args.iter().any(|a| a == "--model") {
+        // below, so ours outranks it; the reader's own --model is theirs, so
+        // only alongside ours. Set only then: it also outranks the default a
+        // person saves from `/model`, and Claude Code says so on every switch.
+        if !args.iter().any(|a| a == "--model") && settings_name_a_model(config_dir.as_deref()) {
             endpoint_env.push(("ANTHROPIC_MODEL".to_string(), model.to_string()));
         }
         let settings_file = RemovedOnDrop(config_dir.as_ref().and_then(|dir| {
             let path = Path::new(dir).join(format!("wally-endpoint-{}.json", std::process::id()));
-            match write_private(&path, &endpoint_settings(&endpoint_env)) {
+            match write_private(&path, &endpoint_settings(&endpoint_env, &catalog)) {
                 Ok(()) => Some(path.to_string_lossy().into_owned()),
                 Err(error) => {
                     out::status_line(&format!(
@@ -1188,11 +1243,53 @@ mod tests {
                 "loopback-token".to_string(),
             ),
         ];
-        let settings: serde_json::Value = serde_json::from_str(&endpoint_settings(&env)).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_str(&endpoint_settings(&env, &[])).unwrap();
         assert_eq!(
             settings,
             serde_json::json!({"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:5000", "ANTHROPIC_AUTH_TOKEN": "loopback-token"}})
         );
+    }
+
+    #[test]
+    fn only_a_settings_file_that_sets_a_model_needs_ours_to_outrank_it() {
+        assert!(settings_text_names_model(
+            r#"{"env":{"ANTHROPIC_MODEL":"opus"}}"#
+        ));
+        assert!(!settings_text_names_model(r#"{"env":{"OTHER":"x"}}"#));
+        assert!(!settings_text_names_model(
+            r#"{"env":{"ANTHROPIC_MODEL":""}}"#
+        ));
+        assert!(!settings_text_names_model(r#"{"model":"opus"}"#));
+        assert!(!settings_text_names_model("not json"));
+    }
+
+    #[test]
+    fn every_catalog_model_gets_a_picker_row_in_catalog_order() {
+        let ids = [
+            "glm-5.3-flash",
+            "deepseek-v4.1-flash",
+            "mimo-v2.6-pro",
+            "muse-spark",
+        ];
+        let catalog: Vec<harness::CatalogModel> = ids
+            .iter()
+            .map(|id| harness::CatalogModel {
+                id: id.to_string(),
+                ..Default::default()
+            })
+            .collect();
+        let settings: serde_json::Value =
+            serde_json::from_str(&endpoint_settings(&[], &catalog)).unwrap();
+        let picker = &settings["modelPicker"];
+        assert_eq!(picker["replaceBuiltInOptions"], true);
+        let rows: Vec<&str> = picker["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["model"].as_str().unwrap())
+            .collect();
+        assert_eq!(rows, ids);
     }
 
     #[test]

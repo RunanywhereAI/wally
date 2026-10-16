@@ -365,6 +365,7 @@ fn openclaw_config_selects_our_provider_and_model() {
         cached_input_per_mtok: 75000,
         image_input: false,
         text_only: false,
+        reasoning: None,
     }];
     let config: Value = serde_json::from_str(&harness::build_open_claw_config(
         "",
@@ -1276,6 +1277,7 @@ fn declare_catalog() -> Vec<CatalogModel> {
         cached_input_per_mtok: 0,
         image_input: false,
         text_only: false,
+        reasoning: None,
     }]
 }
 

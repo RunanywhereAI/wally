@@ -128,11 +128,13 @@ pub const DESKTOP_TIERS: [&str; 3] = ["sonnet", "opus", "haiku"];
 /// `labelOverride` shows the real id. `million_token` names the families whose
 /// model holds a 1M-token window: without saying so the app sizes each entry by
 /// the Claude model it is named after, and compacts a 1M model at 200K.
+/// `max_effort` caps the effort control of the entries it names.
 pub fn apply_gateway(
     base_url: &str,
     api_key: &str,
     models: &[(String, String)],
     million_token: &[String],
+    max_effort: &[(String, &str)],
     display_name: &str,
 ) -> Result<(), String> {
     if home().is_empty() {
@@ -191,6 +193,11 @@ pub fn apply_gateway(
                 if million_token.contains(name) {
                     entry["supports1m"] = json!(true);
                     entry["prefer1m"] = json!(true);
+                }
+                // The highest effort the model grades by: the Claude model it
+                // is listed as may offer levels above it.
+                if let Some((_, cap)) = max_effort.iter().find(|(named, _)| named == name) {
+                    entry["maxEffort"] = json!(cap);
                 }
                 entry
             })

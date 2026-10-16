@@ -17,9 +17,11 @@ pub const CODEX_PROVIDER_ID: &str = "wally";
 /// The variable Codex reads the loopback token from (`env_key`).
 pub const CODEX_KEY_VARIABLE: &str = "WALLY_CODEX_API_KEY";
 
-/// The levels a catalog entry offers in Codex's effort picker.
+/// Every level Codex's effort picker can offer, lowest first, with the
+/// line it shows. A hosted model offers the ones its model list entry names.
 const REASONING_LEVELS: &[(&str, &str)] = &[
     ("none", "No reasoning"),
+    ("minimal", "The least reasoning the model allows"),
     ("low", "Quick reasoning"),
     ("medium", "Balanced reasoning"),
     ("high", "Thorough reasoning"),
@@ -47,6 +49,28 @@ pub(crate) fn toml_string(value: &str) -> String {
     } else {
         format!("'{value}'")
     }
+}
+
+/// The levels `model`'s entry offers in Codex's effort picker. A hosted
+/// model offers the levels its model list entry grades by, and `none` only
+/// when that turns its thinking off (the gateway refuses `none` otherwise).
+/// A model that only switches thinking on or off, or one the list does not
+/// describe, offers every level: the gateway takes them all.
+fn reasoning_levels(model: &CatalogModel) -> Vec<(&'static str, &'static str)> {
+    let Some(reasoning) = &model.reasoning else {
+        return REASONING_LEVELS.to_vec();
+    };
+    REASONING_LEVELS
+        .iter()
+        .filter(|(level, _)| {
+            if *level == "none" {
+                reasoning.thinking_off
+            } else {
+                reasoning.levels.is_empty() || reasoning.levels.contains(level)
+            }
+        })
+        .copied()
+        .collect()
 }
 
 /// One `model_catalog_json` entry. Codex has no metadata for a model it did not ship, and without an
@@ -77,15 +101,14 @@ fn catalog_entry(model: &CatalogModel, priority: usize) -> Value {
         "default_verbosity": "low",
         "supports_parallel_tool_calls": true,
         "supports_reasoning_summaries": true,
-        // What Codex's effort picker offers. Every hosted model takes all of
-        // these as `reasoning_effort`; `none` turns reasoning off. No default:
-        // Codex then sends the person's own setting, or nothing, and the
-        // model keeps its own default.
-        "supported_reasoning_levels": REASONING_LEVELS
+        "supported_reasoning_levels": reasoning_levels(model)
             .iter()
             .map(|(effort, description)| json!({"effort": effort, "description": description}))
             .collect::<Vec<_>>(),
-        "default_reasoning_level": Value::Null,
+        "default_reasoning_level": model
+            .reasoning
+            .as_ref()
+            .and_then(|reasoning| reasoning.default_level),
         // The only value Codex 0.162 accepts. Leaving it out leaves Codex with no apply_patch tool at all and the model editing
         // files through shell heredocs; the translator carries the freeform
         // tool as a function and back.
@@ -419,6 +442,47 @@ mod tests {
     }
 
     #[test]
+    fn each_model_offers_its_own_levels_and_default() {
+        use crate::account::ReasoningSupport;
+        let muse = CatalogModel {
+            id: "muse-spark".to_string(),
+            reasoning: Some(ReasoningSupport {
+                levels: vec!["minimal", "low", "medium", "high", "xhigh"],
+                default_level: Some("medium"),
+                thinking_off: false,
+            }),
+            ..Default::default()
+        };
+        let mimo = CatalogModel {
+            id: "mimo-v2.6-pro".to_string(),
+            reasoning: Some(ReasoningSupport {
+                levels: vec![],
+                default_level: None,
+                thinking_off: true,
+            }),
+            ..Default::default()
+        };
+        let doc: Value = serde_json::from_str(&codex_model_catalog(&[muse, mimo])).unwrap();
+        let levels = |entry: &Value| -> Vec<String> {
+            entry["supported_reasoning_levels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|level| level["effort"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let entries = doc["models"].as_array().unwrap();
+        assert_eq!(
+            levels(&entries[0]),
+            ["minimal", "low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(entries[0]["default_reasoning_level"], "medium");
+        assert_eq!(levels(&entries[1])[0], "none");
+        assert_eq!(levels(&entries[1]).len(), REASONING_LEVELS.len());
+        assert!(entries[1]["default_reasoning_level"].is_null());
+    }
+
+    #[test]
     fn the_catalog_lists_every_model_launched_first_with_its_window() {
         let models = vec![
             CatalogModel {
@@ -445,7 +509,10 @@ mod tests {
             .iter()
             .map(|level| level["effort"].as_str().unwrap())
             .collect();
-        assert_eq!(levels, ["none", "low", "medium", "high", "xhigh", "max"]);
+        assert_eq!(
+            levels,
+            ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        );
         assert_eq!(entries[1]["slug"], "mimo-v2.6-pro");
         assert_eq!(entries[1]["context_window"], 128000);
         assert_eq!(entries[1]["input_modalities"], json!(["text"]));

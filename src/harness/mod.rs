@@ -4,6 +4,7 @@
 pub mod agents;
 pub mod catalog_models;
 pub mod chatgpt;
+pub mod claude_effort;
 pub mod codex;
 pub mod declared_harness;
 #[allow(clippy::module_inception)]

@@ -2107,6 +2107,7 @@ mod tests {
             cached_input_per_mtok: 0,
             image_input: false,
             text_only: false,
+            reasoning: None,
         }];
         let built = build_prime_agent_models_config(
             r#"{"providers":{"openai":{"apiKey":"theirs"}}}"#,

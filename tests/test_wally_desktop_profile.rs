@@ -111,6 +111,7 @@ fn million_token_models_are_offered_at_1m_and_the_rest_are_not() {
         "token",
         &models,
         &["claude-sonnet-4-5".to_string()],
+        &[("claude-opus-5".to_string(), "xhigh")],
         "RunAnywhere",
     )
     .expect("profile written");
@@ -128,6 +129,8 @@ fn million_token_models_are_offered_at_1m_and_the_rest_are_not() {
     assert_eq!(entries[0]["supports1m"], true);
     assert_eq!(entries[0]["prefer1m"], true);
     assert_eq!(entries[0]["labelOverride"], "glm-5.3-flash");
+    assert!(entries[0].get("maxEffort").is_none());
+    assert_eq!(entries[1]["maxEffort"], "xhigh");
     assert_eq!(entries[0]["anthropicFamilyTier"], "sonnet");
     assert_eq!(entries[1]["anthropicFamilyTier"], "opus");
     // By place, not by the borrowed name.

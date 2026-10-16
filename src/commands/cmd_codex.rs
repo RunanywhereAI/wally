@@ -12,8 +12,8 @@ use crate::cli::{App, ValueType};
 use crate::cli_formatter::{examples_footer, Example};
 use crate::codex;
 use crate::commands::cmd_editors::{
-    cloud_context_window, context_window_for_tool, context_window_problem, text_only_ids,
-    write_private, RemovedOnDrop, ScopedEnv,
+    cloud_context_window, context_window_for_tool, context_window_problem, write_private,
+    RemovedOnDrop, ScopedEnv,
 };
 use crate::commands::resolve_default_model;
 use crate::config::cli_paths;
@@ -155,8 +155,7 @@ fn serve(model: &str, options: &GlobalOptions) -> i32 {
         return 1;
     };
     let catalog = harness::catalog_models_for(&endpoint, model);
-    let Some(shim) = codex::start(&endpoint, model, options.verbose, &text_only_ids(&catalog))
-    else {
+    let Some(shim) = codex::start(&endpoint, model, options.verbose, &catalog) else {
         harness::release(&endpoint);
         return 1;
     };
@@ -187,8 +186,7 @@ fn run(
     // Read once: it names the models Codex lists, their windows, and which of
     // them take no images.
     let catalog = harness::catalog_models_for(&endpoint, model);
-    let Some(mut shim) = codex::start(&endpoint, model, options.verbose, &text_only_ids(&catalog))
-    else {
+    let Some(mut shim) = codex::start(&endpoint, model, options.verbose, &catalog) else {
         harness::release(&endpoint);
         return 1;
     };
