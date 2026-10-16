@@ -680,11 +680,19 @@ fn run(
         // not describe takes a slot by place, and only the first three do; a
         // model left without a free Claude id is not listed.
         let names = claude_effort::desktop_names(&catalog);
+        // A place-based name must not repeat one a later model's effort menu
+        // takes, or `effective_model` routes both entries to the first.
+        let mut taken: Vec<String> = names.iter().flatten().cloned().collect();
         for (index, (catalog_model, name)) in catalog.iter().zip(names).enumerate() {
             let name = match name {
                 Some(name) => name,
                 None if index < 3 && claude_effort::effort_menu(catalog_model).is_none() => {
-                    desktop_family(index, catalog_model, context_override).to_string()
+                    let family = desktop_family(index, catalog_model, context_override);
+                    if taken.iter().any(|name| name == family) {
+                        continue;
+                    }
+                    taken.push(family.to_string());
+                    family.to_string()
                 }
                 None => continue,
             };

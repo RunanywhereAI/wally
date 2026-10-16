@@ -127,6 +127,16 @@ fn effective_model(runtime: &Runtime, request: &Value) -> String {
     runtime.model.clone()
 }
 
+fn routable_ids(models: &[CatalogModel]) -> Vec<String> {
+    let mut ids = cached_model_ids();
+    for model in models {
+        if !ids.contains(&model.id) {
+            ids.push(model.id.clone());
+        }
+    }
+    ids
+}
+
 /// The model listed for the Claude tier `requested` names (`sonnet`, `opus`,
 /// `haiku`), when it is a `claude-` id: the alias in that tier's picker slot
 /// (`desktop::DESKTOP_TIERS`), whatever name the slot is listed under.
@@ -875,9 +885,9 @@ pub fn start(
         } else {
             advertised.to_string()
         },
-        // The real routable ids, for effective_model. Reads a local file,
-        // no network.
-        catalog: cached_model_ids(),
+        // The real routable ids, for effective_model: the live catalog the
+        // picker lists, plus the cached ids (a local file, no network).
+        catalog: routable_ids(models),
         text_only_models: text_only_ids(models),
         models: models.to_vec(),
         refused: Mutex::new((HashSet::new(), HashSet::new())),
