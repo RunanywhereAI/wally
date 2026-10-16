@@ -212,6 +212,43 @@ pub fn with_onboarding_done(existing: &str, now_unix: i64) -> Option<String> {
     serde_json::to_string_pretty(&state).ok()
 }
 
+/// The effort levels the app's model controls show. The app drops any level
+/// a model lists that is not in its `enabled-reasoning-efforts` setting, and
+/// that setting starts without `minimal` and `max`, so a model graded
+/// low/high/max would offer only low and high. With these enabled, each model
+/// shows the levels its catalog entry lists, except `none`, which the app
+/// keeps out of its controls.
+const ENABLED_REASONING_EFFORTS: &[&str] = &[
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "persistent",
+];
+
+/// `existing` (the home's `.codex-global-state.json`, empty when there is
+/// none) with `ENABLED_REASONING_EFFORTS` enabled in the app's model controls. Only
+/// that one setting changes. None when the file is not a JSON object.
+pub fn with_all_efforts_enabled(existing: &str) -> Option<String> {
+    let mut state: serde_json::Value = if existing.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(existing).ok()?
+    };
+    state
+        .as_object_mut()?
+        .entry("electron-persisted-atom-state")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()?
+        .insert(
+            "enabled-reasoning-efforts".to_string(),
+            serde_json::json!(ENABLED_REASONING_EFFORTS),
+        );
+    serde_json::to_string_pretty(&state).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +376,22 @@ mod tests {
             "writing"
         );
         assert_eq!(atoms["last_completed_onboarding"], 7);
+    }
+
+    #[test]
+    fn the_effort_levels_are_enabled_without_none_and_the_rest_is_kept() {
+        let existing = r#"{"x": 1, "electron-persisted-atom-state": {"y": 2, "enabled-reasoning-efforts": ["low", "high"]}}"#;
+        let state: serde_json::Value =
+            serde_json::from_str(&with_all_efforts_enabled(existing).unwrap()).unwrap();
+        assert_eq!(state["x"], 1);
+        let atoms = &state["electron-persisted-atom-state"];
+        assert_eq!(atoms["y"], 2);
+        assert_eq!(
+            atoms["enabled-reasoning-efforts"],
+            serde_json::json!(ENABLED_REASONING_EFFORTS)
+        );
+        assert!(!ENABLED_REASONING_EFFORTS.contains(&"none"));
+        assert_eq!(with_all_efforts_enabled("[1]"), None);
     }
 
     #[test]
