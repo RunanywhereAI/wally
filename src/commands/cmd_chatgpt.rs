@@ -272,17 +272,22 @@ mod mac {
 
 /// The Windows app is a Store package (`OpenAI.Codex`) whose main program
 /// has no command-line alias, and starting it through the shell carries no
-/// environment or arguments. Started directly from its package folder it
-/// takes both, so it runs as a second instance on wally's own folders, the
-/// same as on macOS.
+/// environment or arguments. Started from its package folder with them it
+/// runs as a second instance on wally's own folders, the same as on macOS.
+///
+/// Windows 11 lets wally start that program directly. Windows 10 refuses to
+/// start a packaged app's program from outside its package, so there it is
+/// started inside the package (`Invoke-CommandInDesktopPackage`), through a
+/// launcher file that sets the same environment, and then found by the
+/// app-data folder on its command line.
 #[cfg(windows)]
 mod windows {
-    use std::path::PathBuf;
-    use std::process::{Child, Command};
-    use std::sync::{Arc, Mutex};
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
     use crate::bootstrap::GlobalOptions;
+    use crate::commands::cmd_editors::write_private;
     use crate::harness::codex::CODEX_KEY_VARIABLE;
     use crate::io::output as out;
 
@@ -365,25 +370,138 @@ mod windows {
         Some(PathBuf::from(String::from_utf16_lossy(&buffer[..units])))
     }
 
-    /// The installed app's program, or None.
-    pub(super) fn app_path() -> Option<PathBuf> {
+    /// The installed app: its program, and the package it belongs to.
+    pub(super) struct Installed {
+        pub(super) program: PathBuf,
+        package: String,
+    }
+
+    /// The installed app, or None.
+    pub(super) fn app_path() -> Option<Installed> {
         let names = package_names();
         let name = super::newest_package(&names)?;
         let program = package_root(name)?.join("app").join("ChatGPT.exe");
-        program.is_file().then_some(program)
+        program.is_file().then(|| Installed {
+            program,
+            package: name.clone(),
+        })
+    }
+
+    /// Starts the program directly. Its process id, or the error Windows gave.
+    fn start_directly(
+        program: &Path,
+        app_data: &str,
+        codex_home: &Path,
+        token: &str,
+    ) -> std::io::Result<u32> {
+        Command::new(program)
+            .arg(format!("--user-data-dir={app_data}"))
+            .env("CODEX_HOME", codex_home)
+            .env(CODEX_KEY_VARIABLE, token)
+            // The app logs to its standard streams; wally's are the person's.
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|child| child.id())
+    }
+
+    /// Starts the program inside its package, for a Windows that refuses the
+    /// direct start. The environment goes through a launcher file wally owns
+    /// rather than a command line, which any local process can read; the file
+    /// is gone once the app is up. The process id of the app's main process,
+    /// or why it could not be started.
+    fn start_in_package(
+        installed: &Installed,
+        app_data: &str,
+        codex_home: &Path,
+        token: &str,
+    ) -> Result<u32, String> {
+        let launcher = codex_home.join("wally-launch.cmd");
+        let script = super::launcher_script(
+            &installed.program.to_string_lossy(),
+            app_data,
+            &codex_home.to_string_lossy(),
+            CODEX_KEY_VARIABLE,
+            token,
+        )?;
+        write_private(&launcher, &script)
+            .map_err(|error| format!("could not write the app's launcher ({error})"))?;
+        let started = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command"])
+            .arg(super::in_package_command(
+                &super::package_family(&installed.package),
+                &launcher.to_string_lossy(),
+            ))
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output();
+        let found = match started {
+            Ok(output) if output.status.success() => {
+                find_instance(app_data, Duration::from_secs(30))
+            }
+            Ok(output) => {
+                let _ = std::fs::remove_file(&launcher);
+                // PowerShell follows the reason with its own position and
+                // category lines; the first line is the one worth reading.
+                let reason = String::from_utf8_lossy(&output.stderr);
+                return Err(reason.lines().next().unwrap_or("").trim().to_string());
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&launcher);
+                return Err(error.to_string());
+            }
+        };
+        let _ = std::fs::remove_file(&launcher);
+        found.ok_or_else(|| "the app did not come up".to_string())
+    }
+
+    /// The app's main process whose command line names `app_data`, waiting up
+    /// to `within` for it to appear.
+    fn find_instance(app_data: &str, within: Duration) -> Option<u32> {
+        let query = format!(
+            "Get-CimInstance Win32_Process -Filter \"Name = 'ChatGPT.exe'\" | ForEach-Object {{ \"$($_.ProcessId)`t$($_.CommandLine)\" }}"
+        );
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            let listing = Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &query])
+                .stderr(Stdio::null())
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
+            if let Some(pid) = super::instance_in_listing(&listing, app_data) {
+                return Some(pid);
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        None
+    }
+
+    /// Whether process `pid` is still running.
+    fn is_running(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+        };
+        // SAFETY: OpenProcess takes a plain pid; a null handle means it is gone.
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        if handle.is_null() {
+            return false;
+        }
+        // SAFETY: `handle` was just opened and is closed once.
+        let running = unsafe { WaitForSingleObject(handle, 0) } == WAIT_TIMEOUT;
+        unsafe { CloseHandle(handle) };
+        running
     }
 
     /// Closes the instance and every process it started (Electron runs its
     /// windows and the app's Codex as children): first asking, then forcing
     /// what is still there after `grace`. True once it is gone.
-    fn quit(child: &Mutex<Child>, grace: Duration) -> bool {
-        let Ok(mut child) = child.lock() else {
-            return false;
-        };
-        let pid = child.id().to_string();
+    fn quit(pid: u32, grace: Duration) -> bool {
+        let pid_text = pid.to_string();
         let taskkill = |force: bool| {
             let mut command = Command::new("taskkill");
-            command.args(["/PID", &pid, "/T"]);
+            command.args(["/PID", &pid_text, "/T"]);
             if force {
                 command.arg("/F");
             }
@@ -392,17 +510,18 @@ mod windows {
         taskkill(false);
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
-            if matches!(child.try_wait(), Ok(Some(_))) {
+            if !is_running(pid) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(200));
         }
         taskkill(true);
-        child.wait().is_ok()
+        std::thread::sleep(Duration::from_millis(500));
+        !is_running(pid)
     }
 
     pub(super) fn run(
-        app: &std::path::Path,
+        installed: &Installed,
         model: &str,
         context_override: Option<i64>,
         options: &GlobalOptions,
@@ -410,48 +529,95 @@ mod windows {
         let Some(session) = super::session::start(model, context_override, options) else {
             return 1;
         };
-        let spawned = Command::new(app)
-            .arg(format!(
-                "--user-data-dir={}",
-                session.folders.app_data.to_string_lossy()
-            ))
-            .env("CODEX_HOME", &session.folders.codex_home)
-            .env(CODEX_KEY_VARIABLE, &session.shim.auth_token)
-            // The app logs to its standard streams; wally's are the person's.
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        let child = match spawned {
-            Ok(child) => Arc::new(Mutex::new(child)),
-            Err(error) => {
-                out::error_line(&format!("could not start chatgpt ({error})"));
+        let app_data = session.folders.app_data.to_string_lossy().into_owned();
+        let codex_home = session.folders.codex_home.clone();
+        let token = session.shim.auth_token.clone();
+        let started = match start_directly(&installed.program, &app_data, &codex_home, &token) {
+            Ok(pid) => Ok(pid),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                start_in_package(installed, &app_data, &codex_home, &token)
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        let pid = match started {
+            Ok(pid) => pid,
+            Err(problem) => {
+                out::error_line(&format!("could not start chatgpt ({problem})"));
                 session.end();
                 return 1;
             }
         };
         // Ctrl-C quits the instance this run started; its exit ends the run.
-        let for_signal = Arc::clone(&child);
         let _quit_on_signal = crate::util::interrupt::on_interrupt(move || {
-            if !quit(&for_signal, Duration::from_secs(5)) {
+            if !quit(pid, Duration::from_secs(5)) {
                 out::error_line("chatgpt did not quit; close it by hand");
             }
             std::process::exit(130);
         });
-        let status = loop {
-            let exited = child
-                .lock()
-                .map(|mut child| child.try_wait())
-                .unwrap_or(Ok(None));
-            match exited {
-                Ok(Some(status)) => break status.code().unwrap_or(0),
-                Ok(None) => std::thread::sleep(Duration::from_millis(500)),
-                Err(_) => break 1,
-            }
-        };
+        while is_running(pid) {
+            std::thread::sleep(Duration::from_millis(500));
+        }
         out::status_line("chatgpt quit; wally is done");
         session.end();
-        status
+        0
     }
+}
+
+/// The package family name of a full package name: its name and publisher id
+/// (`OpenAI.Codex_26.930.3930.0_arm64__2p2nqsd0c76g0` -> `OpenAI.Codex_2p2nqsd0c76g0`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn package_family(full_name: &str) -> String {
+    let name = full_name.split('_').next().unwrap_or(full_name);
+    match full_name.rsplit_once("__") {
+        Some((_, publisher)) => format!("{name}_{publisher}"),
+        None => full_name.to_string(),
+    }
+}
+
+/// The PowerShell command that runs `launcher` inside the app's package.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn in_package_command(family: &str, launcher: &str) -> String {
+    let quoted = |text: &str| format!("'{}'", text.replace('\'', "''"));
+    format!(
+        "Invoke-CommandInDesktopPackage -PackageFamilyName {} -AppId App -Command 'cmd.exe' -Args {}",
+        quoted(family),
+        quoted(&format!("/d /c \"{launcher}\""))
+    )
+}
+
+/// The launcher file that starts the app with wally's environment. Refused
+/// for a value the command processor would read as syntax: a double quote,
+/// a percent sign or a line break.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn launcher_script(
+    program: &str,
+    app_data: &str,
+    codex_home: &str,
+    key_variable: &str,
+    token: &str,
+) -> Result<String, String> {
+    for value in [program, app_data, codex_home, token] {
+        if value.contains(['"', '%', '\r', '\n']) {
+            return Err(format!("a path cannot be passed to the app: {value}"));
+        }
+    }
+    Ok(format!(
+        "@echo off\r\nset \"CODEX_HOME={codex_home}\"\r\nset \"{key_variable}={token}\"\r\nstart \"\" \"{program}\" --user-data-dir=\"{app_data}\"\r\n"
+    ))
+}
+
+/// The process id in a `<pid>\t<command line>` listing of the app's
+/// processes whose command line names `app_data` and is the main process,
+/// not one of its helpers (those carry `--type=`).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn instance_in_listing(listing: &str, app_data: &str) -> Option<u32> {
+    let wanted = app_data.replace('/', "\\").to_lowercase();
+    listing.lines().find_map(|line| {
+        let (pid, command) = line.split_once('\t')?;
+        let command = command.replace('/', "\\").to_lowercase();
+        (command.contains(&wanted) && !command.contains("--type="))
+            .then(|| pid.trim().parse().ok())?
+    })
 }
 
 /// The package full name of the newest installed ChatGPT app among `names`
@@ -537,7 +703,7 @@ fn run(model: &str, context_override: Option<i64>, options: &GlobalOptions) -> i
     };
     if model.is_empty() {
         // No model named means no wiring: the app opens as the reader has it.
-        return match std::process::Command::new(&app).spawn() {
+        return match std::process::Command::new(&app.program).spawn() {
             Ok(_) => 0,
             Err(error) => {
                 out::error_line(&format!("could not start chatgpt ({error})"));
@@ -573,6 +739,49 @@ mod tests {
             newest_package(&installed).map(String::as_str),
             Some("OpenAI.Codex_26.1001.100.0_arm64__2p2nqsd0c76g0")
         );
+    }
+
+    #[test]
+    fn the_family_name_is_the_name_and_publisher() {
+        assert_eq!(
+            package_family("OpenAI.Codex_26.930.3930.0_arm64__2p2nqsd0c76g0"),
+            "OpenAI.Codex_2p2nqsd0c76g0"
+        );
+    }
+
+    #[test]
+    fn the_in_package_command_quotes_for_powershell() {
+        assert_eq!(
+            in_package_command("OpenAI.Codex_2p2nqsd0c76g0", r"C:\Users\o'brien\l.cmd"),
+            r#"Invoke-CommandInDesktopPackage -PackageFamilyName 'OpenAI.Codex_2p2nqsd0c76g0' -AppId App -Command 'cmd.exe' -Args '/d /c "C:\Users\o''brien\l.cmd"'"#
+        );
+    }
+
+    #[test]
+    fn the_launcher_sets_the_environment_and_starts_the_app() {
+        let script = launcher_script(
+            r"C:\Apps\ChatGPT.exe",
+            r"C:\state\app-data",
+            r"C:\state\codex-home",
+            "WALLY_CODEX_API_KEY",
+            "abc123",
+        )
+        .unwrap();
+        assert!(script.contains("set \"CODEX_HOME=C:\\state\\codex-home\""));
+        assert!(script.contains("set \"WALLY_CODEX_API_KEY=abc123\""));
+        assert!(script
+            .contains(r#"start "" "C:\Apps\ChatGPT.exe" --user-data-dir="C:\state\app-data""#));
+        assert!(launcher_script("C:\\a%b", "x", "y", "K", "t").is_err());
+    }
+
+    #[test]
+    fn the_instance_is_the_main_process_on_our_folder() {
+        let listing =
+            "10\t\"C:\\Apps\\ChatGPT.exe\" --type=renderer --user-data-dir=C:/state\\app-data\n\
+             11\t\"C:\\Apps\\ChatGPT.exe\" --user-data-dir=C:\\other\n\
+             12\t\"C:\\Apps\\ChatGPT.exe\" --user-data-dir=C:/state\\app-data\n";
+        assert_eq!(instance_in_listing(listing, r"C:\state\app-data"), Some(12));
+        assert_eq!(instance_in_listing(listing, r"C:\nowhere"), None);
     }
 
     #[test]
