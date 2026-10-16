@@ -107,6 +107,15 @@ const SANDBOX_SETUP_DIRS: &[&str] = &[".sandbox", ".sandbox-secrets"];
 /// wally's home held there before is its own and is replaced.
 #[cfg(windows)]
 fn share_sandbox_setup(wally_home: &Path, user_home: &Path) {
+    // Run from inside a Codex session wally launched, CODEX_HOME already names
+    // wally's home: its setup is then the one in use, and is left as it is.
+    let same = |a: &Path, b: &Path| match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    if same(wally_home, user_home) {
+        return;
+    }
     let set_up = user_home
         .join(".sandbox-secrets")
         .join("sandbox_users.json")
@@ -352,6 +361,13 @@ mod tests {
             .join("sandbox_users.json")
             .is_file());
         assert!(!secrets.join("stale.json").exists());
+
+        // Launched from inside wally's own Codex: nothing is touched.
+        share_sandbox_setup(&ours, &ours);
+        assert!(ours
+            .join(".sandbox-secrets")
+            .join("sandbox_users.json")
+            .is_file());
 
         // Their setup gone: the links go, their folders stay.
         std::fs::remove_file(secrets.join("sandbox_users.json")).unwrap();
