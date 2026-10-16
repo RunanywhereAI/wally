@@ -17,61 +17,30 @@ use crate::io::output as out;
 
 const COMMAND: &str = "chatgpt";
 
-#[cfg(target_os = "macos")]
-mod mac {
+/// What a run needs on either platform: wally's folders for the app, the
+/// translator, and the settings the app's Codex reads from them.
+#[cfg(any(target_os = "macos", windows))]
+mod session {
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-    use std::sync::Arc;
-    use std::time::Duration;
 
     use crate::bootstrap::GlobalOptions;
-    use crate::codex;
+    use crate::codex::{self, CodexShim};
     use crate::commands::cmd_editors::{
         cloud_context_window, context_window_for_tool, write_private,
     };
     use crate::config::cli_paths;
-    use crate::desktop::instance;
     use crate::harness::chatgpt::{
-        chatgpt_auth, chatgpt_config, chatgpt_settings, with_all_efforts_enabled,
-        with_onboarding_done, CHATGPT_BUNDLE_ID,
+        chatgpt_auth, chatgpt_config, chatgpt_settings, with_onboarding_done,
     };
-    use crate::harness::codex::{codex_model_catalog, CODEX_KEY_VARIABLE};
-    use crate::harness::{self, CatalogModel};
+    use crate::harness::codex::codex_model_catalog;
+    use crate::harness::{self, CatalogModel, Endpoint};
     use crate::io::output as out;
-    use crate::util::getenv;
-
-    pub(super) const DOWNLOAD: &str = "https://chatgpt.com/download";
-
-    /// The installed ChatGPT app that carries Codex, or None. An app with
-    /// another bundle id (the older chat-only one) is not it.
-    pub(super) fn app_path() -> Option<String> {
-        let mut roots = vec!["/Applications".to_string()];
-        if let Some(home) = getenv("HOME").filter(|h| !h.is_empty()) {
-            roots.push(format!("{home}/Applications"));
-        }
-        roots
-            .iter()
-            .map(|root| format!("{root}/ChatGPT.app"))
-            .find(|path| bundle_id(path).as_deref() == Some(CHATGPT_BUNDLE_ID))
-    }
-
-    fn bundle_id(app: &str) -> Option<String> {
-        let output = std::process::Command::new("/usr/libexec/PlistBuddy")
-            .args(["-c", "Print :CFBundleIdentifier"])
-            .arg(format!("{app}/Contents/Info.plist"))
-            .output()
-            .ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
-    }
 
     /// Where the app's Codex home and its own app data live: wally's state
     /// directory, kept between runs so threads and project trust carry over.
-    struct Folders {
-        codex_home: PathBuf,
-        app_data: PathBuf,
+    pub(super) struct Folders {
+        pub(super) codex_home: PathBuf,
+        pub(super) app_data: PathBuf,
         catalog: PathBuf,
     }
 
@@ -110,9 +79,7 @@ mod mac {
             .map_err(|error| format!("could not write the app's Codex settings ({error})"))?;
         let state_path = folders.codex_home.join(".codex-global-state.json");
         let state = std::fs::read_to_string(&state_path).unwrap_or_default();
-        if let Some(done) = with_onboarding_done(&state, crate::codex::translate::now_unix())
-            .and_then(|state| with_all_efforts_enabled(&state))
-        {
+        if let Some(done) = with_onboarding_done(&state, crate::codex::translate::now_unix()) {
             write_private(&state_path, &done)
                 .map_err(|error| format!("could not write the app's state ({error})"))?;
         }
@@ -124,26 +91,45 @@ mod mac {
         Ok(())
     }
 
-    pub(super) fn run(
-        app: &str,
+    /// A run's translator and the folders the app is pointed at.
+    pub(super) struct Session {
+        pub(super) folders: Folders,
+        pub(super) shim: CodexShim,
+        endpoint: Endpoint,
+    }
+
+    impl Session {
+        /// Stops the translator and lets go of the model.
+        pub(super) fn end(mut self) {
+            codex::stop(&mut self.shim);
+            harness::release(&self.endpoint);
+        }
+    }
+
+    /// Starts the translator for `model` and writes the app's settings. None,
+    /// with the reason already printed, when any of it fails.
+    pub(super) fn start(
         model: &str,
         context_override: Option<i64>,
         options: &GlobalOptions,
-    ) -> i32 {
+    ) -> Option<Session> {
         let Some(folders) = folders() else {
             out::error_line("could not find a state directory for the app's data");
-            return 1;
+            return None;
         };
-        let Some(endpoint) = harness::resolve(model, options, super::COMMAND) else {
-            return 1;
-        };
+        let endpoint = harness::resolve(model, options, super::COMMAND)?;
         let catalog = harness::catalog_models_for(&endpoint, model);
-        let Some(mut shim) = codex::start(&endpoint, model, options.verbose, &catalog) else {
+        let Some(shim) = codex::start(&endpoint, model, options.verbose, &catalog) else {
             harness::release(&endpoint);
-            return 1;
+            return None;
         };
-        let real = if endpoint.serving {
-            endpoint.context_window
+        let session = Session {
+            folders,
+            shim,
+            endpoint,
+        };
+        let real = if session.endpoint.serving {
+            session.endpoint.context_window
         } else if catalog[0].context_window > 0 {
             catalog[0].context_window
         } else {
@@ -155,16 +141,75 @@ mod mac {
             catalog[0].context_window = context;
             out::status_line(&format!("context window: {context} tokens"));
         }
-        if let Err(problem) = prepare(&folders, model, &shim.base_url, &catalog, context) {
+        if let Err(problem) = prepare(
+            &session.folders,
+            model,
+            &session.shim.base_url,
+            &catalog,
+            context,
+        ) {
             out::error_line(&problem);
-            codex::stop(&mut shim);
-            harness::release(&endpoint);
-            return 1;
+            session.end();
+            return None;
         }
         out::status_line(&format!(
             "chatgpt will talk to {model} through {}",
-            shim.base_url
+            session.shim.base_url
         ));
+        Some(session)
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::bootstrap::GlobalOptions;
+    use crate::desktop::instance;
+    use crate::harness;
+    use crate::harness::chatgpt::CHATGPT_BUNDLE_ID;
+    use crate::harness::codex::CODEX_KEY_VARIABLE;
+    use crate::io::output as out;
+    use crate::util::getenv;
+
+    pub(super) const DOWNLOAD: &str = "https://chatgpt.com/download";
+
+    /// The installed ChatGPT app that carries Codex, or None. An app with
+    /// another bundle id (the older chat-only one) is not it.
+    pub(super) fn app_path() -> Option<String> {
+        let mut roots = vec!["/Applications".to_string()];
+        if let Some(home) = getenv("HOME").filter(|h| !h.is_empty()) {
+            roots.push(format!("{home}/Applications"));
+        }
+        roots
+            .iter()
+            .map(|root| format!("{root}/ChatGPT.app"))
+            .find(|path| bundle_id(path).as_deref() == Some(CHATGPT_BUNDLE_ID))
+    }
+
+    fn bundle_id(app: &str) -> Option<String> {
+        let output = std::process::Command::new("/usr/libexec/PlistBuddy")
+            .args(["-c", "Print :CFBundleIdentifier"])
+            .arg(format!("{app}/Contents/Info.plist"))
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    pub(super) fn run(
+        app: &str,
+        model: &str,
+        context_override: Option<i64>,
+        options: &GlobalOptions,
+    ) -> i32 {
+        let Some(session) = super::session::start(model, context_override, options) else {
+            return 1;
+        };
 
         // The instance this run starts, found by pid since launchd starts it.
         // Ctrl-C quits it; its exit ends the run even when `open -W` misses it.
@@ -204,20 +249,225 @@ mod mac {
             "-n".to_string(),
             "-W".to_string(),
             "--env".to_string(),
-            format!("CODEX_HOME={}", folders.codex_home.to_string_lossy()),
+            format!(
+                "CODEX_HOME={}",
+                session.folders.codex_home.to_string_lossy()
+            ),
             "--env".to_string(),
-            format!("{CODEX_KEY_VARIABLE}={}", shim.auth_token),
+            format!("{CODEX_KEY_VARIABLE}={}", session.shim.auth_token),
             "-a".to_string(),
             app.to_string(),
             "--args".to_string(),
-            format!("--user-data-dir={}", folders.app_data.to_string_lossy()),
+            format!(
+                "--user-data-dir={}",
+                session.folders.app_data.to_string_lossy()
+            ),
         ];
         let status = harness::launch("open", "", &args, options);
         finished.store(true, Ordering::SeqCst);
-        codex::stop(&mut shim);
-        harness::release(&endpoint);
+        session.end();
         status
     }
+}
+
+/// The Windows app is a Store package (`OpenAI.Codex`) whose main program
+/// has no command-line alias, and starting it through the shell carries no
+/// environment or arguments. Started directly from its package folder it
+/// takes both, so it runs as a second instance on wally's own folders, the
+/// same as on macOS.
+#[cfg(windows)]
+mod windows {
+    use std::path::PathBuf;
+    use std::process::{Child, Command};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use crate::bootstrap::GlobalOptions;
+    use crate::harness::codex::CODEX_KEY_VARIABLE;
+    use crate::io::output as out;
+
+    pub(super) const DOWNLOAD: &str = "https://chatgpt.com/download";
+
+    /// Where Windows records each installed package for the signed-in user,
+    /// one subkey per package full name, with its folder in `PackageRootFolder`.
+    const PACKAGES: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain([0]).collect()
+    }
+
+    /// The installed packages' full names, from the registry.
+    fn package_names() -> Vec<String> {
+        use windows_sys::Win32::System::Registry::{
+            RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+        };
+        let path = wide(PACKAGES);
+        let mut key: HKEY = std::ptr::null_mut();
+        // SAFETY: `path` is a NUL-terminated UTF-16 string and `key` a valid
+        // out-pointer; the key is closed below.
+        if unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &mut key) } != 0 {
+            return Vec::new();
+        }
+        let mut names = Vec::new();
+        for index in 0.. {
+            let mut buffer = [0u16; 512];
+            let mut length = buffer.len() as u32;
+            // SAFETY: `key` is open; `buffer` and `length` describe a
+            // writable buffer of that many UTF-16 units.
+            let status = unsafe {
+                RegEnumKeyExW(
+                    key,
+                    index,
+                    buffer.as_mut_ptr(),
+                    &mut length,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if status != 0 {
+                break;
+            }
+            names.push(String::from_utf16_lossy(&buffer[..length as usize]));
+        }
+        // SAFETY: `key` was opened above and is closed once.
+        unsafe { RegCloseKey(key) };
+        names
+    }
+
+    /// `name`'s install folder, from its `PackageRootFolder` value.
+    fn package_root(name: &str) -> Option<PathBuf> {
+        use windows_sys::Win32::System::Registry::{
+            RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ,
+        };
+        let subkey = wide(&format!("{PACKAGES}\\{name}"));
+        let value = wide("PackageRootFolder");
+        let mut buffer = [0u16; 1024];
+        let mut size = (buffer.len() * 2) as u32;
+        // SAFETY: both names are NUL-terminated UTF-16 strings; `buffer` and
+        // `size` (in bytes) describe a writable buffer.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                subkey.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != 0 {
+            return None;
+        }
+        let units = (size as usize / 2).saturating_sub(1);
+        Some(PathBuf::from(String::from_utf16_lossy(&buffer[..units])))
+    }
+
+    /// The installed app's program, or None.
+    pub(super) fn app_path() -> Option<PathBuf> {
+        let names = package_names();
+        let name = super::newest_package(&names)?;
+        let program = package_root(name)?.join("app").join("ChatGPT.exe");
+        program.is_file().then_some(program)
+    }
+
+    /// Closes the instance and every process it started (Electron runs its
+    /// windows and the app's Codex as children): first asking, then forcing
+    /// what is still there after `grace`. True once it is gone.
+    fn quit(child: &Mutex<Child>, grace: Duration) -> bool {
+        let Ok(mut child) = child.lock() else {
+            return false;
+        };
+        let pid = child.id().to_string();
+        let taskkill = |force: bool| {
+            let mut command = Command::new("taskkill");
+            command.args(["/PID", &pid, "/T"]);
+            if force {
+                command.arg("/F");
+            }
+            let _ = command.output();
+        };
+        taskkill(false);
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        taskkill(true);
+        child.wait().is_ok()
+    }
+
+    pub(super) fn run(
+        app: &std::path::Path,
+        model: &str,
+        context_override: Option<i64>,
+        options: &GlobalOptions,
+    ) -> i32 {
+        let Some(session) = super::session::start(model, context_override, options) else {
+            return 1;
+        };
+        let spawned = Command::new(app)
+            .arg(format!(
+                "--user-data-dir={}",
+                session.folders.app_data.to_string_lossy()
+            ))
+            .env("CODEX_HOME", &session.folders.codex_home)
+            .env(CODEX_KEY_VARIABLE, &session.shim.auth_token)
+            // The app logs to its standard streams; wally's are the person's.
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        let child = match spawned {
+            Ok(child) => Arc::new(Mutex::new(child)),
+            Err(error) => {
+                out::error_line(&format!("could not start chatgpt ({error})"));
+                session.end();
+                return 1;
+            }
+        };
+        // Ctrl-C quits the instance this run started; its exit ends the run.
+        let for_signal = Arc::clone(&child);
+        let _quit_on_signal = crate::util::interrupt::on_interrupt(move || {
+            if !quit(&for_signal, Duration::from_secs(5)) {
+                out::error_line("chatgpt did not quit; close it by hand");
+            }
+            std::process::exit(130);
+        });
+        let status = loop {
+            let exited = child
+                .lock()
+                .map(|mut child| child.try_wait())
+                .unwrap_or(Ok(None));
+            match exited {
+                Ok(Some(status)) => break status.code().unwrap_or(0),
+                Ok(None) => std::thread::sleep(Duration::from_millis(500)),
+                Err(_) => break 1,
+            }
+        };
+        out::status_line("chatgpt quit; wally is done");
+        session.end();
+        status
+    }
+}
+
+/// The package full name of the newest installed ChatGPT app among `names`
+/// (`OpenAI.Codex_<version>_<arch>__<publisher>`), by version. Kept free of
+/// Windows APIs so it can be tested on any platform.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn newest_package(names: &[String]) -> Option<&String> {
+    let version = |name: &str| -> Option<Vec<u64>> {
+        let version = name.strip_prefix("OpenAI.Codex_")?.split('_').next()?;
+        version.split('.').map(|part| part.parse().ok()).collect()
+    };
+    names
+        .iter()
+        .filter_map(|name| Some((version(name)?, name)))
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, name)| name)
 }
 
 pub fn register_chatgpt(app: &mut App) {
@@ -275,8 +525,61 @@ fn run(model: &str, context_override: Option<i64>, options: &GlobalOptions) -> i
     mac::run(&app, model, context_override, options)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn run(model: &str, context_override: Option<i64>, options: &GlobalOptions) -> i32 {
+    let Some(app) = windows::app_path() else {
+        out::error_line("the ChatGPT app is not installed on this machine");
+        out::status_line(&format!(
+            "download it from {}, then run this again",
+            windows::DOWNLOAD
+        ));
+        return 1;
+    };
+    if model.is_empty() {
+        // No model named means no wiring: the app opens as the reader has it.
+        return match std::process::Command::new(&app).spawn() {
+            Ok(_) => 0,
+            Err(error) => {
+                out::error_line(&format!("could not start chatgpt ({error})"));
+                1
+            }
+        };
+    }
+    windows::run(&app, model, context_override, options)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn run(_model: &str, _context_override: Option<i64>, _options: &GlobalOptions) -> i32 {
-    out::error_line("wally chatgpt needs the ChatGPT app for macOS");
+    out::error_line("wally chatgpt needs the ChatGPT app for macOS or Windows");
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn the_newest_chatgpt_package_wins_by_version_not_by_text() {
+        let installed = names(&[
+            "Microsoft.WindowsCalculator_11.2.0.0_arm64__8wekyb3d8bbwe",
+            "OpenAI.Codex_26.930.3930.0_arm64__2p2nqsd0c76g0",
+            "OpenAI.Codex_26.1001.100.0_arm64__2p2nqsd0c76g0",
+        ]);
+        assert_eq!(
+            newest_package(&installed).map(String::as_str),
+            Some("OpenAI.Codex_26.1001.100.0_arm64__2p2nqsd0c76g0")
+        );
+    }
+
+    #[test]
+    fn no_chatgpt_package_means_none() {
+        assert_eq!(
+            newest_package(&names(&["OpenAI.CodexHelper", "Other_1.0.0.0_x64__x"])),
+            None
+        );
+    }
 }

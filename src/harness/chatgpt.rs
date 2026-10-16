@@ -26,6 +26,14 @@ pub fn chatgpt_settings(
 ) -> Vec<String> {
     let mut settings = vec![format!("model={}", toml_string(model))];
     settings.extend(codex_settings(base_url, catalog_path, context_window));
+    let efforts: Vec<String> = ENABLED_REASONING_EFFORTS
+        .iter()
+        .map(|effort| toml_string(effort))
+        .collect();
+    settings.push(format!(
+        "desktop.enabled-reasoning-efforts=[{}]",
+        efforts.join(", ")
+    ));
     settings
 }
 
@@ -212,12 +220,12 @@ pub fn with_onboarding_done(existing: &str, now_unix: i64) -> Option<String> {
     serde_json::to_string_pretty(&state).ok()
 }
 
-/// The effort levels the app's model controls show. The app drops any level
-/// a model lists that is not in its `enabled-reasoning-efforts` setting, and
-/// that setting starts without `minimal` and `max`, so a model graded
-/// low/high/max would offer only low and high. With these enabled, each model
-/// shows the levels its catalog entry lists, except `none`, which the app
-/// keeps out of its controls.
+/// The effort levels the app's model controls show, its desktop setting
+/// `enabled-reasoning-efforts` (kept in `config.toml` under `[desktop]`). The
+/// app drops any level a model lists that is not in it, and it starts without
+/// `minimal` and `max`, so a model graded low/high/max would offer only low
+/// and high. With these enabled, each model shows the levels its catalog
+/// entry lists, except `none`, which the app keeps out of its controls.
 const ENABLED_REASONING_EFFORTS: &[&str] = &[
     "minimal",
     "low",
@@ -227,27 +235,6 @@ const ENABLED_REASONING_EFFORTS: &[&str] = &[
     "max",
     "persistent",
 ];
-
-/// `existing` (the home's `.codex-global-state.json`, empty when there is
-/// none) with `ENABLED_REASONING_EFFORTS` enabled in the app's model controls. Only
-/// that one setting changes. None when the file is not a JSON object.
-pub fn with_all_efforts_enabled(existing: &str) -> Option<String> {
-    let mut state: serde_json::Value = if existing.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(existing).ok()?
-    };
-    state
-        .as_object_mut()?
-        .entry("electron-persisted-atom-state")
-        .or_insert_with(|| serde_json::json!({}))
-        .as_object_mut()?
-        .insert(
-            "enabled-reasoning-efforts".to_string(),
-            serde_json::json!(ENABLED_REASONING_EFFORTS),
-        );
-    serde_json::to_string_pretty(&state).ok()
-}
 
 #[cfg(test)]
 mod tests {
@@ -379,19 +366,19 @@ mod tests {
     }
 
     #[test]
-    fn the_effort_levels_are_enabled_without_none_and_the_rest_is_kept() {
-        let existing = r#"{"x": 1, "electron-persisted-atom-state": {"y": 2, "enabled-reasoning-efforts": ["low", "high"]}}"#;
-        let state: serde_json::Value =
-            serde_json::from_str(&with_all_efforts_enabled(existing).unwrap()).unwrap();
-        assert_eq!(state["x"], 1);
-        let atoms = &state["electron-persisted-atom-state"];
-        assert_eq!(atoms["y"], 2);
-        assert_eq!(
-            atoms["enabled-reasoning-efforts"],
-            serde_json::json!(ENABLED_REASONING_EFFORTS)
-        );
+    fn the_effort_levels_go_in_the_desktop_table_without_none() {
+        let config = chatgpt_config("", &settings());
+        assert!(config.contains(
+            "desktop.enabled-reasoning-efforts=['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'persistent']"
+        ));
         assert!(!ENABLED_REASONING_EFFORTS.contains(&"none"));
-        assert_eq!(with_all_efforts_enabled("[1]"), None);
+        // Once the app has a [desktop] table of its own, the setting moves into it.
+        let app_wrote = format!("{config}\n[desktop]\nfollowUpQueueMode = \"queue\"\n");
+        let again = chatgpt_config(&app_wrote, &settings());
+        let desktop = again.split("[desktop]").nth(1).unwrap();
+        assert!(desktop.contains("followUpQueueMode = \"queue\""));
+        assert!(desktop.contains("enabled-reasoning-efforts=['minimal'"));
+        assert_eq!(again.matches("enabled-reasoning-efforts").count(), 1);
     }
 
     #[test]
