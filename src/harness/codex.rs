@@ -31,9 +31,10 @@ const REASONING_LEVELS: &[(&str, &str)] = &[
 const FALLBACK_CONTEXT_WINDOW: i64 = 128_000;
 
 /// A TOML string for a `-c` value or a settings line, written as a literal string so it needs no
-/// double quote. On Windows Codex is npm's `codex.cmd`, and a double quote
-/// cannot be passed safely through cmd.exe, so the launcher refuses one
-/// (`build_batch_command_line`); a literal string also keeps a Windows path's
+/// double quote. On Windows Codex is npm's `codex.cmd`; wally runs the script
+/// behind it with node, but where it cannot, the shim goes through cmd.exe,
+/// which cannot be handed a double quote safely, so the launcher refuses one
+/// (`build_batch_command_line`). A literal string also keeps a Windows path's
 /// backslashes as they are. A value with a `'` in it (a home folder such as
 /// `o'brien`) takes the multi-line literal form, which may hold one or two in
 /// a row. Only a value with three in a row or a control character, which none
@@ -149,6 +150,69 @@ pub fn codex_settings(
         settings.push(format!("model_context_window={context_window}"));
     }
     settings
+}
+
+/// The settings in the person's own `config.toml` (`user_config`, its text)
+/// that describe this machine rather than a session, as `-c` values for the
+/// Codex home wally launches with: the `[windows]` table, where Codex records
+/// which Windows sandbox the person set up (`sandbox = "elevated"`). Without
+/// it a wally session has no sandbox and Codex refuses every command.
+///
+/// Only plain values are carried (a string without escapes, a boolean, a
+/// number); anything else is left for Codex's default.
+pub fn carried_settings(user_config: &str) -> Vec<String> {
+    let mut settings = Vec::new();
+    let mut table: Option<String> = None;
+    for line in user_config.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            table = line
+                .strip_prefix('[')
+                .and_then(|rest| rest.split(']').next())
+                .filter(|_| !line.starts_with("[["))
+                .map(|name| name.trim().to_string());
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let full = match table.as_deref() {
+            Some(name) => format!("{name}.{key}"),
+            None => key.to_string(),
+        };
+        let Some(member) = full.strip_prefix("windows.") else {
+            continue;
+        };
+        let plain_key = !member.is_empty()
+            && member
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if let Some(value) = plain_value(value).filter(|_| plain_key) {
+            settings.push(format!("windows.{member}={value}"));
+        }
+    }
+    settings
+}
+
+/// A TOML value from the right of `=`, rewritten without double quotes, or
+/// None when it is not a plain one.
+fn plain_value(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    for quote in ['"', '\''] {
+        if let Some(rest) = raw.strip_prefix(quote) {
+            let (inner, after) = rest.split_once(quote)?;
+            let after = after.trim();
+            let plain = !inner.contains('\\') || quote == '\'';
+            return (plain && (after.is_empty() || after.starts_with('#')))
+                .then(|| toml_string(inner));
+        }
+    }
+    let bare = raw.split('#').next().unwrap_or("").trim();
+    let scalar = bare == "true"
+        || bare == "false"
+        || (!bare.is_empty() && bare.parse::<f64>().is_ok() && !bare.contains(['n', 'N']));
+    scalar.then(|| bare.to_string())
 }
 
 /// Whether the person chose a model on Codex's own command line.
@@ -330,6 +394,28 @@ mod tests {
                 "model='glm-5.3-flash'"
             ])
         );
+    }
+
+    #[test]
+    fn the_windows_table_is_carried_without_double_quotes() {
+        let config = "model = \"gpt-5\"\nwindows.allow_mxc = false\n\n[windows]\nsandbox = \"elevated\" # set by codex\nsandbox_private_desktop = true\nweird = \"a\\\\b\"\nlist = [\"x\"]\n\n[tui]\nsandbox = \"no\"\n";
+        assert_eq!(
+            carried_settings(config),
+            [
+                "windows.allow_mxc=false",
+                "windows.sandbox='elevated'",
+                "windows.sandbox_private_desktop=true",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_config_without_windows_settings_carries_nothing() {
+        assert!(carried_settings(
+            "model = \"gpt-5\"\n[projects.\"/x\"]\ntrust_level = \"trusted\"\n"
+        )
+        .is_empty());
+        assert!(carried_settings("").is_empty());
     }
 
     #[test]

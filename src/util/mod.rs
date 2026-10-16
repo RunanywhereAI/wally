@@ -2,6 +2,7 @@
 
 pub mod hush;
 pub mod interrupt;
+pub mod junction;
 pub mod term;
 
 /// Read an environment variable as UTF-8. Returns `None` when unset or empty —

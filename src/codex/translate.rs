@@ -333,6 +333,98 @@ impl History {
     }
 }
 
+/// A past call's arguments as they can be sent back upstream. The model can
+/// emit arguments that are not JSON (a trailing comma, a cut-off string);
+/// Codex records them as they came and answers with a parse error, which is
+/// the model's feedback. Replayed as they are, the gateway refuses every later
+/// request of the session ("function.arguments must be valid JSON"), so a
+/// call that never parsed goes back with none.
+fn replayable_arguments(arguments: &str) -> String {
+    if serde_json::from_str::<serde::de::IgnoredAny>(arguments).is_ok() {
+        arguments.to_string()
+    } else {
+        "{}".to_string()
+    }
+}
+
+/// How many times in a row the model may make the same call and get the same
+/// result before the turn is stopped. Polling a command whose output changes
+/// never trips it.
+pub const REPEATED_CALL_LIMIT: usize = 6;
+
+/// A call the model kept repeating: same tool, same arguments, same result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepeatedCall {
+    pub name: String,
+    pub times: usize,
+}
+
+/// The call that ends the request's history, when the model has made it
+/// `REPEATED_CALL_LIMIT` or more times in a row since the person last wrote,
+/// each time with the same arguments and the same result. A model in that
+/// state does not get out of it alone (one ran about 60 rounds); the turn is
+/// stopped instead of sent upstream again. The person writing anything starts
+/// the count over.
+pub fn repeated_call(request: &Value) -> Option<RepeatedCall> {
+    let items = request.get("input")?.as_array()?;
+    let start = items
+        .iter()
+        .rposition(|item| {
+            item.get("role").and_then(Value::as_str) == Some("user")
+                && item
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("message")
+                    == "message"
+        })
+        .map_or(0, |index| index + 1);
+    let mut outputs: HashMap<&str, &Value> = HashMap::new();
+    let mut calls: Vec<(&str, String, &str)> = Vec::new();
+    for item in &items[start..] {
+        let call_id = text_of(item.get("call_id").unwrap_or(&Value::Null));
+        match item.get("type").and_then(Value::as_str) {
+            Some(kind @ ("function_call" | "custom_tool_call")) => {
+                let name = upstream_tool_name(
+                    item.get("namespace").and_then(Value::as_str),
+                    text_of(item.get("name").unwrap_or(&Value::Null)),
+                );
+                let input = if kind == "custom_tool_call" {
+                    item.get("input")
+                } else {
+                    item.get("arguments")
+                };
+                calls.push((call_id, name, text_of(input.unwrap_or(&Value::Null))));
+            }
+            Some("function_call_output" | "custom_tool_call_output") => {
+                outputs.insert(call_id, item.get("output").unwrap_or(&Value::Null));
+            }
+            _ => {}
+        }
+    }
+    let (last_id, last_name, last_input) = calls.last()?;
+    let last_output = outputs.get(last_id)?;
+    let times = calls
+        .iter()
+        .rev()
+        .take_while(|(id, name, input)| {
+            name == last_name && input == last_input && outputs.get(id) == Some(last_output)
+        })
+        .count();
+    (times >= REPEATED_CALL_LIMIT).then(|| RepeatedCall {
+        name: last_name.clone(),
+        times,
+    })
+}
+
+/// What the person sees in place of the next round of a repeated call.
+pub fn repeated_call_note(call: &RepeatedCall) -> String {
+    format!(
+        "wally stopped this turn: the model called `{}` {} times in a row with the same \
+arguments and got the same result each time. Tell it what to try next, and it will go on.",
+        call.name, call.times
+    )
+}
+
 fn call_ids_of(message: &Value) -> Vec<&str> {
     message
         .get("tool_calls")
@@ -441,7 +533,7 @@ pub fn request_to_chat(request: &Value, model: &str) -> Result<ChatRequest, Stri
                 let arguments = if kind == "custom_tool_call" {
                     json!({"input": text_of(item.get("input").unwrap_or(&Value::Null))}).to_string()
                 } else {
-                    text_of(item.get("arguments").unwrap_or(&Value::Null)).to_string()
+                    replayable_arguments(text_of(item.get("arguments").unwrap_or(&Value::Null)))
                 };
                 history.add_tool_call(json!({
                     "id": text_of(item.get("call_id").unwrap_or(&Value::Null)),

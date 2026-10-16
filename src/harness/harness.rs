@@ -1022,6 +1022,23 @@ pub fn build_batch_command_line(script: &str, args: &[String]) -> Result<String,
     Ok(format!("cmd.exe /d /s /c \"{inner}\""))
 }
 
+/// The script an npm command shim (`tool.cmd`, `shim_text` its contents) runs
+/// with node, relative to the shim's folder: npm writes
+/// `"%_prog%"  "%dp0%\node_modules\<pkg>\bin\<tool>.js" %*`. None for any
+/// other batch file. Kept free of Windows-only APIs so it can be tested on any
+/// platform.
+pub fn npm_shim_script(shim_text: &str) -> Option<String> {
+    let line = shim_text
+        .lines()
+        .rev()
+        .find(|line| line.contains("\"%_prog%\""))?;
+    let after = line.split_once("\"%_prog%\"")?.1;
+    let script = after.trim_start().strip_prefix("\"%dp0%\\")?;
+    let (script, rest) = script.split_once('"')?;
+    (rest.trim() == "%*" && !script.is_empty() && !script.contains(['%', '"']))
+        .then(|| script.to_string())
+}
+
 /// Prints the one shared "cloud session is no longer valid" error, in red,
 /// that every harness shows when a hosted `model` cannot be used because the
 /// session failed verification. One phrasing, one place, so it reads the
@@ -1185,8 +1202,6 @@ fn spawn_command_line(tool: &str, command_line: &str) -> i32 {
 /// shim goes through the same batch-file quoting as every other tool.
 #[cfg(windows)]
 pub(crate) fn spawn(tool: &str, args: &[String]) -> i32 {
-    use std::os::windows::process::CommandExt;
-
     // Checked before the spawn, not after: a failed launch on Windows still
     // reports something useful, but this keeps the message identical to the
     // POSIX path's preflight.
@@ -1203,6 +1218,15 @@ pub(crate) fn spawn(tool: &str, args: &[String]) -> i32 {
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_default();
         if extension == "cmd" || extension == "bat" {
+            // An npm shim only runs node on a script. Running that directly
+            // keeps the arguments data, so a prompt may hold the quotes,
+            // percent signs and line breaks cmd.exe cannot be handed.
+            if let Some((node, script)) = npm_shim_target(&resolved) {
+                let mut forwarded = Vec::with_capacity(args.len() + 1);
+                forwarded.push(script.to_string_lossy().into_owned());
+                forwarded.extend(args.iter().cloned());
+                return spawn_direct(tool, &node.to_string_lossy(), &forwarded);
+            }
             return match build_batch_command_line(&resolved.to_string_lossy(), args) {
                 Ok(command_line) => spawn_command_line(tool, &command_line),
                 Err(error) => {
@@ -1213,13 +1237,41 @@ pub(crate) fn spawn(tool: &str, args: &[String]) -> i32 {
         }
     }
 
+    spawn_direct(tool, tool, args)
+}
+
+/// The node and the script an npm shim at `shim` runs: the node beside the
+/// shim when npm put one there, as the shim itself prefers, else the one on
+/// PATH. None when the shim is not npm's or either is missing.
+#[cfg(windows)]
+fn npm_shim_target(shim: &Path) -> Option<(PathBuf, PathBuf)> {
+    let script = npm_shim_script(&std::fs::read_to_string(shim).ok()?)?;
+    let dir = shim.parent()?;
+    let script = dir.join(script);
+    if !script.is_file() {
+        return None;
+    }
+    let beside = dir.join("node.exe");
+    let node = if beside.is_file() {
+        beside
+    } else {
+        resolve_on_path("node")?
+    };
+    Some((node, script))
+}
+
+/// Runs `program` (an executable, not a batch file) with `args` and waits.
+#[cfg(windows)]
+fn spawn_direct(tool: &str, program: &str, args: &[String]) -> i32 {
+    use std::os::windows::process::CommandExt;
+
     // A plain argv spawn joins arguments with bare spaces, so each piece is
     // quoted the same way the MSVCRT parser expects, or a prompt such as
     // "fix the tests" would reach the tool as three separate arguments.
     // `raw_arg` passes the already-quoted text through untouched, bypassing
     // Command's own (different) quoting, which would otherwise quote it a
     // second time.
-    let mut command = std::process::Command::new(tool);
+    let mut command = std::process::Command::new(program);
     for arg in args {
         command.raw_arg(quote_windows_arg(arg));
     }
@@ -1391,6 +1443,26 @@ mod tests {
     fn hint_shows_the_command_the_prompt_would_run() {
         let installer = installer("claude").unwrap();
         assert!(install_hint("claude").contains(&format!("`{}`", installer.command)));
+    }
+
+    /// The shim npm 10 writes for `@openai/codex` on Windows, as installed.
+    const CODEX_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n";
+
+    #[test]
+    fn an_npm_shim_names_the_script_node_runs() {
+        assert_eq!(
+            npm_shim_script(CODEX_SHIM).as_deref(),
+            Some("node_modules\\@openai\\codex\\bin\\codex.js")
+        );
+    }
+
+    #[test]
+    fn any_other_batch_file_is_not_an_npm_shim() {
+        assert_eq!(npm_shim_script("@echo off\r\ncode.exe %*\r\n"), None);
+        assert_eq!(
+            npm_shim_script("\"%_prog%\" \"%dp0%\\x.js\" %* & del x\r\n"),
+            None
+        );
     }
 
     #[test]

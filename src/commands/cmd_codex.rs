@@ -67,6 +67,78 @@ fn codex_home(state_dir: &str) -> Option<PathBuf> {
     Some(home)
 }
 
+/// The Codex home the person's own Codex uses: `CODEX_HOME` when they set
+/// one, else `~/.codex`. Read before wally sets `CODEX_HOME` for its child.
+fn user_codex_home() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty()) {
+        return Some(PathBuf::from(home));
+    }
+    let profile = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(profile)
+        .filter(|h| !h.is_empty())
+        .map(|h| Path::new(&h).join(".codex"))
+}
+
+/// The person's machine-level Codex settings (`harness::codex::carried_settings`)
+/// as `-c` overrides; none when they have no config.
+fn carried_overrides(user_home: Option<&Path>) -> Vec<String> {
+    let Some(text) =
+        user_home.and_then(|home| std::fs::read_to_string(home.join("config.toml")).ok())
+    else {
+        return Vec::new();
+    };
+    codex_config::carried_settings(&text)
+        .into_iter()
+        .flat_map(|setting| ["-c".to_string(), setting])
+        .collect()
+}
+
+/// The Windows sandbox's one-time setup, which Codex keeps in its home: the
+/// setup marker and the sandbox accounts' passwords. The accounts themselves
+/// are machine-wide, so a second setup from wally's home would give them new
+/// passwords and leave the person's own Codex holding stale ones. wally's home
+/// links to the person's setup instead of keeping its own.
+#[cfg(windows)]
+const SANDBOX_SETUP_DIRS: &[&str] = &[".sandbox", ".sandbox-secrets"];
+
+/// Points wally's home at the person's Windows sandbox setup once they have
+/// completed one (its account passwords are on disk). Until then wally's home
+/// keeps its own, and a link left from an earlier launch is taken away. What
+/// wally's home held there before is its own and is replaced.
+#[cfg(windows)]
+fn share_sandbox_setup(wally_home: &Path, user_home: &Path) {
+    let set_up = user_home
+        .join(".sandbox-secrets")
+        .join("sandbox_users.json")
+        .is_file();
+    for dir in SANDBOX_SETUP_DIRS {
+        let ours = wally_home.join(dir);
+        let linked =
+            std::fs::symlink_metadata(&ours).is_ok_and(|meta| meta.file_type().is_symlink());
+        if !set_up {
+            if linked {
+                let _ = std::fs::remove_dir(&ours);
+            }
+            continue;
+        }
+        let theirs = user_home.join(dir);
+        if crate::util::junction::points_to(&ours, &theirs) {
+            continue;
+        }
+        let removed = match std::fs::symlink_metadata(&ours) {
+            Err(_) => Ok(()),
+            Ok(_) if linked => std::fs::remove_dir(&ours),
+            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&ours),
+            Ok(_) => std::fs::remove_file(&ours),
+        };
+        if let Err(error) = removed.and_then(|()| crate::util::junction::create(&ours, &theirs)) {
+            out::status_line(&format!(
+                "could not share your Codex sandbox setup ({dir}: {error}); Codex may ask to set it up again"
+            ));
+        }
+    }
+}
+
 /// Holds the translator open and prints what to point at it, for a client
 /// that speaks the Responses API but is not Codex.
 fn serve(model: &str, options: &GlobalOptions) -> i32 {
@@ -134,10 +206,19 @@ fn run(
         catalog[0].context_window = context;
     }
     let catalog_file = write_model_catalog(&catalog);
-    let overrides =
-        codex_config::codex_overrides(&shim.base_url, catalog_file.0.as_deref(), context);
+    let user_home = user_codex_home();
+    let mut overrides = carried_overrides(user_home.as_deref());
+    overrides.extend(codex_config::codex_overrides(
+        &shim.base_url,
+        catalog_file.0.as_deref(),
+        context,
+    ));
     // The loopback token, never the upstream key, and only for this child.
     let codex_home = codex_home(&cli_paths::state_dir());
+    #[cfg(windows)]
+    if let (Some(ours), Some(theirs)) = (&codex_home, &user_home) {
+        share_sandbox_setup(ours, theirs);
+    }
     let status = {
         let _key = ScopedEnv::new(codex_config::CODEX_KEY_VARIABLE, &shim.auth_token);
         let _home = codex_home
@@ -237,6 +318,46 @@ mod tests {
         assert!(home.starts_with(state.path()));
         assert!(home.is_dir());
         assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_completed_sandbox_setup_is_shared_and_an_unfinished_one_is_not() {
+        let state = tempfile::tempdir().unwrap();
+        let ours = codex_home(&state.path().to_string_lossy()).unwrap();
+        let theirs = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(theirs.path().join(".sandbox")).unwrap();
+        std::fs::create_dir_all(ours.join(".sandbox-secrets")).unwrap();
+        std::fs::write(ours.join(".sandbox-secrets").join("stale.json"), "{}").unwrap();
+
+        // Not set up yet: wally's home keeps its own.
+        share_sandbox_setup(&ours, theirs.path());
+        assert!(!crate::util::junction::points_to(
+            &ours.join(".sandbox"),
+            &theirs.path().join(".sandbox")
+        ));
+
+        let secrets = theirs.path().join(".sandbox-secrets");
+        std::fs::create_dir_all(&secrets).unwrap();
+        std::fs::write(secrets.join("sandbox_users.json"), "{\"version\":5}").unwrap();
+        share_sandbox_setup(&ours, theirs.path());
+        for dir in SANDBOX_SETUP_DIRS {
+            assert!(
+                crate::util::junction::points_to(&ours.join(dir), &theirs.path().join(dir)),
+                "{dir}"
+            );
+        }
+        assert!(ours
+            .join(".sandbox-secrets")
+            .join("sandbox_users.json")
+            .is_file());
+        assert!(!secrets.join("stale.json").exists());
+
+        // Their setup gone: the links go, their folders stay.
+        std::fs::remove_file(secrets.join("sandbox_users.json")).unwrap();
+        share_sandbox_setup(&ours, theirs.path());
+        assert!(!ours.join(".sandbox").exists());
+        assert!(theirs.path().join(".sandbox").is_dir());
     }
 
     #[test]

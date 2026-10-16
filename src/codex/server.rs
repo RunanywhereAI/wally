@@ -17,11 +17,11 @@ use crate::net::decompress::Decoder;
 use crate::net::http1::{ResponseWriter, Server, ServerHandle, ServerRequest};
 use crate::net::loopback_auth::generate_loopback_token;
 use crate::net::relay::{
-    self, log_upstream_error, presents_token, split_base_url, PreStreamFailure, StreamEnd,
-    StreamSink, Upstream,
+    self, log_upstream_error, presents_token, shim_log, split_base_url, PreStreamFailure,
+    StreamEnd, StreamSink, Upstream,
 };
 use crate::net::upstream_pool::{UpstreamOptions, UpstreamPool};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -233,6 +233,27 @@ fn handle_responses_route(
         Ok(chat) => chat,
         Err(message) => return send_error(writer, 400, "invalid_request_error", &message),
     };
+    let number = runtime.responses.fetch_add(1, Ordering::Relaxed);
+    let response_id = format!("resp_{}_{number}", std::process::id());
+    if let Some(repeated) = translate::repeated_call(&parsed) {
+        shim_log(&format!(
+            "stopped a turn: {} called {} times in a row with the same result",
+            repeated.name, repeated.times
+        ));
+        let mut state = StreamState::new(&response_id, &effective, translate::now_unix(), &chat);
+        let note = translate::repeated_call_note(&repeated);
+        let events = state.on_chunk(&json!({"choices": [{"delta": {"content": note}}]}))
+            + &state.on_chunk(&json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}))
+            + &state.on_done();
+        if writer
+            .begin_chunked(200, &[("Content-Type", "text/event-stream")])
+            .is_ok()
+        {
+            let _ = writer.write_chunk(events.as_bytes());
+            let _ = writer.end_chunked();
+        }
+        return;
+    }
     // A local server, or a hosted model the catalog lists as text-only, gets
     // notes in place of images rather than a refusal for a picture pasted
     // earlier; any other model gets the newest images, for the gateway to judge.
@@ -255,8 +276,6 @@ fn handle_responses_route(
         ));
     }
 
-    let number = runtime.responses.fetch_add(1, Ordering::Relaxed);
-    let response_id = format!("resp_{}_{number}", std::process::id());
     let upstream_body = chat.body.to_string();
     let mut sink = CodexStream {
         model: &effective,

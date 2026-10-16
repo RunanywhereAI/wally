@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use wally::codex::translate::{request_to_chat, ChatRequest, StreamState};
+use wally::codex::translate::{
+    repeated_call, request_to_chat, ChatRequest, RepeatedCall, StreamState, REPEATED_CALL_LIMIT,
+};
 use wally::codex::{self as codex};
 use wally::harness::Endpoint;
 use wally::net::http1::{Client, Request, Server, ServerHandle};
@@ -139,6 +141,68 @@ fn function_calls_group_into_one_assistant_message_followed_by_their_results() {
         messages[3],
         json!({"role": "tool", "tool_call_id": "b", "content": "B"})
     );
+}
+
+/// A call whose arguments never parsed goes back upstream with none, or the
+/// gateway refuses every later request of the session.
+#[test]
+fn a_call_with_arguments_that_are_not_json_is_replayed_with_none() {
+    let messages = messages(json!({"input": [
+        {"type": "message", "role": "user", "content": "go"},
+        {"type": "function_call", "call_id": "a", "name": "exec_command", "arguments": "{\"cmd\":\"ls\",}"},
+        {"type": "function_call_output", "call_id": "a", "output": "failed to parse function arguments"},
+        {"type": "function_call", "call_id": "b", "name": "exec_command", "arguments": ""},
+        {"type": "function_call_output", "call_id": "b", "output": "failed to parse function arguments"},
+        {"type": "function_call", "call_id": "c", "name": "exec_command", "arguments": "{\"cmd\":\"ls\"}"},
+        {"type": "function_call_output", "call_id": "c", "output": "a.txt"},
+    ]}));
+    let arguments: Vec<&str> = messages
+        .iter()
+        .filter_map(|m| m["tool_calls"].as_array())
+        .flatten()
+        .map(|call| call["function"]["arguments"].as_str().unwrap())
+        .collect();
+    assert_eq!(arguments, ["{}", "{}", "{\"cmd\":\"ls\"}"]);
+}
+
+/// `times` rounds of one call, each answered with `output`, after a prompt.
+fn rounds(times: usize, output: impl Fn(usize) -> String) -> Vec<Value> {
+    let mut items = vec![json!({"type": "message", "role": "user", "content": "fix it"})];
+    for round in 0..times {
+        let id = format!("call_{round}");
+        items.push(json!({"type": "function_call", "call_id": id, "name": "exec_command", "arguments": "{\"cmd\":\"cat a\"}"}));
+        items.push(json!({"type": "function_call_output", "call_id": id, "output": output(round)}));
+    }
+    items
+}
+
+#[test]
+fn the_same_call_with_the_same_result_too_many_times_is_a_loop() {
+    let looping = json!({"input": rounds(REPEATED_CALL_LIMIT, |_| "A".to_string())});
+    assert_eq!(
+        repeated_call(&looping),
+        Some(RepeatedCall {
+            name: "exec_command".to_string(),
+            times: REPEATED_CALL_LIMIT
+        })
+    );
+    let short = json!({"input": rounds(REPEATED_CALL_LIMIT - 1, |_| "A".to_string())});
+    assert_eq!(repeated_call(&short), None);
+}
+
+#[test]
+fn polling_a_command_whose_output_changes_is_not_a_loop() {
+    let polling =
+        json!({"input": rounds(REPEATED_CALL_LIMIT * 2, |round| format!("{round}% done"))});
+    assert_eq!(repeated_call(&polling), None);
+}
+
+#[test]
+fn the_person_writing_starts_the_count_over() {
+    let mut items = rounds(REPEATED_CALL_LIMIT, |_| "A".to_string());
+    items.push(json!({"type": "message", "role": "user", "content": "try again"}));
+    items.extend(rounds(2, |_| "A".to_string()).into_iter().skip(1));
+    assert_eq!(repeated_call(&json!({"input": items})), None);
 }
 
 #[test]
@@ -783,6 +847,30 @@ fn a_streamed_turn_goes_through_end_to_end() {
         Some("Bearer test-upstream-key")
     );
     assert!(header("User-Agent").unwrap().ends_with("(codex)"));
+}
+
+#[test]
+fn a_looping_turn_is_stopped_without_going_upstream() {
+    let _guard = shim_lock::shim_lock();
+    let upstream = ScriptedUpstream::new(Reply::Stream(vec![]));
+    let mut shim = codex::start(&upstream.endpoint(), "glm-5.3-flash", false, &[]).unwrap();
+    let request = json!({
+        "model": "glm-5.3-flash",
+        "stream": true,
+        "input": rounds(REPEATED_CALL_LIMIT, |_| "A".to_string()),
+    });
+    let (status, body, _) = post(&shim, Some(&shim.auth_token.clone()), &request);
+    codex::stop(&mut shim);
+    assert_eq!(status, 200, "{body}");
+    let list = events(&body);
+    assert_eq!(list.last().unwrap().0, "response.completed");
+    let text = list.last().unwrap().1["response"]["output"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(text.starts_with("wally stopped this turn"), "{text}");
+    assert!(text.contains("`exec_command`"), "{text}");
+    assert!(upstream.seen.lock().unwrap().is_empty());
 }
 
 #[test]
