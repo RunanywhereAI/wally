@@ -2602,6 +2602,89 @@ const CLEF_27B_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
     checksum_sha256: None,
 }];
 
+/// `perplexity-ai/pplx-decider-flash-v1.2` (BF16, Apache-2.0) mirrored at commit 6d771ad7b5ec into
+/// runanywhere/decision-models-stable-fork, pinned to the upload commit.
+/// Loads as is: no conversion, the readout and both protocol configs ride beside the shards.
+const PPLX_DECIDER_4B_MLX_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/chat_template.jinja",
+        filename: "chat_template.jinja",
+        required: true,
+        size_bytes: 7756,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 2898,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/decision_config.json",
+        filename: "decision_config.json",
+        required: true,
+        size_bytes: 5435,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/joint_config.json",
+        filename: "joint_config.json",
+        required: true,
+        size_bytes: 248,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/model-00001-of-00002.safetensors",
+        filename: "model-00001-of-00002.safetensors",
+        required: true,
+        size_bytes: 4972946624,
+        checksum_sha256: Some("1c1a0c1ab331c7aec1b4b7932eabf80593b56c694fe2b779209c0e0413df1cef"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/model-00002-of-00002.safetensors",
+        filename: "model-00002-of-00002.safetensors",
+        required: true,
+        size_bytes: 4105669472,
+        checksum_sha256: Some("21ba8301660e066f5849b60b1a36a242fc54ca18dd9bd526fdcbc50889171b70"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/model.safetensors.index.json",
+        filename: "model.safetensors.index.json",
+        required: true,
+        size_bytes: 61898,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/processor_config.json",
+        filename: "processor_config.json",
+        required: true,
+        size_bytes: 1219,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/readout.safetensors",
+        filename: "readout.safetensors",
+        required: true,
+        size_bytes: 1305712,
+        checksum_sha256: Some("6751578171026190d4db8078e97162b404fd984646e0e9aec13844e4dd5b1711"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 19989492,
+        checksum_sha256: Some("6f32ce20dc35f57a7f9ad1eac03525bd7d30f9df8cea6507e958279cc3657706"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/bee2a09a0f7708ac40342b74a221a40e06fd870a/mlx/pplx-decider-4b/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 1268,
+        checksum_sha256: None,
+    },
+];
+
 const PPLX_DECIDER_MLX_4BIT_FILES: &[CatalogFile] = &[
     CatalogFile {
         url: "https://huggingface.co/mlx-community/pplx-decider-v1.1-27b-4bit/resolve/main/chat_template.jinja",
@@ -4901,6 +4984,23 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("pplx-decider-27b"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "mlx-pplx-decider-4b",
+        alias: Some("pplx-decider-4b"),
+        name: "Pplx Decider 4B v1.2 (decision, text + images)",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: PPLX_DECIDER_4B_MLX_FILES,
+        download_size_bytes: 9099992022,
+        context_length: 262144,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("pplx-decider-4b"),
         harness_compatible: false,
     },
     CatalogEntry {

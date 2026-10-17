@@ -32,6 +32,7 @@ nemotron-nano             llm         mlx              4.2 GB      no
 mlx-llama3.2              llm         mlx              679.6 MB    no            
 nemotron-mini             llm         mlx              2.2 GB      no            
 pplx-decider-27b          decision    mlx              14.3 GB     no            
+pplx-decider-4b           decision    mlx              8.5 GB      no            
 qwen3-0.6b                llm         mlx/llama.cpp    639.0 MB    no            
 qwen3-4b-instruct-2507    llm         mlx/llama.cpp    4.0 GB      no            [harness-compatible]
 qwen3.8-27b               llm         mlx/llama.cpp    15.9 GB     no            
