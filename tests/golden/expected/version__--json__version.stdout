@@ -1,1 +1,1 @@
-{"wally":"<VERSION>","commons":"0.20.39","pinned_sdk":"0.20.39","idl_version":"1.5.0","idl_schema_sha256":"faca2c22e518f3d41e534399b854bbbc9617d4a76511592a6013a888fdd3cf3d","idl_protoc":"35.1","pin_ok":true}
+{"wally":"<VERSION>","commons":"0.20.40","pinned_sdk":"0.20.40","idl_version":"1.6.0","idl_schema_sha256":"859d5ea75645ca0268e1348a9968813937ea5be0e35340768b0c07786e0993b6","idl_protoc":"35.1","pin_ok":true}

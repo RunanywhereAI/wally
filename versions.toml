@@ -16,16 +16,16 @@ decisions_contract_sha256 = "6cd5afaa222e55337dcab1fa4b2bbee2763cea707e18d539a5c
 
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.
-kit_version = "0.20.39"
-kit_release_tag = "cpp-desktop-v0.20.39"
-idl_version = "1.5.0"
-idl_schema_sha256 = "faca2c22e518f3d41e534399b854bbbc9617d4a76511592a6013a888fdd3cf3d"
+kit_version = "0.20.40"
+kit_release_tag = "cpp-desktop-v0.20.40"
+idl_version = "1.6.0"
+idl_schema_sha256 = "859d5ea75645ca0268e1348a9968813937ea5be0e35340768b0c07786e0993b6"
 idl_protoc_version = "35.1"
-kit_sha256_macos_arm64 = "1262fa1a54be0945c862d66565afeadcee8d840dac3c65a0649838fba62ffda6"
-kit_sha256_windows_x64 = "917c0798706f237a0668f45b1a78915d3b44150b19659347a4641ea7830bf51a"
-kit_sha256_windows_arm64 = "10964d413eda749698e8a2d2afe9438182d2748b1b46a38c82b7f91ea1622653"
-kit_sha256_linux_x64 = "fa9080f282c3cc494ee5a9d1fdfa0e8fc01a621292b44b6ccd9d3140c7853eed"
-kit_sha256_linux_arm64 = "7492758d20e584f56b99be9d262959c4c512011ae13337a34b49bf44498ec5e6"
+kit_sha256_macos_arm64 = "e5a3f10d2ab6023e3d7c599c2a4ca2d05a083d294ac11f866910de0d581bb2f7"
+kit_sha256_windows_x64 = "05720991852c948ce8c45462e025ab410d05fdce852ce1e5410e5c1b70cc0312"
+kit_sha256_windows_arm64 = "ee9c1461701fe27ae409b5f91075e48343a0cc26ed02321b963a4da999e5680a"
+kit_sha256_linux_x64 = "a68b5943315780b4ce845d13966ef592f76595bf2fe9d21cc76e89385df7f35b"
+kit_sha256_linux_arm64 = "22784d3e99752346e00917a92515ab5348d43093c9bbfe5e71954d7fb9a8d70b"
 
 [swift]
 # The Apple MLX host's Swift SDK: sdk_package_version pins swift/Package.swift,
@@ -33,13 +33,14 @@ kit_sha256_linux_arm64 = "7492758d20e584f56b99be9d262959c4c512011ae13337a34b49bf
 # used by ci.yml/release.yml. Both move on their own cadence, distinct from the
 # C++ kit above.
 #
-# sdk_ci_ref is the v0.20.38 commit itself, not the tag name: release tags on
+# sdk_ci_ref is the commit cpp-desktop-v0.20.40 was built from, not a tag
+# name: release tags on
 # that repo are not protected or immutable, and this checkout supplies the
 # Swift code compiled into the Apple bottle, so a retargeted tag would change
 # what ships. The SHA is what the tag resolved to when this pin was made.
 sdk_package_version = "0.20.37"
 tools_version = "6.0"
-sdk_ci_ref = "e595580a72452595a4a5b8abc137cad10132ba75"
+sdk_ci_ref = "c0cc8ebd416b8d4b675f2b6457fe3d4232cc093e"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
