@@ -33,14 +33,14 @@ kit_sha256_linux_arm64 = "22784d3e99752346e00917a92515ab5348d43093c9bbfe5e71954d
 # used by ci.yml/release.yml. Both move on their own cadence, distinct from the
 # C++ kit above.
 #
-# sdk_ci_ref is the commit cpp-desktop-v0.20.40 was built from, not a tag
-# name: release tags on
+# sdk_ci_ref is the cpp-desktop-v0.20.40 source commit plus its Apple binary
+# checksums (siddhesh/kit-0.20.40-swift), not a tag name: release tags on
 # that repo are not protected or immutable, and this checkout supplies the
 # Swift code compiled into the Apple bottle, so a retargeted tag would change
 # what ships. The SHA is what the tag resolved to when this pin was made.
 sdk_package_version = "0.20.37"
 tools_version = "6.0"
-sdk_ci_ref = "c0cc8ebd416b8d4b675f2b6457fe3d4232cc093e"
+sdk_ci_ref = "8e3d147f4dea7609d48ff5bb7c75edb234051853"
 
 [toolchain]
 # CMake's own floor; CMakeLists.txt declares these and check-versions holds it here.
