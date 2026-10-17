@@ -113,6 +113,22 @@ fn registry_unregister_warning(
     }
 }
 
+/// The registry ids `models list` may print as `name`: the id itself, or the
+/// id with the `mlx-` prefix the list drops. The registry decides; the
+/// catalog is not consulted, since the model is one it no longer names.
+fn listed_name_candidates(name: &str) -> [String; 2] {
+    [name.to_string(), format!("mlx-{name}")]
+}
+
+fn registered_by_listed_name(name: &str) -> Option<String> {
+    if refresh_registry().is_err() {
+        return None;
+    }
+    listed_name_candidates(name)
+        .into_iter()
+        .find(|id| crate::commands::model_setup::registry_info(id).is_some())
+}
+
 fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
     let Ok(env) = bootstrap(options) else {
         return 1;
@@ -120,10 +136,19 @@ fn run_rm(options: &GlobalOptions, reference: &str, force: bool) -> i32 {
 
     let resolved = match model_ref::resolve(reference, None) {
         Ok(resolved) => resolved,
-        Err((_, error)) => {
-            out::error_line(&error);
-            return 1;
-        }
+        // A model downloaded under a catalog id that a later release renamed
+        // or dropped still shows in `models list`; it must stay removable by
+        // the name the list prints.
+        Err((_, error)) => match registered_by_listed_name(reference) {
+            Some(model_id) => model_ref::Resolved {
+                model_id,
+                from_catalog: false,
+            },
+            None => {
+                out::error_line(&error);
+                return 1;
+            }
+        },
     };
 
     // C++ reuses a single `std::string error` across resolve/refresh/get/
@@ -289,6 +314,14 @@ pub fn configure_models_delete(cmd: &mut App) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_listed_name_maps_to_itself_and_its_mlx_build() {
+        assert_eq!(
+            super::listed_name_candidates("pplx-decider-flash-v1.2"),
+            ["pplx-decider-flash-v1.2", "mlx-pplx-decider-flash-v1.2"]
+        );
+    }
+
     use super::*;
 
     // local_path pointing straight at a shared framework directory (its

@@ -88,7 +88,7 @@ pub fn refresh_registry() -> Result<(), String> {
 }
 
 /// The registry's record of `model_id`, if it has one.
-fn registry_info(model_id: &str) -> Option<v1::ModelInfo> {
+pub(crate) fn registry_info(model_id: &str) -> Option<v1::ModelInfo> {
     let model_id_c = CString::new(model_id).ok()?;
     let mut info_out = ProtoBuffer::new();
     // SAFETY: model_id_c is a valid, NUL-terminated C string kept alive for
