@@ -376,6 +376,12 @@ mod windows {
         package: String,
     }
 
+    impl Installed {
+        pub(super) fn package_family(&self) -> String {
+            super::package_family(&self.package)
+        }
+    }
+
     /// The installed app, or None.
     pub(super) fn app_path() -> Option<Installed> {
         let names = package_names();
@@ -703,7 +709,10 @@ fn run(model: &str, context_override: Option<i64>, options: &GlobalOptions) -> i
     };
     if model.is_empty() {
         // No model named means no wiring: the app opens as the reader has it.
-        return match std::process::Command::new(&app.program).spawn() {
+        return match std::process::Command::new("explorer.exe")
+            .arg(format!(r"shell:AppsFolder\{}!App", app.package_family()))
+            .spawn()
+        {
             Ok(_) => 0,
             Err(error) => {
                 out::error_line(&format!("could not start chatgpt ({error})"));
