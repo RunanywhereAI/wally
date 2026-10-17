@@ -481,7 +481,10 @@ fn tools_to_openai(tools: &Value) -> Value {
             }
             let mut function = serde_json::Map::new();
             function.insert("name".into(), json!(field(tool, "name")));
-            function.insert("parameters".into(), tool["input_schema"].clone());
+            function.insert(
+                "parameters".into(),
+                crate::util::tool_schema::without_null_fields(&tool["input_schema"]),
+            );
             if let Some(desc) = tool.get("description").filter(|d| d.is_string()) {
                 function.insert("description".into(), desc.clone());
             }

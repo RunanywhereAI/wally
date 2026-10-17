@@ -100,7 +100,10 @@ fn function_tool(name: &str, description: Option<&Value>, parameters: Value) -> 
     if let Some(description) = description.filter(|d| d.is_string()) {
         function.insert("description".into(), description.clone());
     }
-    function.insert("parameters".into(), parameters);
+    function.insert(
+        "parameters".into(),
+        crate::util::tool_schema::without_null_fields(&parameters),
+    );
     json!({"type": "function", "function": Value::Object(function)})
 }
 

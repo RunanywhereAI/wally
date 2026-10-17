@@ -4,6 +4,7 @@ pub mod hush;
 pub mod interrupt;
 pub mod junction;
 pub mod term;
+pub mod tool_schema;
 
 /// Read an environment variable as UTF-8. Returns `None` when unset or empty —
 /// the C++ code treated an empty value as unset throughout.
