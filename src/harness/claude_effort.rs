@@ -51,6 +51,25 @@ pub fn max_effort(model: &CatalogModel) -> Option<&'static str> {
     })
 }
 
+/// The effort Claude Code starts `model` at (`--effort`): the model list's
+/// default level, as the nearest level `model`'s menu has. Without it Claude
+/// Code starts at the default of the Claude model it takes the entry to be,
+/// not the model's own. None for a model with no menu or no default.
+pub fn default_effort(model: &CatalogModel) -> Option<&'static str> {
+    let menu = effort_menu(model)?;
+    let level = model.reasoning.as_ref()?.default_level?;
+    Some(match (level, menu) {
+        (_, EffortMenu::None) => return None,
+        ("minimal" | "low", _) => "low",
+        ("medium", _) => "medium",
+        ("high", _) => "high",
+        ("xhigh", EffortMenu::Full) => "xhigh",
+        ("xhigh", EffortMenu::WithoutXhigh) => "high",
+        ("max", _) => "max",
+        _ => return None,
+    })
+}
+
 /// The Claude model Claude Code takes `model` to be (`modelPicker`'s
 /// `behavesAs`), for its effort menu. None for a model that keeps its own id.
 pub fn behaves_as(model: &CatalogModel) -> Option<&'static str> {
@@ -126,6 +145,33 @@ mod tests {
             model("mimo-v2.6-pro", &[]),
             model("muse-spark", &["minimal", "low", "medium", "high", "xhigh"]),
         ]
+    }
+
+    fn with_default(mut model: CatalogModel, default_level: &'static str) -> CatalogModel {
+        if let Some(reasoning) = model.reasoning.as_mut() {
+            reasoning.default_level = Some(default_level);
+        }
+        model
+    }
+
+    #[test]
+    fn claude_code_starts_each_model_at_the_lists_default() {
+        let models = today();
+        let defaults: Vec<_> = [
+            with_default(models[0].clone(), "max"),
+            with_default(models[1].clone(), "high"),
+            models[2].clone(),
+            with_default(models[3].clone(), "medium"),
+        ]
+        .iter()
+        .map(default_effort)
+        .collect();
+        assert_eq!(defaults, [Some("max"), Some("high"), None, Some("medium")]);
+        // A level the model's Claude menu lacks takes the nearest it has.
+        let glm_xhigh = with_default(models[0].clone(), "xhigh");
+        assert_eq!(default_effort(&glm_xhigh), Some("high"));
+        // No model list entry, no default.
+        assert_eq!(default_effort(&CatalogModel::default()), None);
     }
 
     #[test]

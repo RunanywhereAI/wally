@@ -304,6 +304,7 @@ pub fn build_open_code_config(
             entry["attachment"] = json!(true);
             entry["modalities"] = json!({ "input": ["text", "image"], "output": ["text"] });
         }
+        open_code_reasoning(&mut entry, model);
         // The real price, so opencode shows spend instead of $0.00.
         // opencode's cost is USD per million tokens; the catalog is
         // micro-dollars per million, so a million micros is one dollar.
@@ -344,6 +345,38 @@ pub fn build_open_code_config(
         "model": format!("runanywhere/{primary}"),
     });
     dump(&config)
+}
+
+/// OpenCode's reasoning controls for `model`, from the model list: one
+/// variant per level, each sending itself as `reasoning_effort` (the
+/// `@ai-sdk/openai-compatible` provider option `reasoningEffort`), plus
+/// `none` where the model can turn thinking off, and the model's default
+/// level as its model-level option, which a chosen variant overrides.
+/// Measured against OpenCode 2.0.28 with a capture server: `-m
+/// runanywhere/<id>#high` sends `reasoning_effort: "high"`, no variant sends
+/// the default, and `#none` sends `"none"`. Without variants OpenCode offers
+/// no effort choice for a custom provider's model at all, and the config's
+/// `model` key ignores a `#variant`, so the default lives in `options`.
+/// Nothing for a model the list does not describe.
+fn open_code_reasoning(entry: &mut serde_json::Value, model: &CatalogModel) {
+    let Some(reasoning) = model.reasoning.as_ref() else {
+        return;
+    };
+    let mut variants = serde_json::Map::new();
+    for level in &reasoning.levels {
+        variants.insert((*level).to_string(), json!({ "reasoningEffort": level }));
+    }
+    if reasoning.thinking_off {
+        variants.insert("none".to_string(), json!({ "reasoningEffort": "none" }));
+    }
+    if variants.is_empty() {
+        return;
+    }
+    entry["reasoning"] = json!(true);
+    entry["variants"] = serde_json::Value::Object(variants);
+    if let Some(default_level) = reasoning.default_level {
+        entry["options"] = json!({ "reasoningEffort": default_level });
+    }
 }
 
 /// Compatibility name for callers configuring a hosted catalog.
@@ -478,6 +511,87 @@ mod tests {
 
     use super::*;
     use crate::util::env_lock::lock as env_lock;
+
+    fn described(
+        id: &str,
+        levels: &[&'static str],
+        default_level: Option<&'static str>,
+        thinking_off: bool,
+    ) -> CatalogModel {
+        CatalogModel {
+            id: id.to_string(),
+            reasoning: Some(crate::account::ReasoningSupport {
+                levels: levels.to_vec(),
+                default_level,
+                thinking_off,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn each_model_gets_its_own_levels_as_variants_and_its_default_as_an_option() {
+        let models = [
+            described(
+                "deepseek-v4.1-flash",
+                &["low", "high", "xhigh", "max"],
+                Some("high"),
+                true,
+            ),
+            described(
+                "muse-spark",
+                &["minimal", "low", "medium", "high", "xhigh"],
+                Some("medium"),
+                false,
+            ),
+            described("mimo-v2.6-pro", &[], None, true),
+            CatalogModel {
+                id: "local-model".to_string(),
+                ..Default::default()
+            },
+        ];
+        let doc: serde_json::Value = serde_json::from_str(&build_open_code_config(
+            "deepseek-v4.1-flash",
+            "https://example.test/v1",
+            "k",
+            &models,
+        ))
+        .unwrap();
+        let entries = &doc["provider"]["runanywhere"]["models"];
+        let deepseek = &entries["deepseek-v4.1-flash"];
+        assert_eq!(deepseek["reasoning"], json!(true));
+        assert_eq!(
+            deepseek["variants"],
+            json!({
+                "low": {"reasoningEffort": "low"},
+                "high": {"reasoningEffort": "high"},
+                "xhigh": {"reasoningEffort": "xhigh"},
+                "max": {"reasoningEffort": "max"},
+                "none": {"reasoningEffort": "none"},
+            })
+        );
+        assert_eq!(deepseek["options"], json!({"reasoningEffort": "high"}));
+        // Thinking cannot be turned off on muse-spark: no `none`.
+        let muse = &entries["muse-spark"];
+        assert!(muse["variants"].get("none").is_none());
+        assert_eq!(
+            muse["variants"]["minimal"],
+            json!({"reasoningEffort": "minimal"})
+        );
+        assert_eq!(muse["options"], json!({"reasoningEffort": "medium"}));
+        // On or off only: thinking off is the one choice, and no default is sent.
+        let mimo = &entries["mimo-v2.6-pro"];
+        assert_eq!(
+            mimo["variants"],
+            json!({"none": {"reasoningEffort": "none"}})
+        );
+        assert!(mimo.get("options").is_none());
+        // A model the list does not describe is left as it was.
+        let local = &entries["local-model"];
+        assert!(local.get("variants").is_none());
+        assert!(local.get("reasoning").is_none());
+        assert!(local.get("options").is_none());
+    }
 
     #[test]
     fn scoped_config_restores_non_utf8_previous_value_on_drop() {

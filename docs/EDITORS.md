@@ -49,9 +49,33 @@ they talk to the endpoint directly.
 
 The effort you pick in the tool reaches the model as `reasoning_effort`: Claude
 Code's and Claude Desktop's effort setting, Claude Code's thinking switch
-(off is `none`), and Codex's reasoning level, whose picker lists `none` to
-`max`. GLM grades its reasoning by it, DeepSeek reasons less with any level
-set, and MiMo only honours `none`.
+(off is `none`), Codex's reasoning level, whose picker lists `none` to
+`max`, OpenCode's variants (`ctrl+t`, or `-m runanywhere/<model>#<level>`), and
+DeepSeek Harness's Effort control. Which levels a model offers, and which one
+it runs at when you pick none, come from the console's `/v1/models` `reasoning`
+block, never from a list in wally: GLM 5.3 Flash low / high / max, DeepSeek
+V4.1 Flash low / high / xhigh / max, Muse Spark minimal to xhigh, and MiMo only
+on or off. OpenCode gets every level as a variant, a `none` variant where the
+model can stop thinking, and the model's default as its starting level.
+DeepSeek Harness shows the levels with "Provider default" first: its pi-ai
+adapter takes one default for every model on a route and refuses a request
+whose model lacks it, so wally leaves the default to the endpoint, which runs
+the model's own. It offers no Off, because pi-ai sends the same value for Off
+and for no choice at all. OpenClaw's `/think` (and `--thinking`) offers the
+model's levels, `off` sends `none` where the model can stop thinking, and the
+model's default is set for it unless your own config sets one
+(`agents.defaults.models["runanywhere/<model>"].params.thinking`). Claude Code
+starts each model at its default level (`--effort`, unless you pass your own),
+and `/effort` changes it; Codex and the ChatGPT app list each model's levels
+and start at its default.
+
+Three tools keep their own default. Hermes takes any level with `--reasoning`
+(`wally hermes -m <model> -- --reasoning high`) or `/reasoning`, and otherwise
+runs at `agent.reasoning_effort` in `~/.hermes/config.yaml` (per model under
+`agent.reasoning_overrides`), which wally does not write. Claude Desktop shows
+each model's levels up to its highest and starts at the app's own default.
+Prime Agent is given no reasoning levels yet: its models run at the
+endpoint's default, and a level has to be named in Prime Agent itself.
 
 Codex is told the model's context window through the catalog file, so its
 context meter and auto-compaction work against the real limit. Its hosted web
@@ -188,4 +212,84 @@ different hosts; see [AGENTS.md](../AGENTS.md).
 `wally auth login`, which signed a device in with an API key rather than a
 browser, is not registered in this release; the browser flow above is the only
 way in.
+
+### Reasoning effort without wally
+
+A tool pointed at `https://inference.runanywhere.ai/v1` with an API key, no
+wally in between, sets a model's reasoning with the request field
+`reasoning_effort`. `GET /v1/models` says what each model takes, in its
+`reasoning` block:
+
+```json
+"reasoning": {
+  "levels": ["low", "high", "xhigh", "max"],
+  "default_level": "high",
+  "thinking_off": true
+}
+```
+
+`levels` are the values `reasoning_effort` accepts, `default_level` is what a
+request that sends none runs at, and `thinking_off: true` means `none` turns
+thinking off (a model with `false` always thinks, and `none` is refused).
+
+OpenCode needs each level declared as a variant, or it offers no choice. In
+`opencode.json`:
+
+```json
+{
+  "provider": {
+    "runanywhere": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "RunAnywhere",
+      "options": {
+        "baseURL": "https://inference.runanywhere.ai/v1",
+        "apiKey": "{env:RUNANYWHERE_API_KEY}"
+      },
+      "models": {
+        "deepseek-v4.1-flash": {
+          "reasoning": true,
+          "options": { "reasoningEffort": "high" },
+          "variants": {
+            "low": { "reasoningEffort": "low" },
+            "high": { "reasoningEffort": "high" },
+            "xhigh": { "reasoningEffort": "xhigh" },
+            "max": { "reasoningEffort": "max" },
+            "none": { "reasoningEffort": "none" }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`options.reasoningEffort` is the starting level and a variant overrides it:
+cycle with `ctrl+t`, or name one with `opencode run -m
+runanywhere/deepseek-v4.1-flash#max`. Repeat the block for each model with that
+model's `levels`, and leave `none` out where `thinking_off` is false. (A
+`#variant` in the config's own `model` key is ignored, which is why the
+default goes in `options`.)
+
+DeepSeek Harness takes the levels as `reasoningEfforts` on each model of its
+`llm-pi-ai` provider; each key is a level it shows, and its value is what it
+sends:
+
+```yaml
+- name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      runanywhere:
+        api: openai-completions
+        baseURL: https://inference.runanywhere.ai/v1
+        apiKeyEnv: RUNANYWHERE_API_KEY
+        compat:
+          supportsDeveloperRole: false
+        models:
+          - id: deepseek-v4.1-flash
+            reasoningEfforts: { low: low, high: high, xhigh: xhigh, max: max }
+```
+
+Any other OpenAI-compatible client sends the field itself, for example
+`"reasoning_effort": "max"` beside `model` and `messages`, or
+`extra_body={"reasoning_effort": "max"}` in the OpenAI Python SDK.
 

@@ -1032,6 +1032,21 @@ fn run(
             launch_args.push("--model".to_string());
             launch_args.push(model.to_string());
         }
+        // The model's own default effort, as --model above: theirs wins, and
+        // /effort still changes it in the session.
+        if !args
+            .iter()
+            .any(|a| a == "--effort" || a.starts_with("--effort="))
+        {
+            if let Some(level) = catalog
+                .iter()
+                .find(|entry| entry.id == model)
+                .and_then(claude_effort::default_effort)
+            {
+                launch_args.push("--effort".to_string());
+                launch_args.push(level.to_string());
+            }
+        }
         launch_args.extend(settings_args(args, settings_file.0.as_deref()));
         launch_args.extend(args.iter().cloned());
         status = harness::launch(editor.command, "", &launch_args, options);
