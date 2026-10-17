@@ -420,7 +420,10 @@ def main():
             gif.write_bytes(b"GIF89a")
             for args, message in (
                 (["--image", str(gif)], "not a PNG, JPEG, WebP or HEIC"),
-                (["--image", str(png), "--local"], "cloud only"),
+                (["--grouping", "joint"], "only apply to a local model"),
+                (["--grouping", "sideways"], "--grouping must be 'joint' or 'per-question'"),
+                (["--max-pixels", "10", "--min-pixels", "20"], "must not exceed --max-pixels"),
+                (["--max-length", "0"], "--max-length must be greater than 0"),
                 (["--image", str(png)] * 9, "at most 8"),
             ):
                 refused = invoke(binary, env, "decisions", "--input", "x", "--ask", "Okay?", *args)

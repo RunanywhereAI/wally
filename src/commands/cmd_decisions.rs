@@ -80,6 +80,101 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// The bytes and MIME type of a contract image data URL. The inverse of
+/// `image_data_url`; anything else in the URL is refused rather than guessed.
+fn decode_image_data_url(url: &str) -> Result<(Vec<u8>, String), String> {
+    let (prefix, encoded) = IMAGE_URL_PREFIXES
+        .iter()
+        .find_map(|prefix| url.strip_prefix(prefix).map(|rest| (*prefix, rest)))
+        .ok_or_else(|| "images must be base64 PNG, JPEG or WebP data URLs".to_string())?;
+    let mime = prefix["data:".len()..prefix.len() - ";base64,".len()].to_string();
+    let value = |c: u8| -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some(u32::from(c - b'A')),
+            b'a'..=b'z' => Some(u32::from(c - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(c - b'0') + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let bytes = encoded.as_bytes();
+    if bytes.is_empty() || bytes.len() % 4 != 0 {
+        return Err("image data URL is not padded base64".to_string());
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for (index, chunk) in bytes.chunks(4).enumerate() {
+        let last = index + 1 == bytes.len() / 4;
+        let padding = chunk.iter().rev().take_while(|&&c| c == b'=').count();
+        if padding > 2 || (padding > 0 && !last) {
+            return Err("image data URL is not padded base64".to_string());
+        }
+        let mut n = 0u32;
+        for &c in &chunk[..4 - padding] {
+            n = (n << 6) | value(c).ok_or("image data URL is not base64")?;
+        }
+        n <<= 6 * padding as u32;
+        out.extend_from_slice(&n.to_be_bytes()[1..4 - padding]);
+    }
+    Ok((out, mime))
+}
+
+/// Settings only a local decision model takes. Each is a request: a model
+/// that cannot honour one refuses the whole call, naming it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalControls {
+    pub grouping: v1::DecisionGrouping,
+    /// 0 = the model's limit.
+    pub max_length: u32,
+    /// 0 = the model's own budget.
+    pub max_pixels: u32,
+    /// 0 = the model's own floor.
+    pub min_pixels: u32,
+}
+
+impl LocalControls {
+    const FLAGS: [&'static str; 4] = ["--grouping", "--max-length", "--max-pixels", "--min-pixels"];
+
+    fn from_flags(p: &crate::cli::Parsed) -> Result<Self, String> {
+        let grouping = match p.get_str("--grouping").as_deref() {
+            None => v1::DecisionGrouping::Unspecified,
+            Some("joint") => v1::DecisionGrouping::Joint,
+            Some("per-question") => v1::DecisionGrouping::PerQuestion,
+            Some(other) => {
+                return Err(format!(
+                    "--grouping must be 'joint' or 'per-question', not '{other}'"
+                ))
+            }
+        };
+        let positive = |name: &str| -> Result<u32, String> {
+            match p.get_u64(name) {
+                None => Ok(0),
+                Some(0) => Err(format!("{name} must be greater than 0")),
+                Some(value) => {
+                    u32::try_from(value).map_err(|_| format!("{name} must be at most {}", u32::MAX))
+                }
+            }
+        };
+        let controls = Self {
+            grouping,
+            max_length: positive("--max-length")?,
+            max_pixels: positive("--max-pixels")?,
+            min_pixels: positive("--min-pixels")?,
+        };
+        if controls.min_pixels != 0
+            && controls.max_pixels != 0
+            && controls.min_pixels > controls.max_pixels
+        {
+            return Err("--min-pixels must not exceed --max-pixels".to_string());
+        }
+        Ok(controls)
+    }
+
+    fn is_set(&self) -> bool {
+        *self != Self::default()
+    }
+}
+
 /// An image file as the data URL the contract takes, at its full size, its
 /// type read from its bytes rather than its name. A HEIC photo is sent as a
 /// JPEG made from it. The gateway judges every image's size, except one whose
@@ -823,7 +918,10 @@ fn local_response(
 /// options map name→key (the name IS the canonical key the renderer expects);
 /// score levels map to ordered keys "0".."n-1" with the level text as the
 /// description, so the answer's `legend` can label the expected level.
-fn local_request(request: &contract::DecisionsRequest) -> v1::DecisionRequest {
+fn local_request(
+    request: &contract::DecisionsRequest,
+    controls: &LocalControls,
+) -> Result<v1::DecisionRequest, String> {
     let questions = request
         .questions
         .iter()
@@ -873,20 +971,34 @@ fn local_request(request: &contract::DecisionsRequest) -> v1::DecisionRequest {
         })
         .collect();
 
-    let options =
-        (request.temperature.is_some() || request.prompt_format_version.is_some()).then(|| {
-            v1::DecisionOptions {
-                temperature: request.temperature.unwrap_or(0.0) as f32,
-                prompt_format_version: request.prompt_format_version.unwrap_or(0) as u32,
-            }
-        });
+    let options = (request.temperature.is_some()
+        || request.prompt_format_version.is_some()
+        || controls.is_set())
+    .then(|| v1::DecisionOptions {
+        temperature: request.temperature.unwrap_or(0.0) as f32,
+        prompt_format_version: request.prompt_format_version.unwrap_or(0) as u32,
+        grouping: controls.grouping as i32,
+        max_length: controls.max_length,
+        max_pixels: controls.max_pixels,
+        min_pixels: controls.min_pixels,
+    });
+    let images = request
+        .images
+        .iter()
+        .flatten()
+        .map(|url| {
+            decode_image_data_url(url)
+                .map(|(data, mime_type)| v1::DecisionImage { data, mime_type })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    v1::DecisionRequest {
+    Ok(v1::DecisionRequest {
         state: request.input.clone(),
         questions,
         options,
         model_id: (!request.model.is_empty()).then(|| request.model.clone()),
-    }
+        images,
+    })
 }
 
 /// Score through the local component: resolve the model, load it through the
@@ -951,7 +1063,15 @@ pub(crate) fn score_loaded(
     loaded: &LoadedDecisions,
     request: &contract::DecisionsRequest,
 ) -> Result<contract::DecisionsResponse, String> {
-    let proto_request = local_request(request);
+    score_loaded_with(loaded, request, &LocalControls::default())
+}
+
+pub(crate) fn score_loaded_with(
+    loaded: &LoadedDecisions,
+    request: &contract::DecisionsRequest,
+    controls: &LocalControls,
+) -> Result<contract::DecisionsResponse, String> {
+    let proto_request = local_request(request, controls)?;
     let bytes = serialize(&proto_request);
     let mut out_buffer = ProtoBuffer::new();
     // SAFETY: handle is live and loaded; bytes/out_buffer are valid for the
@@ -999,7 +1119,12 @@ struct LocalFailure {
     already_reported: bool,
 }
 
-fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json: bool) -> i32 {
+fn run_local(
+    options: &GlobalOptions,
+    request: &contract::DecisionsRequest,
+    controls: &LocalControls,
+    json: bool,
+) -> i32 {
     let scored: Result<_, LocalFailure> = {
         // Scope the guard across startup, load, score and component teardown;
         // restore stdout before rendering on every success/failure path.
@@ -1031,11 +1156,12 @@ fn run_local(options: &GlobalOptions, request: &contract::DecisionsRequest, json
                 already_reported: false,
             })?;
             let started = Instant::now();
-            let response = score_loaded(&loaded, request).map_err(|message| LocalFailure {
-                exit_code: 1,
-                message,
-                already_reported: false,
-            })?;
+            let response =
+                score_loaded_with(&loaded, request, controls).map_err(|message| LocalFailure {
+                    exit_code: 1,
+                    message,
+                    already_reported: false,
+                })?;
             drop(loaded);
             Ok((response, started.elapsed().as_millis()))
         })()
@@ -1106,6 +1232,13 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
             }
         }
     }
+    let controls = match LocalControls::from_flags(p) {
+        Ok(controls) => controls,
+        Err(error) => {
+            report_failure(json, &account::DecisionsResult::default(), &error);
+            return 2;
+        }
+    };
     let mut request = match build_request(p) {
         Ok(request) => request,
         Err(error) => {
@@ -1113,14 +1246,6 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
             return 2;
         }
     };
-    if transport == Transport::Local && request.images.is_some() {
-        report_failure(
-            json,
-            &account::DecisionsResult::default(),
-            "images are scored on the cloud only: drop --local",
-        );
-        return 2;
-    }
     if let Some(route) = forced_route {
         if let Err(error) = preferences::set_decisions_route(route.name()) {
             report_failure(json, &account::DecisionsResult::default(), &error);
@@ -1210,14 +1335,6 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
             );
             return 2;
         }
-        if request.images.is_some() {
-            report_failure(
-                json,
-                &account::DecisionsResult::default(),
-                "images are scored on the cloud only: drop --local, or add --cloud",
-            );
-            return 2;
-        }
         // The local path promises no network; bootstrap must not run the
         // SDK's telemetry/auth phase, which posts anonymously to the staging
         // backend in development.
@@ -1225,7 +1342,20 @@ fn run(p: &crate::cli::Parsed, options: &GlobalOptions, json: bool) -> i32 {
             offline: true,
             ..options.clone()
         };
-        return run_local(&offline, &request, json);
+        return run_local(&offline, &request, &controls, json);
+    }
+    if controls.is_set() {
+        let set = LocalControls::FLAGS
+            .into_iter()
+            .filter(|name| p.is_set(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        report_failure(
+            json,
+            &account::DecisionsResult::default(),
+            &format!("{set} only apply to a local model: add --local"),
+        );
+        return 2;
     }
     // The hosted console takes a model id, not a path; only the local
     // transport accepts a path, so the id-shape rule gates cloud here.
@@ -1377,13 +1507,33 @@ pub fn register_decisions(app: &mut App) {
     cmd.add_option(
         "--image",
         ValueType::Text,
-        "PNG, JPEG, WebP or HEIC file every question is about, sent at full size (repeatable, up to 8; cloud only; HEIC needs macOS)",
+        "PNG, JPEG, WebP or HEIC file every question is about, sent at full size (repeatable, up to 8; HEIC needs macOS)",
     )
     .multi();
     cmd.add_option(
         "--temperature",
         ValueType::Float,
         "Probability temperature (>0, at most 100)",
+    );
+    cmd.add_option(
+        "--grouping",
+        ValueType::Text,
+        "Local only: 'joint' scores every question in one pass, 'per-question' one pass each (default: the model's)",
+    );
+    cmd.add_option(
+        "--max-length",
+        ValueType::UInt64,
+        "Local only: token cap per pass; longer requests split their questions",
+    );
+    cmd.add_option(
+        "--max-pixels",
+        ValueType::UInt64,
+        "Local only: pixel budget per image (default: the model's)",
+    );
+    cmd.add_option(
+        "--min-pixels",
+        ValueType::UInt64,
+        "Local only: lower pixel bound per image (default: the model's)",
     );
     cmd.add_flag(
         "--json",
@@ -1831,8 +1981,10 @@ mod tests {
 
     #[test]
     fn local_request_maps_cloud_shapes_onto_the_proto_contract() {
-        let proto = local_request(&ticket_request());
+        let proto = local_request(&ticket_request(), &LocalControls::default()).unwrap();
         assert_eq!(proto.state, "ticket");
+        assert!(proto.options.is_none(), "no options when nothing is set");
+        assert!(proto.images.is_empty());
         assert_eq!(proto.questions.len(), 2);
         let refund = &proto.questions[0];
         assert_eq!(refund.r#type, v1::DecisionQuestionType::Noul as i32);
@@ -1845,6 +1997,67 @@ mod tests {
         let keys: Vec<&str> = urgency.options.iter().map(|o| o.key.as_str()).collect();
         assert_eq!(keys, ["0", "1", "2"]);
         assert_eq!(urgency.options[2].description, "high");
+    }
+
+    #[test]
+    fn local_request_carries_the_controls_and_the_image_bytes() {
+        let png = b"\x89PNG\r\n\x1a\nrest".to_vec();
+        let request = contract::DecisionsRequest {
+            images: Some(vec![format!("data:image/png;base64,{}", base64(&png))]),
+            ..ticket_request()
+        };
+        let controls = LocalControls {
+            grouping: v1::DecisionGrouping::PerQuestion,
+            max_length: 4096,
+            max_pixels: 1_638_400,
+            min_pixels: 65_536,
+        };
+        let proto = local_request(&request, &controls).unwrap();
+        let options = proto.options.expect("controls set the options");
+        assert_eq!(options.grouping, v1::DecisionGrouping::PerQuestion as i32);
+        assert_eq!(
+            (options.max_length, options.max_pixels, options.min_pixels),
+            (4096, 1_638_400, 65_536)
+        );
+        assert_eq!(
+            options.temperature, 0.0,
+            "an unset temperature stays the model's"
+        );
+        assert_eq!(proto.images.len(), 1);
+        assert_eq!(proto.images[0].data, png);
+        assert_eq!(proto.images[0].mime_type, "image/png");
+    }
+
+    #[test]
+    fn image_data_urls_decode_back_to_their_bytes() {
+        for length in 0..7 {
+            let bytes: Vec<u8> = (0..length).map(|i| (i * 37 + 200) as u8).collect();
+            let url = format!("data:image/webp;base64,{}", base64(&bytes));
+            if bytes.is_empty() {
+                assert!(
+                    decode_image_data_url(&url).is_err(),
+                    "an empty image is refused"
+                );
+                continue;
+            }
+            assert_eq!(
+                decode_image_data_url(&url).unwrap(),
+                (bytes, "image/webp".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_image_data_urls_are_refused() {
+        for url in [
+            "data:image/gif;base64,R0lG",
+            "data:image/png;base64,abc",
+            "data:image/png;base64,ab=c",
+            "data:image/png;base64,a===",
+            "data:image/png;base64,ab!d",
+        ] {
+            assert!(decode_image_data_url(url).is_err(), "{url}");
+        }
     }
 
     #[test]

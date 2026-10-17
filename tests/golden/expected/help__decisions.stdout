@@ -14,8 +14,17 @@ Options:
       --request TEXT          Complete DecisionsRequest JSON file (- for stdin)
       --image TEXT ...        PNG, JPEG, WebP or HEIC file every question is
                               about, sent at full size (repeatable, up to 8;
-                              cloud only; HEIC needs macOS)
+                              HEIC needs macOS)
       --temperature FLOAT     Probability temperature (>0, at most 100)
+      --grouping TEXT         Local only: 'joint' scores every question in one
+                              pass, 'per-question' one pass each (default: the
+                              model's)
+      --max-length UINT       Local only: token cap per pass; longer requests
+                              split their questions
+      --max-pixels UINT       Local only: pixel budget per image (default: the
+                              model's)
+      --min-pixels UINT       Local only: lower pixel bound per image (default:
+                              the model's)
       --json                  Print result/error JSON with request ID and HTTP
                               status
       --local                 Score on this machine with a local decision model
