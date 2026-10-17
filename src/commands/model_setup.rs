@@ -247,11 +247,21 @@ pub fn ensure_model_ready(
 mod tests {
     use super::sibling_candidates;
 
+    /// The MLX builds these rows pair with are Apple-only; elsewhere the
+    /// catalog hides them, so there is no other build to stand in.
+    fn mlx_build(id: &'static str) -> Vec<&'static str> {
+        if cfg!(target_os = "macos") {
+            vec![id]
+        } else {
+            Vec::new()
+        }
+    }
+
     #[test]
     fn a_decision_row_offers_its_other_build() {
         assert_eq!(
             sibling_candidates("clef-flash-9b", "clef-flash-9b", false),
-            ["mlx-clef-flash-9b-4bit"]
+            mlx_build("mlx-clef-flash-9b-4bit")
         );
     }
 
@@ -267,7 +277,7 @@ mod tests {
     fn an_offline_caller_may_use_any_build_of_the_row() {
         assert_eq!(
             sibling_candidates("qwen3-4b-instruct-2507", "qwen3-4b-instruct-2507", true),
-            ["mlx-qwen3-4b-instruct-2507-4bit"]
+            mlx_build("mlx-qwen3-4b-instruct-2507-4bit")
         );
     }
 
