@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 class Wally < Formula
-  desc "Run language, speech and image models on your own machine"
+  desc "Run models on your machine or your RunAnywhere account"
   homepage "https://github.com/RunanywhereAI/wally"
   version "0.8.12"
   license "MIT"
