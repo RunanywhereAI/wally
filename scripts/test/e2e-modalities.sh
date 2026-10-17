@@ -13,6 +13,11 @@
 #   4. `wally models list --json` downloaded rows whose modality matches
 #   5. If WALLY_E2E_AUTO=1, small OSS catalog defaults the binary can run
 #
+# Decisions are opt-in by id only (they are a verb, not a discoverable
+# modality): WALLY_E2E_DECISION scores text; WALLY_E2E_DECISION_IMAGE names a
+# decision model that takes images and also exercises the local controls.
+# A text-only WALLY_E2E_DECISION must refuse an image request.
+#
 # Skip = no model. Fail = a model was selected and the command failed.
 # Public CI leaves every knob unset and stays green.
 #
@@ -456,6 +461,51 @@ if [[ -n "${MOD_DIARIZE}" ]]; then
     "${WALLY}" diarize -m "${MOD_DIARIZE}" "${wav}"
 else
   skipm "diarize (set WALLY_E2E_DIARIZE)"
+fi
+
+# A refusal is the expected outcome: the command must fail, and say why.
+expect_refusal() {
+  local label="$1"
+  local needle="$2"
+  shift 2
+  set +e
+  "$@" >/dev/null 2>"${workdir}/err"
+  local rc=$?
+  set -e
+  if [[ "${rc}" -ne 0 ]] && grep -q "${needle}" "${workdir}/err"; then
+    ok "${label}"
+  else
+    bad "${label} (rc ${rc}; wanted a refusal naming '${needle}')"
+  fi
+}
+
+decision_questions=(--input "A customer reports every API call returns 401 since a key rotation."
+  --ask "Is this an authentication problem?" --choice "Team?=support,billing,sales")
+
+if [[ -n "${WALLY_E2E_DECISION:-}" ]]; then
+  run_cmd "decision ${WALLY_E2E_DECISION}" \
+    "${WALLY}" decisions --local -m "${WALLY_E2E_DECISION}" "${decision_questions[@]}"
+  if [[ -s "${png}" && "${WALLY_E2E_DECISION}" != "${WALLY_E2E_DECISION_IMAGE:-}" ]]; then
+    expect_refusal "decision ${WALLY_E2E_DECISION} refuses an image" "images" \
+      "${WALLY}" decisions --local -m "${WALLY_E2E_DECISION}" --image "${png}" \
+      "${decision_questions[@]}"
+  fi
+else
+  skipm "decision (set WALLY_E2E_DECISION to a local decision model id)"
+fi
+
+if [[ -n "${WALLY_E2E_DECISION_IMAGE:-}" && -s "${png}" ]]; then
+  run_cmd "decision+image ${WALLY_E2E_DECISION_IMAGE}" \
+    "${WALLY}" decisions --local -m "${WALLY_E2E_DECISION_IMAGE}" --image "${png}" \
+    --input "What colour is the picture?" --choice "Colour?=red,green,blue"
+  run_cmd "decision controls ${WALLY_E2E_DECISION_IMAGE}" \
+    "${WALLY}" decisions --local -m "${WALLY_E2E_DECISION_IMAGE}" --image "${png}" \
+    --grouping joint --max-pixels 200000 --max-length 8192 "${decision_questions[@]}"
+  expect_refusal "decision ${WALLY_E2E_DECISION_IMAGE} refuses an over-length question" "limit" \
+    "${WALLY}" decisions --local -m "${WALLY_E2E_DECISION_IMAGE}" --max-length 16 \
+    "${decision_questions[@]}"
+else
+  skipm "decision+image (set WALLY_E2E_DECISION_IMAGE to a decision model that takes images)"
 fi
 
 echo "modalities: ${pass} passed, ${fail} failed, ${skip} skipped"
