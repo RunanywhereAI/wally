@@ -9,7 +9,7 @@
 use std::ffi::CString;
 
 use crate::bootstrap::GlobalOptions;
-use crate::catalog::model_ref;
+use crate::catalog::{self, model_ref};
 use crate::harness;
 use crate::io::output::{error_line, status_line};
 use crate::io::proto::{self, parse_proto_buffer, v1, ProtoBuffer};
@@ -87,6 +87,65 @@ pub fn refresh_registry() -> Result<(), String> {
     parse_proto_buffer::<v1::ModelRegistryRefreshResult>(out_buffer).map(|_| ())
 }
 
+/// The registry's record of `model_id`, if it has one.
+fn registry_info(model_id: &str) -> Option<v1::ModelInfo> {
+    let model_id_c = CString::new(model_id).ok()?;
+    let mut info_out = ProtoBuffer::new();
+    // SAFETY: model_id_c is a valid, NUL-terminated C string kept alive for
+    // the duration of this call; info_out is live/initialized.
+    let get_rc = unsafe {
+        sys::rac_model_registry_get_proto_buffer(
+            sys::rac_get_model_registry(),
+            model_id_c.as_ptr(),
+            info_out.as_mut_ptr(),
+        )
+    };
+    // Parsed unconditionally: it interprets the {status,error_message}
+    // envelope and frees the buffer on every path (no leak on get failure).
+    let info = parse_proto_buffer::<v1::ModelInfo>(info_out).ok()?;
+    (get_rc == sys::SUCCESS).then_some(info)
+}
+
+/// Commons reconciliation (the refresh before any lookup) already validated
+/// folder completeness; registry_status is the single authority.
+fn is_downloaded(info: &v1::ModelInfo) -> bool {
+    info.registry_status
+        .and_then(|status| v1::ModelRegistryStatus::try_from(status).ok())
+        == Some(v1::ModelRegistryStatus::Downloaded)
+}
+
+/// Another build of the same `models list` row that is already on disk, used
+/// when the one `reference` names is not. `models list` shows a merged row as
+/// downloaded when any of its builds is, so `-m <row id>` must be able to run
+/// that build. Limited to decision models and offline callers, which would
+/// otherwise refuse outright; everything else keeps pulling the build it named.
+fn downloaded_sibling(
+    reference: &str,
+    model_id: &str,
+    offline: bool,
+) -> Option<(String, v1::ModelInfo)> {
+    sibling_candidates(reference, model_id, offline)
+        .into_iter()
+        .find_map(|id| {
+            let info = registry_info(id)?;
+            is_downloaded(&info).then(|| (id.to_string(), info))
+        })
+}
+
+/// The other builds of `model_id`'s merged row that may stand in for it.
+fn sibling_candidates(reference: &str, model_id: &str, offline: bool) -> Vec<&'static str> {
+    let named = catalog::find(reference).or_else(|| catalog::find(model_id));
+    if !offline && named.map(|entry| entry.category) != Some(v1::ModelCategory::Decision) {
+        return Vec::new();
+    }
+    let key = catalog::merge_key_for(model_id);
+    catalog::all()
+        .iter()
+        .filter(|entry| entry.id != model_id && entry.merge_key.unwrap_or(entry.id) == key)
+        .map(|entry| entry.id)
+        .collect()
+}
+
 /// Resolve ref -> ensure downloaded (auto-pull with progress) -> resolve
 /// paths. Err is the exit code the command should return (0 is never an Err
 /// variant; errors are already printed to stderr before returning).
@@ -101,45 +160,31 @@ pub fn ensure_model_ready(
             return Err(1);
         }
     };
-    let mut out = ResolvedModelPaths {
-        model_id: resolved.model_id.clone(),
-        ..Default::default()
-    };
-
     // Link any on-disk artifacts before deciding whether to pull.
     if let Err(error) = refresh_registry() {
         status_line(&format!("warning: registry refresh failed: {error}"));
     }
 
-    // Display name (best effort) + downloaded check.
-    let mut downloaded = false;
-    if let Ok(model_id_c) = CString::new(resolved.model_id.as_str()) {
-        let mut info_out = ProtoBuffer::new();
-        // SAFETY: model_id_c is a valid, NUL-terminated C string kept alive
-        // for the duration of this call; info_out is live/initialized.
-        let get_rc = unsafe {
-            sys::rac_model_registry_get_proto_buffer(
-                sys::rac_get_model_registry(),
-                model_id_c.as_ptr(),
-                info_out.as_mut_ptr(),
-            )
-        };
-        // Parsed unconditionally: it interprets the {status,error_message}
-        // envelope and frees the buffer on every path (no leak on get
-        // failure).
-        if let Ok(info) = parse_proto_buffer::<v1::ModelInfo>(info_out) {
-            if get_rc == sys::SUCCESS {
-                out.display_name = info.name;
-                // Commons reconciliation (refresh above) already validated
-                // folder completeness; registry_status is the single
-                // authority.
-                downloaded = info
-                    .registry_status
-                    .and_then(|status| v1::ModelRegistryStatus::try_from(status).ok())
-                    == Some(v1::ModelRegistryStatus::Downloaded);
-            }
+    let mut model_id = resolved.model_id.clone();
+    let mut registered = registry_info(&model_id);
+    let mut downloaded = registered.as_ref().is_some_and(is_downloaded);
+    if !downloaded {
+        if let Some((sibling, info)) = downloaded_sibling(reference, &model_id, options.offline) {
+            status_line(&format!("using the downloaded {sibling} for {reference}"));
+            model_id = sibling;
+            registered = Some(info);
+            downloaded = true;
         }
     }
+    let mut out = ResolvedModelPaths {
+        model_id: model_id.clone(),
+        display_name: registered.map(|info| info.name).unwrap_or_default(),
+        ..Default::default()
+    };
+    let resolved = model_ref::Resolved {
+        model_id,
+        ..resolved
+    };
 
     if !downloaded {
         // Offline callers (`wally decisions --local`) promise no network
@@ -195,5 +240,39 @@ pub fn ensure_model_ready(
             ));
             Err(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sibling_candidates;
+
+    #[test]
+    fn a_decision_row_offers_its_other_build() {
+        assert_eq!(
+            sibling_candidates("clef-flash-9b", "clef-flash-9b", false),
+            ["mlx-clef-flash-9b-4bit"]
+        );
+    }
+
+    #[test]
+    fn a_chat_row_keeps_the_build_it_named_when_online() {
+        assert!(
+            sibling_candidates("qwen3-4b-instruct-2507", "qwen3-4b-instruct-2507", false)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_offline_caller_may_use_any_build_of_the_row() {
+        assert_eq!(
+            sibling_candidates("qwen3-4b-instruct-2507", "qwen3-4b-instruct-2507", true),
+            ["mlx-qwen3-4b-instruct-2507-4bit"]
+        );
+    }
+
+    #[test]
+    fn a_model_outside_any_row_has_no_siblings() {
+        assert!(sibling_candidates("silero-vad", "silero-vad", true).is_empty());
     }
 }
