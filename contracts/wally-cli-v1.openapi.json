@@ -2514,8 +2514,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "mig/devsync/wally-pin-source",
-    "commit": "78fbc52a76b0d3d200813ef5c35ccd25dc09261c",
+    "branch": "staging",
+    "commit": "d7e2304deb80297ba9361c29ba69601a3d5d7c53",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
