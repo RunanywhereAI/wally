@@ -947,7 +947,8 @@
           "openai_sdk",
           "langchain",
           "llamaindex",
-          "curl"
+          "curl",
+          "codex"
         ],
         "title": "Harness",
         "type": "string"
@@ -2458,8 +2459,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "fix/reasoning-budget",
-    "commit": "d4b4877a5650c591ce0ffa2a5b2450af54c3593e",
+    "branch": "harness/codex-label",
+    "commit": "19076293c92b4b06d9e1ef8459caf00871b39068",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

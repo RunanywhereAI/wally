@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "b9902ce66d30e292851a3007378cde5486b70cde98d39883b0bbfea0a886799b";
+    "bbeb3df0f4ef2746397287ead867931a880ce805cf548624aa67ca549bab39a5";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -375,6 +375,7 @@ pub enum Harness {
     KLangchain,
     KLlamaindex,
     KCurl,
+    KCodex,
 }
 
 impl Harness {
@@ -401,6 +402,7 @@ impl Harness {
             Harness::KLangchain => "langchain",
             Harness::KLlamaindex => "llamaindex",
             Harness::KCurl => "curl",
+            Harness::KCodex => "codex",
         }
     }
 
@@ -427,6 +429,7 @@ impl Harness {
             "langchain" => Ok(Harness::KLangchain),
             "llamaindex" => Ok(Harness::KLlamaindex),
             "curl" => Ok(Harness::KCurl),
+            "codex" => Ok(Harness::KCodex),
             other => Err(format!("unknown Harness: {other}")),
         }
     }
