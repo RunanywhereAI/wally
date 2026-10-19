@@ -40,4 +40,5 @@ ternary-bonsai-1.7b       llm         mlx/llama.cpp    467.5 MB    no
 ternary-bonsai-27b        llm         mlx              7.9 GB      no            
 ternary-bonsai-4b         llm         mlx/llama.cpp    1.1 GB      no            
 ternary-bonsai-8b         llm         mlx/llama.cpp    2.2 GB      no            
+pplx-decider-4b-gguf      decision    llama.cpp        2.9 GB      no            
 smollm2-135m              llm         llama.cpp        96.0 MB     no            

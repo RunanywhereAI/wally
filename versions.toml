@@ -16,10 +16,10 @@ decisions_contract_sha256 = "2201716c3f8f1ac4e5e70046a33939a631aacd503fa7a7a7539
 
 [sdk]
 # The published C++ desktop kit this tree builds against; bump the SHAs with it.
-kit_version = "0.20.40"
-kit_release_tag = "cpp-desktop-v0.20.40"
-idl_version = "1.6.0"
-idl_schema_sha256 = "859d5ea75645ca0268e1348a9968813937ea5be0e35340768b0c07786e0993b6"
+kit_version = "0.20.41"
+kit_release_tag = "cpp-desktop-v0.20.41"
+idl_version = "1.6.1"
+idl_schema_sha256 = "688706bfa5ac286fd28ed5f21a1dca1a1fa0ff0e0d5a8f6d4cffc313b9e46d0a"
 idl_protoc_version = "35.1"
 kit_sha256_macos_arm64 = "e5a3f10d2ab6023e3d7c599c2a4ca2d05a083d294ac11f866910de0d581bb2f7"
 kit_sha256_windows_x64 = "05720991852c948ce8c45462e025ab410d05fdce852ce1e5410e5c1b70cc0312"

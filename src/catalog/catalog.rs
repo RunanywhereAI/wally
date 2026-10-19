@@ -2602,6 +2602,17 @@ const CLEF_27B_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
     checksum_sha256: None,
 }];
 
+/// `perplexity-ai/pplx-decider-flash-v1.2` converted to GGUF (Q4_K_M) by the llama.cpp fork's
+/// pplx-decider converter (non-causal full attention, the readout as a padded LM head), pinned to
+/// the upload commit.
+const PPLX_DECIDER_4B_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
+    url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/cb2ff56b749a3ab9ad46a20ca5f234771205d62a/gguf/pplx-decider-4b/pplx-decider-flash-v1.2-Q4_K_M.gguf",
+    filename: "pplx-decider-flash-v1.2-Q4_K_M.gguf",
+    required: true,
+    size_bytes: 3066388160,
+    checksum_sha256: Some("a27af5c4486a65ba5b5504fba469f811556b8256aae8d26821b346d2560b7ae5"),
+}];
+
 /// `perplexity-ai/pplx-decider-flash-v1.2` (BF16, Apache-2.0) mirrored at commit 6d771ad7b5ec into
 /// runanywhere/decision-models-stable-fork, pinned to the upload commit.
 /// Loads as is: no conversion, the readout and both protocol configs ride beside the shards.
@@ -5001,6 +5012,27 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("pplx-decider-4b"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        // Its own row rather than a sibling of the MLX build: `pplx-decider-4b`
+        // already names the MLX row, and this one is text only.
+        id: "pplx-decider-4b-gguf",
+        alias: None,
+        name: "Pplx Decider 4B v1.2 (decision, text)",
+        category: v1::ModelCategory::Decision,
+        framework: v1::InferenceFramework::LlamaCpp,
+        format: v1::ModelFormat::Gguf,
+        // File-list path, as for the other GGUF decision rows: it keeps the
+        // Decision category.
+        url: None,
+        files: PPLX_DECIDER_4B_GGUF_FILES,
+        download_size_bytes: 3066388160,
+        context_length: 262144,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: None,
         harness_compatible: false,
     },
     CatalogEntry {

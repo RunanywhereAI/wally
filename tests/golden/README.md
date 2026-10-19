@@ -103,3 +103,8 @@ option's two lines are the only difference.
 `wally chatgpt` added a line to every command list, so the same 31 cases were
 re-captured from the Rust binary; that line is the only difference in each.
 `help__chatgpt` and `help__help__chatgpt` are new cases.
+
+The kit pin moved to 0.20.41 (IDL 1.6.1), so the three `version__*` cases were
+updated; the version and schema lines are the only difference. The
+`pplx-decider-4b-gguf` catalog row added one row to `local__models__list__--all`
+and its `--json` twin.

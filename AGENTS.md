@@ -106,10 +106,10 @@ emits `src/account/decisions_contract.rs` with `--operation-id createDecisions`.
 request as above; local (`--local`, or a `-m` that resolves to a local
 decision artifact) runs it through the kit's `rac_decision_*` component and
 maps the proto result back onto the same `DecisionsResponse`, so rendering and
-`--json` are transport-independent. The two local rows (`clef-flash-9b`,
-`clef-flash-mlx`) are `ModelCategory::Decision` and are the only
-non-Language entries the LLM-only catalog cut surfaces (`is_llm` in
-`src/catalog/catalog.rs`, mirrored in `cmd_list.rs`'s row filter).
+`--json` are transport-independent. The local decision rows (`clef-flash-9b`,
+`clef-flash-mlx`, `pplx-decider-4b-gguf` and the rest) are
+`ModelCategory::Decision` and are the only non-Language entries the LLM-only
+catalog cut surfaces (`is_llm` in `src/catalog/catalog.rs`, mirrored in `cmd_list.rs`'s row filter).
 
 To re-vendor from an InferenceInfra checkout (records the source commit on the
 extract):

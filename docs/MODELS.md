@@ -42,13 +42,14 @@ It supports yes/no (`--ask`), choices (`--choice`) and ordered levels
 hosted path only, for a model that takes them. On macOS a HEIC photo is
 converted to JPEG first; elsewhere it is refused.
 
-`eve` is the hosted decision model and the default, so `-m` is optional. Two
+`eve` is the hosted decision model and the default, so `-m` is optional. These
 local checkpoints run the same questions on-device:
 
 | Id | Backend | Pull |
 |---|---|---|
 | `clef-flash-9b` | llama.cpp (Q4_K_M) | `wally models pull clef-flash-9b` |
 | `clef-flash-mlx` | MLX (Apple) | `wally models pull clef-flash-mlx` |
+| `pplx-decider-4b-gguf` | llama.cpp (Q4_K_M), text only | `wally models pull pplx-decider-4b-gguf` |
 
 `wally decisions --local -m <id>` forces the local path and never touches the
 network; a bare `-m <local id>` selects it automatically. On Apple, MLX
