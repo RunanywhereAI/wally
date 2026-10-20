@@ -291,7 +291,7 @@
             ]
           },
           "questions": {
-            "description": "The questions to answer about the input, each with an id unique in the request. Each is scored on its own. The cap is one replica's question gate: a 128-question request can occupy a whole decisions replica by itself.",
+            "description": "The questions to answer about the input, each with an id unique in the request. Each is scored on its own. This contract takes up to 128; each model takes at most its own number of questions in one request, and at most its own total of prompt tokens, in which the input is counted once per question. A request past either is refused with 400 naming the limit, and nothing is billed: split its questions over several requests.",
             "items": {
               "$ref": "#/components/schemas/DecisionQuestion"
             },
@@ -852,7 +852,7 @@
         "additionalProperties": {
           "$ref": "#/components/schemas/SystemOneQuestion"
         },
-        "description": "The questions, keyed by the caller's own names (1 to 128 characters, not blank); each answer is returned under its name. This API takes 1 to 128 questions. The cap is one replica's question gate: a 128-question request can occupy a whole decisions replica by itself.",
+        "description": "The questions, keyed by the caller's own names (1 to 128 characters, not blank); each answer is returned under its name. This API takes 1 to 128 questions; each model takes at most its own number of questions in one request, and at most its own total of prompt tokens, in which the content is counted once per question. A request past either is refused with 400 naming the limit, and nothing is billed: split its questions over several requests.",
         "maxProperties": 128,
         "minProperties": 1,
         "propertyNames": {
@@ -1081,7 +1081,7 @@
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValueL2"
         },
-        "description": "The content every question is asked about: a non-blank string, or a JSON array or object, which is rendered into each question's prompt as compact JSON. It is billed once per question. The real limits are tighter than this bound: the whole request body is at most 1 MiB, and each question's prompt must fit the model's per-question limit, which is the `max_input_tokens` GET /v1/models reports for the model. A request over either is refused with 400 and nothing is billed.",
+        "description": "The content every question is asked about: a non-blank string, or a JSON array or object, which is rendered into each question's prompt as compact JSON. It is billed once per question. The real limits are tighter than this bound: the whole request body is at most 1 MiB, each question's prompt must fit the model's per-question limit, which is the `max_input_tokens` GET /v1/models reports for the model, and the whole request, with this content counted once per question, must fit the model's per-request total. A request over any of them is refused with 400 and nothing is billed.",
         "items": {
           "$ref": "#/components/schemas/JsonValueL2"
         },
@@ -1329,7 +1329,7 @@
       },
       "request": {
         "path": "public/decisions_request.schema.json",
-        "sha256": "19b58ab4ed78a457c89928cbd62119159efcc95767314cce0da47cb87efa8e4d"
+        "sha256": "73839cf30646c45d7a7cf5f904c9ad93734ecee21bb912c77164c6f30191d381"
       },
       "response": {
         "path": "public/decisions_response.schema.json",
@@ -1337,7 +1337,7 @@
       },
       "systemone_request": {
         "path": "public/systemone_request.schema.json",
-        "sha256": "dd73324fb306daccad68ab2a300e0bc66236deba7f550ef5e0541136ef100bf0"
+        "sha256": "1fd883db07b75b20a465aed2afd7cac5884d97e1df8f68ec027c8e8702a65a4f"
       },
       "systemone_response": {
         "path": "public/systemone_response.schema.json",
