@@ -2994,6 +2994,98 @@ const GLINER_DECIDE_MLX_FILES: &[CatalogFile] = &[
     },
 ];
 
+/// `RecursiveSI/flint-int4` (Apache-2.0) mirrored into runanywhere/decision-models-stable-fork,
+/// pinned to the upload commit. Checksums are the ones the checkpoint ships in `flint-int4.json`.
+const FLINT_MLX_INT4_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/chat_template.jinja",
+        filename: "chat_template.jinja",
+        required: true,
+        size_bytes: 2328,
+        checksum_sha256: Some("7940f4ffa3275c36caa4a582f845aaad79da11018b3961e8fbcad6ae29733466"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 3082,
+        checksum_sha256: Some("80f577a984db1bd40dfff88457b611d4c13e807704a945616be27f28809eed21"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/generation_config.json",
+        filename: "generation_config.json",
+        required: true,
+        size_bytes: 202,
+        checksum_sha256: Some("a499c71895e008abd572558a5ad5904feaed92cf2a3b6e2cb0e9cabf03b96ed3"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/model-00000.safetensors",
+        filename: "model-00000.safetensors",
+        required: true,
+        size_bytes: 4745746152,
+        checksum_sha256: Some("1a362742a0136c95ed751e2c56d83e63d4ed9ac674984b23b368f105d16cfe7a"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/model-00001.safetensors",
+        filename: "model-00001.safetensors",
+        required: true,
+        size_bytes: 4682022280,
+        checksum_sha256: Some("12979140fa019042ff5cdec4c0237cc87db13b56428ce7fe093dd9d33893ea32"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/model-00002.safetensors",
+        filename: "model-00002.safetensors",
+        required: true,
+        size_bytes: 4682022280,
+        checksum_sha256: Some("01805c6b882fdec008b0184ec68e7516102205b521e63ca5126f9d52b9aed87b"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/model-00003.safetensors",
+        filename: "model-00003.safetensors",
+        required: true,
+        size_bytes: 4682022280,
+        checksum_sha256: Some("9380ed032d90e0ff566d49672faf292f354b3b0e7320820c150eeed8c75e9d42"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/model-00004.safetensors",
+        filename: "model-00004.safetensors",
+        required: true,
+        size_bytes: 3777099608,
+        checksum_sha256: Some("c1ba12d2c2a80feb5e554554a01cfde2b71c2638e27fc0ee597b4121399eff99"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/special_tokens_map.json",
+        filename: "special_tokens_map.json",
+        required: true,
+        size_bytes: 20192,
+        checksum_sha256: Some("be37b302338dda189bc70bfbe902d8faebeb5986d60c1342713439eefc4ca182"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 10879128,
+        checksum_sha256: Some("a263cce0b7e2b03f7ee07ce809783ef4b47f160c3f268a4ea1524f638da45b68"),
+    },
+    CatalogFile {
+        url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/c21a6ff0c423303587076ca3cfa9b8c7ef25d4f5/mlx/flint-int4/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 30439,
+        checksum_sha256: Some("159ac88217e90ffd0a4a294726048bb302829e82e1958dc85bb203aa79138fbf"),
+    },
+];
+
+/// `unsloth/flint-GGUF` UD-Q4_K_XL (Apache-2.0) mirrored into runanywhere/decision-models-stable-fork,
+/// pinned to the upload commit.
+const FLINT_GGUF_FILES: &[CatalogFile] = &[CatalogFile {
+    url: "https://huggingface.co/runanywhere/decision-models-stable-fork/resolve/6f36c8fce2618e67111eb6c631f371f5a27c9762/gguf/flint/flint-preview-UD-Q4_K_XL.gguf",
+    filename: "flint-preview-UD-Q4_K_XL.gguf",
+    required: true,
+    size_bytes: 25054688704,
+    checksum_sha256: Some("63c2ecc461ca545134b670c660e76fa20f47240f8d39b6510bfd21c4dd6e072f"),
+}];
+
 const CATALOG: &[CatalogEntry] = &[
     // --- LLM (LlamaCpp / GGUF) ---
     // Name carries Q8_0 on purpose: this is the one GGUF artifact in the
@@ -5033,6 +5125,42 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: None,
+        harness_compatible: false,
+    },
+    // Recursive Flint, a 40B-total / 2.5B-active MoE coding model (Apache-2.0).
+    CatalogEntry {
+        id: "mlx-flint-int4",
+        alias: Some("mlx-flint"),
+        name: "Recursive Flint 40B-A2.5B INT4",
+        category: v1::ModelCategory::Language,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: FLINT_MLX_INT4_FILES,
+        download_size_bytes: 22579847971,
+        context_length: 262144,
+        supports_thinking: true,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("flint"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "flint-ud-q4_k_xl",
+        alias: Some("flint"),
+        name: "Recursive Flint 40B-A2.5B UD-Q4_K_XL",
+        category: v1::ModelCategory::Language,
+        framework: v1::InferenceFramework::LlamaCpp,
+        format: v1::ModelFormat::Gguf,
+        // File-list path so the artifact carries its checksum.
+        url: None,
+        files: FLINT_GGUF_FILES,
+        download_size_bytes: 25054688704,
+        context_length: 262144,
+        supports_thinking: true,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("flint"),
         harness_compatible: false,
     },
     CatalogEntry {
