@@ -256,24 +256,142 @@ struct ProvidersGuard {
 
 impl Drop for ProvidersGuard {
     fn drop(&mut self) {
-        let current = match std::fs::read(&self.path) {
-            Ok(bytes) => Some(bytes),
-            Err(err) if err.kind() == ErrorKind::NotFound => None,
-            Err(_) => {
-                report_manual_cleanup(&self.path);
-                return;
+        for _ in 0..REPLACE_ATTEMPTS {
+            let Ok(current) = read_optional(&self.path) else {
+                break;
+            };
+            let replacement = match plan_cleanup(&self.snapshot, current.as_deref()) {
+                Cleanup::Write(bytes) => Some(bytes),
+                Cleanup::Remove => None,
+                Cleanup::Nothing => return,
+                Cleanup::Unparseable => break,
+            };
+            match replace_if_unchanged(&self.path, current.as_deref(), replacement.as_deref()) {
+                Ok(Replaced::Done) => return,
+                // Changed between our read and our write: plan again from
+                // what is there now rather than overwrite it.
+                Ok(Replaced::Conflict) => continue,
+                Err(_) => break,
             }
+        }
+        report_manual_cleanup(&self.path);
+    }
+}
+
+/// How many times a read-plan-replace of `providers.json` is retried when
+/// someone else changes the file in between.
+const REPLACE_ATTEMPTS: usize = 3;
+
+fn read_optional(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Replaced {
+    Done,
+    /// The file no longer held `expected`; nothing was changed.
+    Conflict,
+}
+
+/// Replaces `path` with `replacement` (None: removes it), but only while it
+/// still holds `expected` (None: absent).
+///
+/// The new bytes go to a temporary file beside it and are renamed into place,
+/// so Command Code, which reloads the file live, never reads half of one.
+/// Command Code takes no lock of its own, so the compare and the rename are
+/// two steps: a change landing between them is still lost, but the window is
+/// the length of one rename rather than of a whole merge.
+pub fn replace_if_unchanged(
+    path: &Path,
+    expected: Option<&[u8]>,
+    replacement: Option<&[u8]>,
+) -> std::io::Result<Replaced> {
+    let staged = match replacement {
+        Some(bytes) => {
+            let mut name = path.file_name().unwrap_or_default().to_os_string();
+            name.push(format!(".wally-{}.tmp", std::process::id()));
+            let staged = path.with_file_name(name);
+            if let Err(err) = std::fs::write(&staged, bytes) {
+                let _ = std::fs::remove_file(&staged);
+                return Err(err);
+            }
+            Some(staged)
+        }
+        None => None,
+    };
+    let unchanged = match read_optional(path) {
+        Ok(current) => current.as_deref() == expected,
+        Err(err) => {
+            if let Some(staged) = &staged {
+                let _ = std::fs::remove_file(staged);
+            }
+            return Err(err);
+        }
+    };
+    if !unchanged {
+        if let Some(staged) = &staged {
+            let _ = std::fs::remove_file(staged);
+        }
+        return Ok(Replaced::Conflict);
+    }
+    let committed = match &staged {
+        Some(staged) => std::fs::rename(staged, path),
+        None if expected.is_some() => std::fs::remove_file(path),
+        None => Ok(()),
+    };
+    if let Err(err) = committed {
+        if let Some(staged) = &staged {
+            let _ = std::fs::remove_file(staged);
+        }
+        return Err(err);
+    }
+    Ok(Replaced::Done)
+}
+
+/// Merges our provider into `path` and returns what the guard needs to take
+/// it out again. A file that changes while it is being merged is read again
+/// rather than overwritten with a stale merge.
+fn install_provider(
+    path: &Path,
+    base_url: &str,
+    catalog: &[CatalogModel],
+) -> Result<Snapshot, String> {
+    for _ in 0..REPLACE_ATTEMPTS {
+        let raw = read_optional(path)
+            .map_err(|err| format!("could not read {}: {err}", path.display()))?;
+        let text = raw
+            .as_deref()
+            .map(std::str::from_utf8)
+            .transpose()
+            .map_err(|_| format!("{} is not UTF-8", path.display()))?;
+        let existing = parse_existing(text)?;
+        // A leftover from a run that never cleaned up is not put back.
+        let original = match (&raw, existing.dropped_leftover) {
+            (Some(_), true) => Some(dump_pretty(&existing.document, 2).into_bytes()),
+            _ => raw.clone(),
         };
-        let done = match plan_cleanup(&self.snapshot, current.as_deref()) {
-            Cleanup::Write(bytes) => std::fs::write(&self.path, bytes).is_ok(),
-            Cleanup::Remove => std::fs::remove_file(&self.path).is_ok(),
-            Cleanup::Nothing => true,
-            Cleanup::Unparseable => false,
-        };
-        if !done {
-            report_manual_cleanup(&self.path);
+        let written =
+            dump_pretty(&with_our_provider(existing.document, base_url, catalog), 2).into_bytes();
+        match replace_if_unchanged(path, raw.as_deref(), Some(&written)) {
+            Ok(Replaced::Done) => {
+                return Ok(Snapshot {
+                    original,
+                    had_provider: existing.had_provider,
+                    written,
+                })
+            }
+            Ok(Replaced::Conflict) => continue,
+            Err(err) => return Err(format!("could not write {}: {err}", path.display())),
         }
     }
+    Err(format!(
+        "{} kept changing while wally was adding its provider; try again",
+        path.display()
+    ))
 }
 
 fn report_manual_cleanup(path: &Path) {
@@ -374,51 +492,15 @@ fn launch_with_endpoint(
     }
 
     let path = dir.join("providers.json");
-    let raw = match std::fs::read(&path) {
-        Ok(bytes) => Some(bytes),
-        Err(err) if err.kind() == ErrorKind::NotFound => None,
-        Err(err) => {
-            out::error_line(&format!("could not read {}: {err}", path.display()));
-            return 1;
-        }
-    };
-    let text = match raw.as_deref().map(std::str::from_utf8).transpose() {
-        Ok(text) => text,
-        Err(_) => {
-            out::error_line(&format!("{} is not UTF-8", path.display()));
-            return 1;
-        }
-    };
-    let existing = match parse_existing(text) {
-        Ok(existing) => existing,
+    // Only once our provider is in: a run that never wrote anything, or lost
+    // a conflict, has nothing to take back out.
+    let _restore = match install_provider(&path, &endpoint.base_url, &catalog) {
+        Ok(snapshot) => ProvidersGuard { path, snapshot },
         Err(failure) => {
             out::error_line(&failure);
             return 1;
         }
     };
-    // A leftover from a run that never cleaned up is not put back.
-    let original = match (&raw, existing.dropped_leftover) {
-        (Some(_), true) => Some(dump_pretty(&existing.document, 2).into_bytes()),
-        _ => raw.clone(),
-    };
-    let written = dump_pretty(
-        &with_our_provider(existing.document, &endpoint.base_url, &catalog),
-        2,
-    )
-    .into_bytes();
-    // Before the write, so a write that fails halfway is still undone.
-    let _restore = ProvidersGuard {
-        path: path.clone(),
-        snapshot: Snapshot {
-            original,
-            had_provider: existing.had_provider,
-            written: written.clone(),
-        },
-    };
-    if let Err(err) = std::fs::write(&path, &written) {
-        out::error_line(&format!("could not write {}: {err}", path.display()));
-        return 1;
-    }
 
     let key = ScopedEnv::new(KEY_VARIABLE, key_or_placeholder(&endpoint.api_key));
     let auth_json = std::fs::read_to_string(dir.join("auth.json")).ok();
@@ -622,6 +704,134 @@ mod tests {
     fn a_file_deleted_during_the_run_stays_deleted() {
         let snap = snapshot(Some("{}"), false, "WRITTEN");
         assert_eq!(plan_cleanup(&snap, None), Cleanup::Nothing);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("wally-cc-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn leftovers(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect()
+    }
+
+    #[test]
+    fn replace_commits_when_the_file_is_as_expected() {
+        let dir = scratch("replace-ok");
+        let path = dir.join("providers.json");
+        std::fs::write(&path, b"old").unwrap();
+        assert_eq!(
+            replace_if_unchanged(&path, Some(b"old"), Some(b"new")).unwrap(),
+            Replaced::Done
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert!(leftovers(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replace_leaves_a_file_that_changed_since_it_was_read() {
+        let dir = scratch("replace-conflict");
+        let path = dir.join("providers.json");
+        std::fs::write(&path, b"theirs").unwrap();
+        assert_eq!(
+            replace_if_unchanged(&path, Some(b"old"), Some(b"new")).unwrap(),
+            Replaced::Conflict
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"theirs");
+        assert!(leftovers(&dir).is_empty());
+        assert_eq!(
+            replace_if_unchanged(&path, Some(b"old"), None).unwrap(),
+            Replaced::Conflict
+        );
+        assert!(path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replace_removes_and_creates_by_expectation() {
+        let dir = scratch("replace-absent");
+        let path = dir.join("providers.json");
+        assert_eq!(
+            replace_if_unchanged(&path, None, Some(b"new")).unwrap(),
+            Replaced::Done
+        );
+        assert_eq!(
+            replace_if_unchanged(&path, None, Some(b"again")).unwrap(),
+            Replaced::Conflict
+        );
+        assert_eq!(
+            replace_if_unchanged(&path, Some(b"new"), None).unwrap(),
+            Replaced::Done
+        );
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Makes the staged write fail: a directory already sits where the
+    /// temporary file would go.
+    fn block_staging(path: &Path) {
+        let mut name = path.file_name().unwrap().to_os_string();
+        name.push(format!(".wally-{}.tmp", std::process::id()));
+        std::fs::create_dir_all(path.with_file_name(name)).unwrap();
+    }
+
+    #[test]
+    fn a_failed_setup_write_keeps_the_original_intact() {
+        let dir = scratch("install-fails");
+        let path = dir.join("providers.json");
+        let theirs = br#"{"provider":{"mine":{"baseURL":"http://x/v1","models":{}}}}"#;
+        std::fs::write(&path, theirs).unwrap();
+        block_staging(&path);
+        let failure = install_provider(&path, "http://ours/v1", &[priced("m")]).unwrap_err();
+        assert!(failure.starts_with("could not write"), "{failure}");
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_cleanup_write_leaves_a_whole_file_not_a_torn_one() {
+        let dir = scratch("cleanup-fails");
+        let path = dir.join("providers.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let snapshot = install_provider(&path, "http://ours/v1", &[priced("m")]).unwrap();
+        let installed = std::fs::read(&path).unwrap();
+        block_staging(&path);
+        drop(ProvidersGuard {
+            path: path.clone(),
+            snapshot,
+        });
+        // Cleanup could not stage its write, so the file is exactly what
+        // setup wrote: still valid JSON, never half of one.
+        assert_eq!(std::fs::read(&path).unwrap(), installed);
+        assert!(serde_json::from_slice::<Value>(&installed).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_then_guard_puts_the_file_back_byte_for_byte() {
+        let dir = scratch("install-restore");
+        let path = dir.join("providers.json");
+        let theirs =
+            b"{ \"provider\" : { \"mine\": {\"baseURL\":\"http://x/v1\",\"models\":{}} } }\n";
+        std::fs::write(&path, theirs).unwrap();
+        let snapshot =
+            install_provider(&path, "http://ours/v1", &[priced("glm-5.3-flash")]).unwrap();
+        let installed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(installed["provider"].get(PROVIDER_ID).is_some());
+        drop(ProvidersGuard {
+            path: path.clone(),
+            snapshot,
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        assert!(leftovers(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
