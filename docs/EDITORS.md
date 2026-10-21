@@ -30,6 +30,7 @@ tool starts the way you already have it configured, and wally wires nothing.
 | `openclaw` | your own `openclaw.json` plus one provider, written for the run and named by `OPENCLAW_CONFIG_PATH` |
 | `deepseek` | a `--patch` overlay on the argv that adds the provider to dsh's `llm-pi-ai` row; nothing enters `$DSH_HOME` |
 | `prime-agent` | a temporary extension loaded with `-e` that registers the provider for the run, with the key in `RUNANYWHERE_API_KEY`; nothing enters `~/.prime/agent` |
+| `command-code` | a `runanywhere-wally` provider merged into `~/.commandcode/providers.json` (it reads providers from nowhere else) and taken out when it exits: the original bytes go back if the file is unchanged, otherwise only that provider comes out. The file names `$WALLY_COMMAND_CODE_API_KEY` rather than holding the key. A local model, or a person with no Command Code sign-in, runs with `CMD_LOCAL_ONLY=1` (no Command Code gateway models, `/share`, `/usage` or server-side web tools); with no sign-in a placeholder `COMMAND_CODE_API_KEY` gets past Command Code's login screen. `--skip-onboarding --no-auto-update` are passed, `-t` is left to you. One run at a time (a lock in `~/.commandcode/`). Its own subcommands (`-- status`, `-- login`, …) run untouched; `-- acp` is wired, and there the editor picks the model |
 
 Two flags go with `-m`. `--serve` holds the endpoint open and prints it instead
 of launching anything, which is how a tool nobody has taught wally about gets
@@ -76,6 +77,15 @@ runs at `agent.reasoning_effort` in `~/.hermes/config.yaml` (per model under
 each model's levels up to its highest and starts at the app's own default.
 Prime Agent is given no reasoning levels yet: its models run at the
 endpoint's default, and a level has to be named in Prime Agent itself.
+Command Code is given each model's levels from `low` to `max` as
+`reasoningEfforts` (`--effort`, or `/model`), and starts at its own default.
+The endpoint attributes its traffic as `unknown` until the console learns a
+`command_code` harness.
+Wally ends when Command Code ends: Ctrl-C reaches both, and wally cleans up
+after the tool exits. A signal sent to wally alone leaves it waiting for the
+tool; signal the process group to stop both. A `kill -9` leaves the provider in
+`providers.json` until the next `wally command-code` drops it, and a bare
+`cmd -c` afterwards cannot find that provider for a resumed session.
 
 Codex is told the model's context window through the catalog file, so its
 context meter and auto-compaction work against the real limit. Its hosted web

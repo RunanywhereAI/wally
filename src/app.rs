@@ -133,6 +133,7 @@ pub fn configure_app(app: &mut App) {
                 "openclaw",
                 "deepseek",
                 "prime-agent",
+                "command-code",
             ],
         },
         Section {
@@ -176,6 +177,7 @@ fn is_passthrough_command(token: &str) -> bool {
         "openclaw",
         "deepseek",
         "prime-agent",
+        "command-code",
     ];
     NAMES.contains(&token)
 }

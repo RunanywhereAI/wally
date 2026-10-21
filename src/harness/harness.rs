@@ -754,6 +754,7 @@ fn installer(tool: &str) -> Option<Installer> {
         "openclaw" => ("npm i -g openclaw@latest", "npm.cmd i -g openclaw@latest", true),
         "dsh" => ("npm i -g @deepseek-ai/dsh", "npm.cmd i -g @deepseek-ai/dsh", true),
         "codex" => ("npm i -g @openai/codex", "npm.cmd i -g @openai/codex", true),
+        "command-code" => ("npm i -g command-code", "npm.cmd i -g command-code", true),
         "claude" => (
             "curl -fsSL https://claude.ai/install.sh | bash",
             "irm https://claude.ai/install.ps1 | iex",
@@ -1407,12 +1408,20 @@ mod tests {
         assert!(opencode.needs_npm);
     }
 
+    #[test]
+    #[cfg(not(windows))]
+    fn command_code_installs_with_npm() {
+        let command_code = installer("command-code").unwrap();
+        assert_eq!(command_code.command, "npm i -g command-code");
+        assert!(command_code.needs_npm);
+    }
+
     // PowerShell's default execution policy blocks npm's own npm.ps1 shim,
     // so the offered command must be the npm.cmd shim instead.
     #[cfg(windows)]
     #[test]
     fn npm_tools_install_with_npm_cmd_on_windows() {
-        for tool in ["opencode", "openclaw", "dsh"] {
+        for tool in ["opencode", "openclaw", "dsh", "command-code"] {
             let installer = installer(tool).unwrap();
             assert!(
                 installer.command.starts_with("npm.cmd "),

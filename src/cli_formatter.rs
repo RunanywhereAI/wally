@@ -1212,6 +1212,11 @@ mod tests {
                     "Open Prime Agent with a model",
                     "Coding tools",
                 ),
+                leaf(
+                    "command-code",
+                    "Open Command Code with a model",
+                    "Coding tools",
+                ),
                 namespace(
                     "account",
                     "Account",

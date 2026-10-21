@@ -27,6 +27,10 @@ pub enum Handoff {
     /// Prime Agent 0.10 has no `-e` extension flag. The provider is written
     /// into `models.json` in the agent directory.
     Extension,
+    /// Command Code reads custom providers only from
+    /// `~/.commandcode/providers.json`, and no variable moves that file; see
+    /// `command_code`.
+    ProvidersFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,13 +76,22 @@ pub fn agents() -> &'static [Agent] {
             handoff: Handoff::Extension,
             default_args: "",
         },
+        // `command-code` rather than `cmd`: on Windows `cmd` is cmd.exe, and
+        // the package ships the long name on every platform.
+        Agent {
+            id: "command-code",
+            command: "command-code",
+            summary: "Open Command Code with a model",
+            handoff: Handoff::ProvidersFile,
+            default_args: "",
+        },
     ];
     AGENTS
 }
 
 /// An OpenAI client sends an Authorization header whatever is in it, and the
 /// local server ignores the value. A placeholder keeps both ends happy.
-fn key_or_placeholder(api_key: &str) -> &str {
+pub(super) fn key_or_placeholder(api_key: &str) -> &str {
     if api_key.is_empty() {
         "local"
     } else {
@@ -119,7 +132,7 @@ fn unset_environment(name: &str) {
 /// The process outlives one launch — tests run several, and the REPL can too
 /// — so a value left behind would silently configure the next tool that
 /// named no model.
-struct ScopedEnv {
+pub(super) struct ScopedEnv {
     name: String,
     previous: Option<std::ffi::OsString>,
     had_previous: bool,
@@ -127,7 +140,7 @@ struct ScopedEnv {
 }
 
 impl ScopedEnv {
-    fn new(name: &str, value: &str) -> Self {
+    pub(super) fn new(name: &str, value: &str) -> Self {
         let previous = std::env::var_os(name);
         let had_previous = previous.is_some();
         let applied = set_environment(name, value);
@@ -139,7 +152,7 @@ impl ScopedEnv {
         }
     }
 
-    fn applied(&self) -> bool {
+    pub(super) fn applied(&self) -> bool {
         self.applied
     }
 }
@@ -485,7 +498,7 @@ fn drop_stale_open_claw_provider(state: &Path, config: &str) {
 /// The OS home: HOME, falling back to USERPROFILE on Windows the way
 /// `open_claw_state_directory` does (PowerShell and cmd.exe leave HOME
 /// unset).
-fn os_home() -> Option<OsString> {
+pub(super) fn os_home() -> Option<OsString> {
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
     #[cfg(windows)]
     let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()));
@@ -1416,6 +1429,11 @@ pub fn build_deep_seek_patch(llm_config: &str, model: &str) -> String {
 }
 
 pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &GlobalOptions) -> i32 {
+    // Command Code takes its lock and checks for its own subcommands before
+    // an endpoint is resolved, so it runs its own launch from the start.
+    if agent.handoff == Handoff::ProvidersFile {
+        return super::command_code::launch(agent, model, args, options);
+    }
     // A launch killed before its own Drop runs (crash, kill -9, a closed
     // terminal) leaves its config behind; sweep those before this one
     // possibly writes another, rather than only ever growing the pile.
@@ -1656,6 +1674,7 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                 options,
             )
         }
+        Handoff::ProvidersFile => unreachable!("command-code is dispatched before resolve"),
     };
 
     release(&endpoint);

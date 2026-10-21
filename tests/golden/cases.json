@@ -293,6 +293,13 @@
   ]
  },
  {
+  "name": "help__command-code",
+  "args": [
+   "help",
+   "command-code"
+  ]
+ },
+ {
   "name": "help__codex",
   "args": [
    "help",
@@ -464,6 +471,14 @@
   "args": [
    "help",
    "prime-agent",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__command-code",
+  "args": [
+   "help",
+   "command-code",
    "--help"
   ]
  },
