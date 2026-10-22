@@ -2459,8 +2459,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "fix/codex-harness-live",
-    "commit": "3fb1fd00aa4045ee9f2f6bfc5b7fefd6062dbc52",
+    "branch": "feat/eve-cap",
+    "commit": "8159b212889883906e510929148143c3eca1b23e",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

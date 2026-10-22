@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "298e6c27507aaffc032ea8c2f0640d8e1acf8873baadbb8f481ee4d5f8853d47";
+    "7f41d88a88825b96dba0db9c3e65e96b10bdd7a1dcac87a9eaabf22e35c08b54";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
