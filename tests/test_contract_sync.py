@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The CLI contract sync wrapper describes itself and refuses a pin with no provenance."""
+"""The CLI contract sync wrapper describes itself and refuses a pin with no provenance; the extractor carves the slice."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SYNC = REPO / "contracts" / "sync_from_inferenceinfra.py"
 EXTRACT = REPO / "contracts" / "wally-cli-v1.openapi.json"
+EXTRACTOR = REPO / "contracts" / "extract-cli-contract.py"
 
 
 def _check(*extra: str) -> subprocess.CompletedProcess[str]:
@@ -100,6 +101,80 @@ class ContractSyncTests(unittest.TestCase):
                 source[field] = ""
                 document["x-runanywhere-source"] = source
                 self._assert_refused(document, field)
+
+
+class ExtractorNarrowingTests(unittest.TestCase):
+    """`GET /v1/models` is carved to the one form the CLI reads (extract-cli-contract.py)."""
+
+    def _extract(self, source: dict) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "control-plane-v1.openapi.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            output = Path(directory) / "extract.json"
+            result = subprocess.run(
+                [sys.executable, str(EXTRACTOR), str(source_path), "--output", str(output)],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+            return json.loads(output.read_text(encoding="utf-8"))
+
+    def _source_with_a_format_query(self) -> dict:
+        """The committed extract, with listModels as the control plane describes it once the
+        models list can also answer `?format=openrouter-v2`: a format query, and a `oneOf`
+        response with no discriminator whose second branch is a shape the generator cannot read."""
+        document = json.loads(EXTRACT.read_text(encoding="utf-8"))
+        components = document["components"]
+        components["parameters"]["ModelListFormatQuery"] = {
+            "in": "query",
+            "name": "format",
+            "required": False,
+            "schema": {"enum": ["openrouter-v2"], "type": "string"},
+        }
+        components["schemas"]["OpenRouterModelDocumentList"] = {
+            "type": "object",
+            "properties": {"data": {"type": "array", "items": {"type": "object"}}},
+        }
+        components["schemas"]["ModelListResponse"] = {
+            "oneOf": [
+                {"$ref": "#/components/schemas/ModelList"},
+                {"$ref": "#/components/schemas/OpenRouterModelDocumentList"},
+            ]
+        }
+        operation = document["paths"]["/v1/models"]["get"]
+        operation["parameters"] = [{"$ref": "#/components/parameters/ModelListFormatQuery"}]
+        operation["responses"]["200"]["content"]["application/json"]["schema"] = {
+            "$ref": "#/components/schemas/ModelListResponse"
+        }
+        return document
+
+    def test_models_list_keeps_only_the_default_form(self):
+        extract = self._extract(self._source_with_a_format_query())
+        operation = extract["paths"]["/v1/models"]["get"]
+        self.assertEqual(
+            {"$ref": "#/components/schemas/ModelList"},
+            operation["responses"]["200"]["content"]["application/json"]["schema"],
+        )
+        self.assertNotIn("parameters", operation)
+        self.assertNotIn("ModelListFormatQuery", extract["components"]["parameters"])
+        self.assertNotIn("ModelListResponse", extract["components"]["schemas"])
+        self.assertNotIn("OpenRouterModelDocumentList", extract["components"]["schemas"])
+
+    def test_the_other_form_changing_does_not_move_the_slice(self):
+        before = self._source_with_a_format_query()
+        after = self._source_with_a_format_query()
+        after["components"]["schemas"]["OpenRouterModelDocumentList"]["properties"]["next"] = {
+            "type": "string"
+        }
+        self.assertEqual(self._extract(before), self._extract(after))
+
+    def test_a_source_without_the_format_query_is_carried_unchanged(self):
+        document = json.loads(EXTRACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            document["paths"], self._extract(document)["paths"]
+        )
 
 
 if __name__ == "__main__":
