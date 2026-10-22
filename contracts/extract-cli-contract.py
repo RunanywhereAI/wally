@@ -50,6 +50,21 @@ CLI_OPERATION_IDS = {
     # export behind `wally account usage --requests`.
     "listCliUsageRequests",
 }
+# Operations whose source description also carries a form the CLI never asks for. The CLI sends
+# `GET /v1/models` with no `format` query, so it only ever reads the default `ModelList`; the
+# `?format=openrouter-v2` document is a second 200 shape the control plane serves to other clients
+# (a `oneOf` with no discriminator, because the query picks the variant, not a field). It is cut out
+# of the slice rather than generated: the slice is what the CLI consumes, the binding generator reads
+# closed, discriminated shapes only, and a change to the other form must not flag the CLI as stale.
+# `parameters` names component parameters to leave out; `schemas` maps a component schema the
+# operation references to the one the CLI reads instead. An operation that does not reference them
+# (an older source contract) is carried unchanged.
+CLI_NARROWED_OPERATIONS = {
+    "listModels": {
+        "parameters": {"ModelListFormatQuery"},
+        "schemas": {"ModelListResponse": "ModelList"},
+    },
+}
 HTTP_METHODS = {"get", "post", "put", "delete", "patch"}
 # The component sections a kept operation may reference. Until wally #81 only
 # `schemas` was carried, so every `#/components/{parameters,responses}/...`
@@ -76,6 +91,30 @@ def _refs(value: object, out: set[str]) -> None:
     elif isinstance(value, list):
         for child in value:
             _refs(child, out)
+
+
+def _narrow(value: object, parameters: set[str], schemas: dict[str, str]) -> object:
+    """`value` with the narrowing of CLI_NARROWED_OPERATIONS applied; a copy, never the source."""
+    if isinstance(value, dict):
+        ref = value.get("$ref")
+        if isinstance(ref, str):
+            target = ref.rsplit("/", 1)[-1]
+            if ref.startswith("#/components/schemas/") and target in schemas:
+                return {**value, "$ref": f"#/components/schemas/{schemas[target]}"}
+        return {key: _narrow(child, parameters, schemas) for key, child in value.items()}
+    if isinstance(value, list):
+        kept = [
+            child
+            for child in value
+            if not (
+                isinstance(child, dict)
+                and isinstance(child.get("$ref"), str)
+                and child["$ref"].startswith("#/components/parameters/")
+                and child["$ref"].rsplit("/", 1)[-1] in parameters
+            )
+        ]
+        return [_narrow(child, parameters, schemas) for child in kept]
+    return value
 
 
 def main() -> None:
@@ -129,6 +168,13 @@ def main() -> None:
         kept = {}
         for method, operation in item.items():
             if method in HTTP_METHODS and operation.get("operationId") in CLI_OPERATION_IDS:
+                narrowing = CLI_NARROWED_OPERATIONS.get(operation["operationId"])
+                if narrowing:
+                    had_parameters = bool(operation.get("parameters"))
+                    operation = _narrow(operation, narrowing["parameters"], narrowing["schemas"])
+                    if had_parameters and not operation["parameters"]:
+                        # Every parameter was one the CLI does not send: no empty list stays behind.
+                        del operation["parameters"]
                 kept[method] = operation
                 found: set[str] = set()
                 _refs(operation, found)
