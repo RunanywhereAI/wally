@@ -1200,6 +1200,11 @@ mod tests {
                     "Open OpenCode with a local or cloud model",
                     "Coding tools",
                 ),
+                leaf(
+                    "shannon",
+                    "Test your own apps with Shannon, an AI pentester",
+                    "Coding tools",
+                ),
                 leaf("hermes", "Open Hermes with a model", "Coding tools"),
                 leaf("openclaw", "Open OpenClaw with a model", "Coding tools"),
                 leaf(
@@ -1215,11 +1220,6 @@ mod tests {
                 leaf(
                     "command-code",
                     "Open Command Code with a model",
-                    "Coding tools",
-                ),
-                leaf(
-                    "shannon",
-                    "Run Shannon, an AI pentester, on a model from your account",
                     "Coding tools",
                 ),
                 namespace(

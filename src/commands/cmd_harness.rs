@@ -74,7 +74,7 @@ pub fn register_harness(app: &mut App) {
     // runs the pinned release, rather than a row in the agents table.
     let shannon = app.add_subcommand(
         "shannon",
-        "Run Shannon, an AI pentester, on a model from your account",
+        "Test your own apps with Shannon, an AI pentester",
     );
     shannon.footer(&examples_footer(&[
         Example::new(

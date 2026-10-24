@@ -62,6 +62,16 @@ Offer to explain a harness before running it. Someone who has just signed up
 does not yet know what opencode is, and "would you like me to explain how the
 opencode harness works?" is a better second message than a launched TUI.
 
+## Shannon and other tools
+
+`wally shannon -- -u <app url> -r <repo path>` runs Shannon, an open-source AI
+pentester, on a model from the person's account. Only suggest it for a system
+they own or are authorised to test. It needs Docker running and Node 18+, and
+wally sets up the model config and key itself. For a scan longer than a
+sign-in lasts, the person exports a console Cloud key as `WALLY_CLOUD_KEY`.
+Setup details, and how to point any other OpenAI-compatible tool at the
+endpoint by hand, are in `docs/EDITORS.md`.
+
 ## Running a model directly
 
 ```bash
@@ -103,6 +113,8 @@ harness; those surfaces refuse it and point back here.
 ## When something is wrong
 
 - **"not signed in"** — `wally account login`.
+- **"not available on this account" or "not on your account's model list"** —
+  that model needs approval. Do not log in again; request access in the console.
 - **"that key is not valid"** — the key was revoked or expired; `wally account login` again.
 - **opencode not installed** — `npm i -g opencode-ai`.
 - **a model is slow or unavailable** — `wally backends` shows which engines this

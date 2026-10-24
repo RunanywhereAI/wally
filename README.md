@@ -58,6 +58,14 @@ wally opencode
 
 The default model is `glm-5.3-flash`. To change it, run `wally models default <model>`.
 
+**Test an app you are authorised to test with an AI pentester:**
+
+```bash
+wally shannon -- -u https://staging.example.com -r ./my-repo
+```
+
+Needs Docker and Node 18+. See [Shannon](docs/EDITORS.md#shannon).
+
 **Get help:**
 
 ```bash

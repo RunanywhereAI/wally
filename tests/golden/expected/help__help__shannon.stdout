@@ -1,0 +1,25 @@
+Test your own apps with Shannon, an AI pentester
+
+Usage: wally shannon [OPTIONS] [args...]
+
+Arguments:
+  args                        Shannon's own command and options; with none,
+                              start
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model from your account (default: your default
+                              model)
+
+Examples:
+  # Scan a target you are authorised to test (starts a scan)
+  wally shannon -- -u https://staging.example.com -r ./my-repo
+
+  # Choose the model for the scan
+  wally shannon -m glm-5.3-flash -- -u https://staging.example.com -r ./my-repo
+
+  # List running and finished scans
+  wally shannon -- scans
+
+  # Follow a scan's log
+  wally shannon -- logs my-scan

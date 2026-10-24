@@ -112,3 +112,7 @@ and its `--json` twin.
 `wally command-code` added a line to every command list, so the same 31 cases
 were re-captured from the Rust binary; that line is the only difference in
 each. `help__command-code` and `help__help__command-code` are new cases.
+
+`wally shannon` added a line to every command list, so the same 31 cases were
+re-captured from the Rust binary; that line is the only difference in each.
+`help__shannon` and `help__help__shannon` are new cases.
