@@ -1217,6 +1217,11 @@ mod tests {
                     "Open Command Code with a model",
                     "Coding tools",
                 ),
+                leaf(
+                    "shannon",
+                    "Run Shannon, an AI pentester, on a model from your account",
+                    "Coding tools",
+                ),
                 namespace(
                     "account",
                     "Account",

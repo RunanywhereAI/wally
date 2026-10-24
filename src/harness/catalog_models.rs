@@ -5,7 +5,7 @@
 //! model the console advertises rather than only the one the person launched.
 //! The launched model stays first so it remains the default.
 
-use crate::account::{ConsoleClient, ReasoningSupport};
+use crate::account::{ConsoleClient, IdentityResult, ReasoningSupport};
 
 use super::harness::Endpoint;
 use super::local_models::{local_context_size, local_output_size};
@@ -109,20 +109,19 @@ fn primary_first(models: &mut Vec<CatalogModel>, primary: &str) {
     }
 }
 
-/// Every hosted model the console advertises, each with its limits and price,
-/// `primary` first so it stays the harness default. Fetches the live catalog
-/// through `console` from `console_url` with `access_token`; `primary` is
-/// always present even if the catalog does not name it. The `console` overload
-/// is the test seam.
-pub fn catalog_models_with(
+/// Every hosted model the account can use, each with its limits and price, in
+/// the console's order, and what happened asking for them: the identity result
+/// and message of the model-list call, so a caller that must not guess (an
+/// empty list from an offline machine is not an empty account) can tell. The
+/// price call is best effort; a failed one leaves the prices at zero.
+pub fn account_models_with(
     console: &ConsoleClient,
     console_url: &str,
     access_token: &str,
-    primary: &str,
-) -> Vec<CatalogModel> {
+) -> (IdentityResult, Vec<CatalogModel>, String) {
     let mut out = Vec::new();
 
-    let (_, models, _) = console.fetch_models(console_url, access_token);
+    let (result, models, error) = console.fetch_models(console_url, access_token);
     let (_, prices, _) = console.fetch_catalog(console_url, access_token);
     let price_for = |id: &str| -> (i64, i64, i64) {
         prices
@@ -150,6 +149,21 @@ pub fn catalog_models_with(
             reasoning: info.reasoning.clone(),
         });
     }
+    (result, out, error)
+}
+
+/// Every hosted model the console advertises, each with its limits and price,
+/// `primary` first so it stays the harness default. Fetches the live catalog
+/// through `console` from `console_url` with `access_token`; `primary` is
+/// always present even if the catalog does not name it. The `console` overload
+/// is the test seam.
+pub fn catalog_models_with(
+    console: &ConsoleClient,
+    console_url: &str,
+    access_token: &str,
+    primary: &str,
+) -> Vec<CatalogModel> {
+    let (_, mut out, _) = account_models_with(console, console_url, access_token);
     primary_first(&mut out, primary);
     out
 }

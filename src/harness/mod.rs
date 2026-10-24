@@ -1,5 +1,5 @@
 //! Launching coding tools (Claude Code, Codex, opencode, Hermes, OpenClaw, DeepSeek,
-//! Prime Agent, Command Code)
+//! Prime Agent, Command Code) and Shannon, the open-source security tester,
 //! against a hosted or local model. One namespace, as C++ `wally::harness` was.
 
 pub mod agents;
@@ -15,6 +15,7 @@ pub mod image_gate;
 pub mod local_models;
 pub mod opencode;
 pub mod path_reload;
+pub mod shannon;
 
 pub use agents::*;
 pub use catalog_models::*;

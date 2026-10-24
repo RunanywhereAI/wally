@@ -87,7 +87,7 @@ fn epoch_seconds() -> i64 {
 /// The refresh half of the same dance `wally account usage` uses: exchange the
 /// refresh token for a new access token and persist it, so later commands in
 /// the same session do not pay for the refresh again.
-fn refresh_session(
+pub(crate) fn refresh_session(
     console: &ConsoleClient,
     credentials: &mut Credentials,
 ) -> Result<(), SessionError> {
@@ -1063,6 +1063,16 @@ pub fn report_not_signed_in() {
     ));
 }
 
+/// What a person is told when a hosted model is not on their account's list:
+/// a model that needs approval is asked for in the console, so this never
+/// sends them to log in again.
+pub fn not_on_account_message(model: &str) -> String {
+    format!(
+        "'{model}' is not on your account's model list. If it needs approval, request access \
+         in the console."
+    )
+}
+
 pub fn refresh_and_recheck_model(credentials: &Credentials, model: &str) -> bool {
     let pal = cli_color::make_palette(color_output_enabled(false));
     out::status_line(&format!("could not find '{model}' in the catalog"));
@@ -1082,7 +1092,7 @@ pub fn refresh_and_recheck_model(credentials: &Credentials, model: &str) -> bool
         pal.green, pal.reset
     ));
     if !account::model_is_cached(model) {
-        out::error_line(&format!("unknown model '{model}'"));
+        out::error_line(&not_on_account_message(model));
         // The cache is fresh (just refreshed), so this list is accurate.
         let available = account::cached_model_ids();
         if !available.is_empty() {
@@ -1472,6 +1482,17 @@ mod tests {
             npm_shim_script("\"%_prog%\" \"%dp0%\\x.js\" %* & del x\r\n"),
             None
         );
+    }
+
+    #[test]
+    fn a_model_off_the_account_list_points_at_the_console_not_at_login() {
+        let message = not_on_account_message("some-model");
+        assert_eq!(
+            message,
+            "'some-model' is not on your account's model list. If it needs approval, request \
+             access in the console."
+        );
+        assert!(!message.contains("log in") && !message.contains("login"));
     }
 
     #[test]
