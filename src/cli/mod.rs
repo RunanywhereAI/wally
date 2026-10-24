@@ -509,10 +509,13 @@ fn classify(token: &str) -> Token<'_> {
     }
     // Short option: `-x` is the name, whatever follows (`value` or clustered
     // flags) is `rest`. A `-`-prefixed negative number with no matching short
-    // option falls back to Plain by the caller when nothing resolves it.
+    // option falls back to Plain by the caller when nothing resolves it. The
+    // name ends after the first character, not the first byte, so `-é` is an
+    // unmatched option rather than a slice inside a UTF-8 sequence.
+    let split = 1 + token[1..].chars().next().map_or(0, char::len_utf8);
     Token::Short {
-        name: &token[..2],
-        rest: &token[2..],
+        name: &token[..split],
+        rest: &token[split..],
     }
 }
 
@@ -684,7 +687,8 @@ impl<'a> ParseState<'a> {
                 } else {
                     // A clustered short flag after `-h` (e.g. `-hv`): re-scan
                     // the remainder as its own short token.
-                    self.consume_short(args, i, &format!("-{}", &rest[..1]), &rest[1..])
+                    let split = rest.chars().next().map_or(0, char::len_utf8);
+                    self.consume_short(args, i, &format!("-{}", &rest[..split]), &rest[split..])
                 };
             }
             if self.frames[level]
@@ -1896,6 +1900,33 @@ mod tests {
             outcome,
             Outcome::Extras {
                 message: "The following argument was not expected: extra".to_string(),
+                path: vec!["about".to_string()],
+            }
+        );
+    }
+
+    /// A short-shaped token whose first character after `-` is not ASCII is
+    /// an unmatched option (CLI11 splits it by character), not a panic from
+    /// slicing inside a UTF-8 sequence.
+    #[test]
+    fn non_ascii_short_token_is_extras_error_not_a_panic() {
+        let mut app = App::new("root", "wally");
+        app.set_help_flag("-h,--help", "Show help");
+        app.add_subcommand("about", "About wally");
+
+        let outcome = app.parse(&["about".into(), "-é".into()]);
+        assert_eq!(
+            outcome,
+            Outcome::Extras {
+                message: "The following argument was not expected: -é".to_string(),
+                path: vec!["about".to_string()],
+            }
+        );
+
+        let outcome = app.parse(&["about".into(), "-hé".into()]);
+        assert_eq!(
+            outcome,
+            Outcome::Help {
                 path: vec!["about".to_string()],
             }
         );
