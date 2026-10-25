@@ -55,15 +55,20 @@ pub const MODEL_VARIABLE: &str = "SHANNON_AI_MODEL";
 /// way to supply one: a flag would put it in argv and shell history.
 pub const CLOUD_KEY_VARIABLE: &str = "WALLY_CLOUD_KEY";
 
-/// Variables that would override the key or the endpoint Shannon is given.
-/// Shannon prefers its provider's native key variable over
-/// `SHANNON_AI_API_KEY`, and `SHANNON_AI_BASE_URL` sends model traffic, and the
-/// key with it, to another host.
-const OVERRIDING_VARIABLES: [&str; 5] = [
+/// Where Shannon sends model traffic. Set rather than removed: Shannon fills a
+/// missing value from its own saved settings, which could name another host.
+pub const BASE_URL_VARIABLE: &str = "SHANNON_AI_BASE_URL";
+
+/// Shannon's switch for reusing a local Pi login instead of the key it is
+/// given. Forced off so the Wally key is the one that is used.
+pub const PI_AUTH_VARIABLE: &str = "SHANNON_USE_PI_AUTH";
+
+/// Variables that would override the key Shannon is given. Shannon prefers
+/// its provider's native key variable over `SHANNON_AI_API_KEY`.
+const OVERRIDING_VARIABLES: [&str; 4] = [
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "XAI_API_KEY",
-    "SHANNON_AI_BASE_URL",
     // Wally's own input, already handed over as SHANNON_AI_API_KEY.
     CLOUD_KEY_VARIABLE,
 ];
@@ -175,13 +180,15 @@ pub struct ChildEnv {
 }
 
 impl ChildEnv {
-    /// For `start`: the model and the key, and none of the variables that would
-    /// override either.
-    pub fn for_start(model: &str, key: &str) -> Self {
+    /// For `start`: the model, the key and the endpoint, Pi login reuse off,
+    /// and none of the variables that would override the key.
+    pub fn for_start(model: &str, key: &str, base_url: &str) -> Self {
         ChildEnv {
             set: vec![
                 (MODEL_VARIABLE, format!("{PROVIDER_ID}:{model}")),
                 (KEY_VARIABLE, key.to_string()),
+                (BASE_URL_VARIABLE, base_url.to_string()),
+                (PI_AUTH_VARIABLE, "0".to_string()),
             ],
             remove: OVERRIDING_VARIABLES.to_vec(),
         }
@@ -727,7 +734,7 @@ pub fn launch(requested_model: Option<&str>, args: &[String]) -> i32 {
     run_child(
         &runner,
         &invocation.argv(&path.to_string_lossy()),
-        &ChildEnv::for_start(&model, &hosted.key),
+        &ChildEnv::for_start(&model, &hosted.key, &base_url),
     )
 }
 
@@ -861,7 +868,7 @@ mod tests {
         let argv = invocation.argv("/p/models.json");
         assert!(argv.iter().all(|arg| !arg.contains(key)));
 
-        let env = ChildEnv::for_start("glm-5.3-flash", key);
+        let env = ChildEnv::for_start("glm-5.3-flash", key, "https://api.test/v1");
         assert!(env.set.contains(&(KEY_VARIABLE, key.to_string())));
         assert!(env
             .set
@@ -875,16 +882,22 @@ mod tests {
 
     #[test]
     fn start_removes_the_variables_that_would_override_the_key() {
-        let env = ChildEnv::for_start("m", "k");
+        let env = ChildEnv::for_start("m", "k", "https://api.test/v1");
         for name in [
             "OPENAI_API_KEY",
             "ANTHROPIC_API_KEY",
             "XAI_API_KEY",
-            "SHANNON_AI_BASE_URL",
             "WALLY_CLOUD_KEY",
         ] {
             assert!(env.remove.contains(&name), "{name}");
         }
+        // Set, not removed: Shannon would refill a missing endpoint from its
+        // saved settings, and Pi login reuse would ignore the key.
+        assert!(env
+            .set
+            .contains(&(BASE_URL_VARIABLE, "https://api.test/v1".to_string())));
+        assert!(env.set.contains(&(PI_AUTH_VARIABLE, "0".to_string())));
+        assert!(!env.remove.contains(&BASE_URL_VARIABLE));
         let unchanged = ChildEnv::unchanged();
         assert!(unchanged.set.is_empty() && unchanged.remove.is_empty());
     }
@@ -904,6 +917,7 @@ mod tests {
                  echo \"OPENAI=${{OPENAI_API_KEY-unset}}\" >> {r}\n\
                  echo \"ANTHROPIC=${{ANTHROPIC_API_KEY-unset}}\" >> {r}\n\
                  echo \"BASE=${{SHANNON_AI_BASE_URL-unset}}\" >> {r}\n\
+                 echo \"PIAUTH=${{SHANNON_USE_PI_AUTH-unset}}\" >> {r}\n\
                  exit 7",
                 r = record.display()
             ),
@@ -913,16 +927,18 @@ mod tests {
             std::env::set_var("OPENAI_API_KEY", "stray-openai");
             std::env::set_var("ANTHROPIC_API_KEY", "stray-anthropic");
             std::env::set_var("SHANNON_AI_BASE_URL", "https://elsewhere.test");
+            std::env::set_var("SHANNON_USE_PI_AUTH", "1");
         }
         let code = run_child(
             &Runner::Installed(shannon),
             &strings(&["start", "-u", "https://app.test"]),
-            &ChildEnv::for_start("glm-5.3-flash", "the-key"),
+            &ChildEnv::for_start("glm-5.3-flash", "the-key", "https://api.test/v1"),
         );
         unsafe {
             std::env::remove_var("OPENAI_API_KEY");
             std::env::remove_var("ANTHROPIC_API_KEY");
             std::env::remove_var("SHANNON_AI_BASE_URL");
+            std::env::remove_var("SHANNON_USE_PI_AUTH");
         }
         assert_eq!(code, 7);
         let seen = std::fs::read_to_string(&record).unwrap();
@@ -934,7 +950,8 @@ mod tests {
         );
         assert!(seen.contains("OPENAI=unset"), "{seen}");
         assert!(seen.contains("ANTHROPIC=unset"), "{seen}");
-        assert!(seen.contains("BASE=unset"), "{seen}");
+        assert!(seen.contains("BASE=https://api.test/v1"), "{seen}");
+        assert!(seen.contains("PIAUTH=0"), "{seen}");
         assert!(!seen.contains("stray"), "{seen}");
     }
 
