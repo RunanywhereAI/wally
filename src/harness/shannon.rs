@@ -59,11 +59,13 @@ pub const CLOUD_KEY_VARIABLE: &str = "WALLY_CLOUD_KEY";
 /// Shannon prefers its provider's native key variable over
 /// `SHANNON_AI_API_KEY`, and `SHANNON_AI_BASE_URL` sends model traffic, and the
 /// key with it, to another host.
-const OVERRIDING_VARIABLES: [&str; 4] = [
+const OVERRIDING_VARIABLES: [&str; 5] = [
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "XAI_API_KEY",
     "SHANNON_AI_BASE_URL",
+    // Wally's own input, already handed over as SHANNON_AI_API_KEY.
+    CLOUD_KEY_VARIABLE,
 ];
 
 /// A session that would end sooner than this is refreshed before the scan
@@ -379,16 +381,36 @@ pub fn parse_version(output: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Tries `start` again while the program is reported busy: a script that was
+/// written a moment ago can still be open for writing in a process forked in
+/// between, and the kernel refuses to run it until that process execs.
+fn retry_busy<T>(mut start: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut attempts = 0;
+    loop {
+        match start() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 40 =>
+            {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Runs `<shannon> version`, giving it a bounded time, and returns the version
 /// it reports. None if it does not run, fails, or does not answer.
 pub fn probe_version(shannon: &Path) -> Option<String> {
-    let mut child = Command::new(shannon)
-        .arg("version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut child = retry_busy(|| {
+        Command::new(shannon)
+            .arg("version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    })
+    .ok()?;
     let deadline = Instant::now() + Duration::from_secs(VERSION_PROBE_SECONDS);
     let status = loop {
         match child.try_wait() {
@@ -462,7 +484,7 @@ pub fn run_child(runner: &Runner, argv: &[String], env: &ChildEnv) -> i32 {
     let mut command = Command::new(runner.program());
     command.args(runner.prefix()).args(argv);
     env.apply(&mut command);
-    let status = match command.status() {
+    let status = match retry_busy(|| command.status()) {
         Ok(status) => status,
         Err(error) => {
             out::error_line(&format!("could not start Shannon: {error}"));
@@ -729,6 +751,9 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
+        // Other tests point TMPDIR at a directory they then sweep; resolving
+        // it under the same lock keeps this one out of their way.
+        let _lock = crate::util::env_lock::lock();
         let dir = std::env::temp_dir().join(format!("wally-shannon-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -856,6 +881,7 @@ mod tests {
             "ANTHROPIC_API_KEY",
             "XAI_API_KEY",
             "SHANNON_AI_BASE_URL",
+            "WALLY_CLOUD_KEY",
         ] {
             assert!(env.remove.contains(&name), "{name}");
         }
@@ -865,8 +891,8 @@ mod tests {
 
     #[test]
     fn the_child_sees_the_key_and_not_the_stray_ones() {
-        let _guard = crate::util::env_lock::lock();
         let dir = scratch("env");
+        let _guard = crate::util::env_lock::lock();
         let record = dir.join("record");
         let shannon = stub(
             &dir,
