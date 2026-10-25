@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "298e6c27507aaffc032ea8c2f0640d8e1acf8873baadbb8f481ee4d5f8853d47";
+    "f0cd9d02482c6bbf041500133d48b6ce2ca35643efcd7d925bd3c4e70220a5cc";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -51,6 +51,11 @@ pub enum ApiErrorCode {
     KReconciliationUnverified,
     KRetentionManagedByRunanywhere,
     KCardRequired,
+    KAccessRequestExists,
+    KAccessRequestClosed,
+    KAccessProgrammeClosed,
+    KNotStaff,
+    KInvalidTransition,
 }
 
 impl ApiErrorCode {
@@ -92,6 +97,11 @@ impl ApiErrorCode {
             ApiErrorCode::KReconciliationUnverified => "reconciliation_unverified",
             ApiErrorCode::KRetentionManagedByRunanywhere => "retention_managed_by_runanywhere",
             ApiErrorCode::KCardRequired => "card_required",
+            ApiErrorCode::KAccessRequestExists => "access_request_exists",
+            ApiErrorCode::KAccessRequestClosed => "access_request_closed",
+            ApiErrorCode::KAccessProgrammeClosed => "access_programme_closed",
+            ApiErrorCode::KNotStaff => "not_staff",
+            ApiErrorCode::KInvalidTransition => "invalid_transition",
         }
     }
 
@@ -133,6 +143,11 @@ impl ApiErrorCode {
             "reconciliation_unverified" => Ok(ApiErrorCode::KReconciliationUnverified),
             "retention_managed_by_runanywhere" => Ok(ApiErrorCode::KRetentionManagedByRunanywhere),
             "card_required" => Ok(ApiErrorCode::KCardRequired),
+            "access_request_exists" => Ok(ApiErrorCode::KAccessRequestExists),
+            "access_request_closed" => Ok(ApiErrorCode::KAccessRequestClosed),
+            "access_programme_closed" => Ok(ApiErrorCode::KAccessProgrammeClosed),
+            "not_staff" => Ok(ApiErrorCode::KNotStaff),
+            "invalid_transition" => Ok(ApiErrorCode::KInvalidTransition),
             other => Err(format!("unknown ApiErrorCode: {other}")),
         }
     }

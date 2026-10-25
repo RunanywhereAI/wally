@@ -329,7 +329,12 @@
           "gateway_operation_pending",
           "reconciliation_unverified",
           "retention_managed_by_runanywhere",
-          "card_required"
+          "card_required",
+          "access_request_exists",
+          "access_request_closed",
+          "access_programme_closed",
+          "not_staff",
+          "invalid_transition"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -1413,7 +1418,7 @@
             "type": "integer"
           },
           "datacenters": {
-            "description": "Where the model is served from: one entry per country its serving nodes are in. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "description": "Where the model is served from: one entry per country. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
             "items": {
               "$ref": "#/components/schemas/OpenRouterDatacenter"
             },
@@ -2459,8 +2464,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "fix/codex-harness-live",
-    "commit": "3fb1fd00aa4045ee9f2f6bfc5b7fefd6062dbc52",
+    "branch": "feat/model-access-review",
+    "commit": "aa1298ba044ea8e0570991c0e7543ede0c85c8af",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
