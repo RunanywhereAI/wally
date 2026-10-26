@@ -428,9 +428,9 @@ your shell.
 
 [DeepSec](https://www.npmjs.com/package/deepsec) is an npm CLI wally does not
 bundle. Wally runs the release it was checked against (`2.3.10`): your `deepsec`
-on PATH if it reports exactly that version, otherwise it prints the
-`npx --yes deepsec@2.3.10` command and asks before running it. Bare
-`wally deepsec` is DeepSec `init` in the current directory: run it from a repo you own, not from `$HOME`. DeepSec
+on PATH if it reports exactly that version, otherwise `npx --yes deepsec@2.3.10`
+(same as Shannon). Bare `wally deepsec` is DeepSec `init` in
+the current directory: run it from a repo you own, not from `$HOME`. DeepSec
 still links a Vercel project (Sandbox identity) even when models go through
 your RunAnywhere account.
 

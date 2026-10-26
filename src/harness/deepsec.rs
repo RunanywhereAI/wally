@@ -16,7 +16,6 @@ use serde_json::json;
 use crate::account::{self, ConsoleClient};
 use crate::io::output as out;
 
-use super::harness::confirm;
 use super::hosted::{self, CLOUD_KEY_VARIABLE};
 
 /// The DeepSec release this launcher was written against.
@@ -308,6 +307,17 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+/// DeepSec init drops the CLI into `<cwd>/.deepsec/node_modules`. That is an
+/// install even when `deepsec` is not on PATH.
+pub fn workspace_deepsec(cwd: &Path) -> Option<PathBuf> {
+    let path = cwd
+        .join(".deepsec")
+        .join("node_modules")
+        .join(".bin")
+        .join("deepsec");
+    is_executable(&path).then_some(path)
+}
+
 pub fn find_on_path(name: &str, search_path: &OsStr) -> Option<PathBuf> {
     let names: Vec<String> = if cfg!(windows) {
         vec![
@@ -396,9 +406,14 @@ pub fn probe_version(deepsec: &Path) -> Option<String> {
 pub fn select_runner(
     search_path: &OsStr,
     probe: &dyn Fn(&Path) -> Option<String>,
+    preferred: Option<&Path>,
 ) -> Result<(Runner, Option<String>), String> {
     let mut note = None;
-    if let Some(installed) = find_on_path("deepsec", search_path) {
+    let installed = preferred
+        .filter(|path| is_executable(path))
+        .map(Path::to_path_buf)
+        .or_else(|| find_on_path("deepsec", search_path));
+    if let Some(installed) = installed {
         match probe(&installed) {
             Some(version)
                 if version == PINNED_VERSION
@@ -496,7 +511,11 @@ pub fn launch(requested_model: Option<&str>, args: &[String]) -> i32 {
     }
 
     let search_path = std::env::var_os("PATH").unwrap_or_default();
-    let (runner, note) = match select_runner(&search_path, &probe_version) {
+    let (runner, note) = match select_runner(
+        &search_path,
+        &probe_version,
+        workspace_deepsec(&cwd).as_deref(),
+    ) {
         Ok(selected) => selected,
         Err(message) => {
             out::error_line(&message);
@@ -505,17 +524,11 @@ pub fn launch(requested_model: Option<&str>, args: &[String]) -> i32 {
     };
     if let Some(note) = note {
         out::status_line(&note);
-    }
-    if matches!(runner, Runner::Npx(_)) {
-        let command = npx_invoke();
-        out::error_line("deepsec is not installed on this machine");
-        out::status_line(&format!("run it with `{command}`"));
+    } else if matches!(runner, Runner::Npx(_)) {
+        out::status_line(&format!("using `{}`", npx_invoke()));
         out::status_line(
             "DeepSec init also links a Vercel project for Sandbox identity; models still use your RunAnywhere account.",
         );
-        if !confirm(&format!("Run it now with `{command}`? [y/N] ")) {
-            return 127;
-        }
     }
 
     let Invocation::Routed { .. } = &invocation else {
@@ -766,15 +779,34 @@ mod tests {
         fs::set_permissions(&deepsec, fs::Permissions::from_mode(0o700)).unwrap();
         let (runner, note) = select_runner(dir.path().as_os_str(), &|_| {
             Some(PINNED_VERSION.to_string())
-        })
+        }, None)
         .unwrap();
         assert!(note.is_none());
         assert_eq!(runner, Runner::Installed(deepsec));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn select_runner_prefers_workspace_install_over_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("deepsec");
+        fs::write(&workspace, "#!/bin/sh\necho deepsec 2.3.10\n").unwrap();
+        fs::set_permissions(&workspace, fs::Permissions::from_mode(0o700)).unwrap();
+        let (runner, note) = select_runner(
+            OsStr::new("/empty-wally-path"),
+            &|_| Some(PINNED_VERSION.to_string()),
+            Some(&workspace),
+        )
+        .unwrap();
+        assert!(note.is_none());
+        assert_eq!(runner, Runner::Installed(workspace));
+    }
+
     #[test]
     fn select_runner_without_deepsec_or_npx_names_node() {
-        let err = select_runner(OsStr::new("/empty-wally-path"), &|_| None).unwrap_err();
+        let err = select_runner(OsStr::new("/empty-wally-path"), &|_| None, None).unwrap_err();
         assert!(err.contains("npx were not found"));
         assert!(err.contains("Node 18"));
     }
