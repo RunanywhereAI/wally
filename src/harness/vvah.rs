@@ -166,7 +166,8 @@ pub fn config_yaml(model: &str) -> String {
         out.push_str(&format!("    {id}: {{id: {model}, via: openai}}\n"));
     }
     out.push_str(
-        "step2:\n  max_turns: 60\n\
+        "step1:\n  auto_exclude_effort: none\n\
+         step2:\n  max_turns: 60\n\
          step4:\n  max_turns: 60\n\
          step6_verify:\n  max_turns: 60\n\
          step_remediate:\n  enabled: true\n\
@@ -861,6 +862,7 @@ mod tests {
         assert!(yaml.contains("remediate: {id: glm-5.3-flash, via: openai}"));
         assert!(yaml.contains("    orchestrator: {id: glm-5.3-flash, via: openai}"));
         assert!(yaml.contains("max_turns: 60"));
+        assert!(yaml.contains("auto_exclude_effort: none"));
         assert!(!yaml.contains("inject:"));
         assert!(!yaml.to_lowercase().contains("api_key"));
         assert!(!yaml.contains("sk-"));

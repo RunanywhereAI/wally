@@ -422,8 +422,8 @@ only.
 ## DeepSec
 
 [DeepSec](https://www.npmjs.com/package/deepsec) is an npm CLI wally does not
-bundle. If `deepsec` is not on PATH, wally prints the `npx --yes deepsec@…`
-command and asks before running it. Bare `wally deepsec` is DeepSec `init` in
+bundle. If `deepsec` is not on PATH, wally runs `npx --yes deepsec@…` the same
+way Shannon does. Bare `wally deepsec` is DeepSec `init` in
 the current directory: run it from a repo you own, not from `$HOME`. DeepSec
 still links a Vercel project (Sandbox identity) even when models go through
 your RunAnywhere account.
