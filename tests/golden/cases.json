@@ -307,6 +307,20 @@
   ]
  },
  {
+  "name": "help__deepsec",
+  "args": [
+   "help",
+   "deepsec"
+  ]
+ },
+ {
+  "name": "help__vvah",
+  "args": [
+   "help",
+   "vvah"
+  ]
+ },
+ {
   "name": "help__codex",
   "args": [
    "help",
@@ -494,6 +508,22 @@
   "args": [
    "help",
    "shannon",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__deepsec",
+  "args": [
+   "help",
+   "deepsec",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__vvah",
+  "args": [
+   "help",
+   "vvah",
    "--help"
   ]
  },

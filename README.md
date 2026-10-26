@@ -66,6 +66,15 @@ wally shannon -- -u https://staging.example.com -r ./my-repo
 
 Needs Docker and Node 18+. See [Shannon](docs/EDITORS.md#shannon).
 
+**Scan repos you are authorised to test:**
+
+```bash
+wally deepsec -- init --repo ./my-repo
+wally vvah -- scan --repo ./my-repo
+```
+
+DeepSec needs Node 18+ for `npx`. VVAH needs Python 3.11–3.14. See [Security tools](docs/EDITORS.md#security-tools).
+
 **Get help:**
 
 ```bash

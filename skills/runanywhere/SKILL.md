@@ -72,6 +72,20 @@ sign-in lasts, the person exports a console Cloud key as `WALLY_CLOUD_KEY`.
 Setup details, and how to point any other OpenAI-compatible tool at the
 endpoint by hand, are in `docs/EDITORS.md`.
 
+## Security tools
+
+`wally deepsec` and `wally vvah` run hosted security scanners on a model from the
+person's account. Only suggest them for a repo or system they own or are
+authorised to test. DeepSec needs Node 18+; VVAH needs Python 3.11–3.14. Wally sets
+up routing and keys in the child environment, never on the command line. For a
+run longer than a sign-in lasts, they export a console Cloud key as
+`WALLY_CLOUD_KEY`. Details are in `docs/EDITORS.md`.
+
+```bash
+wally deepsec -- init --repo "$REPO_PATH"
+wally vvah -- scan --repo "$REPO_PATH"
+```
+
 ## Running a model directly
 
 ```bash
@@ -115,6 +129,7 @@ harness; those surfaces refuse it and point back here.
 - **"not signed in"** — `wally account login`.
 - **"not available on this account" or "not on your account's model list"** —
   that model needs approval. Do not log in again; request access in the console.
+- **DeepSec or VVAH prerequisites missing** — install Node 18+ (DeepSec) or Python 3.11–3.14 (VVAH); see `docs/EDITORS.md`.
 - **"that key is not valid"** — the key was revoked or expired; `wally account login` again.
 - **opencode not installed** — `npm i -g opencode-ai`.
 - **a model is slow or unavailable** — `wally backends` shows which engines this

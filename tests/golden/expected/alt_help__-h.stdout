@@ -27,6 +27,10 @@ Coding tools:
   prime-agent                 Open Prime Agent with a model
   command-code                Open Command Code with a model
 
+Security tools:
+  deepsec                     Scan your own repos with DeepSec
+  vvah                        Scan your own repos with VVAH
+
 Account:
   account login               Sign in through the browser
   account logout              Sign out and revoke the session

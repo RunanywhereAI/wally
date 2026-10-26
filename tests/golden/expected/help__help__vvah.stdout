@@ -1,0 +1,22 @@
+Scan your own repos with VVAH
+
+Usage: wally vvah [OPTIONS] [args...]
+
+Arguments:
+  args                        VVAH's own command and options; with none, scan
+                              --repo . --remediate
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model from your account (default: your default
+                              model)
+
+Examples:
+  # Scan the current repo you are authorised to test
+  wally vvah
+
+  # Scan another path with a chosen model
+  wally vvah -m glm-5.3-flash -- scan --repo ./my-repo
+
+  # Other VVAH commands pass through
+  wally vvah -- report

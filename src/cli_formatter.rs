@@ -1222,6 +1222,12 @@ mod tests {
                     "Open Command Code with a model",
                     "Coding tools",
                 ),
+                leaf(
+                    "deepsec",
+                    "Scan your own repos with DeepSec",
+                    "Security tools",
+                ),
+                leaf("vvah", "Scan your own repos with VVAH", "Security tools"),
                 namespace(
                     "account",
                     "Account",

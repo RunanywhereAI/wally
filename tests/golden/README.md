@@ -116,3 +116,8 @@ each. `help__command-code` and `help__help__command-code` are new cases.
 `wally shannon` added a line to every command list, so the same 31 cases were
 re-captured from the Rust binary; that line is the only difference in each.
 `help__shannon` and `help__help__shannon` are new cases.
+
+`wally deepsec` and `wally vvah` added a **Security tools** group to every
+command list, so those two lines are the only extra difference in each.
+`help__deepsec`, `help__help__deepsec`, `help__vvah` and `help__help__vvah` are
+new cases.

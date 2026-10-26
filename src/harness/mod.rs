@@ -9,13 +9,16 @@ pub mod claude_effort;
 pub mod codex;
 pub mod command_code;
 pub mod declared_harness;
+pub mod deepsec;
 #[allow(clippy::module_inception)]
 pub mod harness;
+pub mod hosted;
 pub mod image_gate;
 pub mod local_models;
 pub mod opencode;
 pub mod path_reload;
 pub mod shannon;
+pub mod vvah;
 
 pub use agents::*;
 pub use catalog_models::*;
