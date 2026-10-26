@@ -550,10 +550,7 @@ fn ensure_installed() -> Option<PathBuf> {
         return None;
     };
     let python = find_supported_python().map(|(path, _, _)| path);
-    let shown = python
-        .as_ref()
-        .map(PathBuf::as_path)
-        .unwrap_or(Path::new("python3"));
+    let shown = python.as_deref().unwrap_or(Path::new("python3"));
     let command = install_command(&dir, shown);
     out::error_line("vvaharness is not installed on this machine");
     out::status_line(&format!("install it with `{command}`"));
