@@ -777,9 +777,11 @@ mod tests {
         let deepsec = dir.path().join("deepsec");
         fs::write(&deepsec, "#!/bin/sh\necho deepsec 2.3.10\n").unwrap();
         fs::set_permissions(&deepsec, fs::Permissions::from_mode(0o700)).unwrap();
-        let (runner, note) = select_runner(dir.path().as_os_str(), &|_| {
-            Some(PINNED_VERSION.to_string())
-        }, None)
+        let (runner, note) = select_runner(
+            dir.path().as_os_str(),
+            &|_| Some(PINNED_VERSION.to_string()),
+            None,
+        )
         .unwrap();
         assert!(note.is_none());
         assert_eq!(runner, Runner::Installed(deepsec));
