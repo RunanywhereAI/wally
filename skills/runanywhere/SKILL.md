@@ -85,7 +85,7 @@ run longer than a sign-in lasts, they export a console Cloud key as
 `WALLY_CLOUD_KEY`. Details are in `docs/EDITORS.md`.
 
 ```bash
-wally deepsec -- init --repo "$REPO_PATH"
+wally deepsec -- init . "$REPO_PATH"
 wally vvah -- scan --repo "$REPO_PATH"
 ```
 

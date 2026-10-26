@@ -111,7 +111,7 @@ pub fn register_harness(app: &mut App) {
     let deepsec = app.add_subcommand("deepsec", "Scan your own repos with DeepSec");
     deepsec.footer(&examples_footer(&[
         Example::new(
-            "wally deepsec -- init --repo ./my-repo",
+            "wally deepsec -- init . ./my-repo",
             "Start a scan on a repo you are authorised to test (runs init)",
         ),
         Example::new(

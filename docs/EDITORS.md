@@ -446,7 +446,7 @@ What you need:
 
 ```bash
 wally account login
-wally deepsec -- init --repo ./my-repo
+wally deepsec -- init . ./my-repo
 ```
 
 With no DeepSec command after `--`, wally runs `init`. Other subcommands pass

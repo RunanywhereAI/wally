@@ -69,7 +69,7 @@ Needs Docker. Node 18+ is required unless Shannon 3.4.0 is installed on PATH. Se
 **Scan repos you are authorised to test:**
 
 ```bash
-wally deepsec -- init --repo ./my-repo
+wally deepsec -- init . ./my-repo
 wally vvah -- scan --repo ./my-repo
 ```
 

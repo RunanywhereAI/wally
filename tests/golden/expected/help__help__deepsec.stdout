@@ -12,7 +12,7 @@ Options:
 
 Examples:
   # Start a scan on a repo you are authorised to test (runs init)
-  wally deepsec -- init --repo ./my-repo
+  wally deepsec -- init . ./my-repo
 
   # Choose the model
   wally deepsec -m glm-5.3-flash -- process
