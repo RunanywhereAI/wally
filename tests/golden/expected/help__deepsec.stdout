@@ -1,0 +1,21 @@
+Scan your own repos with DeepSec
+
+Usage: wally deepsec [OPTIONS] [args...]
+
+Arguments:
+  args                        DeepSec's own command and options; with none, init
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model from your account (default: your default
+                              model)
+
+Examples:
+  # Start a scan on a repo you are authorised to test (runs init)
+  wally deepsec -- init --repo ./my-repo
+
+  # Choose the model
+  wally deepsec -m glm-5.3-flash -- process
+
+  # Other DeepSec commands pass through
+  wally deepsec -- status

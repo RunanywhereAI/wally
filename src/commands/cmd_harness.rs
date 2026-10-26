@@ -108,6 +108,72 @@ pub fn register_harness(app: &mut App) {
         harness::shannon::launch(p.get_str("--model").as_deref(), &p.get_strs("args"))
     });
 
+    let deepsec = app.add_subcommand("deepsec", "Scan your own repos with DeepSec");
+    deepsec.footer(&examples_footer(&[
+        Example::new(
+            "wally deepsec -- init --repo ./my-repo",
+            "Start a scan on a repo you are authorised to test (runs init)",
+        ),
+        Example::new(
+            "wally deepsec -m glm-5.3-flash -- process",
+            "Choose the model",
+        ),
+        Example::new(
+            "wally deepsec -- status",
+            "Other DeepSec commands pass through",
+        ),
+    ]));
+    deepsec.add_option(
+        "-m,--model",
+        ValueType::Text,
+        "A model from your account (default: your default model)",
+    );
+    deepsec
+        .add_option(
+            "args",
+            ValueType::Text,
+            "DeepSec's own command and options; with none, init",
+        )
+        .multi();
+    deepsec.prefix_command(true);
+    deepsec.callback(|p, _g| {
+        if harness::refuse_decisions_model(p.get_str("--model").as_deref()) {
+            return 2;
+        }
+        harness::deepsec::launch(p.get_str("--model").as_deref(), &p.get_strs("args"))
+    });
+
+    let vvah = app.add_subcommand("vvah", "Scan your own repos with VVAH");
+    vvah.footer(&examples_footer(&[
+        Example::new(
+            "wally vvah",
+            "Scan the current repo you are authorised to test",
+        ),
+        Example::new(
+            "wally vvah -m glm-5.3-flash -- scan --repo ./my-repo",
+            "Scan another path with a chosen model",
+        ),
+        Example::new("wally vvah -- report", "Other VVAH commands pass through"),
+    ]));
+    vvah.add_option(
+        "-m,--model",
+        ValueType::Text,
+        "A model from your account (default: your default model)",
+    );
+    vvah.add_option(
+        "args",
+        ValueType::Text,
+        "VVAH's own command and options; with none, scan --repo . --remediate",
+    )
+    .multi();
+    vvah.prefix_command(true);
+    vvah.callback(|p, _g| {
+        if harness::refuse_decisions_model(p.get_str("--model").as_deref()) {
+            return 2;
+        }
+        harness::vvah::launch(p.get_str("--model").as_deref(), &p.get_strs("args"))
+    });
+
     // The OpenAI-shaped agents, one subcommand per row of the table. They need
     // no translator, so there is nothing here but resolving the model and
     // handing the endpoint over the way each one takes it.
