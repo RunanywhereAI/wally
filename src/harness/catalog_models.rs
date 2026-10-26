@@ -153,6 +153,27 @@ pub fn account_models_with(
             reasoning: info.reasoning.clone(),
         });
     }
+    // A private, grant-only model is stripped from the gateway's /v1/models for
+    // every key (so the id never reaches an account that was not granted it),
+    // but the CATALOGUE is grant-aware: it lists a private model only to an
+    // account that holds it. Add what the catalogue names that /v1/models left
+    // out, so a granted account can pick the model it can already call. The
+    // catalogue carries price but not limits, so these entries get no window
+    // (the same shape `primary_first` uses for a model it only knows by id).
+    // Decisions-only ids stay out: they are the one thing the catalogue names
+    // that is deliberately not a chat model.
+    for price in &prices {
+        if price.id.is_empty() || price.decisions_only || out.iter().any(|m| m.id == price.id) {
+            continue;
+        }
+        out.push(CatalogModel {
+            id: price.id.clone(),
+            input_per_mtok: price.input_per_mtok,
+            output_per_mtok: price.output_per_mtok,
+            cached_input_per_mtok: price.cached_input_per_mtok,
+            ..Default::default()
+        });
+    }
     (result, out, error)
 }
 
@@ -255,5 +276,75 @@ mod effort_tests {
         let mut body = serde_json::json!({"reasoning_effort": "none"});
         fit_reasoning_effort(&mut body, &[always_thinks()], "muse-spark");
         assert_eq!(body["reasoning_effort"], "minimal");
+    }
+}
+
+#[cfg(test)]
+mod granted_model_tests {
+    use super::*;
+    use crate::account::console::{HttpResponse, Transport};
+    use std::sync::Arc;
+
+    const GATED: &str = "deepseek-v4.1-flash-1017-uncensored";
+
+    /// A control plane where `/v1/models` is the gateway's list (a private,
+    /// grant-only model is stripped from it) and the catalogue is the
+    /// grant-aware one (it names the model the account was granted).
+    fn console(models_body: &'static str, catalog_body: &'static str) -> ConsoleClient {
+        let transport: Transport = Arc::new(move |request| {
+            let body = if request.url.ends_with("/v1/models/catalog") {
+                catalog_body
+            } else if request.url.ends_with("/v1/models") {
+                models_body
+            } else {
+                return Err(format!("unexpected url {}", request.url));
+            };
+            Ok(HttpResponse {
+                status: 200,
+                body: body.to_string(),
+                headers: Default::default(),
+            })
+        });
+        ConsoleClient::new(Some(transport))
+    }
+
+    const MODELS: &str = r#"{"object":"list","data":[{"id":"glm-5.3-flash","object":"model"}]}"#;
+    const CATALOG_WITH_GRANT: &str = r#"{"pricing_version":"v","effective_from":"2026-10-26T00:00:00Z","models":[
+        {"id":"glm-5.3-flash","display_name":"GLM","input_per_mtok":272000,"output_per_mtok":650000,"cached_input_per_mtok":76000,"decisions_only":false,"decisions_image_input":false},
+        {"id":"deepseek-v4.1-flash-1017-uncensored","display_name":"U","input_per_mtok":230000,"output_per_mtok":900000,"cached_input_per_mtok":22000,"decisions_only":false,"decisions_image_input":false}]}"#;
+    const CATALOG_WITHOUT_GRANT: &str = r#"{"pricing_version":"v","effective_from":"2026-10-26T00:00:00Z","models":[
+        {"id":"glm-5.3-flash","display_name":"GLM","input_per_mtok":272000,"output_per_mtok":650000,"cached_input_per_mtok":76000,"decisions_only":false,"decisions_image_input":false}]}"#;
+
+    #[test]
+    fn a_granted_private_model_the_gateway_list_omits_is_added_from_the_catalogue() {
+        let (result, models, _) = account_models_with(
+            &console(MODELS, CATALOG_WITH_GRANT),
+            "https://c.example",
+            "k",
+        );
+        assert!(matches!(result, IdentityResult::Ok));
+        let gated = models
+            .iter()
+            .find(|m| m.id == GATED)
+            .expect("granted model is listed");
+        assert_eq!(gated.input_per_mtok, 230000, "priced from the catalogue");
+    }
+
+    #[test]
+    fn an_account_without_the_grant_never_gets_the_private_model() {
+        let (_, models, _) = account_models_with(
+            &console(MODELS, CATALOG_WITHOUT_GRANT),
+            "https://c.example",
+            "k",
+        );
+        assert!(models.iter().all(|m| m.id != GATED), "no grant, no listing");
+    }
+
+    #[test]
+    fn a_model_in_both_lists_is_listed_once() {
+        let both = r#"{"object":"list","data":[{"id":"glm-5.3-flash","object":"model"},{"id":"deepseek-v4.1-flash-1017-uncensored","object":"model"}]}"#;
+        let (_, models, _) =
+            account_models_with(&console(both, CATALOG_WITH_GRANT), "https://c.example", "k");
+        assert_eq!(models.iter().filter(|m| m.id == GATED).count(), 1);
     }
 }
