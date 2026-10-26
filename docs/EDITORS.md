@@ -353,11 +353,12 @@ For `start`, wally:
 - writes every model your account can use, with its real context and output
   limits, to `shannon/models.json` in your wally profile (owner-only, replaced
   on every run) and passes it as `--models-config`;
-- sets `SHANNON_AI_MODEL=runanywhere:<model>` and `SHANNON_AI_API_KEY` for
-  Shannon's process only. The key is never in the arguments or in `models.json`;
-- drops `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY` and
-  `SHANNON_AI_BASE_URL` from Shannon's environment so none of them can take
-  over from your key.
+- sets `SHANNON_AI_MODEL=runanywhere:<model>`, `SHANNON_AI_API_KEY` and
+  `SHANNON_AI_BASE_URL` (wally's endpoint) for Shannon's process only. The key
+  is never in the arguments or in `models.json`;
+- removes `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY` and
+  `WALLY_CLOUD_KEY` from Shannon's environment so none of them can take over
+  from your key. Your own shell is never changed.
 
 `--models-config` is wally's to set, so passing your own with `start` is refused.
 
@@ -390,17 +391,19 @@ with the `runanywhere:` prefix chosen below. Write this as `models.json`:
 then:
 
 ```bash
-export SHANNON_AI_API_KEY=<your Cloud key>
+export SHANNON_AI_API_KEY='YOUR_CLOUD_KEY'
 export SHANNON_AI_MODEL=runanywhere:glm-5.3-flash
 npx --yes @keygraph/shannon@3.4.0 start -u https://staging.example.com -r ./my-repo \
   --models-config ./models.json
 ```
 
-Add `contextWindow` and `maxTokens` to each model from `GET /v1/models` so
-Shannon knows its real limits. Do not use the `openai:` prefix. Shannon's built-in `openai` provider speaks the
-Responses API, which the endpoint does not serve; the `runanywhere` provider
-above speaks chat completions. `GET /v1/models` lists the ids and limits
-available to your account.
+For each model from `GET /v1/models`, map `max_input_tokens` to
+`contextWindow`, `max_output_tokens` to `maxTokens`, and `input_modalities` to
+`input` so Shannon knows the model's real limits and inputs. Do not use the
+`openai:` prefix. Shannon's built-in `openai` provider speaks the Responses
+API, which the endpoint does not serve; the `runanywhere` provider above speaks
+chat completions. `GET /v1/models` lists the ids and limits available to your
+account.
 
 ### Models that need approval
 
@@ -416,22 +419,26 @@ repos and systems you own or are explicitly authorised to test.**
 Both need a signed-in account (`wally account login`), or a Cloud key from the
 console. The key is never passed on the command line or written into config
 files wally creates. For a run longer than a sign-in lasts, export a Cloud key
-as `WALLY_CLOUD_KEY` before you start; wally reads it from the environment
-only.
+as `WALLY_CLOUD_KEY` before you start (for example
+`export WALLY_CLOUD_KEY='YOUR_CLOUD_KEY'`); wally reads it from the environment
+only and overrides competing variables for the child process only, never in
+your shell.
 
 ## DeepSec
 
 [DeepSec](https://www.npmjs.com/package/deepsec) is an npm CLI wally does not
-bundle. If `deepsec` is not on PATH, wally prints the `npx --yes deepsec@…`
-command and asks before running it. Bare `wally deepsec` is DeepSec `init` in
-the current directory: run it from a repo you own, not from `$HOME`. DeepSec
+bundle. Wally runs the release it was checked against (`2.3.10`): your `deepsec`
+on PATH if it reports exactly that version, otherwise it prints the
+`npx --yes deepsec@2.3.10` command and asks before running it. Bare
+`wally deepsec` is DeepSec `init` in the current directory: run it from a repo you own, not from `$HOME`. DeepSec
 still links a Vercel project (Sandbox identity) even when models go through
 your RunAnywhere account.
 
 What you need:
 
-- Node 18 or later (`npx`).
-- A model on your account (`-m` or your default).
+- Node 18 or later (`npx`). Skip this if `deepsec` `2.3.10` is on your PATH.
+- A model on your account (`-m` or your default), from a signed-in account or
+  `WALLY_CLOUD_KEY`.
 
 ```bash
 wally account login
@@ -460,15 +467,17 @@ override your key. Passing your own `--model-auth`, `--ai-base-url` or
 ## VVAH
 
 [VVAH](https://github.com/visa/visa-vulnerability-agentic-harness) is a Python
-CLI wally does not bundle. If `vvaharness` is missing, wally prints the install
-command, asks `Install it now with \`…\`? [y/N]`, and on yes creates a venv
-under the Wally profile (`<profile>/vvah/`) and pip-installs the pinned tag.
+CLI wally does not bundle. Wally runs the release it was checked against
+(`1.5.1`). If `vvaharness` is missing, wally prints the install command, asks
+`Install it now with \`…\`? [y/N]`, and on yes creates a venv under the Wally
+profile (`<profile>/vvah/`) and pip-installs the `v1.5.1` tag.
 
 What you need:
 
 - Python 3.11–3.14 on PATH (`python3.12` is preferred; Homebrew's `python3` is
   often 3.15, which VVAH cannot install on). Checked after you confirm install.
-- A model on your account (`-m` or your default).
+- A model on your account (`-m` or your default), from a signed-in account or
+  `WALLY_CLOUD_KEY`.
 
 ```bash
 wally account login

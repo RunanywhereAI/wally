@@ -64,7 +64,7 @@ The default model is `glm-5.3-flash`. To change it, run `wally models default <m
 wally shannon -- -u https://staging.example.com -r ./my-repo
 ```
 
-Needs Docker and Node 18+. See [Shannon](docs/EDITORS.md#shannon).
+Needs Docker. Node 18+ is required unless Shannon 3.4.0 is installed on PATH. See [Shannon](docs/EDITORS.md#shannon).
 
 **Scan repos you are authorised to test:**
 
@@ -73,7 +73,7 @@ wally deepsec -- init --repo ./my-repo
 wally vvah -- scan --repo ./my-repo
 ```
 
-DeepSec needs Node 18+ for `npx`. VVAH needs Python 3.11–3.14. See [Security tools](docs/EDITORS.md#security-tools).
+DeepSec 2.3.10 needs Node 18+ for `npx` unless it is on PATH. VVAH 1.5.1 needs Python 3.11–3.14 (it installs with pip into a venv). Models come from your signed-in account or `WALLY_CLOUD_KEY`. See [Security tools](docs/EDITORS.md#security-tools).
 
 **Get help:**
 

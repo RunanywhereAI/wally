@@ -64,10 +64,10 @@ opencode harness works?" is a better second message than a launched TUI.
 
 ## Shannon and other tools
 
-`wally shannon -- -u <app url> -r <repo path>` runs Shannon, an open-source AI
+`wally shannon -- -u "$APP_URL" -r "$REPO_PATH"` runs Shannon, an open-source AI
 pentester, on a model from the person's account. Only suggest it for a system
-they own or are authorised to test. It needs Docker running and Node 18+, and
-wally sets up the model config and key itself. For a scan longer than a
+they own or are authorised to test. It needs Docker running, plus Node 18+ unless Shannon 3.4.0 is
+installed on PATH, and wally sets up the model config and key itself. For a scan longer than a
 sign-in lasts, the person exports a console Cloud key as `WALLY_CLOUD_KEY`.
 Setup details, and how to point any other OpenAI-compatible tool at the
 endpoint by hand, are in `docs/EDITORS.md`.
@@ -76,8 +76,9 @@ endpoint by hand, are in `docs/EDITORS.md`.
 
 `wally deepsec` and `wally vvah` run hosted security scanners on a model from the
 person's account. Only suggest them for a repo or system they own or are
-authorised to test. DeepSec needs Node 18+; VVAH needs Python 3.11–3.14. Wally sets
-up routing and keys in the child environment, never on the command line. For a
+authorised to test. DeepSec (2.3.10) needs Node 18+ for `npx` unless it is on PATH; VVAH (1.5.1) needs
+Python 3.11–3.14. Wally sets up routing and keys in the child environment only,
+never on the command line, and overrides competing variables for that child only. For a
 run longer than a sign-in lasts, they export a console Cloud key as
 `WALLY_CLOUD_KEY`. Details are in `docs/EDITORS.md`.
 
