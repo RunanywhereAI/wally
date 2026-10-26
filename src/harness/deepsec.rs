@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn pi_model_id_prefixes_runanywhere_when_bare() {
         assert_eq!(pi_model_id("glm-5.3-flash"), "runanywhere/glm-5.3-flash");
-        assert_eq!(pi_model_id("zai/glm-5.2"), "zai/glm-5.2");
+        assert_eq!(pi_model_id("acme/custom-model"), "acme/custom-model");
     }
 
     #[test]
