@@ -122,6 +122,10 @@ pub fn account_models_with(
     let mut out = Vec::new();
 
     let (result, models, error) = console.fetch_models(console_url, access_token);
+    if !matches!(result, IdentityResult::Ok) {
+        // Nothing to price; callers stop on a failed model list.
+        return (result, out, error);
+    }
     let (_, prices, _) = console.fetch_catalog(console_url, access_token);
     let price_for = |id: &str| -> (i64, i64, i64) {
         prices

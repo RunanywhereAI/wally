@@ -21,8 +21,9 @@ release bump leaves them valid; tests/cli_golden.rs applies the same rewrites.
 """
 import argparse, json, os, re, shutil, subprocess, sys, tempfile
 
-PASSTHROUGH = {'opencode', 'claude-code', 'claude-desktop', 'hermes', 'openclaw', 'deepseek'}
-SECTIONS = {'Commands', 'Chat', 'Models', 'Coding tools', 'Account', 'Wally'}
+PASSTHROUGH = {'opencode', 'claude-code', 'claude-desktop', 'hermes', 'openclaw', 'deepseek',
+               'shannon', 'deepsec', 'vvah'}
+SECTIONS = {'Commands', 'Chat', 'Models', 'Coding tools', 'Security tools', 'Account', 'Wally'}
 # Leaf commands whose invalid invocations are safe to run (parse fails first).
 SAFE_LEAVES = ['run', 'llm generate', 'llm stream', 'llm tool-call', 'serve',
                'models list', 'models show', 'models pull', 'models rm', 'models default',

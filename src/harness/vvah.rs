@@ -131,8 +131,16 @@ impl Invocation {
 // Config
 // ---------------------------------------------------------------------------
 
+/// A YAML flow-mapping entry for one role. The model id is a double-quoted
+/// scalar (JSON strings are valid YAML): an id may hold `{`, `}`, `,` or `:`,
+/// which would otherwise end the mapping or add fields.
+fn role_entry(id: &str, model: &str) -> String {
+    let model = serde_json::to_string(model).expect("a string serialises");
+    format!("{id}: {{id: {model}, via: openai}}")
+}
+
 fn role_line(id: &str, model: &str) -> String {
-    format!("  {id}: {{id: {model}, via: openai}}")
+    format!("  {}", role_entry(id, model))
 }
 
 /// OpenAI-compatible overlay for every active VVAH role. No key.
@@ -159,11 +167,11 @@ pub fn config_yaml(model: &str) -> String {
         "penetration_tester",
         "cross_repo_analyzer",
     ] {
-        out.push_str(&format!("    {id}: {{id: {model}, via: openai}}\n"));
+        out.push_str(&format!("    {}\n", role_entry(id, model)));
     }
     out.push_str("  exploit_verification:\n");
     for id in ["attacker", "judge", "classify", "mapper"] {
-        out.push_str(&format!("    {id}: {{id: {model}, via: openai}}\n"));
+        out.push_str(&format!("    {}\n", role_entry(id, model)));
     }
     out.push_str(
         "step1:\n  auto_exclude_effort: none\n\
@@ -202,10 +210,11 @@ pub fn repo_from_rest(rest: &[String]) -> &str {
     "."
 }
 
+/// `path` canonicalised, or its nearest ancestor that exists (the profile
+/// directory and its parent may not exist yet).
 fn existing_or_parent(path: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(path)
-        .ok()
-        .or_else(|| path.parent().and_then(|parent| parent.canonicalize().ok()))
+    path.ancestors()
+        .find_map(|candidate| std::fs::canonicalize(candidate).ok())
 }
 
 /// True when `path` is `root` or a file under it (VVAH's CONFIG_POLICY_REFUSED).
@@ -396,6 +405,22 @@ pub fn venv_vvaharness(dir: &Path) -> PathBuf {
     name
 }
 
+/// `text` as one shell word: left alone when it is plainly safe, else quoted
+/// for the platform's shell (single quotes on Unix, double quotes on Windows).
+fn shell_word(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:\\+=@%".contains(c));
+    if plain {
+        text.to_string()
+    } else if cfg!(windows) {
+        format!("\"{}\"", text.replace('"', "\"\""))
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
 pub fn install_command(dir: &Path, python: &Path) -> String {
     let venv = dir.join("venv");
     let pip = venv
@@ -403,9 +428,9 @@ pub fn install_command(dir: &Path, python: &Path) -> String {
         .join(if cfg!(windows) { "pip.exe" } else { "pip" });
     format!(
         "{} -m venv {} && {} install {SOURCE}",
-        python.display(),
-        venv.display(),
-        pip.display()
+        shell_word(&python.display().to_string()),
+        shell_word(&venv.display().to_string()),
+        shell_word(&pip.display().to_string())
     )
 }
 
@@ -657,7 +682,7 @@ pub fn launch(requested_model: Option<&str>, args: &[String]) -> i32 {
         }
     };
     let cwd = std::env::current_dir().unwrap_or_default();
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = hosted::home_directory();
     if refuse_home_workspace(args, &cwd, home.as_deref()) {
         out::error_line(
             "wally vvah with no extra args scans the current directory. \
@@ -855,9 +880,12 @@ mod tests {
     #[test]
     fn config_yaml_maps_roles_without_a_key() {
         let yaml = config_yaml("glm-5.3-flash");
-        assert!(yaml.contains("autoexclude: {id: glm-5.3-flash, via: openai}"));
-        assert!(yaml.contains("remediate: {id: glm-5.3-flash, via: openai}"));
-        assert!(yaml.contains("    orchestrator: {id: glm-5.3-flash, via: openai}"));
+        assert!(yaml.contains("autoexclude: {id: \"glm-5.3-flash\", via: openai}"));
+        assert!(yaml.contains("remediate: {id: \"glm-5.3-flash\", via: openai}"));
+        assert!(yaml.contains("    orchestrator: {id: \"glm-5.3-flash\", via: openai}"));
+        // An id with flow-mapping characters stays one scalar.
+        let odd = config_yaml("a},b: {c:d");
+        assert!(odd.contains("decompose: {id: \"a},b: {c:d\", via: openai}"));
         assert!(yaml.contains("max_turns: 60"));
         assert!(yaml.contains("auto_exclude_effort: none"));
         assert!(!yaml.contains("inject:"));
@@ -872,6 +900,40 @@ mod tests {
         assert!(command.contains("python3.12 -m venv"));
         assert!(command.contains("pip"));
         assert!(command.contains(SOURCE));
+    }
+
+    #[test]
+    fn install_command_quotes_paths_with_spaces() {
+        assert_eq!(
+            shell_word("/opt/py/bin/python3.12"),
+            "/opt/py/bin/python3.12"
+        );
+        if !cfg!(windows) {
+            assert_eq!(shell_word("/Users/a b/vvah"), "'/Users/a b/vvah'");
+            assert_eq!(shell_word("it's"), "'it'\\''s'");
+            let dir = Path::new("/Users/a b/vvah");
+            let command = install_command(dir, Path::new("/usr/bin/python3.12"));
+            assert!(
+                command.contains("-m venv '/Users/a b/vvah/venv' &&"),
+                "{command}"
+            );
+            assert!(
+                command.contains("'/Users/a b/vvah/venv/bin/pip' install"),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn containment_walks_up_to_the_nearest_existing_ancestor() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let missing = root.path().join("not").join("yet").join("config");
+        assert!(path_is_inside(&missing, root.path()));
+        let other = tempfile::tempdir().expect("tempdir");
+        assert!(!path_is_inside(
+            &other.path().join("a").join("b"),
+            root.path()
+        ));
     }
 
     #[test]

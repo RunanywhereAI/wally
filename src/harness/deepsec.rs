@@ -69,7 +69,17 @@ const VERSION_PROBE_SECONDS: u64 = 20;
 
 const ROUTE_COMMANDS: [&str; 4] = ["init", "setup", "process", "revalidate"];
 
-const OWNED_FLAGS: [&str; 3] = ["--model-auth", "--ai-base-url", "--ai-api-key-env"];
+/// Every flag `route_flags` injects. A later copy from the person could win and
+/// break the route (a bare `--model` is not in the generated `models.json`).
+const OWNED_FLAGS: [&str; 7] = [
+    "--agent",
+    "--model",
+    "--model-auth",
+    "--ai-provider",
+    "--ai-base-url",
+    "--ai-api-key-env",
+    "--ai-credential-header",
+];
 
 const OVERRIDING_VARIABLES: [&str; 4] = [
     "OPENAI_API_KEY",
@@ -102,8 +112,9 @@ fn names_owned_flag(arg: &str) -> bool {
 }
 
 fn route_error() -> String {
-    "wally deepsec sets the model route itself, from your account. Remove --model-auth, \
-     --ai-base-url and --ai-api-key-env, or run DeepSec directly to use your own route."
+    "wally deepsec sets the model route itself, from your account. Remove --agent, --model, \
+     --model-auth, --ai-provider, --ai-base-url, --ai-api-key-env and --ai-credential-header \
+     (choose the model with wally's -m), or run DeepSec directly to use your own route."
         .to_string()
 }
 
@@ -423,13 +434,13 @@ pub fn select_runner(
             }
             Some(version) => {
                 note = Some(format!(
-                    "the deepsec on PATH is {version}, not {PINNED_VERSION}; using npx \
+                    "the installed deepsec is {version}, not {PINNED_VERSION}; using npx \
                      {PACKAGE}@{PINNED_VERSION} instead"
                 ));
             }
             None => {
                 note = Some(format!(
-                    "could not read the version of the deepsec on PATH; using npx \
+                    "could not read the version of the installed deepsec; using npx \
                      {PACKAGE}@{PINNED_VERSION} instead"
                 ));
             }
@@ -500,7 +511,7 @@ pub fn launch(requested_model: Option<&str>, args: &[String]) -> i32 {
     };
 
     let cwd = std::env::current_dir().unwrap_or_default();
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = hosted::home_directory();
     if refuse_home_workspace(args, &cwd, home.as_deref()) {
         out::error_line(
             "wally deepsec with no extra args runs DeepSec init in the current directory. \
@@ -643,7 +654,15 @@ mod tests {
 
     #[test]
     fn classify_refuses_owned_route_flags_on_routed_commands() {
-        for flag in ["--model-auth", "--ai-base-url", "--ai-api-key-env"] {
+        for flag in [
+            "--agent",
+            "--model",
+            "--model-auth",
+            "--ai-provider",
+            "--ai-base-url",
+            "--ai-api-key-env",
+            "--ai-credential-header",
+        ] {
             assert!(classify(&strings(&["init", flag])).is_err());
             assert!(classify(&strings(&["revalidate", &format!("{flag}=x")])).is_err());
         }

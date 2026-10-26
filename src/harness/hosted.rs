@@ -1,7 +1,7 @@
 //! Shared hosted-account access for security-tool launchers.
 
 use crate::account::{self, ConsoleClient, IdentityResult};
-use crate::harness::catalog_models::{catalog_models_with, CatalogModel};
+use crate::harness::catalog_models::{account_models_with, CatalogModel};
 use crate::harness::harness::{
     model_id_is_safe, refresh_session, report_cloud_session_invalid, report_not_signed_in,
     verify_cloud_session,
@@ -20,6 +20,23 @@ pub struct Hosted {
     pub console_url: String,
     pub key: String,
     pub session: bool,
+}
+
+fn first_nonempty_path(
+    home: Option<std::ffi::OsString>,
+    profile: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    [home, profile]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// The user's home directory: `HOME`, else `USERPROFILE` (a Windows shell that
+/// leaves `HOME` unset). Used only to refuse scanning the home directory.
+pub fn home_directory() -> Option<std::path::PathBuf> {
+    first_nonempty_path(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
 }
 
 fn cloud_key_from_environment() -> Option<String> {
@@ -144,12 +161,11 @@ pub fn require_safe_model(requested: Option<&str>) -> Result<(), i32> {
     Ok(())
 }
 
-pub fn load_models(
-    console: &ConsoleClient,
-    hosted: &Hosted,
-    primary: &str,
-) -> Result<Vec<CatalogModel>, i32> {
-    let (result, _, error) = console.fetch_models(&hosted.console_url, &hosted.key);
+/// The account's own models, as the console lists them. A requested model the
+/// account does not have must stay absent so `choose_model` can refuse it.
+pub fn load_models(console: &ConsoleClient, hosted: &Hosted) -> Result<Vec<CatalogModel>, i32> {
+    let (result, mut models, error) =
+        account_models_with(console, &hosted.console_url, &hosted.key);
     match result {
         IdentityResult::Ok => {}
         IdentityResult::Unauthorized if hosted.session => {
@@ -167,7 +183,6 @@ pub fn load_models(
             return Err(1);
         }
     }
-    let mut models = catalog_models_with(console, &hosted.console_url, &hosted.key, primary);
     models.retain(|model| !super::is_decisions_model(&model.id));
     Ok(models)
 }
@@ -178,8 +193,7 @@ pub fn pick_model(
     requested: Option<&str>,
 ) -> Result<(String, String), i32> {
     let preferred = crate::config::preferences::resolve_model("");
-    let primary = requested.unwrap_or(preferred.as_str());
-    let models = load_models(console, hosted, primary)?;
+    let models = load_models(console, hosted)?;
     let model = match choose_model(&models, requested, &preferred) {
         Ok(model) => model,
         Err(message) => {
@@ -188,7 +202,7 @@ pub fn pick_model(
         }
     };
     if requested.is_none() {
-        out::status_line(&format!("model not provided, using default model {model}"));
+        out::status_line(&format!("model not provided, using {model}"));
     }
     let base_url = format!("{}/v1", hosted.console_url);
     Ok((model, base_url))
@@ -203,6 +217,26 @@ mod tests {
             id: id.to_string(),
             ..CatalogModel::default()
         }
+    }
+
+    #[test]
+    fn home_falls_back_to_userprofile_only_when_home_is_unset_or_empty() {
+        use std::ffi::OsString;
+        let os = |text: &str| Some(OsString::from(text));
+        assert_eq!(
+            first_nonempty_path(os("/home/a"), os("C:\\Users\\a")),
+            Some("/home/a".into())
+        );
+        assert_eq!(
+            first_nonempty_path(None, os("C:\\Users\\a")),
+            Some("C:\\Users\\a".into())
+        );
+        assert_eq!(
+            first_nonempty_path(os(""), os("/profile")),
+            Some("/profile".into())
+        );
+        assert_eq!(first_nonempty_path(None, None), None);
+        assert_eq!(first_nonempty_path(os(""), os("")), None);
     }
 
     #[test]

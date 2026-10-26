@@ -1,6 +1,7 @@
 //! Launching coding tools (Claude Code, Codex, opencode, Hermes, OpenClaw, DeepSeek,
-//! Prime Agent, Command Code) and Shannon, the open-source security tester,
-//! against a hosted or local model. One namespace, as C++ `wally::harness` was.
+//! Prime Agent, Command Code) against a hosted or local model, and the hosted
+//! security harnesses (Shannon, DeepSec, VVAH), which run only against hosted
+//! account models. One namespace, as C++ `wally::harness` was.
 
 pub mod agents;
 pub mod catalog_models;

@@ -76,9 +76,11 @@ endpoint by hand, are in `docs/EDITORS.md`.
 
 `wally deepsec` and `wally vvah` run hosted security scanners on a model from the
 person's account. Only suggest them for a repo or system they own or are
-authorised to test. DeepSec (2.3.10) needs Node 18+ for `npx` unless it is on PATH; VVAH (1.5.1) needs
-Python 3.11–3.14. Wally sets up routing and keys in the child environment only,
-never on the command line, and overrides competing variables for that child only. For a
+authorised to test. DeepSec (2.3.10) needs Node 18+ for `npx` unless a `deepsec` on PATH reports exactly 2.3.10; VVAH (1.5.1) needs
+Python 3.11–3.14. Wally sets up routing per tool (command-line flags for DeepSec, a
+config file in the Wally profile for VVAH); keys go in the child environment
+only, never on the command line, and competing variables are removed for that
+child only. For a
 run longer than a sign-in lasts, they export a console Cloud key as
 `WALLY_CLOUD_KEY`. Details are in `docs/EDITORS.md`.
 
@@ -129,7 +131,8 @@ harness; those surfaces refuse it and point back here.
 
 - **"not signed in"** — `wally account login`.
 - **"not available on this account" or "not on your account's model list"** —
-  that model needs approval. Do not log in again; request access in the console.
+  that model may need approval. Check the model id first; if it is right and the
+  model is gated, request access in the console. Do not log in again.
 - **DeepSec or VVAH prerequisites missing** — install Node 18+ (DeepSec) or Python 3.11–3.14 (VVAH); see `docs/EDITORS.md`.
 - **"that key is not valid"** — the key was revoked or expired; `wally account login` again.
 - **opencode not installed** — `npm i -g opencode-ai`.

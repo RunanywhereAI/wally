@@ -1,6 +1,6 @@
 # Golden CLI corpus
 
-Byte-exact stdout, stderr and exit code for 371 invocations of `wally`,
+Byte-exact stdout, stderr and exit code for 379 invocations of `wally`,
 captured from the C++ build of `origin/main` at `d1e9c0b` (the last C++
 release line) on macOS arm64 with kit 0.20.37. `tests/cli_golden.rs` replays
 every case against the Rust binary in the same isolated environment and fails
@@ -118,6 +118,11 @@ re-captured from the Rust binary; that line is the only difference in each.
 `help__shannon` and `help__help__shannon` are new cases.
 
 `wally deepsec` and `wally vvah` added a **Security tools** group to every
-command list, so those two lines are the only extra difference in each.
+command list, so the heading, the `deepsec` and `vvah` entries and the blank
+separator line (four lines in all) are the only extra difference in each.
 `help__deepsec`, `help__help__deepsec`, `help__vvah` and `help__help__vvah` are
 new cases.
+
+The first `wally vvah` example's description was reworded to say bare
+`wally vvah` also remediates (edits files); `help__vvah` and
+`help__help__vvah` were updated by that one line.

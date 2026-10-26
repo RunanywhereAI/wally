@@ -12,7 +12,7 @@ Options:
                               model)
 
 Examples:
-  # Scan the current repo you are authorised to test
+  # Scan and remediate (edits files in) the current repo
   wally vvah
 
   # Scan another path with a chosen model

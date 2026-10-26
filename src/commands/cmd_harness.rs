@@ -147,7 +147,7 @@ pub fn register_harness(app: &mut App) {
     vvah.footer(&examples_footer(&[
         Example::new(
             "wally vvah",
-            "Scan the current repo you are authorised to test",
+            "Scan and remediate (edits files in) the current repo",
         ),
         Example::new(
             "wally vvah -m glm-5.3-flash -- scan --repo ./my-repo",

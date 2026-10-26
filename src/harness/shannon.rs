@@ -716,7 +716,7 @@ pub fn launch(requested_model: Option<&str>, args: &[String]) -> i32 {
         }
     };
     if requested_model.is_none() {
-        out::status_line(&format!("model not provided, using default model {model}"));
+        out::status_line(&format!("model not provided, using {model}"));
     }
 
     let Some(path) = models_config_path() else {
@@ -922,6 +922,13 @@ mod tests {
                 r = record.display()
             ),
         );
+        let names = [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "SHANNON_AI_BASE_URL",
+            "SHANNON_USE_PI_AUTH",
+        ];
+        let prior: Vec<Option<std::ffi::OsString>> = names.iter().map(std::env::var_os).collect();
         // SAFETY: serialised by the env lock; restored below.
         unsafe {
             std::env::set_var("OPENAI_API_KEY", "stray-openai");
@@ -934,11 +941,14 @@ mod tests {
             &strings(&["start", "-u", "https://app.test"]),
             &ChildEnv::for_start("glm-5.3-flash", "the-key", "https://api.test/v1"),
         );
-        unsafe {
-            std::env::remove_var("OPENAI_API_KEY");
-            std::env::remove_var("ANTHROPIC_API_KEY");
-            std::env::remove_var("SHANNON_AI_BASE_URL");
-            std::env::remove_var("SHANNON_USE_PI_AUTH");
+        for (name, value) in names.iter().zip(prior) {
+            // SAFETY: serialised by the env lock.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
         }
         assert_eq!(code, 7);
         let seen = std::fs::read_to_string(&record).unwrap();
