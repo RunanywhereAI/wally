@@ -219,6 +219,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         elif self.path == "/v1/models":
             # Login primes the model cache from here; a minimal catalog is enough.
             self.reply(200, {"data": [{"id": "glm-5.3-flash"}]})
+        elif self.path == "/v1/models/catalog":
+            # The cache refresh also asks the price catalog for granted models
+            # the public list omits. Empty is a signed-in account with none.
+            self.reply(200, {"models": []})
         elif self.path.startswith("/v1/cli/usage/requests"):
             self.reply_requests_page()
         elif self.path.startswith("/v1/cli/usage"):
@@ -527,6 +531,7 @@ def main():
             ("POST", "/auth/cli/start", None),
             ("POST", "/auth/cli/poll", None),
             ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
+            ("GET", "/v1/models/catalog", f"Bearer {ACCESS_TOKEN}"),
             # The sign-in left to expire: two polls 29 s apart, then it stops.
             ("POST", "/auth/cli/start", None),
             ("POST", "/auth/cli/poll", None),
@@ -538,6 +543,7 @@ def main():
             ("POST", "/auth/cli/poll", None),
             ("POST", "/auth/cli/poll", None),
             ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
+            ("GET", "/v1/models/catalog", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),
             # One read per invocation. The windows are totalled server-side, so
             # `days` and `limit` are held at the minimum the route accepts —
