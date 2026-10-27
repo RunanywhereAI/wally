@@ -20,7 +20,6 @@ Coding tools:
   codex                       Open Codex with a model
   chatgpt                     Open ChatGPT's Codex with a model
   opencode                    Open OpenCode with a local or cloud model
-  shannon                     Test your own apps with Shannon, an AI pentester
   hermes                      Open Hermes with a model
   openclaw                    Open OpenClaw with a model
   deepseek                    Open DeepSeek Harness with a model
@@ -28,6 +27,7 @@ Coding tools:
   command-code                Open Command Code with a model
 
 Security tools:
+  shannon                     Test your own apps with Shannon, an AI pentester
   deepsec                     Scan your own repos with DeepSec
   vvah                        Scan your own repos with VVAH
 
