@@ -168,11 +168,19 @@ pub fn refresh_model_cache_now(credentials: &Credentials) -> Result<(), bool> {
         // Rate-limited or unreachable is a "try again", anything else a hard fail.
         return Err(result == super::IdentityResult::Unavailable);
     }
-    let ids: Vec<String> = models
+    let mut ids: Vec<String> = models
         .into_iter()
         .filter(|model| !model.id.is_empty())
         .map(|model| model.id)
         .collect();
+    // Gated chat models are entitled on the price catalog and absent from
+    // /v1/models. A failed catalog read leaves the public list as-is, so an
+    // account without the grant still fails `-m` as an unknown model.
+    if let (super::IdentityResult::Ok, prices, _) =
+        console.fetch_catalog(&credentials.console_url, &credentials.access_token)
+    {
+        ids.extend(super::gated_chat_ids(&ids, &prices));
+    }
     // A failed write must not report success: the caller (and the launch
     // path validating against the cache) would otherwise trust a catalog that
     // was never actually persisted, and reject a valid model against the

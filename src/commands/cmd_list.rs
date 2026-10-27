@@ -254,12 +254,20 @@ fn cloud_models() -> Result<CloudModels, String> {
                     decisions_only: false,
                 })
                 .collect();
-            // Decision-only models never appear above; the price catalog
-            // names them. A failed price lookup is not fatal: the rows just
-            // stay missing, exactly as before.
+            // The price catalog is this account's entitlements. Chat models
+            // it names that /v1/models left out are gated: shown only when
+            // this account holds the grant. Decision-only models never appear
+            // above. A failed price lookup is not fatal: those rows stay missing.
             if let Ok(prices) = session.call(|client, url, token| {
                 client.fetch_catalog_within(url, token, CLOUD_LOOKUP_TIMEOUT_MS)
             }) {
+                let listed: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+                for id in crate::account::gated_chat_ids(&listed, &prices) {
+                    rows.push(CloudRow {
+                        id,
+                        decisions_only: false,
+                    });
+                }
                 for price in &prices {
                     if price.decisions_only
                         && !price.id.is_empty()
