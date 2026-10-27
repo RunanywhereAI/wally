@@ -300,12 +300,19 @@ pub struct CatalogPrice {
 /// to. The price catalog is per-account, so a gated id is here only when the
 /// account holds the grant. Decision-only rows are not chat models.
 pub fn gated_chat_ids(listed: &[String], prices: &[CatalogPrice]) -> Vec<String> {
-    prices
-        .iter()
-        .filter(|price| !price.decisions_only && !price.id.is_empty())
-        .filter(|price| !listed.iter().any(|id| id == &price.id))
-        .map(|price| price.id.clone())
-        .collect()
+    let mut ids = Vec::new();
+    for price in prices {
+        let id = price.id.as_str();
+        if price.decisions_only
+            || id.is_empty()
+            || listed.iter().any(|listed_id| listed_id == id)
+            || ids.iter().any(|seen: &String| seen == id)
+        {
+            continue;
+        }
+        ids.push(price.id.clone());
+    }
+    ids
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -2292,6 +2299,7 @@ mod tests {
         let listed = vec!["deepseek-v4.1-flash-1017".to_string()];
         let prices = vec![
             price("deepseek-v4.1-flash-1017", false),
+            price("deepseek-v4.1-flash-1017-uncensored", false),
             price("deepseek-v4.1-flash-1017-uncensored", false),
             price("eve", true),
             price("", false),

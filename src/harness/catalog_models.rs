@@ -162,15 +162,14 @@ pub fn account_models_with(
     // (the same shape `primary_first` uses for a model it only knows by id).
     // Decisions-only ids stay out: they are the one thing the catalogue names
     // that is deliberately not a chat model.
-    for price in &prices {
-        if price.id.is_empty() || price.decisions_only || out.iter().any(|m| m.id == price.id) {
-            continue;
-        }
+    let listed: Vec<String> = out.iter().map(|model| model.id.clone()).collect();
+    for id in crate::account::gated_chat_ids(&listed, &prices) {
+        let price = prices.iter().find(|price| price.id == id);
         out.push(CatalogModel {
-            id: price.id.clone(),
-            input_per_mtok: price.input_per_mtok,
-            output_per_mtok: price.output_per_mtok,
-            cached_input_per_mtok: price.cached_input_per_mtok,
+            id,
+            input_per_mtok: price.map(|price| price.input_per_mtok).unwrap_or(0),
+            output_per_mtok: price.map(|price| price.output_per_mtok).unwrap_or(0),
+            cached_input_per_mtok: price.map(|price| price.cached_input_per_mtok).unwrap_or(0),
             ..Default::default()
         });
     }
