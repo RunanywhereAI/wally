@@ -130,7 +130,7 @@ fn reference_allows_sibling_substitution(reference: &str, resolved_model_id: &st
     if entry.id != merge_key {
         return false;
     }
-    !entry.alias.is_some_and(|alias| alias == reference)
+    entry.alias.is_none_or(|alias| alias != reference)
 }
 
 /// Another build of the same `models list` row that is already on disk, used
