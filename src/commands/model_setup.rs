@@ -114,6 +114,25 @@ fn is_downloaded(info: &v1::ModelInfo) -> bool {
         == Some(v1::ModelRegistryStatus::Downloaded)
 }
 
+/// Sibling substitution applies only when `reference` names the merged
+/// `models list` row (the merge key). Backend-specific catalog ids, aliases
+/// (`lfm-d1-3b-mlx`, `lfm-d1-3b-gguf`), and `mlx-`/`npu-` spellings pin one
+/// build — if that build is missing, pull or error instead of running another
+/// backend that happens to be on disk.
+fn reference_allows_sibling_substitution(reference: &str, resolved_model_id: &str) -> bool {
+    let Some(entry) = catalog::find(reference) else {
+        return false;
+    };
+    if entry.id != resolved_model_id {
+        return false;
+    }
+    let merge_key = entry.merge_key.unwrap_or(entry.id);
+    if entry.id != merge_key {
+        return false;
+    }
+    !entry.alias.is_some_and(|alias| alias == reference)
+}
+
 /// Another build of the same `models list` row that is already on disk, used
 /// when the one `reference` names is not. `models list` shows a merged row as
 /// downloaded when any of its builds is, so `-m <row id>` must be able to run
@@ -168,7 +187,7 @@ pub fn ensure_model_ready(
     let mut model_id = resolved.model_id.clone();
     let mut registered = registry_info(&model_id);
     let mut downloaded = registered.as_ref().is_some_and(is_downloaded);
-    if !downloaded {
+    if !downloaded && reference_allows_sibling_substitution(reference, &model_id) {
         if let Some((sibling, info)) = downloaded_sibling(reference, &model_id, options.offline) {
             status_line(&format!("using the downloaded {sibling} for {reference}"));
             model_id = sibling;
@@ -245,7 +264,7 @@ pub fn ensure_model_ready(
 
 #[cfg(test)]
 mod tests {
-    use super::sibling_candidates;
+    use super::{reference_allows_sibling_substitution, sibling_candidates};
 
     /// The MLX builds these rows pair with are Apple-only; elsewhere the
     /// catalog hides them, so there is no other build to stand in.
@@ -284,5 +303,37 @@ mod tests {
     #[test]
     fn a_model_outside_any_row_has_no_siblings() {
         assert!(sibling_candidates("silero-vad", "silero-vad", true).is_empty());
+    }
+
+    #[test]
+    fn merged_row_id_allows_sibling_substitution() {
+        assert!(reference_allows_sibling_substitution(
+            "lfm-d1-3b",
+            "lfm-d1-3b"
+        ));
+        assert!(reference_allows_sibling_substitution(
+            "clef-flash-9b",
+            "clef-flash-9b"
+        ));
+    }
+
+    #[test]
+    fn backend_specific_reference_disallows_sibling_substitution() {
+        assert!(!reference_allows_sibling_substitution(
+            "mlx-lfm-d1-3b",
+            "mlx-lfm-d1-3b-8bit"
+        ));
+        assert!(!reference_allows_sibling_substitution(
+            "lfm-d1-3b-mlx",
+            "mlx-lfm-d1-3b-8bit"
+        ));
+        assert!(!reference_allows_sibling_substitution(
+            "lfm-d1-3b-gguf",
+            "lfm-d1-3b"
+        ));
+        assert!(!reference_allows_sibling_substitution(
+            "clef-flash-mlx",
+            "mlx-clef-flash-9b-4bit"
+        ));
     }
 }
