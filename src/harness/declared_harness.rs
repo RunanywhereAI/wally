@@ -3,11 +3,17 @@
 //!
 //! InferenceInfra attributes every inference request to a harness
 //! (api/app/services/harness.py `detect()`): a declared `X-RA-Harness` header
-//! first, then a substring match over the User-Agent. The attribution shapes a
-//! request -- with `RA_REASONING_ALLOWANCE_HARNESS_ONLY` on, only a recognised
-//! harness gets the reasoning allowance on top of its `max_tokens` -- so a
-//! harness that reaches the endpoint looking like a plain API client gets its
-//! reasoning trace cut short.
+//! first, then a substring match over the User-Agent.
+//!
+//! The attribution is bookkeeping only (usage by tool, the ledger's harness
+//! column). It never changes what a request is served: `max_tokens` is a hard
+//! total of everything the model generates, thinking included, for every
+//! caller, harness or plain API alike. InferenceInfra once added a reasoning
+//! allowance on top of a named `max_tokens` (with
+//! `RA_REASONING_ALLOWANCE_HARNESS_ONLY` limiting it to recognised harnesses);
+//! that allowance is being removed, and wally does not rely on it. A harness
+//! gets room to think from the limit wally writes into its config
+//! (`catalog_models::output_limit`), never from the header.
 //!
 //! wally launches these tools and knows which one it started, so it says so.
 //! The names are the contract's own `Harness` enum, never a retyped list, so a

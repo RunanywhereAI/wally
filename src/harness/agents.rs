@@ -21,6 +21,13 @@ pub enum Handoff {
     /// extra request headers only from `config.yaml`, never the environment.
     /// Wally does not write those headers. It does set `model.supports_vision`
     /// in that file, because Hermes reads vision from there and from nowhere else.
+    ///
+    /// Nor does wally write an output limit for Hermes. Its requests follow the
+    /// plain API rule, which is the same rule every harness gets: whatever
+    /// `max_tokens` Hermes sends is the hard total, thinking included, and a
+    /// request naming none gets the model's default. Writing a `max_tokens`
+    /// into `config.yaml` is an option only once Hermes is shown to read it
+    /// from there.
     CustomEndpointEnvironment,
     ConfigFile,
     PatchOverlay,
