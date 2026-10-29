@@ -1357,3 +1357,155 @@ fn deepseek_web_ui_takes_a_free_port_unless_one_was_chosen() {
         );
     }
 }
+
+// The limit a harness config writes becomes that harness's `max_tokens`, and
+// the API reads `max_tokens` as a hard total of everything the model
+// generates, thinking included (OpenAI, Anthropic and OpenRouter define it the
+// same way; the server adds no reasoning allowance on top). So the config, not
+// the server, has to make the limit big enough: a reasoning model given 8,192
+// can spend all of it thinking and answer nothing (the 2026-09-22 OpenCode
+// incident). Every writer declares the model list's `max_output`: never below
+// min(16,384, max_output), never above max_output. A model the list gives a
+// window but no output cap gets the writer's own fallback, min(window, 65,536)
+// for OpenCode, OpenClaw and Prime Agent and min(window, 32,768) for dsh; one
+// with no window at all (a private id the catalogue lists without limits) gets
+// no limit, so the harness sends its own and the server applies the model's
+// default.
+#[test]
+fn every_harness_config_writes_an_output_limit_within_the_models_own_bounds() {
+    const FLOOR: i64 = 16_384;
+    let model = |id: &str, context_window: i64, max_output: i64| CatalogModel {
+        id: id.to_string(),
+        context_window,
+        max_output,
+        ..Default::default()
+    };
+    // Hosted models with a max_output: the bound applies.
+    let capped = [
+        model("deepseek-v4.1-flash", 1_048_576, 65_536),
+        model("glm-5.3-flash", 202_752, 131_072),
+        model("short-output", 32_768, 8_192),
+    ];
+    // A window but no output cap: the writer's fallback. No window: nothing.
+    let uncapped = [
+        model("big-window", 1_048_576, 0),
+        model("small-window", 20_000, 0),
+        model("deepseek-v4.1-flash-dedicated", 0, 0),
+    ];
+    let catalog: Vec<CatalogModel> = capped.iter().chain(uncapped.iter()).cloned().collect();
+    let base = "https://api.example.test/v1";
+    let primary = catalog[0].id.as_str();
+
+    let by_id = |entries: &Value, field: &str| -> Vec<(String, Option<i64>)> {
+        entries
+            .as_array()
+            .expect("models array")
+            .iter()
+            .map(|entry| {
+                (
+                    entry["id"].as_str().expect("model id").to_string(),
+                    entry
+                        .get(field)
+                        .map(|v| v.as_i64().expect("an integer limit")),
+                )
+            })
+            .collect()
+    };
+    let open_code: Value = serde_json::from_str(&harness::build_open_code_config(
+        primary, base, "tok", &catalog,
+    ))
+    .unwrap();
+    let open_code: Vec<(String, Option<i64>)> = open_code["provider"]["runanywhere"]["models"]
+        .as_object()
+        .expect("models object")
+        .iter()
+        .map(|(id, entry)| {
+            (
+                id.clone(),
+                entry
+                    .get("limit")
+                    .map(|limit| limit["output"].as_i64().expect("an integer limit")),
+            )
+        })
+        .collect();
+    let open_claw: Value = serde_json::from_str(&harness::build_open_claw_config(
+        "", primary, base, "key", &catalog,
+    ))
+    .unwrap();
+    let prime: Value = serde_json::from_str(
+        &harness::build_prime_agent_models_config("", base, "key", &catalog).unwrap(),
+    )
+    .unwrap();
+    let dsh: Value = serde_json::from_str(&harness::build_deep_seek_llm_config(
+        base,
+        "RUNANYWHERE_API_KEY",
+        &catalog,
+    ))
+    .unwrap();
+    let writers = [
+        ("opencode", 65_536, open_code),
+        (
+            "openclaw",
+            65_536,
+            by_id(
+                &open_claw["models"]["providers"]["runanywhere"]["models"],
+                "maxTokens",
+            ),
+        ),
+        (
+            "prime-agent",
+            65_536,
+            by_id(&prime["providers"]["runanywhere"]["models"], "maxTokens"),
+        ),
+        (
+            "dsh",
+            32_768,
+            by_id(&dsh["providers"]["runanywhere"]["models"], "maxTokens"),
+        ),
+    ];
+
+    for (writer, fallback, written) in &writers {
+        assert_eq!(
+            written.len(),
+            catalog.len(),
+            "{writer}: every catalog model is declared"
+        );
+        let limit_of = |id: &str| -> Option<i64> {
+            written
+                .iter()
+                .find(|(written_id, _)| written_id == id)
+                .unwrap_or_else(|| panic!("{writer} did not declare {id}"))
+                .1
+        };
+        for model in &capped {
+            let limit = limit_of(&model.id)
+                .unwrap_or_else(|| panic!("{writer} wrote no limit for {}", model.id));
+            assert!(
+                FLOOR.min(model.max_output) <= limit && limit <= model.max_output,
+                "{writer}: {} limit {limit} is outside [min({FLOOR}, {max}), {max}]",
+                model.id,
+                max = model.max_output,
+            );
+        }
+        assert_eq!(limit_of("big-window"), Some(*fallback), "{writer} fallback");
+        assert_eq!(
+            limit_of("small-window"),
+            Some(20_000),
+            "{writer}: the fallback never exceeds the window"
+        );
+        assert_eq!(
+            limit_of("deepseek-v4.1-flash-dedicated"),
+            None,
+            "{writer}: no window, no limit"
+        );
+        // The one rule all four writers share.
+        for model in &catalog {
+            assert_eq!(
+                limit_of(&model.id),
+                harness::output_limit(model, *fallback),
+                "{writer}: {} must follow output_limit",
+                model.id
+            );
+        }
+    }
+}
