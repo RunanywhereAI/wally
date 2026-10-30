@@ -84,7 +84,7 @@ fi
 mkdir -p "${STAGE}/share/wally/browser"
 tar -C "${browser_src}" \
   --exclude .venv --exclude '__pycache__' --exclude .pytest_cache --exclude tests \
-  -cf - pyproject.toml uv.lock .python-version wally_browser \
+  -cf - pyproject.toml uv.lock .python-version wally_browser jev_ultrafast \
   | tar -C "${STAGE}/share/wally/browser" -xf -
 
 copy_kit_runtime() {
