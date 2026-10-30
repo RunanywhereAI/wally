@@ -12,8 +12,10 @@ import httpx
 from .questions import NEXT_ACTION, TARGET, TEXT_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=25)
-# The hosted Eve route accepts at most 26 options in one choice question.
-MAX_OPTIONS = 26
+# Options one choice question may carry: the hosted Eve route takes 26,
+# jev-latest takes 64.
+OPTION_CAPS = {"jev-latest": 64}
+EVE_OPTION_CAP = 26
 NONE = "none"
 
 
@@ -65,16 +67,21 @@ def validate_choice(answer, ids):
 
 
 def criterion(index, action):
-    label = action["label"].split(" → ")[0]
-    value = action.get("current_value", action.get("value", ""))
-    line = f"[{index}] {action.get('role', '')} {label}".strip()
-    if value:
-        line += f" · {value}"
-    return line[:240]
+    """The element as Jev Ultrafast describes it: label, current value, and state."""
+    return {
+        "element": f"[{index}] {action['label']}"[:240],
+        "current_value": action.get("current_value", action.get("value", "")),
+        **{k: action[k] for k in ("role", "checked", "selected", "expanded") if k in action},
+    }
 
 
-def chunked_target_questions(goal, operation, candidates, limit=MAX_OPTIONS):
-    """One question, or several, so each choice stays within Eve's 26-option cap."""
+def option_cap():
+    return OPTION_CAPS.get(os.environ.get("WALLY_BROWSER_DECISION_MODEL", "eve"), EVE_OPTION_CAP)
+
+
+def chunked_target_questions(goal, operation, candidates, limit=None):
+    """One question, or several, so each choice stays within the model's option cap."""
+    limit = limit or option_cap()
     ids = list(candidates)
     name = operation.lower() + "_target"
     if len(ids) < 2:
@@ -107,7 +114,8 @@ def chunked_target_questions(goal, operation, candidates, limit=MAX_OPTIONS):
     return {f"{name}_{n}": question(part, extra=True) for n, part in enumerate(parts, 1)}
 
 
-def chosen_target(result, operation, candidates, limit=MAX_OPTIONS):
+def chosen_target(result, operation, candidates, limit=None):
+    limit = limit or option_cap()
     ids = list(candidates)
     name = operation.lower() + "_target"
     size = limit if len(ids) <= limit else limit - 1
@@ -127,7 +135,7 @@ def chosen_target(result, operation, candidates, limit=MAX_OPTIONS):
         if best is None or answer["probabilities"][answer["choice"]] > best["probabilities"][best["choice"]]:
             best = answer
     if best is None:
-        raise ValueError(f"Eve found no target for {operation}; no action executed.")
+        raise ValueError(f"The decision model found no target for {operation}; no action executed.")
     best["probabilities"] = {i: p for i, p in best["probabilities"].items() if i != NONE}
     return best
 
@@ -184,9 +192,7 @@ def choose(state, goal, history):
         "model": os.environ.get("WALLY_BROWSER_DECISION_MODEL", "eve"),
         "state": {
             "page": {k: state[k] for k in ("url", "title", "text")},
-            "elements": [
-                f"[{e['index']}] {e.get('role', '')} {e.get('label', '')}".strip()[:240] for e in elements
-            ],
+            "elements": elements,
             "recent_actions": [
                 {k: h.get(k) for k in ("action", "kind", "text", "page_changed")} for h in history[-10:]
             ],
@@ -336,7 +342,7 @@ def field_text(context):
     if not key:
         raise ValueError("Typing needs a Wally session; no text is guessed.")
     base = (os.environ.get("WALLY_BROWSER_API_BASE") or os.environ.get("TEXT_MODEL_BASE_URL") or "https://inference.runanywhere.ai/v1").rstrip("/")
-    model = "deepseek-v4.1-flash"
+    model = os.environ.get("WALLY_BROWSER_TEXT_MODEL", "deepseek-v4.1-flash")
     reasoning = {"reasoning_effort": "none"}
     started = time.perf_counter()
     today = datetime.date.today().isoformat()

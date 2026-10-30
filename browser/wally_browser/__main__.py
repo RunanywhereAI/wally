@@ -77,8 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.start_url:
         sys.stderr.write("pass --start-url\n")
         return 2
-    os.environ["TEXT_MODEL"] = "deepseek-v4.1-flash"
-    os.environ["TEXT_MODEL_REASONING"] = "none"
+    decider = os.environ.get("WALLY_BROWSER_DECISION_MODEL", "eve")
     chrome_ready()
     try:
         with Agent(args.start_url, args.goal) as agent:
@@ -97,12 +96,15 @@ def main(argv: list[str] | None = None) -> int:
                     line += f"  {done['kind']}  {done['action']}"
                     if done.get("text"):
                         line += f"  {done['text']!r}  text {done.get('text_latency_ms', 0)} ms"
-                    line += f"  eve {done.get('latency_ms', 0)} ms"
+                    line += f"  {decider} {done.get('latency_ms', 0)} ms"
                 shown = count
                 print(line, flush=True)
     except KeyboardInterrupt:
         sys.stderr.write("\nstopped\n")
         return 130
+    except (RuntimeError, ValueError) as error:
+        sys.stderr.write(f"browser-use stopped: {error}\n")
+        return 1
     if last is None:
         return 1
     if last["status"] == "done":

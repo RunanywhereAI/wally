@@ -15,8 +15,15 @@ use crate::cli_formatter::{examples_footer, Example};
 use crate::harness;
 use crate::io::output as out;
 
-const DEFAULT_TEXT_MODEL: &str = "glm-5.3-flash";
+const DEFAULT_TEXT_MODEL: &str = "deepseek-v4.1-flash";
 const DEFAULT_MAX_STEPS: u64 = 60;
+/// TypeSafe's decision model. No RunAnywhere route serves it; it answers on a
+/// gateway named by `WALLY_BROWSER_API_BASE`.
+const JEV_MODEL: &str = "jev-latest";
+
+fn is_browser_decision_model(id: &str) -> bool {
+    harness::is_decisions_model(id) || id == JEV_MODEL
+}
 /// Where an install keeps the locked Python project, relative to the binary's
 /// directory. A checkout points `WALLY_BROWSER_PROJECT` at its `browser/`.
 const PROJECT_RELATIVE: &[&str] = &["../share/wally/browser", "../browser"];
@@ -46,7 +53,7 @@ pub fn parse_request(
 ) -> Result<Request, String> {
     let mut words: Vec<String> = words.to_vec();
     let mut decision_model = model.map(str::to_string);
-    if words.len() > 1 && harness::is_decisions_model(&words[0]) {
+    if words.len() > 1 && is_browser_decision_model(&words[0]) {
         let named = words.remove(0);
         if let Some(flag) = &decision_model {
             if flag != &named {
@@ -57,7 +64,7 @@ pub fn parse_request(
     }
     let decision_model =
         decision_model.unwrap_or_else(|| harness::DEFAULT_DECISIONS_MODEL.to_string());
-    if !harness::is_decisions_model(&decision_model) {
+    if !is_browser_decision_model(&decision_model) {
         return Err(format!(
             "{decision_model} is not a decision model; browser-use needs one to choose each step \
              (default {})",
@@ -65,7 +72,7 @@ pub fn parse_request(
         ));
     }
     let text_model = text_model.unwrap_or(DEFAULT_TEXT_MODEL).to_string();
-    if harness::is_decisions_model(&text_model) {
+    if is_browser_decision_model(&text_model) {
         return Err(format!(
             "{text_model} is a decision model; --text-model needs a chat model (default {DEFAULT_TEXT_MODEL})"
         ));
@@ -188,6 +195,41 @@ fn find_on_path(tool: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// Another gateway, when `WALLY_BROWSER_API_BASE` and `WALLY_BROWSER_API_KEY`
+/// are both set: its own key, so no Wally session is needed or checked.
+fn gateway_override() -> Option<(String, String, i64)> {
+    let base = crate::util::getenv("WALLY_BROWSER_API_BASE")?;
+    let key = crate::util::getenv("WALLY_BROWSER_API_KEY")?;
+    Some((base.trim_end_matches('/').to_string(), key, 0))
+}
+
+/// The signed-in Wally session: its endpoint, key and expiry.
+fn hosted_session(request: &Request) -> Option<(String, String, i64)> {
+    let mut credentials = match account::load() {
+        Ok(credentials) => credentials,
+        Err(message) => {
+            out::error_line(&message);
+            return None;
+        }
+    };
+    if !credentials.signed_in() {
+        harness::report_not_signed_in();
+        return None;
+    }
+    if let Err(error) = harness::verify_cloud_session(&ConsoleClient::default(), &mut credentials) {
+        if !error.unverified {
+            harness::report_cloud_session_invalid(&request.decision_model);
+            return None;
+        }
+        // The console could not be asked right now; the gateway will answer for the key.
+    }
+    Some((
+        format!("{}/v1", credentials.console_url),
+        credentials.access_token,
+        credentials.expires_at,
+    ))
+}
+
 fn run(request: Request) -> i32 {
     let Some(project) = find_project() else {
         out::error_line(
@@ -204,25 +246,13 @@ fn run(request: Request) -> i32 {
         return 127;
     };
 
-    let mut credentials = match account::load() {
-        Ok(credentials) => credentials,
-        Err(message) => {
-            out::error_line(&message);
-            return 1;
-        }
+    let (api_base, api_key, deadline) = match gateway_override() {
+        Some(gateway) => gateway,
+        None => match hosted_session(&request) {
+            Some(session) => session,
+            None => return 1,
+        },
     };
-    if !credentials.signed_in() {
-        harness::report_not_signed_in();
-        return 1;
-    }
-    if let Err(error) = harness::verify_cloud_session(&ConsoleClient::default(), &mut credentials) {
-        if !error.unverified {
-            harness::report_cloud_session_invalid(&request.decision_model);
-            return 1;
-        }
-        // The console could not be asked right now; the gateway will answer for the key.
-    }
-    let api_base = format!("{}/v1", credentials.console_url);
     out::status_line(&format!(
         "browser-use: {} chooses each step, {} writes text; the run stops at the payment page",
         request.decision_model, request.text_model
@@ -231,12 +261,7 @@ fn run(request: Request) -> i32 {
     let mut command = std::process::Command::new(&uv);
     command
         .args(child_arguments(&request, &project))
-        .envs(child_environment(
-            &request,
-            &api_base,
-            &credentials.access_token,
-            credentials.expires_at,
-        ));
+        .envs(child_environment(&request, &api_base, &api_key, deadline));
     // Stay in the foreground terminal job. A new process group is stopped by
     // the kernel (SIGTTIN) the moment Python reads a confirmation, and Chrome,
     // in that same group, freezes with it.
@@ -290,7 +315,7 @@ pub fn register_browser_use(app: &mut App) {
     cmd.add_option(
         "--text-model",
         ValueType::Text,
-        "Chat model for the plan and field text (default glm-5.3-flash)",
+        "Chat model for the plan and field text (default deepseek-v4.1-flash)",
     );
     cmd.add_option(
         "--profile",
@@ -362,8 +387,15 @@ mod tests {
             parse_request(&words(&["eve", "find", "a", "flight"]), None, None, None).unwrap();
         assert_eq!(request.decision_model, "eve");
         assert_eq!(request.goal, "find a flight");
-        assert_eq!(request.text_model, "glm-5.3-flash");
+        assert_eq!(request.text_model, "deepseek-v4.1-flash");
         assert_eq!(request.chrome, "dedicated");
+    }
+
+    #[test]
+    fn jev_latest_is_accepted_as_the_decision_model() {
+        let request = parse_request(&words(&["jev-latest", "book"]), None, None, None).unwrap();
+        assert_eq!(request.decision_model, "jev-latest");
+        assert_eq!(request.goal, "book");
     }
 
     #[test]
