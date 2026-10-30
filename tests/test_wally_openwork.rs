@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use wally::harness::{
-    app_at, build_openwork_config, launch_command, workspace_id, workspace_list, CatalogModel,
-    OpenWorkApp, Profile, Providers, HOSTED_PROVIDER, LOCAL_PROVIDER,
+    app_at, build_openwork_config, program, without_verbatim_prefix, workspace_id, workspace_list,
+    CatalogModel, OpenWorkApp, Profile, Providers, HOSTED_PROVIDER, LOCAL_PROVIDER,
 };
 
 fn model(id: &str, context: i64) -> CatalogModel {
@@ -180,6 +180,39 @@ fn the_workspace_list_selects_its_one_workspace_by_openworks_id() {
 }
 
 #[test]
+fn a_verbatim_drive_prefix_is_dropped_and_nothing_else() {
+    assert_eq!(
+        without_verbatim_prefix(r"\\?\C:\Users\me\openwork\workspace"),
+        r"C:\Users\me\openwork\workspace"
+    );
+    assert_eq!(
+        without_verbatim_prefix(r"\\?\UNC\server\share"),
+        r"\\?\UNC\server\share"
+    );
+    assert_eq!(
+        without_verbatim_prefix("/state/openwork"),
+        "/state/openwork"
+    );
+}
+
+#[test]
+fn the_workspace_path_is_the_resolved_folder() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let profile = Profile::under(dir.path());
+    profile.create().unwrap();
+    assert_eq!(
+        Path::new(&profile.workspace_path()),
+        std::fs::canonicalize(&profile.workspace)
+            .unwrap()
+            .as_path()
+            .to_str()
+            .map(without_verbatim_prefix)
+            .map(Path::new)
+            .unwrap()
+    );
+}
+
+#[test]
 fn an_app_is_a_bundle_with_a_plist_or_an_executable_file() {
     let dir = tempfile::tempdir().expect("temp dir");
     let bundle = dir.path().join("OpenWork.app");
@@ -198,9 +231,7 @@ fn an_app_is_a_bundle_with_a_plist_or_an_executable_file() {
 }
 
 #[test]
-fn an_executable_takes_no_arguments_and_gets_the_environment_from_its_spawn() {
+fn an_executable_is_started_as_it_is() {
     let app = OpenWorkApp::Executable(PathBuf::from("/opt/OpenWork/openwork"));
-    let (program, args) = launch_command(&app, &[("A".to_string(), "1".to_string())]);
-    assert_eq!(program, "/opt/OpenWork/openwork");
-    assert!(args.is_empty());
+    assert_eq!(program(&app), PathBuf::from("/opt/OpenWork/openwork"));
 }

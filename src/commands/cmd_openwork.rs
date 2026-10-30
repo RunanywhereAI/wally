@@ -160,8 +160,7 @@ fn prepare(profile: &Profile) -> Result<(), String> {
     profile.create()?;
     let list = profile.workspace_list();
     if !list.exists() {
-        let workspace = profile.workspace.to_string_lossy();
-        write_private(&list, &harness::workspace_list(&workspace))
+        write_private(&list, &harness::workspace_list(&profile.workspace_path()))
             .map_err(|error| format!("could not write OpenWork's workspace list ({error})"))?;
     }
     Ok(())
@@ -205,90 +204,23 @@ fn run(app: &OpenWorkApp, model: &str, options: &GlobalOptions) -> i32 {
 }
 
 /// Starts `app` on `environment` and waits for it. Only the child gets the
-/// environment; this process's own is left as it was.
+/// environment; this process's own is left as it was. The app's console
+/// chatter is dropped: OpenWork keeps its own logs in the profile.
 fn start(app: &OpenWorkApp, environment: &[(String, String)]) -> i32 {
-    let (program, args) = harness::launch_command(app, environment);
-    match app {
-        #[cfg(target_os = "macos")]
-        OpenWorkApp::Bundle(bundle) => mac::start_bundle(bundle, &program, &args),
-        #[cfg(not(target_os = "macos"))]
-        OpenWorkApp::Bundle(_) => {
-            out::error_line("an OpenWork .app bundle only runs on macOS");
-            1
+    // Ctrl-C reaches the app from the terminal and it quits; wally waits for
+    // that, so the local server outlives it.
+    let _wait = crate::util::interrupt::on_interrupt(|| {});
+    match std::process::Command::new(harness::program(app))
+        .envs(environment.iter().map(|(k, v)| (k, v)))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+    {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(error) => {
+            out::error_line(&format!("could not start OpenWork ({error})"));
+            127
         }
-        OpenWorkApp::Executable(_) => {
-            // The app gets Ctrl-C from the terminal itself; wally waits for
-            // it to exit so the local server outlives it.
-            let _wait = crate::util::interrupt::on_interrupt(|| {});
-            match std::process::Command::new(&program)
-                .args(&args)
-                .envs(environment.iter().map(|(k, v)| (k, v)))
-                .status()
-            {
-                Ok(status) => status.code().unwrap_or(1),
-                Err(error) => {
-                    out::error_line(&format!("could not start OpenWork ({error})"));
-                    127
-                }
-            }
-        }
-    }
-}
-
-/// `open -n -W` starts the instance through launchd, so it is found by pid,
-/// as `wally chatgpt` does: Ctrl-C quits it, and its exit ends the run.
-#[cfg(target_os = "macos")]
-mod mac {
-    use std::path::Path;
-    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use crate::desktop::instance;
-    use crate::io::output as out;
-
-    pub(super) fn start_bundle(bundle: &Path, program: &str, args: &[String]) -> i32 {
-        let bundle = bundle.to_string_lossy().into_owned();
-        let instance_pid = Arc::new(AtomicI32::new(0));
-        let for_signal = Arc::clone(&instance_pid);
-        let _quit_on_signal = crate::util::interrupt::on_interrupt(move || {
-            let pid = for_signal.load(Ordering::SeqCst);
-            if pid > 0 && !instance::quit(pid, Duration::from_secs(5)) {
-                out::error_line("OpenWork did not quit; close it by hand");
-            }
-            // SAFETY: _exit has no preconditions and does not return; it
-            // skips destructors while the local server may be mid-request.
-            unsafe { libc::_exit(130) };
-        });
-        let finished = Arc::new(AtomicBool::new(false));
-        {
-            let before = instance::main_pids(&bundle);
-            let bundle = bundle.clone();
-            let instance_pid = Arc::clone(&instance_pid);
-            let finished = Arc::clone(&finished);
-            std::thread::spawn(move || {
-                let Some(pid) = instance::wait_for_new(&bundle, &before, Duration::from_secs(60))
-                else {
-                    return;
-                };
-                instance_pid.store(pid, Ordering::SeqCst);
-                instance::wait_for_exit(pid);
-                std::thread::sleep(Duration::from_secs(1));
-                if !finished.load(Ordering::SeqCst) {
-                    out::status_line("OpenWork quit; wally is done");
-                    // SAFETY: as above.
-                    unsafe { libc::_exit(0) };
-                }
-            });
-        }
-        let status = match std::process::Command::new(program).args(args).status() {
-            Ok(status) => status.code().unwrap_or(1),
-            Err(error) => {
-                out::error_line(&format!("could not start OpenWork ({error})"));
-                127
-            }
-        };
-        finished.store(true, Ordering::SeqCst);
-        status
     }
 }

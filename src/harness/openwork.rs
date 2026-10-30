@@ -97,6 +97,19 @@ impl Profile {
         self.user_data.join("openwork-workspaces.json")
     }
 
+    /// The workspace folder as OpenWork resolves it (`path.resolve` then
+    /// `realpath` in `normalizeLocalWorkspacePath`): native separators and
+    /// long names. Its id is a hash of this exact text, so a spelling with
+    /// mixed separators or a Windows 8.3 short name would not be selected.
+    /// The folder must already exist.
+    pub fn workspace_path(&self) -> String {
+        let resolved = std::fs::canonicalize(&self.workspace)
+            .unwrap_or_else(|_| self.workspace.clone())
+            .to_string_lossy()
+            .into_owned();
+        without_verbatim_prefix(&resolved).to_string()
+    }
+
     /// Every variable that moves OpenWork and its engine onto this profile:
     /// OpenWork's own isolation set (`BLANK_SLATE_PATH_ENV_KEYS` in
     /// `apps/desktop/electron/blank-slate-profile.mjs`) minus the home and
@@ -139,6 +152,15 @@ impl Profile {
             ("OPENWORK_ENGINE_V2_PREVIEW".into(), "off".into()),
             ("OPENWORK_ENGINE_AUTO_UPGRADE".into(), "0".into()),
         ]
+    }
+}
+
+/// `path` without the `\\?\` that `canonicalize` puts on a Windows drive
+/// path, which Node's `realpath` never returns. Anything else is unchanged.
+pub fn without_verbatim_prefix(path: &str) -> &str {
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest,
+        _ => path,
     }
 }
 
@@ -270,26 +292,19 @@ fn standard_locations() -> Vec<PathBuf> {
         .collect()
 }
 
-/// The program and arguments that start `app` as a new instance on the
-/// profile `environment`, and wait for it. A bundle goes through `open -n -W`,
-/// which carries the environment to the app with `--env`; an executable takes
-/// it from the process the caller spawns.
-pub fn launch_command(
-    app: &OpenWorkApp,
-    environment: &[(String, String)],
-) -> (String, Vec<String>) {
+/// The bundle's main executable, `CFBundleExecutable` in OpenWork 0.18.63's
+/// Info.plist.
+pub const BUNDLE_EXECUTABLE: &str = "OpenWork";
+
+/// The program that starts `app`. A bundle is started from its own
+/// executable rather than through `open`, so the profile environment, which
+/// carries the account token, is handed to the child directly instead of
+/// sitting in `open`'s arguments, and the app is wally's child: Ctrl-C reaches
+/// it from the terminal and its exit ends the run.
+pub fn program(app: &OpenWorkApp) -> PathBuf {
     match app {
-        OpenWorkApp::Bundle(bundle) => {
-            let mut args = vec!["-n".to_string(), "-W".to_string()];
-            for (name, value) in environment {
-                args.push("--env".to_string());
-                args.push(format!("{name}={value}"));
-            }
-            args.push("-a".to_string());
-            args.push(bundle.to_string_lossy().into_owned());
-            ("open".to_string(), args)
-        }
-        OpenWorkApp::Executable(path) => (path.to_string_lossy().into_owned(), Vec::new()),
+        OpenWorkApp::Bundle(bundle) => bundle.join("Contents/MacOS").join(BUNDLE_EXECUTABLE),
+        OpenWorkApp::Executable(path) => path.clone(),
     }
 }
 
@@ -310,20 +325,11 @@ mod tests {
     }
 
     #[test]
-    fn a_bundle_launches_through_open_with_each_variable() {
+    fn a_bundle_starts_from_its_own_executable() {
         let app = OpenWorkApp::Bundle(PathBuf::from("/Applications/OpenWork.app"));
-        let (program, args) = launch_command(&app, &[("A".to_string(), "1".to_string())]);
-        assert_eq!(program, "open");
         assert_eq!(
-            args,
-            [
-                "-n",
-                "-W",
-                "--env",
-                "A=1",
-                "-a",
-                "/Applications/OpenWork.app"
-            ]
+            program(&app),
+            PathBuf::from("/Applications/OpenWork.app/Contents/MacOS/OpenWork")
         );
     }
 }
