@@ -145,7 +145,11 @@ def main():
                     assert pathlib.Path(profile_env[key]).is_relative_to(profile_root), profile_env
                 assert profile_env["engine_v2"] not in ("", "1", "chat", "sidecar"), profile_env
                 workspaces = json.loads((profile_root / "user-data" / "openwork-workspaces.json").read_text())
-                assert workspaces["workspaces"][0]["path"] == str(profile_root / "workspace"), workspaces
+                # Resolved on both sides: the runner's temp dir is an 8.3
+                # short name, and wally writes the long, native spelling.
+                written = pathlib.Path(workspaces["workspaces"][0]["path"])
+                assert written.resolve() == (profile_root / "workspace").resolve(), workspaces
+                assert "/" not in str(written) or os.name != "nt", workspaces
                 assert not (home / "OpenWork Chat").exists()
                 assert not (home / ".config" / "opencode").exists()
                 address = urllib.parse.urlsplit(captured["url"])

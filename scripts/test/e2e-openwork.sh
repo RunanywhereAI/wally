@@ -105,7 +105,11 @@ PY
 
 cleanup
 trap - EXIT
-sleep 3
+# The engine is stopped by the app on its way out, which takes a few seconds.
+for _ in $(seq 1 20); do
+    pgrep -f "OpenWork.app/Contents/Resources/sidecars/opencode" >/dev/null || break
+    sleep 1
+done
 if pgrep -f "OpenWork.app/Contents/Resources/sidecars/opencode" >/dev/null; then
     echo "  FAIL  openwork: its engine is still running after the app quit"
     exit 1
