@@ -42,7 +42,7 @@ class HelpCliTests(unittest.TestCase):
 
     def test_harness_help_does_not_launch_or_require_tool(self):
         env = dict(self.env, PATH=self.directory.name)
-        for command in ("opencode", "claude-code", "claude-desktop", "hermes", "openclaw", "deepseek"):
+        for command in ("opencode", "openwork", "claude-code", "claude-desktop", "hermes", "openclaw", "deepseek"):
             with self.subTest(command=command):
                 help_text = self.run_help(command, "--help", env=env)
                 self.assertIn(f"Usage: wally {command}", help_text)

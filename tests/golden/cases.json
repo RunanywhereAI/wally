@@ -335,6 +335,13 @@
   ]
  },
  {
+  "name": "help__openwork",
+  "args": [
+   "help",
+   "openwork"
+  ]
+ },
+ {
   "name": "help__deepseek",
   "args": [
    "help",
@@ -540,6 +547,14 @@
   "args": [
    "help",
    "chatgpt",
+   "--help"
+  ]
+ },
+ {
+  "name": "help__help__openwork",
+  "args": [
+   "help",
+   "openwork",
    "--help"
   ]
  },

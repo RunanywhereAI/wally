@@ -58,6 +58,10 @@ If opencode is not installed, `wally` says so and prints the install command
 (`npm i -g opencode-ai`) rather than failing. Install it, then run the same
 line again.
 
+`wally openwork -m <model>` opens the OpenWork desktop app with every
+RunAnywhere model in its model picker, on a private profile. On macOS it offers
+`brew install --cask openwork` when the app is missing.
+
 Offer to explain a harness before running it. Someone who has just signed up
 does not yet know what opencode is, and "would you like me to explain how the
 opencode harness works?" is a better second message than a launched TUI.

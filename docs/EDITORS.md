@@ -11,6 +11,7 @@ configure by hand:
 wally claude-code -m qwen3-4b-instruct-2507
 wally codex -m qwen3-4b-instruct-2507
 wally chatgpt -m qwen3-4b-instruct-2507
+wally openwork -m qwen3-4b-instruct-2507
 wally hermes -m qwen3-4b-instruct-2507
 wally deepseek -m qwen3-4b-instruct-2507
 wally openclaw -m qwen3-4b-instruct-2507
@@ -24,6 +25,7 @@ tool starts the way you already have it configured, and wally wires nothing.
 | `claude-code` | `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in the process |
 | `codex` | `-c` overrides on its command line naming a `wally` provider at the translator, plus a model catalog file for the run; the loopback token is in `WALLY_CODEX_API_KEY`. It runs in a Codex home of wally's own, so its threads and settings stay apart from yours; nothing is copied in and `~/.codex` is never written |
 | `chatgpt` | the ChatGPT app for macOS started as a second instance with its own app data and its own Codex home, whose `config.toml` holds the same settings `codex` passes as `-c` (one block wally rewrites per launch; the app's own entries are kept) and an API-key `auth.json` so no ChatGPT sign-in is asked for. Your own ChatGPT app and `~/.codex` are never touched. Quitting the app ends the run, and Ctrl-C quits the app |
+| `openwork` | the OpenWork desktop app (public edition, `brew install --cask openwork` on macOS) started as a second instance on a profile of wally's own under the state directory (`openwork/`): its Electron data, runtime database, server settings, opencode history and a `RunAnywhere` workspace all live there, so your own OpenWork, your opencode history and `~/OpenWork Chat` are never written. Its opencode 1.x engine gets the provider in `OPENCODE_CONFIG_CONTENT`: the hosted catalog under `runanywhere` and, for a local model, `runanywhere-local` beside it, with the launched model selected. Chats stay on that engine (`OPENWORK_ENGINE_V2_PREVIEW=off`, `OPENWORK_ENGINE_AUTO_UPGRADE=0`), because OpenWork starts its opencode 2 engine with an allowlisted environment that never sees the provider. Your global `~/.config/opencode` is still read. The profile is kept between runs. Quitting the app ends the run, and Ctrl-C quits the app. `WALLY_OPENWORK_APP` points at an install elsewhere. The Windows location (`%LOCALAPPDATA%\Programs\OpenWork\OpenWork.exe`) has not been checked against a real install yet |
 | `opencode` | a temporary provider in `OPENCODE_CONFIG_CONTENT`, with the local or hosted endpoint and context limits |
 | `claude-desktop` | a gateway profile in Claude Desktop's third party mode, covering the chat and Cowork tabs |
 | `hermes` | `CUSTOM_BASE_URL`, `HERMES_INFERENCE_PROVIDER=custom`, the model in `HERMES_INFERENCE_MODEL`, and the key under the name its host gates on |
