@@ -337,6 +337,18 @@ impl Site {
         self.state.lock().unwrap().fail_status = Some(status);
     }
 
+    /// The beacons for `key`, waiting up to 5 s for the first one to arrive.
+    pub fn beacons_within(&self, key: &str) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let found = self.beacons(key);
+            if !found.is_empty() || Instant::now() >= deadline {
+                return found;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     pub fn beacons(&self, key: &str) -> Vec<String> {
         self.state
             .lock()
@@ -439,9 +451,25 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
                 None => {
                     let reply = match &state.plan {
                         Some(plan) => {
+                            // A step is done once its beacon arrives, or once the agent
+                            // reports it executed (recent_actions): a beacon is an async
+                            // fetch and can land after the next decision is asked for.
+                            let executed: Vec<String> = request["state"]["recent_actions"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|step| step["action"].as_str())
+                                .map(str::to_lowercase)
+                                .collect();
                             let next = plan
                                 .iter()
-                                .find(|want| !state.recorded.beacons.iter().any(|(k, _)| k == want.beacon))
+                                .find(|want| {
+                                    let label = want.label.to_lowercase();
+                                    !state.recorded.beacons.iter().any(|(k, _)| k == want.beacon)
+                                        && !executed.iter().any(|action| {
+                                            action.contains(&label) && !action.starts_with("open ")
+                                        })
+                                })
                                 .copied();
                             let shy = state.shy;
                             answer_with(&request, |name, criteria, elements| {
@@ -704,6 +732,20 @@ pub struct Chrome {
     _profile: tempfile::TempDir,
 }
 
+/// GET `{origin}/json/version` answers with a DevTools socket.
+fn answers(origin: &str) -> bool {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(2)))
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    agent
+        .get(&format!("{origin}/json/version"))
+        .call()
+        .ok()
+        .and_then(|response| response.into_body().read_to_string().ok())
+        .is_some_and(|text| text.contains("webSocketDebuggerUrl"))
+}
+
 impl Chrome {
     pub fn start(binary: &Path) -> Self {
         let profile = tempfile::tempdir().expect("chrome profile dir");
@@ -739,9 +781,28 @@ impl Chrome {
             );
             std::thread::sleep(Duration::from_millis(50));
         };
+        // The port file can appear before Chrome answers on it, and on some
+        // Windows runners Chrome listens on [::1] rather than 127.0.0.1. Use
+        // whichever loopback name answers /json/version from this process.
+        let origins = [
+            format!("http://127.0.0.1:{port}"),
+            format!("http://[::1]:{port}"),
+            format!("http://localhost:{port}"),
+        ];
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let origin = loop {
+            if let Some(origin) = origins.iter().find(|origin| answers(origin)) {
+                break origin.clone();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Chrome reported DevTools port {port}, but /json/version answered on none of {origins:?}"
+            );
+            std::thread::sleep(Duration::from_millis(200));
+        };
         Chrome {
             child,
-            origin: format!("http://127.0.0.1:{port}"),
+            origin,
             _profile: profile,
         }
     }

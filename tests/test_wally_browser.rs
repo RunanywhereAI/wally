@@ -474,7 +474,7 @@ fn pattern_a_card_field_in_a_cross_origin_iframe_is_out_of_reach() {
     );
     assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert_eq!(
-        site.beacons("frame"),
+        site.beacons_within("frame"),
         ["loaded"],
         "the card iframe never loaded"
     );
@@ -549,7 +549,7 @@ fn probe_text_never_follows_focus_into_a_cross_origin_card_frame() {
         &[want("TYPE_TEXT", "Full name", "typed_card_frame")]
     );
     assert_eq!(
-        site.beacons("frame"),
+        site.beacons_within("frame"),
         ["loaded"],
         "the card iframe never loaded"
     );
@@ -624,7 +624,7 @@ fn probe_a_keydown_handler_cannot_pull_text_into_a_cross_origin_card_frame() {
         &["--max-steps", "4"]
     );
     assert_eq!(
-        site.beacons("frame"),
+        site.beacons_within("frame"),
         ["loaded"],
         "the card iframe never loaded"
     );
