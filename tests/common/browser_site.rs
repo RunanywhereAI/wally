@@ -727,10 +727,11 @@ fn follow_plan(
     }
     if name.starts_with(&format!("{}_target", want.op.to_lowercase())) {
         let wanted = want.label.to_lowercase();
+        // A checkbox or radio already in the wanted (on) state is not clicked
+        // again: a second click would turn it back off.
         if let Some(option) = options.iter().find(|o| {
-            label_of(&criteria[o.as_str()])
-                .to_lowercase()
-                .contains(&wanted)
+            let criterion = &criteria[o.as_str()];
+            criterion["checked"] != "true" && label_of(criterion).to_lowercase().contains(&wanted)
         }) {
             return option.to_string();
         }
