@@ -16,6 +16,7 @@ pub const SNAPSHOT_JS: &str = include_str!("js/snapshot.js");
 const SETTLE_JS: &str = include_str!("js/settle.js");
 const HIT_TEST_JS: &str = include_str!("js/hit_test.js");
 const GUARD_READ_JS: &str = include_str!("js/guard_read.js");
+const FOCUS_CHECK_JS: &str = include_str!("js/focus_check.js");
 const VIEWPORT: (u32, u32) = (1120, 780);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -55,6 +56,9 @@ pub struct Action {
     pub autocomplete: Option<String>,
     #[serde(default)]
     pub delta: Option<i64>,
+    /// A link with `target=_blank`: its click opens a new tab.
+    #[serde(default)]
+    pub opens_tab: Option<bool>,
 }
 
 /// One read of the page. `marker`, `page_key` and `guards` are compared, never
@@ -138,6 +142,9 @@ pub struct CdpBrowser<W: Wire> {
     target: Option<String>,
     session: String,
     after_input: Option<Action>,
+    /// Page tabs that existed before the last click; a tab outside this set
+    /// that our tab opened is followed.
+    known_tabs: Vec<String>,
 }
 
 impl<W: Wire> CdpBrowser<W> {
@@ -164,28 +171,113 @@ impl<W: Wire> CdpBrowser<W> {
             target: Some(target),
             session,
             after_input: None,
+            known_tabs: Vec::new(),
         };
-        browser.call(
+        browser.prepare_tab()?;
+        browser.call("Page.navigate", json!({"url": url}))?;
+        browser.wait_loaded();
+        browser.known_tabs = browser.page_tabs()?.into_iter().map(|tab| tab.0).collect();
+        Ok(browser)
+    }
+
+    /// The viewport every observation assumes, and focus emulation, which
+    /// keeps animation frames and menus rendering in a background tab without
+    /// bringing the person's Chrome window forward.
+    fn prepare_tab(&mut self) -> Result<(), StepError> {
+        self.call(
             "Emulation.setDeviceMetricsOverride",
             json!({"width": VIEWPORT.0, "height": VIEWPORT.1, "deviceScaleFactor": 1, "mobile": false}),
         )?;
-        // Keeps animation frames and menus rendering in a background tab
-        // without bringing the person's Chrome window forward.
-        browser.call(
+        self.call(
             "Emulation.setFocusEmulationEnabled",
             json!({"enabled": true}),
         )?;
-        browser.call("Page.navigate", json!({"url": url}))?;
+        Ok(())
+    }
+
+    /// Up to 15 s for the document to finish loading.
+    fn wait_loaded(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(15);
         while Instant::now() < deadline {
-            if let Ok(Value::String(state)) = browser.evaluate("document.readyState") {
+            if let Ok(Value::String(state)) = self.evaluate("document.readyState") {
                 if state == "complete" {
                     break;
                 }
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(browser)
+    }
+
+    /// Open page tabs as (target id, opener id).
+    fn page_tabs(&mut self) -> Result<Vec<(String, Option<String>)>, StepError> {
+        let reply = self
+            .cdp
+            .call("Target.getTargets", json!({}), None)
+            .map_err(browser_error)?;
+        Ok(reply
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|info| info.get("type").and_then(Value::as_str) == Some("page"))
+            .filter_map(|info| {
+                let id = info.get("targetId")?.as_str()?.to_string();
+                let opener = info
+                    .get("openerId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                Some((id, opener))
+            })
+            .collect())
+    }
+
+    /// A tab our tab opened since the last click, if any. After a click on a
+    /// `target=_blank` link any new tab counts: a `rel=noopener` link (how
+    /// Amazon opens product pages) may leave no opener to match.
+    fn opened_tab(&mut self, after_new_tab_link: bool) -> Result<Option<String>, StepError> {
+        let ours = self.target.clone();
+        let known = self.known_tabs.clone();
+        Ok(self
+            .page_tabs()?
+            .into_iter()
+            .find(|(id, opener)| {
+                !known.contains(id) && ((opener.is_some() && *opener == ours) || after_new_tab_link)
+            })
+            .map(|(id, _)| id))
+    }
+
+    /// Moves the run to `target`, a tab our page opened. The old tab stays open.
+    fn follow(&mut self, target: String) -> Result<(), StepError> {
+        let attached = self
+            .cdp
+            .call(
+                "Target.attachToTarget",
+                json!({"targetId": target, "flatten": true}),
+                None,
+            )
+            .map_err(browser_error)?;
+        self.session = string_field(&attached, "sessionId")?;
+        self.target = Some(target);
+        self.after_input = None;
+        self.prepare_tab()?;
+        self.wait_loaded();
+        self.known_tabs = self.page_tabs()?.into_iter().map(|tab| tab.0).collect();
+        Ok(())
+    }
+
+    /// After a click that opens a tab, wait up to 2 s for it; on any other
+    /// observation, follow one that is already there (window.open from script).
+    fn follow_opened_tab(&mut self, wait: bool) -> Result<(), StepError> {
+        let deadline = Instant::now() + Duration::from_secs(if wait { 2 } else { 0 });
+        loop {
+            if let Some(tab) = self.opened_tab(wait)? {
+                return self.follow(tab);
+            }
+            if Instant::now() >= deadline {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, StepError> {
@@ -226,6 +318,11 @@ impl<W: Wire> CdpBrowser<W> {
 
 impl<W: Wire> Browser for CdpBrowser<W> {
     fn observe(&mut self) -> Result<Observation, StepError> {
+        let opens_tab = self
+            .after_input
+            .as_ref()
+            .is_some_and(|a| a.opens_tab == Some(true));
+        self.follow_opened_tab(opens_tab)?;
         self.settle_after_input();
         for attempt in 0..10 {
             match self.evaluate(SNAPSHOT_JS) {
@@ -271,6 +368,7 @@ impl<W: Wire> Browser for CdpBrowser<W> {
         if !self.fresh(page, Some(action))? {
             return Err(StepError::Stale);
         }
+        self.known_tabs = self.page_tabs()?.into_iter().map(|tab| tab.0).collect();
         match action.kind {
             ActionKind::Wait => {
                 std::thread::sleep(Duration::from_millis(100));
@@ -314,6 +412,13 @@ impl<W: Wire> Browser for CdpBrowser<W> {
                     }
                 }
                 if action.kind == ActionKind::Fill {
+                    // Text goes only to the node the guards judged, or to a plain
+                    // text field the page moved focus to that passes them too.
+                    let node = action.node.unwrap_or_default();
+                    let focus = self.evaluate(&format!("{}({node})", FOCUS_CHECK_JS.trim_end()))?;
+                    if let Some(reason) = focus_refusal(&action.label, &focus) {
+                        return Err(StepError::Refused(reason));
+                    }
                     let modifiers = if cfg!(target_os = "macos") { 4 } else { 2 };
                     self.call(
                         "Input.dispatchKeyEvent",
@@ -338,6 +443,46 @@ impl<W: Wire> Browser for CdpBrowser<W> {
                 .cdp
                 .call("Target.activateTarget", json!({"targetId": target}), None);
         }
+    }
+}
+
+/// Why typing must not go ahead after the click, given what `focus_check.js`
+/// found holding focus; `None` when it may.
+pub fn focus_refusal(label: &str, focus: &Value) -> Option<String> {
+    let field = |key: &str| {
+        focus
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    match field("focus").as_str() {
+        "same" => None,
+        "other" => {
+            let moved = Action {
+                kind: ActionKind::Fill,
+                label: field("label"),
+                autocomplete: Some(field("autocomplete")).filter(|a| !a.is_empty()),
+                ..Action::default()
+            };
+            let text = focus.get("text").and_then(Value::as_bool).unwrap_or(false);
+            if !text || field("type") == "password" || super::guards::sensitive_fill(&moved) {
+                Some(format!(
+                    "focus moved from {label:?} to {:?}, which is not a plain text field; nothing typed",
+                    moved.label
+                ))
+            } else {
+                None
+            }
+        }
+        holder => Some(format!(
+            "focus moved from {label:?} to {}; nothing typed",
+            if holder.is_empty() {
+                "an unknown element"
+            } else {
+                holder
+            }
+        )),
     }
 }
 
@@ -417,5 +562,35 @@ mod tests {
             fingerprint(&raw),
             recorded()["fingerprint"].as_str().unwrap()
         );
+    }
+
+    #[test]
+    fn typing_goes_ahead_when_the_field_keeps_focus() {
+        assert_eq!(focus_refusal("Where to?", &json!({"focus": "same"})), None);
+    }
+
+    #[test]
+    fn typing_follows_focus_to_a_plain_text_field() {
+        let focus = json!({"focus": "other", "text": true, "type": "text", "label": "Where else?", "autocomplete": ""});
+        assert_eq!(focus_refusal("Where to?", &focus), None);
+    }
+
+    #[test]
+    fn typing_never_follows_focus_to_a_card_field() {
+        let focus = json!({"focus": "other", "text": true, "type": "text", "label": "Card number", "autocomplete": "cc-number"});
+        assert!(focus_refusal("Full name", &focus).is_some());
+    }
+
+    #[test]
+    fn typing_never_follows_focus_into_a_cross_origin_frame() {
+        assert!(focus_refusal("Full name", &json!({"focus": "cross-origin frame"})).is_some());
+    }
+
+    #[test]
+    fn typing_never_follows_focus_to_a_password_or_non_text_element() {
+        let password = json!({"focus": "other", "text": true, "type": "password", "label": "Name", "autocomplete": ""});
+        assert!(focus_refusal("Full name", &password).is_some());
+        let button = json!({"focus": "other", "text": false, "type": "submit", "label": "Go", "autocomplete": ""});
+        assert!(focus_refusal("Full name", &button).is_some());
     }
 }

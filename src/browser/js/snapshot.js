@@ -118,6 +118,7 @@
       (e.tagName==='INPUT' ? '' : children(e) || (e.shadowRoot ? children(e.shadowRoot) : '')) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
+  cache.name=name;
   const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',
     'menuitemcheckbox','option','treeitem','gridcell','combobox','textbox','searchbox','spinbutton'];
   const selector='a[href],button,input,textarea,select,summary,[contenteditable="true"],'+
@@ -187,6 +188,8 @@
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     const base={node:identity(e),role:rname,label:name(e)||rname,
       rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+    const link=cache.closest(e,'a[href]');
+    if (link && ['_blank','_new'].includes(link.target)) base.opens_tab=true;
     // The guards read this to tell a card or password field from an address one.
     const autocomplete=e.getAttribute('autocomplete');
     if (autocomplete) base.autocomplete=autocomplete;

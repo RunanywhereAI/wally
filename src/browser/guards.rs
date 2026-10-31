@@ -15,7 +15,45 @@ const PAY: &[&str] = &[
     "submit payment",
     "charge",
 ];
-const PAGE_MONEY: &[&str] = &["pay", "payment", "charge", "card"];
+/// Text that says money is about to move: a checkout, review or payment page.
+const PAGE_MONEY: &[&str] = &[
+    "pay",
+    "paying",
+    "payment",
+    "charge",
+    "charged",
+    "card",
+    "card ending",
+    "order total",
+    "grand total",
+    "amount due",
+    "billing",
+    "checkout",
+    "visa",
+    "mastercard",
+    "amex",
+    "upi",
+    "wallet",
+];
+/// Words that commit an order, a booking, a subscription or a transfer. On a
+/// page with money text, a control whose label says any of these is refused:
+/// blocking a harmless "Book now" is the safe way to be wrong.
+const COMMIT: &[&str] = &[
+    "buy",
+    "order now",
+    "book now",
+    "submit order",
+    "complete order",
+    "confirm order",
+    "confirm booking",
+    "checkout",
+    "check out",
+    "subscribe",
+    "donate",
+    "send",
+    "transfer",
+    "pay now",
+];
 const SENSITIVE: &[&str] = &[
     "card",
     "cvv",
@@ -30,7 +68,10 @@ const SENSITIVE: &[&str] = &[
     "net banking",
 ];
 const POSTAL: &[&str] = &["pincode", "postal"];
-const SHORT_COMMIT: &[&str] = &["yes", "confirm", "book", "reserve"];
+/// A bare label that commits whatever the page around it describes.
+const SHORT_COMMIT: &[&str] = &[
+    "yes", "confirm", "book", "reserve", "continue", "submit", "proceed", "order",
+];
 const SENSITIVE_AUTOCOMPLETE: &[&str] = &[
     "cc-number",
     "cc-csc",
@@ -60,19 +101,44 @@ pub fn sensitive_fill(action: &Action) -> bool {
     contains_any(label, SENSITIVE)
 }
 
-/// A payment control, a sensitive field, or a bare confirm sitting on payment text.
+/// "Place order", "Place your order", "Place the order now".
+fn places_an_order(label: &str) -> bool {
+    contains_any(label, &["place"]) && contains_any(label, &["order", "orders"])
+}
+
+/// A label that commits something: a payment, an order, a booking, a send.
+/// Judged without the page, for the rule that such a press is never repeated.
+pub fn commits(label: &str) -> bool {
+    let bare = label.trim().trim_end_matches(['.', '!', '›', '>']).trim();
+    contains_any(label, PAY)
+        || places_an_order(label)
+        || contains_any(label, COMMIT)
+        || SHORT_COMMIT
+            .iter()
+            .any(|word| bare.eq_ignore_ascii_case(word))
+}
+
+/// A payment control, a sensitive field, or a commit sitting on money text.
 pub fn refuses(action: &Action, page_text: &str) -> bool {
     let label = action.label.as_str();
     match action.kind {
-        ActionKind::Click | ActionKind::Select if contains_any(label, PAY) => return true,
+        ActionKind::Click | ActionKind::Select
+            if contains_any(label, PAY) || places_an_order(label) =>
+        {
+            return true
+        }
         ActionKind::Fill if sensitive_fill(action) => return true,
+        ActionKind::Fill | ActionKind::Scroll | ActionKind::Wait => return false,
         _ => {}
     }
-    let bare = label.trim();
-    SHORT_COMMIT
-        .iter()
-        .any(|word| bare.eq_ignore_ascii_case(word))
-        && contains_any(page_text, PAGE_MONEY)
+    if !contains_any(page_text, PAGE_MONEY) {
+        return false;
+    }
+    let bare = label.trim().trim_end_matches(['.', '!', '›', '>']).trim();
+    contains_any(label, COMMIT)
+        || SHORT_COMMIT
+            .iter()
+            .any(|word| bare.eq_ignore_ascii_case(word))
 }
 
 #[cfg(test)]
@@ -161,6 +227,55 @@ mod tests {
         assert!(!refuses(
             &action(ActionKind::Click, "Search", None),
             PAYMENT_PAGE
+        ));
+    }
+
+    #[test]
+    fn place_your_order_is_refused_on_any_page() {
+        let button = action(ActionKind::Click, "Place your order", None);
+        assert!(refuses(
+            &button,
+            "Order total ₹4,532 · Paying with Visa ending 4242"
+        ));
+        assert!(refuses(&button, ""));
+    }
+
+    #[test]
+    fn buy_is_refused_when_the_page_says_the_card_will_be_charged() {
+        let buy = action(ActionKind::Click, "Buy", None);
+        assert!(refuses(&buy, "Your card ending 4242 will be charged"));
+    }
+
+    #[test]
+    fn book_now_is_refused_when_the_page_charges_a_saved_card() {
+        let book = action(ActionKind::Click, "Book now", None);
+        assert!(refuses(&book, "We will charge your saved card"));
+    }
+
+    #[test]
+    fn continue_is_refused_on_a_review_step_with_an_order_total() {
+        let next = action(ActionKind::Click, "Continue", None);
+        assert!(refuses(&next, "Review your order. Order total ₹4,532"));
+    }
+
+    #[test]
+    fn commit_words_pass_where_no_money_is_shown() {
+        assert!(!refuses(
+            &action(ActionKind::Click, "Book now", None),
+            "Hotels in Lisbon"
+        ));
+        assert!(!refuses(
+            &action(ActionKind::Click, "Continue", None),
+            "Choose your seat"
+        ));
+    }
+
+    #[test]
+    fn add_to_cart_is_not_a_commit() {
+        let add = action(ActionKind::Click, "Add to cart", None);
+        assert!(!refuses(
+            &add,
+            "₹6,499 · Pay on delivery available · Visa EMI"
         ));
     }
 

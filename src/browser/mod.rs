@@ -41,6 +41,8 @@ use crate::io::output as out;
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepError {
     Stale,
+    /// A guard stopped an action at the last moment; nothing ran.
+    Refused(String),
     Browser(String),
     Model(String),
     Budget(String),
@@ -50,6 +52,7 @@ impl std::fmt::Display for StepError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StepError::Stale => f.write_str("the page kept changing; no action executed"),
+            StepError::Refused(message) => write!(f, "refused: {message}"),
             StepError::Browser(message)
             | StepError::Model(message)
             | StepError::Budget(message) => f.write_str(message),
@@ -274,6 +277,25 @@ impl<B: Browser, M: Models> Agent<B, M> {
             self.status = Status::Blocked;
             return Ok(());
         }
+        // A commit (pay, buy, confirm, book…) that left the page unchanged is
+        // not pressed again: a second press can be a second charge. Other
+        // controls may need a second press (a date picker's Done).
+        if let Some(last) = self.history.last() {
+            let clicks = |kind: ActionKind| matches!(kind, ActionKind::Click | ActionKind::Select);
+            if clicks(action.kind)
+                && guards::commits(&action.label)
+                && clicks(last.kind)
+                && last.node.is_some()
+                && last.node == action.node
+                && last.page_changed == Some(false)
+            {
+                self.status = Status::Blocked;
+                return Err(StepError::Refused(format!(
+                    "{:?} was pressed and nothing changed; not pressing it again",
+                    action.label
+                )));
+            }
+        }
         if self.history.len() >= self.max_steps {
             self.status = Status::Blocked;
             return Err(StepError::Budget(format!(
@@ -302,7 +324,12 @@ impl<B: Browser, M: Models> Agent<B, M> {
             helper = Some(used);
         }
         // `act` checks the page again right before input, after any text call.
-        self.browser.act(&action, &page, text.as_deref())?;
+        if let Err(error) = self.browser.act(&action, &page, text.as_deref()) {
+            if matches!(error, StepError::Refused(_)) {
+                self.status = Status::Blocked;
+            }
+            return Err(error);
+        }
         self.pending_text = None;
         // Recorded before observing: a stale observation must not erase the action.
         self.history.push(Step {
@@ -837,6 +864,26 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_that_changed_nothing_is_not_pressed_again() {
+        let same = page("same", vec![click("e1", "Confirm")]);
+        let mut agent = agent(vec![same], &["e1", "e1"], 60);
+        agent.tick().unwrap();
+        let error = agent.tick().unwrap_err();
+        assert!(matches!(error, StepError::Refused(_)), "{error:?}");
+        assert_eq!(agent.status, Status::Blocked);
+        assert_eq!(agent.browser.acted.len(), 1);
+    }
+
+    #[test]
+    fn an_ordinary_control_may_be_pressed_again() {
+        let pages = vec![page("same", vec![click("e1", "Done")])];
+        let mut agent = agent(pages, &["e1", "e1"], 60);
+        agent.tick().unwrap();
+        agent.tick().unwrap();
+        assert_eq!(agent.browser.acted.len(), 2);
+    }
+
+    #[test]
     fn three_unchanged_pages_in_a_row_block_the_run() {
         let same = page("same", vec![click("e1", "Next")]);
         let mut agent = agent(vec![same], &["e1", "e1", "e1"], 60);
@@ -845,6 +892,42 @@ mod tests {
         }
         assert_eq!(agent.status, Status::Blocked);
         assert_eq!(agent.browser.acted.len(), 3);
+    }
+
+    #[test]
+    fn a_refusal_at_the_browser_blocks_the_run() {
+        struct RefusingBrowser(FakeBrowser);
+        impl Browser for RefusingBrowser {
+            fn observe(&mut self) -> Result<Observation, StepError> {
+                self.0.observe()
+            }
+            fn fresh(
+                &mut self,
+                page: &Observation,
+                action: Option<&Action>,
+            ) -> Result<bool, StepError> {
+                self.0.fresh(page, action)
+            }
+            fn act(
+                &mut self,
+                _: &Action,
+                _: &Observation,
+                _: Option<&str>,
+            ) -> Result<(), StepError> {
+                Err(StepError::Refused("focus moved".into()))
+            }
+            fn close(&mut self) {}
+        }
+        let mut fill = click("e1", "Full name");
+        fill.kind = ActionKind::Fill;
+        let browser = RefusingBrowser(FakeBrowser {
+            pages: vec![page("a", vec![fill])].into(),
+            ..FakeBrowser::default()
+        });
+        let mut agent = Agent::new(browser, FakeModels::choosing(&["e1"]), "goal", 60).unwrap();
+        assert!(matches!(agent.tick(), Err(StepError::Refused(_))));
+        assert_eq!(agent.status, Status::Blocked);
+        assert!(agent.history.is_empty());
     }
 
     #[test]

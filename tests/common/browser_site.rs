@@ -201,6 +201,52 @@ customElements.define('shop-item', class extends HTMLElement {
                     .collect::<String>()
             ))
         }
+        "/probe/place-order" => {
+            r#"<title>Review your order</title><p>Order total ₹4,532 · Paying with Visa ending 4242</p>
+<button onclick="beacon('paid=1')">Place your order</button>"#
+        }
+        "/probe/buy" => {
+            r#"<title>Confirm</title><p>Your card ending 4242 will be charged</p>
+<button onclick="beacon('paid=1')">Buy</button>"#
+        }
+        "/probe/book-now" => {
+            r#"<title>Book</title><p>We will charge your saved card</p>
+<button onclick="beacon('paid=1')">Book now</button>"#
+        }
+        "/probe/focus-steal" => {
+            r#"<title>Details</title>
+<label>Full name <input aria-label="Full name" onfocus="document.getElementById('cc').focus()"></label>
+<label>Card number <input id=cc autocomplete="cc-number" aria-label="Card number"
+  oninput="beacon('typed_card='+encodeURIComponent(this.value))"></label>"#
+        }
+        "/probe/focus-steal-frame" => {
+            r#"<title>Details</title>
+<label>Full name <input aria-label="Full name" onfocus="card.contentWindow.focus()"></label>
+<iframe id=card style="width:400px;height:80px;border:0"></iframe>
+<script>card.onload=()=>beacon('frame=loaded');card.src=location.protocol+'//localhost:'+location.port+'/probe/card-frame'</script>"#
+        }
+        "/probe/card-frame" => {
+            r#"<title>Card</title>
+<input id=cc autocomplete="cc-number" aria-label="Card number"
+  oninput="beacon('typed_card_frame='+encodeURIComponent(this.value))">
+<script>window.addEventListener('focus',()=>cc.focus())</script>"#
+        }
+        "/p/new-tab" => {
+            r#"<title>Results</title>
+<a href="/p/new-tab-target" target=_blank>Open seat map</a>"#
+        }
+        "/p/new-tab-noopener" => {
+            r#"<title>Results</title>
+<a href="/p/new-tab-target" target=_blank rel="noopener noreferrer">Open seat map</a>"#
+        }
+        "/p/window-open" => {
+            r#"<title>Results</title>
+<button onclick="window.open('/p/new-tab-target')">Open seat map</button>"#
+        }
+        "/p/new-tab-target" => {
+            r#"<title>Seat map</title><script>beacon('tab=opened')</script>
+<button onclick="beacon('seat=14C')">Reserve seat 14C</button>"#
+        }
         _ => return None,
     };
     Some(format!("<!doctype html><meta charset=utf-8>{BEACON}{body}"))
@@ -450,6 +496,7 @@ fn field_value(request: &Value) -> String {
         ("promo", "SAVE10"),
         ("message", "Hello"),
         ("quantity", "2"),
+        ("full name", "Asha Rao"),
     ]
     .iter()
     .find(|(key, _)| label.starts_with(key))
