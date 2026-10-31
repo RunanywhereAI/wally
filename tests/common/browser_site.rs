@@ -24,7 +24,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
-const BEACON: &str = "<script>function beacon(q){fetch('/beacon?'+q)}</script>";
+// Synchronous, so a beacon has landed before the page handler returns: an
+// async fetch can arrive after the agent's next decision on a slow runner.
+const BEACON: &str = "<script>function beacon(q){const x=new XMLHttpRequest();x.open('GET','/beacon?'+q,false);x.send()}</script>";
 
 fn page(path: &str) -> Option<String> {
     let body = match path {
@@ -190,7 +192,7 @@ customElements.define('shop-item', class extends HTMLElement {
         "/p/cross-frame-card" => {
             r#"<title>Checkout</title><p>Enter your card</p>
 <iframe id=card style="width:500px;height:200px;border:0"></iframe>
-<script>card.onload=()=>beacon('frame=loaded');card.src=location.protocol+'//localhost:'+location.port+'/payment'</script>"#
+<script>card.onload=()=>beacon('frame=loaded');card.src='__ALT__'+'/payment'</script>"#
         }
         "/p/many" => {
             return Some(format!(
@@ -223,7 +225,7 @@ customElements.define('shop-item', class extends HTMLElement {
             r#"<title>Details</title>
 <label>Full name <input aria-label="Full name" onfocus="card.contentWindow.focus()"></label>
 <iframe id=card style="width:400px;height:80px;border:0"></iframe>
-<script>card.onload=()=>beacon('frame=loaded');card.src=location.protocol+'//localhost:'+location.port+'/probe/card-frame'</script>"#
+<script>card.onload=()=>beacon('frame=loaded');card.src='__ALT__'+'/probe/card-frame'</script>"#
         }
         "/probe/card-frame" => {
             r#"<title>Card</title>
@@ -258,7 +260,7 @@ customElements.define('shop-item', class extends HTMLElement {
             r#"<title>Your details</title>
 <label>Full name <input id=fullname aria-label="Full name"></label>
 <iframe id=card style="width:400px;height:80px;border:0"></iframe>
-<script>card.onload=()=>beacon('frame=loaded');card.src=location.protocol+'//localhost:'+location.port+'/probe/card-frame';
+<script>card.onload=()=>beacon('frame=loaded');card.src='__ALT__'+'/probe/card-frame';
 fullname.addEventListener('keydown',()=>card.focus())</script>"#
         }
         _ => return None,
@@ -297,6 +299,8 @@ struct State {
     recorded: Recorded,
     /// Answer every /systemone call with this status instead.
     fail_status: Option<u16>,
+    /// The second origin pages put in place of `__ALT__`.
+    alt_origin: String,
     /// Follow these steps instead of reaching for danger.
     plan: Option<Vec<Want>>,
     /// Answer `none` to every split target question, so only a final round
@@ -313,14 +317,23 @@ impl Site {
     pub fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the test site");
         let origin = format!("http://{}", listener.local_addr().unwrap());
-        let state = Arc::new(Mutex::new(State::default()));
-        let shared = Arc::clone(&state);
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let state = Arc::clone(&shared);
-                std::thread::spawn(move || serve(stream, &state));
-            }
-        });
+        // A second port is a second origin, for the cross-origin frames. Both
+        // on 127.0.0.1: "localhost" can resolve to ::1 first on Windows.
+        let alt = TcpListener::bind("127.0.0.1:0").expect("bind the second origin");
+        let alt_origin = format!("http://{}", alt.local_addr().unwrap());
+        let state = Arc::new(Mutex::new(State {
+            alt_origin,
+            ..State::default()
+        }));
+        for listener in [listener, alt] {
+            let shared = Arc::clone(&state);
+            std::thread::spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    let state = Arc::clone(&shared);
+                    std::thread::spawn(move || serve(stream, &state));
+                }
+            });
+        }
         Site { origin, state }
     }
 
@@ -433,7 +446,11 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
             (204, "text/plain", String::new())
         }
         ("GET", _) => match page(path) {
-            Some(html) => (200, "text/html; charset=utf-8", html),
+            Some(html) => (
+                200,
+                "text/html; charset=utf-8",
+                html.replace("__ALT__", &state.lock().unwrap().alt_origin),
+            ),
             None => (404, "text/html", "<title>Not found</title>".to_string()),
         },
         ("POST", "/v1/systemone") => {
