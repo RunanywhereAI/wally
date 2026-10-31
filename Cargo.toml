@@ -55,6 +55,9 @@ sha2 = "0.10"
 hex = "0.4"
 getrandom = "0.3"
 ctrlc = { version = "3", features = ["termination"] }
+# browser-use drives Chrome over its DevTools WebSocket. Sync, and no TLS:
+# DevTools listens on plain ws:// at loopback only.
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # Upstream response decompression (src/net/decompress.rs), matching the four
 # encodings cpp-httplib's Accept-Encoding advertises and decodes: gzip and
 # zlib-wrapped deflate share flate2's rust_backend (miniz_oxide) -- pure Rust,

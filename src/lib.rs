@@ -11,6 +11,7 @@ pub mod account;
 pub mod anthropic;
 pub mod app;
 pub mod bootstrap;
+pub mod browser;
 pub mod catalog;
 pub mod cli;
 pub mod cli_formatter;
