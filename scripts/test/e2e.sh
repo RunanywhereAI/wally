@@ -174,4 +174,12 @@ else
     echo "  skip  modalities (WALLY_E2E_MODALITIES=0)"
 fi
 
+# The OpenWork desktop app on wally's private profile; opt-in, macOS only.
+if bash "${ROOT}/scripts/test/e2e-openwork.sh" "${WALLY}"; then
+    :
+else
+    echo "  FAIL  openwork"
+    fail=1
+fi
+
 exit "${fail}"

@@ -1,4 +1,4 @@
-//! Launching coding tools (Claude Code, Codex, opencode, Hermes, OpenClaw, DeepSeek,
+//! Launching coding tools (Claude Code, Codex, opencode, OpenWork, Hermes, OpenClaw, DeepSeek,
 //! Prime Agent, Command Code) against a hosted or local model, and the hosted
 //! security harnesses (Shannon, DeepSec, VVAH), which run only against hosted
 //! account models. One namespace, as C++ `wally::harness` was.
@@ -17,6 +17,7 @@ pub mod hosted;
 pub mod image_gate;
 pub mod local_models;
 pub mod opencode;
+pub mod openwork;
 pub mod path_reload;
 pub mod shannon;
 pub mod vvah;
@@ -27,6 +28,7 @@ pub use declared_harness::*;
 pub use harness::*;
 pub use local_models::*;
 pub use opencode::*;
+pub use openwork::*;
 
 /// Hosted decision models expose probabilities rather than generated text and
 /// must never be routed through chat/completions or a coding harness. The

@@ -75,6 +75,7 @@ pub fn configure_app(app: &mut App) {
     crate::commands::register_editors(app);
     crate::commands::register_codex(app);
     crate::commands::register_chatgpt(app);
+    crate::commands::register_openwork(app);
     crate::commands::register_harness(app); // coding agents
     crate::commands::register_default_models(app);
 
@@ -129,6 +130,7 @@ pub fn configure_app(app: &mut App) {
                 "claude-desktop",
                 "codex",
                 "chatgpt",
+                "openwork",
                 "hermes",
                 "openclaw",
                 "deepseek",
@@ -193,7 +195,7 @@ fn is_passthrough_command(token: &str) -> bool {
 /// the help page except `update` (it is the update) and `uninstall` (there is
 /// nothing left to update). Help pages show it too, from run().
 fn shows_update_notice(path: &[String]) -> bool {
-    const NAMES: &[&str] = &["run", "serve", "models", "account", "about"];
+    const NAMES: &[&str] = &["run", "serve", "models", "account", "about", "openwork"];
     path.first()
         .is_some_and(|name| NAMES.contains(&name.as_str()) || is_passthrough_command(name))
 }

@@ -158,6 +158,39 @@ fn run() -> Result<i32, String> {
             .get("limit")
             .cloned()
             .unwrap_or(Value::Null);
+    } else if tool == "openwork" {
+        // OpenWork's engine reads the same variable; the local model is its
+        // own provider so a hosted catalog can sit beside it.
+        let config: Value = serde_json::from_str(&env_str("OPENCODE_CONFIG_CONTENT"))
+            .map_err(|error| format!("invalid OPENCODE_CONFIG_CONTENT: {error}"))?;
+        let providers = field(&config, "provider")?;
+        let provider = field(providers, "runanywhere-local")?;
+        url = text_field(field(provider, "options")?, "baseURL")?;
+        let selected = text_field(&config, "model")?;
+        model = selected
+            .strip_prefix("runanywhere-local/")
+            .ok_or_else(|| format!("the local model is not selected: {selected}"))?
+            .to_string();
+        report["limits"] = field(field(provider, "models")?, &model)?
+            .get("limit")
+            .cloned()
+            .unwrap_or(Value::Null);
+        report["providers"] = json!(providers
+            .as_object()
+            .map(|map| map.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default());
+        report["hosted_models"] = json!(providers
+            .get("runanywhere")
+            .and_then(|hosted| hosted.get("models"))
+            .and_then(Value::as_object)
+            .map(|models| models.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default());
+        report["profile"] = json!({
+            "user_data": env_str("OPENWORK_ELECTRON_USERDATA"),
+            "runtime_db": env_str("OPENWORK_RUNTIME_DB"),
+            "opencode_db": env_str("OPENCODE_DB"),
+            "engine_v2": env_str("OPENWORK_ENGINE_V2_PREVIEW"),
+        });
     } else if tool == "dsh" {
         let mut patch = String::new();
         let mut index = 1;

@@ -62,7 +62,7 @@ def main():
                 # PATH alone can select an incompatible System32 runtime.
                 for runtime in sorted(child.parent.glob("*.dll")):
                     shutil.copy2(runtime, bins / runtime.name)
-            for name in ("opencode", "dsh", "hermes", "openclaw", "claude"):
+            for name in ("opencode", "dsh", "hermes", "openclaw", "claude", "openwork"):
                 target = bins / (name + (".exe" if os.name == "nt" else ""))
                 shutil.copy2(child, target)
             weights_dir = models_home / "Models" / "LlamaCpp" / "qwen3-4b-instruct-2507"
@@ -119,6 +119,62 @@ def main():
                     connection.settimeout(1)
                     assert connection.connect_ex((address.hostname, address.port)) != 0, captured
                 print(f"PASS local {tool} ({model}): HTTP, launch arguments, teardown")
+
+            # OpenWork: the app is the stand-in (WALLY_OPENWORK_APP), on a
+            # private profile under the state dir, with the local model
+            # selected and, once signed in, the hosted catalog beside it.
+            state = root / "state"
+            openwork = {"WALLY_OPENWORK_APP": str(bins / ("openwork" + (".exe" if os.name == "nt" else ""))),
+                        "XDG_STATE_HOME": str(state)}
+            profile_root = state / "runanywhere" / "openwork"
+            for signed_in in (False, True):
+                extra = dict(openwork, **({"WALLY_TEST_SEED_CLOUD": "test-cloud-token"} if signed_in else {}))
+                _, backend, captured = invoke(["openwork", "-m", "qwen3-4b-instruct"], extra=extra)
+                assert captured["model"] == "qwen3-4b-instruct", captured
+                assert pathlib.Path(backend["model_path"]) == weights, backend
+                assert backend["created"] == backend["destroyed"] == 1, backend
+                limits = captured["limits"]
+                assert backend.get("config", {}).get("context_length") == limits["context"], backend
+                if signed_in:
+                    assert captured["providers"] == ["runanywhere", "runanywhere-local"], captured
+                    assert captured["hosted_models"] == ["qwen3-4b-instruct-2507"], captured
+                else:
+                    assert captured["providers"] == ["runanywhere-local"], captured
+                profile_env = captured["profile"]
+                for key in ("user_data", "runtime_db", "opencode_db"):
+                    assert pathlib.Path(profile_env[key]).is_relative_to(profile_root), profile_env
+                assert profile_env["engine_v2"] not in ("", "1", "chat", "sidecar"), profile_env
+                workspaces = json.loads((profile_root / "user-data" / "openwork-workspaces.json").read_text())
+                # Resolved on both sides: the runner's temp dir is an 8.3
+                # short name, and wally writes the long, native spelling.
+                written = workspaces["workspaces"][0]["path"]
+                assert pathlib.Path(written).resolve() == (profile_root / "workspace").resolve(), workspaces
+                assert "/" not in written or os.name != "nt", workspaces
+                assert not (home / "OpenWork Chat").exists()
+                assert not (home / ".config" / "opencode").exists()
+                address = urllib.parse.urlsplit(captured["url"])
+                with socket.socket() as connection:
+                    connection.settimeout(1)
+                    assert connection.connect_ex((address.hostname, address.port)) != 0, captured
+                print(f"PASS local openwork ({'signed in' if signed_in else 'signed out'}): "
+                      "private profile, providers, teardown")
+
+            # The seeded sign-in must not carry into the scenarios below.
+            shutil.rmtree(profile)
+            profile.mkdir()
+
+            for report in (root / "child.json", root / "backend.json"):
+                report.unlink(missing_ok=True)
+            missing = subprocess.run(
+                [str(binary), "--home", str(models_home), "openwork", "-m", "qwen3-4b-instruct"],
+                env=dict(env, WALLY_OPENWORK_APP=str(root / "no-such-openwork")),
+                input="", text=True, capture_output=True, timeout=20)
+            assert missing.returncode == 127, missing
+            assert "not an OpenWork app" in missing.stderr, missing.stderr
+            if (root / "backend.json").exists():
+                assert json.loads((root / "backend.json").read_text())["created"] == 0
+            assert not (root / "child.json").exists()
+            print("PASS a missing OpenWork stops before any model loads")
 
             uncertified_dir = models_home / "Models" / "LlamaCpp" / "qwen3-0.6b"
             uncertified_dir.mkdir(parents=True)

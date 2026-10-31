@@ -599,7 +599,7 @@ fn dir_has_tool(dir: &Path, tool: &str) -> bool {
     false
 }
 
-fn on_path(tool: &str) -> bool {
+pub(crate) fn on_path(tool: &str) -> bool {
     let path = match std::env::var("PATH") {
         Ok(p) => p,
         Err(_) => return false,

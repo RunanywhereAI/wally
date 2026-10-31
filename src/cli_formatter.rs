@@ -1196,6 +1196,11 @@ mod tests {
                     "Coding tools",
                 ),
                 leaf(
+                    "openwork",
+                    "Open OpenWork with a local or cloud model",
+                    "Coding tools",
+                ),
+                leaf(
                     "opencode",
                     "Open OpenCode with a local or cloud model",
                     "Coding tools",

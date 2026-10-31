@@ -1,0 +1,15 @@
+Open OpenWork with a local or cloud model
+
+Usage: wally openwork [OPTIONS]
+
+Options:
+  -h, --help                  Show help
+  -m, --model TEXT            A model on this machine, or a hosted one from your
+                              account
+
+Examples:
+  # The certified local model, with your hosted models beside it
+  wally openwork -m qwen3-4b-instruct-2507
+
+  # A hosted model (needs `wally account login`)
+  wally openwork -m glm-5.3-flash

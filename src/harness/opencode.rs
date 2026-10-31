@@ -279,6 +279,22 @@ pub fn build_open_code_config(
     access_token: &str,
     models: &[CatalogModel],
 ) -> String {
+    let config = json!({
+        "provider": { "runanywhere": open_code_provider("RunAnywhere", base_url, access_token, models) },
+        "model": format!("runanywhere/{primary}"),
+    });
+    dump(&config)
+}
+
+/// One `@ai-sdk/openai-compatible` provider entry, shown as `name`, listing
+/// every model in `models`; what `build_open_code_config` puts under
+/// `provider.runanywhere`.
+pub fn open_code_provider(
+    name: &str,
+    base_url: &str,
+    access_token: &str,
+    models: &[CatalogModel],
+) -> serde_json::Value {
     let mut entries = json!({});
     for model in models {
         let mut entry = json!({ "name": model.id });
@@ -327,9 +343,9 @@ pub fn build_open_code_config(
     } else {
         access_token
     };
-    let provider = json!({
+    json!({
         "npm": "@ai-sdk/openai-compatible",
-        "name": "RunAnywhere",
+        "name": name,
         // `options.headers` rides on every request (checked against opencode
         // 1.18.31); the declaration makes attribution independent of
         // opencode's own User-Agent.
@@ -339,12 +355,7 @@ pub fn build_open_code_config(
             "headers": { HARNESS_HEADER: harness_header_value(DeclaredHarness::KOpencode) },
         },
         "models": entries,
-    });
-    let config = json!({
-        "provider": { "runanywhere": provider },
-        "model": format!("runanywhere/{primary}"),
-    });
-    dump(&config)
+    })
 }
 
 /// OpenCode's reasoning controls for `model`, from the model list: one
