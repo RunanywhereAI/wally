@@ -173,6 +173,43 @@ fn chunks(count: usize, limit: usize) -> (usize, usize) {
 
 /// One question, or several, so each choice stays within the model's cap.
 /// Split questions each add a `none` option.
+/// One target question over `part`; `none_option` adds "none of these".
+fn target_question(
+    goal: &str,
+    operation: &str,
+    part: &[(String, Action)],
+    none_option: bool,
+    today: &str,
+) -> Json {
+    let mut criteria = Json::object();
+    for (index, action) in part {
+        criteria.set(index, criterion(index, action));
+    }
+    if none_option {
+        criteria.set(NONE, "None of these is the right target.");
+    }
+    Json::object().with("type", "choice").with("criteria", criteria).with(
+        "instructions",
+        Json::object()
+            .with("goal", goal)
+            .with("operation", operation)
+            .with("today", today)
+            .with(
+                "rules",
+                vec![
+                    NEXT_ACTION.into(),
+                    TARGET.into(),
+                    format!(
+                        "Today is {today}. If the goal says today, choose the calendar day for that date when it is in this list."
+                    )
+                    .into(),
+                ],
+            ),
+    )
+}
+
+/// One question, or several, so each choice stays within the model's cap.
+/// Split questions each add a `none` option.
 pub fn target_questions(
     goal: &str,
     operation: &str,
@@ -184,42 +221,59 @@ pub fn target_questions(
     if candidates.len() < 2 {
         return Vec::new();
     }
-    let question = |part: &[(String, Action)], extra: bool| {
-        let mut criteria = Json::object();
-        for (index, action) in part {
-            criteria.set(index, criterion(index, action));
-        }
-        if extra {
-            criteria.set(NONE, "None of these is the right target.");
-        }
-        Json::object().with("type", "choice").with("criteria", criteria).with(
-            "instructions",
-            Json::object()
-                .with("goal", goal)
-                .with("operation", operation)
-                .with("today", today)
-                .with(
-                    "rules",
-                    vec![
-                        NEXT_ACTION.into(),
-                        TARGET.into(),
-                        format!(
-                            "Today is {today}. If the goal says today, choose the calendar day for that date when it is in this list."
-                        )
-                        .into(),
-                    ],
-                ),
-        )
-    };
     let (size, count) = chunks(candidates.len(), limit);
     if count == 1 {
-        return vec![(name, question(candidates, false))];
+        return vec![(
+            name,
+            target_question(goal, operation, candidates, false, today),
+        )];
     }
     candidates
         .chunks(size)
         .enumerate()
-        .map(|(n, part)| (format!("{name}_{}", n + 1), question(part, true)))
+        .map(|(n, part)| {
+            (
+                format!("{name}_{}", n + 1),
+                target_question(goal, operation, part, true, today),
+            )
+        })
         .collect()
+}
+
+pub fn final_name(operation: &str) -> String {
+    format!("{}_target_final", operation.to_lowercase())
+}
+
+/// The second round, when every split question answered `none`: each
+/// group's best-scored control, side by side in one question. A control
+/// another group pushed out of view gets compared with its real rivals here.
+pub fn finalist_question(
+    goal: &str,
+    operation: &str,
+    candidates: &[(String, Action)],
+    finalists: &[String],
+    today: &str,
+) -> Json {
+    let part: Vec<(String, Action)> = candidates
+        .iter()
+        .filter(|(index, _)| finalists.contains(index))
+        .cloned()
+        .collect();
+    target_question(goal, operation, &part, true, today)
+}
+
+/// The final round's answer. `none` here is a refusal: no action runs.
+pub fn final_choice(raw: &Value, operation: &str, finalists: &[String]) -> Result<Choice, String> {
+    let mut allowed = finalists.to_vec();
+    allowed.push(NONE.to_string());
+    let mut answer = validate_choice(raw, &final_name(operation), &allowed)?;
+    if answer.choice == NONE {
+        return Err(format!(
+            "The decision model found no target for {operation}; no action executed."
+        ));
+    }
+    answer.probabilities.remove(NONE);
+    Ok(answer)
 }
 
 pub const OPERATION_LABELS: &[(&str, &str)] = &[
@@ -374,34 +428,46 @@ pub fn validate_choice(raw: &Value, name: &str, ids: &[String]) -> Result<Choice
     })
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TargetPick {
+    Chosen(Choice),
+    /// Every split question said `none`: ask again among each group's best.
+    Finalists(Vec<String>),
+}
+
 /// The target for `operation`: the one question's answer, or across split
-/// questions the best-scored real target. Every chunk answering `none` is a
-/// refusal, not a guess.
+/// questions the best-scored real target. When every group answers `none`,
+/// each group's top control goes to a final round instead of a guess.
 pub fn chosen_target(
     raw: &Value,
     operation: &str,
     candidates: &[(String, Action)],
     limit: usize,
-) -> Result<Choice, String> {
+) -> Result<TargetPick, String> {
     let name = format!("{}_target", operation.to_lowercase());
     if candidates.len() == 1 {
         let only = candidates[0].0.clone();
-        return Ok(Choice {
+        return Ok(TargetPick::Chosen(Choice {
             choice: only.clone(),
             confidence: 1.0,
             probabilities: BTreeMap::from([(only, 1.0)]),
-        });
+        }));
     }
     let ids: Vec<String> = candidates.iter().map(|(id, _)| id.clone()).collect();
     let (size, count) = chunks(ids.len(), limit);
     if count == 1 {
-        return validate_choice(raw, &name, &ids);
+        return validate_choice(raw, &name, &ids).map(TargetPick::Chosen);
     }
     let mut best: Option<Choice> = None;
+    let mut finalists = Vec::new();
     for (n, part) in ids.chunks(size).enumerate() {
         let mut allowed = part.to_vec();
         allowed.push(NONE.to_string());
         let answer = validate_choice(raw, &format!("{name}_{}", n + 1), &allowed)?;
+        let top = part.iter().max_by(|a, b| {
+            answer.probabilities[a.as_str()].total_cmp(&answer.probabilities[b.as_str()])
+        });
+        finalists.extend(top.cloned());
         if answer.choice == NONE {
             continue;
         }
@@ -413,11 +479,13 @@ pub fn chosen_target(
             best = Some(answer);
         }
     }
-    let mut best = best.ok_or_else(|| {
-        format!("The decision model found no target for {operation}; no action executed.")
-    })?;
-    best.probabilities.remove(NONE);
-    Ok(best)
+    match best {
+        Some(mut best) => {
+            best.probabilities.remove(NONE);
+            Ok(TargetPick::Chosen(best))
+        }
+        None => Ok(TargetPick::Finalists(finalists)),
+    }
 }
 
 #[cfg(test)]
@@ -552,18 +620,54 @@ mod tests {
             "click_target_1": choice("2", &[("1", 0.1), ("2", 0.6), ("none", 0.3)]),
             "click_target_2": choice("3", &[("3", 0.8), ("4", 0.1), ("none", 0.1)]),
         }});
-        let chosen = chosen_target(&raw, "CLICK", &candidates(4), 3).unwrap();
+        let TargetPick::Chosen(chosen) = chosen_target(&raw, "CLICK", &candidates(4), 3).unwrap()
+        else {
+            panic!("expected a chosen target")
+        };
         assert_eq!(chosen.choice, "3");
         assert!(!chosen.probabilities.contains_key(NONE));
     }
 
     #[test]
-    fn every_chunk_answering_none_is_refused() {
+    fn every_chunk_answering_none_sends_each_groups_best_to_a_final_round() {
         let raw = json!({"answers": {
-            "click_target_1": choice("none", &[("1", 0.1), ("2", 0.1), ("none", 0.8)]),
-            "click_target_2": choice("none", &[("3", 0.1), ("4", 0.1), ("none", 0.8)]),
+            "click_target_1": choice("none", &[("1", 0.05), ("2", 0.15), ("none", 0.8)]),
+            "click_target_2": choice("none", &[("3", 0.12), ("4", 0.08), ("none", 0.8)]),
         }});
-        let error = chosen_target(&raw, "CLICK", &candidates(4), 3).unwrap_err();
+        let pick = chosen_target(&raw, "CLICK", &candidates(4), 3).unwrap();
+        assert_eq!(pick, TargetPick::Finalists(vec!["2".into(), "3".into()]));
+    }
+
+    #[test]
+    fn the_final_round_offers_only_the_finalists_and_none() {
+        let question = finalist_question(
+            "g",
+            "CLICK",
+            &candidates(4),
+            &["2".into(), "3".into()],
+            "2026-10-31",
+        );
+        let Some(Json::Object(members)) = question.get("criteria") else {
+            panic!()
+        };
+        let labels: Vec<&str> = members.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(labels, ["2", "3", NONE]);
+    }
+
+    #[test]
+    fn the_final_round_picks_a_finalist() {
+        let raw = json!({"answers": {"click_target_final":
+            choice("3", &[("2", 0.2), ("3", 0.7), ("none", 0.1)])}});
+        let answer = final_choice(&raw, "CLICK", &["2".into(), "3".into()]).unwrap();
+        assert_eq!(answer.choice, "3");
+        assert!(!answer.probabilities.contains_key(NONE));
+    }
+
+    #[test]
+    fn none_in_the_final_round_is_a_refusal() {
+        let raw = json!({"answers": {"click_target_final":
+            choice("none", &[("2", 0.1), ("3", 0.1), ("none", 0.8)])}});
+        let error = final_choice(&raw, "CLICK", &["2".into(), "3".into()]).unwrap_err();
         assert!(error.contains("no target"), "{error}");
     }
 
@@ -674,6 +778,9 @@ mod tests {
             64,
         )
         .unwrap();
+        let TargetPick::Chosen(chosen) = chosen else {
+            panic!("expected a chosen target")
+        };
         assert_eq!(
             chosen.choice,
             recorded["decision"]["target"].as_str().unwrap()

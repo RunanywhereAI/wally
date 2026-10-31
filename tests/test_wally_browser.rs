@@ -472,3 +472,17 @@ fn pattern_a_card_field_in_a_cross_origin_iframe_is_out_of_reach() {
     assert!(site.beacons("typed_card").is_empty());
     assert!(site.beacons("paid").is_empty());
 }
+
+#[test]
+fn pattern_a_target_every_group_refused_is_found_in_the_final_round() {
+    let binary = need_chrome!();
+    let _serial = serial();
+    let site = Site::start();
+    site.follow(&[want("CLICK", "Save for later", "saved")]);
+    site.shy_in_split_questions();
+    let chrome = Chrome::start(&binary);
+    let run = browse(&site, &chrome, "/p/many", "Save the product for later", &[]);
+    done(&run);
+    assert_eq!(site.beacons("saved"), ["1"]);
+    assert!(site.beacons("other").is_empty());
+}

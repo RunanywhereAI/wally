@@ -192,6 +192,15 @@ customElements.define('shop-item', class extends HTMLElement {
 <iframe id=card style="width:500px;height:200px;border:0"></iframe>
 <script>card.onload=()=>beacon('frame=loaded');card.src=location.protocol+'//localhost:'+location.port+'/payment'</script>"#
         }
+        "/p/many" => {
+            return Some(format!(
+                "<!doctype html><meta charset=utf-8>{BEACON}<title>Product</title>{}\
+                 <button onclick=\"beacon('saved=1')\">Save for later</button>",
+                (1..=80)
+                    .map(|i| format!("<button style=\"margin:1px\" onclick=\"beacon('other={i}')\">Related item {i}</button>"))
+                    .collect::<String>()
+            ))
+        }
         _ => return None,
     };
     Some(format!("<!doctype html><meta charset=utf-8>{BEACON}{body}"))
@@ -230,6 +239,9 @@ struct State {
     fail_status: Option<u16>,
     /// Follow these steps instead of reaching for danger.
     plan: Option<Vec<Want>>,
+    /// Answer `none` to every split target question, so only a final round
+    /// can name the target.
+    shy: bool,
 }
 
 pub struct Site {
@@ -255,6 +267,10 @@ impl Site {
     /// The fake model does these steps in order, one per beacon, then DONE.
     pub fn follow(&self, plan: &[Want]) {
         self.state.lock().unwrap().plan = Some(plan.to_vec());
+    }
+
+    pub fn shy_in_split_questions(&self) {
+        self.state.lock().unwrap().shy = true;
     }
 
     pub fn fail_decisions_with(&self, status: u16) {
@@ -367,7 +383,14 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
                                 .iter()
                                 .find(|want| !state.recorded.beacons.iter().any(|(k, _)| k == want.beacon))
                                 .copied();
+                            let shy = state.shy;
                             answer_with(&request, |name, criteria, elements| {
+                                let split = name.rsplit('_').next().is_some_and(|tail| {
+                                    tail.chars().all(|c| c.is_ascii_digit())
+                                });
+                                if shy && split && criteria.contains_key("none") {
+                                    return "none".into();
+                                }
                                 follow_plan(name, criteria, elements, next)
                             })
                         }

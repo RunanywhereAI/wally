@@ -24,7 +24,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use self::chrome::ChromeMode;
-use self::decide::{chosen_target, decision_request, option_cap, validate_choice};
+use self::decide::{
+    chosen_target, decision_request, final_choice, final_name, finalist_question, option_cap,
+    validate_choice, TargetPick,
+};
 use self::gateway::Gateway;
 use self::json::Json;
 use self::page::{Action, ActionKind, Browser, CdpBrowser, Observation};
@@ -383,12 +386,33 @@ impl Models for HostedModels {
         let (choice, target) = match space.targets_for(&operation.choice) {
             Some(candidates) => {
                 // Unused target heads cannot cause an action; only the chosen one is checked.
-                let target = chosen_target(
+                let pick = chosen_target(
                     &raw,
                     &operation.choice,
                     candidates,
                     option_cap(&self.decision_model),
                 )?;
+                let target = match pick {
+                    TargetPick::Chosen(target) => target,
+                    TargetPick::Finalists(finalists) => {
+                        let question = finalist_question(
+                            goal,
+                            &operation.choice,
+                            candidates,
+                            &finalists,
+                            &today,
+                        );
+                        let body = Json::object()
+                            .with("model", &self.decision_model)
+                            .with("state", body.get("state").cloned().unwrap_or(Json::Null))
+                            .with(
+                                "questions",
+                                Json::object().with(&final_name(&operation.choice), question),
+                            );
+                        let raw = self.systemone(&body)?;
+                        final_choice(&raw, &operation.choice, &finalists)?
+                    }
+                };
                 for (index, action) in candidates {
                     probabilities.insert(
                         action.id.clone(),
