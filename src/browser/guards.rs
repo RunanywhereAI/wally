@@ -1,6 +1,6 @@
 //! Stops the model cannot overrule. A match means the action is not executed.
 
-use super::page::{Action, ActionKind};
+use super::page::{Action, ActionKind, Observation};
 use super::words::{contains_any, contains_joined};
 
 const PAY: &[&str] = &[
@@ -103,6 +103,15 @@ pub fn sensitive_fill(action: &Action) -> bool {
     contains_any(label, SENSITIVE)
 }
 
+/// Word rules judge button-length labels only. A product title such as
+/// "boAt Airdopes 161 … Fast Charge …" or "USB data transfer cable" names no
+/// action; a long label is left to the page-structure rule in `refuses_on`.
+const MAX_CONTROL_WORDS: usize = 8;
+
+fn button_length(label: &str) -> bool {
+    label.split_whitespace().count() <= MAX_CONTROL_WORDS
+}
+
 /// "Place order", "Place your order", "Place the order now".
 fn places_an_order(label: &str) -> bool {
     contains_any(label, &["place"]) && contains_any(label, &["order", "orders"])
@@ -111,6 +120,9 @@ fn places_an_order(label: &str) -> bool {
 /// A label that commits something: a payment, an order, a booking, a send.
 /// Judged without the page, for the rule that such a press is never repeated.
 pub fn commits(label: &str) -> bool {
+    if !button_length(label) {
+        return false;
+    }
     let bare = label.trim().trim_end_matches(['.', '!', '›', '>']).trim();
     contains_any(label, PAY)
         || places_an_order(label)
@@ -120,10 +132,26 @@ pub fn commits(label: &str) -> bool {
             .any(|word| bare.eq_ignore_ascii_case(word))
 }
 
+/// Every stop for `action` on `page`. Besides the word rules, a page's own
+/// structure says when money or a secret is about to be sent, in any
+/// language: submitting a form that holds a card, one-time-code or password
+/// field, or pressing a commit while such a field is on screen.
+pub fn refuses_on(action: &Action, page: &Observation) -> bool {
+    if refuses(action, &page.text) {
+        return true;
+    }
+    if !matches!(action.kind, ActionKind::Click | ActionKind::Select) {
+        return false;
+    }
+    (action.submits == Some(true) && action.form_has_card == Some(true))
+        || (page.payment_fields && commits(&action.label))
+}
+
 /// A payment control, a sensitive field, or a commit sitting on money text.
 pub fn refuses(action: &Action, page_text: &str) -> bool {
     let label = action.label.as_str();
     match action.kind {
+        ActionKind::Click | ActionKind::Select if !button_length(label) => return false,
         ActionKind::Click | ActionKind::Select
             if contains_any(label, PAY) || places_an_order(label) =>
         {
@@ -279,6 +307,42 @@ mod tests {
         ));
     }
 
+    fn page(text: &str, payment_fields: bool) -> Observation {
+        Observation {
+            url: String::new(),
+            title: String::new(),
+            text: text.into(),
+            actions: Vec::new(),
+            marker: serde_json::Value::Null,
+            page_key: serde_json::Value::Null,
+            guards: serde_json::Value::Null,
+            fingerprint: String::new(),
+            payment_fields,
+        }
+    }
+
+    #[test]
+    fn submitting_a_form_that_holds_card_fields_is_refused_in_any_language() {
+        let mut order = action(ActionKind::Click, "Zahlungspflichtig bestellen", None);
+        order.submits = Some(true);
+        order.form_has_card = Some(true);
+        assert!(refuses_on(&order, &page("Gesamtsumme 49,99 €", true)));
+    }
+
+    #[test]
+    fn submitting_a_form_without_card_fields_is_allowed() {
+        let mut search = action(ActionKind::Click, "Suchen", None);
+        search.submits = Some(true);
+        assert!(!refuses_on(&search, &page("Flüge suchen", false)));
+    }
+
+    #[test]
+    fn a_commit_while_card_fields_are_on_screen_is_refused() {
+        let book = action(ActionKind::Click, "Book now", None);
+        assert!(refuses_on(&book, &page("Hotel Lisboa", true)));
+        assert!(!refuses_on(&book, &page("Hotel Lisboa", false)));
+    }
+
     #[test]
     fn commit_words_pass_where_no_money_is_shown() {
         assert!(!refuses(
@@ -289,6 +353,33 @@ mod tests {
             &action(ActionKind::Click, "Continue", None),
             "Choose your seat"
         ));
+    }
+
+    #[test]
+    fn a_product_title_with_action_words_is_not_a_payment_control() {
+        let money = "Bank offer: 10% off with HDFC credit card · ₹1,299";
+        for title in [
+            "boAt Airdopes 161, Adv 4Mic ENx, 50H Battery,Fast Charge,13mm Driver, Metallic Finish",
+            "SanDisk USB 3.2 data transfer cable for phones and laptops, 1 m",
+            "Wireless mouse with send to back buttons for gaming and office, black",
+        ] {
+            assert!(
+                !refuses(&action(ActionKind::Click, title, None), money),
+                "{title}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_submit_in_a_card_form_is_still_refused() {
+        let mut order = action(
+            ActionKind::Click,
+            "Confirm and complete your purchase of these items with the saved card now",
+            None,
+        );
+        order.submits = Some(true);
+        order.form_has_card = Some(true);
+        assert!(refuses_on(&order, &page("", true)));
     }
 
     #[test]

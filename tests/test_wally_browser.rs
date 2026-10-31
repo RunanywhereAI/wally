@@ -636,3 +636,48 @@ fn probe_a_keydown_handler_cannot_pull_text_into_a_cross_origin_card_frame() {
         run.stderr
     );
 }
+
+#[test]
+fn pattern_a_native_date_input_is_set_in_its_own_format() {
+    let (site, run) = pattern!("/p/date", &[want("TYPE_TEXT", "Departure date", "date")]);
+    done(&run);
+    assert_eq!(site.beacons("date"), ["2026-11-20"]);
+}
+
+#[test]
+fn pattern_a_native_datetime_input_is_set_in_its_own_format() {
+    let (site, run) = pattern!("/p/datetime", &[want("TYPE_TEXT", "Pickup time", "pickup")]);
+    done(&run);
+    assert_eq!(site.beacons("pickup"), ["2026-11-20T07:30"]);
+}
+
+#[test]
+fn probe_a_checkout_in_another_language_is_never_submitted() {
+    let (site, run) = pattern!(
+        "/probe/german-checkout",
+        &[want("CLICK", "Zahlungspflichtig bestellen", "paid")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn pattern_a_control_below_the_fold_of_an_inner_scroller_is_reached() {
+    let (site, run) = pattern!("/p/inner-scroll", &[want("CLICK", "Load more", "more")]);
+    done(&run);
+    assert_eq!(site.beacons("more"), ["1"]);
+    assert!(run.stdout.contains("scroll  Scroll down"), "{}", run.stdout);
+}
+
+#[test]
+fn pattern_a_new_tab_that_loads_late_is_read_after_it_loads() {
+    let (site, run) = pattern!(
+        "/p/slow-new-tab",
+        &[
+            want("CLICK", "Open seat map", "tab"),
+            want("CLICK", "Reserve seat 14C", "seat")
+        ]
+    );
+    done(&run);
+    assert_eq!(site.beacons("seat"), ["14C"]);
+}

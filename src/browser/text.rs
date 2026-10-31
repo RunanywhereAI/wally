@@ -20,6 +20,10 @@ pub fn field_context(goal: &str, action: &Action, page: &Observation, history: &
         .with("label", &action.label)
         .with("role", action.role.clone())
         .with("value", action.value.clone());
+    // A native date or time input only takes its own format.
+    if let Some(kind) = &action.input_type {
+        field.set("format", super::page::date_format(kind));
+    }
     // The focused box can rename itself. The click that opened it still has the real name.
     if let Some(item) = history
         .iter()
@@ -427,6 +431,7 @@ mod tests {
             page_key: serde_json::Value::Null,
             guards: serde_json::Value::Null,
             fingerprint: String::new(),
+            payment_fields: false,
         };
         let context = field_context("goal", &field, &page, &[opened]);
         let field = context.get("field").unwrap();
