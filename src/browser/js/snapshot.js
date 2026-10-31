@@ -188,8 +188,10 @@
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     const base={node:identity(e),role:rname,label:name(e)||rname,
       rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
-    const link=cache.closest(e,'a[href]');
-    if (link && ['_blank','_new'].includes(link.target)) base.opens_tab=true;
+    // A link aimed at another browsing context may open a tab: _blank, or any
+    // named target ("_self", "_top" and "_parent" stay in this one).
+    const link=cache.closest(e,'a[href]'), aim=(link?.target||'').trim().toLowerCase();
+    if (link && aim && !['_self','_top','_parent'].includes(aim)) { base.opens_tab=true; base.link=link.href; }
     // The guards read this to tell a card or password field from an address one.
     const autocomplete=e.getAttribute('autocomplete');
     if (autocomplete) base.autocomplete=autocomplete;

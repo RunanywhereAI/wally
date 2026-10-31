@@ -17,6 +17,7 @@ const SETTLE_JS: &str = include_str!("js/settle.js");
 const HIT_TEST_JS: &str = include_str!("js/hit_test.js");
 const GUARD_READ_JS: &str = include_str!("js/guard_read.js");
 const FOCUS_CHECK_JS: &str = include_str!("js/focus_check.js");
+const SELECT_TEXT_JS: &str = include_str!("js/select_text.js");
 const VIEWPORT: (u32, u32) = (1120, 780);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -56,9 +57,13 @@ pub struct Action {
     pub autocomplete: Option<String>,
     #[serde(default)]
     pub delta: Option<i64>,
-    /// A link with `target=_blank`: its click opens a new tab.
+    /// A link aimed at another browsing context (`_blank`, a named target):
+    /// its click may open a new tab.
     #[serde(default)]
     pub opens_tab: Option<bool>,
+    /// That link's absolute URL, to tell the tab it opens from others.
+    #[serde(default)]
+    pub link: Option<String>,
 }
 
 /// One read of the page. `marker`, `page_key` and `guards` are compared, never
@@ -208,8 +213,8 @@ impl<W: Wire> CdpBrowser<W> {
         }
     }
 
-    /// Open page tabs as (target id, opener id).
-    fn page_tabs(&mut self) -> Result<Vec<(String, Option<String>)>, StepError> {
+    /// Open page tabs as (target id, opener id, url).
+    fn page_tabs(&mut self) -> Result<Vec<(String, Option<String>, String)>, StepError> {
         let reply = self
             .cdp
             .call("Target.getTargets", json!({}), None)
@@ -226,24 +231,33 @@ impl<W: Wire> CdpBrowser<W> {
                     .get("openerId")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                Some((id, opener))
+                let url = info
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                Some((id, opener, url))
             })
             .collect())
     }
 
-    /// A tab our tab opened since the last click, if any. After a click on a
-    /// `target=_blank` link any new tab counts: a `rel=noopener` link (how
-    /// Amazon opens product pages) may leave no opener to match.
-    fn opened_tab(&mut self, after_new_tab_link: bool) -> Result<Option<String>, StepError> {
+    /// A tab our tab opened since the last click, if any: one whose opener is
+    /// our tab, or, after a click on a new-tab link, one on that link's
+    /// origin. A `rel=noopener` link (how Amazon opens product pages) leaves no
+    /// opener to match, and a tab the person opens elsewhere matches neither.
+    fn opened_tab(&mut self, link: Option<&str>) -> Result<Option<String>, StepError> {
         let ours = self.target.clone();
         let known = self.known_tabs.clone();
+        let link_origin = link.and_then(origin_of);
         Ok(self
             .page_tabs()?
             .into_iter()
-            .find(|(id, opener)| {
-                !known.contains(id) && ((opener.is_some() && *opener == ours) || after_new_tab_link)
+            .find(|(id, opener, url)| {
+                !known.contains(id)
+                    && ((opener.is_some() && *opener == ours)
+                        || (link_origin.is_some() && origin_of(url) == link_origin))
             })
-            .map(|(id, _)| id))
+            .map(|(id, _, _)| id))
     }
 
     /// Moves the run to `target`, a tab our page opened. The old tab stays open.
@@ -261,16 +275,17 @@ impl<W: Wire> CdpBrowser<W> {
         self.after_input = None;
         self.prepare_tab()?;
         self.wait_loaded();
-        self.known_tabs = self.page_tabs()?.into_iter().map(|tab| tab.0).collect();
+        self.known_tabs = self.page_tabs()?.into_iter().map(|(id, _, _)| id).collect();
         Ok(())
     }
 
     /// After a click that opens a tab, wait up to 2 s for it; on any other
     /// observation, follow one that is already there (window.open from script).
-    fn follow_opened_tab(&mut self, wait: bool) -> Result<(), StepError> {
-        let deadline = Instant::now() + Duration::from_secs(if wait { 2 } else { 0 });
+    fn follow_opened_tab(&mut self, link: Option<&str>) -> Result<(), StepError> {
+        let wait = if link.is_some() { 2 } else { 0 };
+        let deadline = Instant::now() + Duration::from_secs(wait);
         loop {
-            if let Some(tab) = self.opened_tab(wait)? {
+            if let Some(tab) = self.opened_tab(link)? {
                 return self.follow(tab);
             }
             if Instant::now() >= deadline {
@@ -318,11 +333,12 @@ impl<W: Wire> CdpBrowser<W> {
 
 impl<W: Wire> Browser for CdpBrowser<W> {
     fn observe(&mut self) -> Result<Observation, StepError> {
-        let opens_tab = self
+        let link = self
             .after_input
             .as_ref()
-            .is_some_and(|a| a.opens_tab == Some(true));
-        self.follow_opened_tab(opens_tab)?;
+            .filter(|a| a.opens_tab == Some(true))
+            .and_then(|a| a.link.clone());
+        self.follow_opened_tab(link.as_deref())?;
         self.settle_after_input();
         for attempt in 0..10 {
             match self.evaluate(SNAPSHOT_JS) {
@@ -368,7 +384,7 @@ impl<W: Wire> Browser for CdpBrowser<W> {
         if !self.fresh(page, Some(action))? {
             return Err(StepError::Stale);
         }
-        self.known_tabs = self.page_tabs()?.into_iter().map(|tab| tab.0).collect();
+        self.known_tabs = self.page_tabs()?.into_iter().map(|(id, _, _)| id).collect();
         match action.kind {
             ActionKind::Wait => {
                 std::thread::sleep(Duration::from_millis(100));
@@ -412,23 +428,16 @@ impl<W: Wire> Browser for CdpBrowser<W> {
                     }
                 }
                 if action.kind == ActionKind::Fill {
-                    // Text goes only to the node the guards judged, or to a plain
-                    // text field the page moved focus to that passes them too.
+                    // Select the old value in code, not with a key event: a
+                    // page's keydown handler could move focus after the check.
                     let node = action.node.unwrap_or_default();
+                    self.evaluate(&format!("{}({node})", SELECT_TEXT_JS.trim_end()))?;
+                    // Nothing runs between this check and the text: it goes only
+                    // to a plain, safe text field, judged as it is now.
                     let focus = self.evaluate(&format!("{}({node})", FOCUS_CHECK_JS.trim_end()))?;
                     if let Some(reason) = focus_refusal(&action.label, &focus) {
                         return Err(StepError::Refused(reason));
                     }
-                    let modifiers = if cfg!(target_os = "macos") { 4 } else { 2 };
-                    self.call(
-                        "Input.dispatchKeyEvent",
-                        json!({"type": "keyDown", "key": "a", "code": "KeyA", "modifiers": modifiers,
-                               "commands": ["selectAll"]}),
-                    )?;
-                    self.call(
-                        "Input.dispatchKeyEvent",
-                        json!({"type": "keyUp", "key": "a", "code": "KeyA", "modifiers": modifiers}),
-                    )?;
                     self.call("Input.insertText", json!({"text": text.unwrap_or("")}))?;
                 }
             }
@@ -456,34 +465,44 @@ pub fn focus_refusal(label: &str, focus: &Value) -> Option<String> {
             .unwrap_or("")
             .to_string()
     };
-    match field("focus").as_str() {
-        "same" => None,
-        "other" => {
-            let moved = Action {
-                kind: ActionKind::Fill,
-                label: field("label"),
-                autocomplete: Some(field("autocomplete")).filter(|a| !a.is_empty()),
-                ..Action::default()
-            };
-            let text = focus.get("text").and_then(Value::as_bool).unwrap_or(false);
-            if !text || field("type") == "password" || super::guards::sensitive_fill(&moved) {
-                Some(format!(
-                    "focus moved from {label:?} to {:?}, which is not a plain text field; nothing typed",
-                    moved.label
-                ))
-            } else {
-                None
-            }
-        }
-        holder => Some(format!(
-            "focus moved from {label:?} to {}; nothing typed",
-            if holder.is_empty() {
-                "an unknown element"
-            } else {
-                holder
-            }
-        )),
+    let holder = field("focus");
+    if holder != "same" && holder != "other" {
+        let holder = if holder.is_empty() {
+            "an unknown element".to_string()
+        } else {
+            holder
+        };
+        return Some(format!(
+            "focus moved from {label:?} to {holder}; nothing typed"
+        ));
     }
+    // The focused field as it is now, judged again even when it is the node
+    // the guard passed: a handler can have turned it into a card or password field.
+    let focused = Action {
+        kind: ActionKind::Fill,
+        label: field("label"),
+        autocomplete: Some(field("autocomplete")).filter(|a| !a.is_empty()),
+        ..Action::default()
+    };
+    let text = focus.get("text").and_then(Value::as_bool).unwrap_or(false);
+    if text && field("type") != "password" && !super::guards::sensitive_fill(&focused) {
+        return None;
+    }
+    Some(if holder == "same" {
+        format!("{label:?} is no longer a plain text field; nothing typed")
+    } else {
+        format!(
+            "focus moved from {label:?} to {:?}, which is not a plain text field; nothing typed",
+            focused.label
+        )
+    })
+}
+
+/// `scheme://host[:port]` of a URL, the part a redirect keeps.
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    (!host.is_empty()).then(|| format!("{}://{}", scheme.to_lowercase(), host.to_lowercase()))
 }
 
 /// The three fields the page scripts read off an action.
@@ -566,7 +585,16 @@ mod tests {
 
     #[test]
     fn typing_goes_ahead_when_the_field_keeps_focus() {
-        assert_eq!(focus_refusal("Where to?", &json!({"focus": "same"})), None);
+        let focus = json!({"focus": "same", "text": true, "type": "text", "label": "Where to?", "autocomplete": ""});
+        assert_eq!(focus_refusal("Where to?", &focus), None);
+    }
+
+    #[test]
+    fn typing_stops_when_the_judged_field_turned_into_a_card_field() {
+        let focus = json!({"focus": "same", "text": true, "type": "text", "label": "Full name", "autocomplete": "cc-number"});
+        assert!(focus_refusal("Full name", &focus).is_some());
+        let password = json!({"focus": "same", "text": true, "type": "password", "label": "Full name", "autocomplete": ""});
+        assert!(focus_refusal("Full name", &password).is_some());
     }
 
     #[test]
@@ -592,5 +620,18 @@ mod tests {
         assert!(focus_refusal("Full name", &password).is_some());
         let button = json!({"focus": "other", "text": false, "type": "submit", "label": "Go", "autocomplete": ""});
         assert!(focus_refusal("Full name", &button).is_some());
+    }
+
+    #[test]
+    fn a_redirect_keeps_the_links_origin() {
+        assert_eq!(
+            origin_of("https://www.amazon.in/sspa/click?ie=UTF8&url=%2Fdp%2FB0"),
+            origin_of("https://www.amazon.in/SanDisk-Portable/dp/B0")
+        );
+        assert_ne!(
+            origin_of("https://www.amazon.in/x"),
+            origin_of("https://mail.google.com/")
+        );
+        assert_eq!(origin_of("about:blank"), None);
     }
 }

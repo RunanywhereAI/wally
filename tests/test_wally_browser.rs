@@ -590,3 +590,40 @@ fn pattern_a_tab_opened_by_script_is_followed() {
     done(&run);
     assert_eq!(site.beacons("seat"), ["14C"]);
 }
+
+#[test]
+fn probe_a_keydown_handler_cannot_pull_text_into_a_card_field() {
+    let (site, run) = pattern!(
+        "/probe/keydown-steal",
+        &[want("TYPE_TEXT", "Full name", "typed_card")],
+        &["--max-steps", "4"]
+    );
+    assert!(
+        site.beacons("typed_card").is_empty(),
+        "{:?}\n{}\n{}",
+        site.beacons("typed_card"),
+        run.stdout,
+        run.stderr
+    );
+}
+
+#[test]
+fn probe_a_keydown_handler_cannot_pull_text_into_a_cross_origin_card_frame() {
+    let (site, run) = pattern!(
+        "/probe/keydown-steal-frame",
+        &[want("TYPE_TEXT", "Full name", "typed_card_frame")],
+        &["--max-steps", "4"]
+    );
+    assert_eq!(
+        site.beacons("frame"),
+        ["loaded"],
+        "the card iframe never loaded"
+    );
+    assert!(
+        site.beacons("typed_card_frame").is_empty(),
+        "{:?}\n{}\n{}",
+        site.beacons("typed_card_frame"),
+        run.stdout,
+        run.stderr
+    );
+}

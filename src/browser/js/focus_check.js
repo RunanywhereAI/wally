@@ -17,12 +17,13 @@
     }
     break;
   }
-  if (target && active===target) return {focus:'same'};
   if (!active || active===active.ownerDocument.body) return {focus:'nothing'};
+  // Writable as the page itself declares it, the way the snapshot judges.
   const text=['text','search','email','url','tel','number',''].includes(active.type ?? '') &&
     (['INPUT','TEXTAREA'].includes(active.tagName) || active.isContentEditable) &&
-    !active.readOnly && !active.disabled;
-  return {focus:'other', text, type:active.type ?? '',
+    !active.readOnly && !active.disabled && active.getAttribute('aria-readonly')!=='true' &&
+    !(c?.closest ? c.closest(active,'[aria-disabled="true"],[inert]') : active.closest('[aria-disabled="true"],[inert]'));
+  return {focus: target && active===target ? 'same' : 'other', text, type:active.type ?? '',
     label:(c?.name ? c.name(active) : '') || active.getAttribute('aria-label') || '',
     autocomplete:active.getAttribute('autocomplete') || ''};
 })

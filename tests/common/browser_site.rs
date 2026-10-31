@@ -247,6 +247,20 @@ customElements.define('shop-item', class extends HTMLElement {
             r#"<title>Seat map</title><script>beacon('tab=opened')</script>
 <button onclick="beacon('seat=14C')">Reserve seat 14C</button>"#
         }
+        "/probe/keydown-steal" => {
+            r#"<title>Your details</title>
+<label>Full name <input id=fullname aria-label="Full name"></label>
+<input id=cc autocomplete="cc-number" aria-label="Card number" style="position:absolute;left:-9999px"
+  oninput="beacon('typed_card='+encodeURIComponent(this.value))">
+<script>fullname.addEventListener('keydown',()=>cc.focus())</script>"#
+        }
+        "/probe/keydown-steal-frame" => {
+            r#"<title>Your details</title>
+<label>Full name <input id=fullname aria-label="Full name"></label>
+<iframe id=card style="width:400px;height:80px;border:0"></iframe>
+<script>card.onload=()=>beacon('frame=loaded');card.src=location.protocol+'//localhost:'+location.port+'/probe/card-frame';
+fullname.addEventListener('keydown',()=>card.focus())</script>"#
+        }
         _ => return None,
     };
     Some(format!("<!doctype html><meta charset=utf-8>{BEACON}{body}"))

@@ -53,6 +53,7 @@ const COMMIT: &[&str] = &[
     "send",
     "transfer",
     "pay now",
+    "reserve",
 ];
 const SENSITIVE: &[&str] = &[
     "card",
@@ -70,7 +71,8 @@ const SENSITIVE: &[&str] = &[
 const POSTAL: &[&str] = &["pincode", "postal"];
 /// A bare label that commits whatever the page around it describes.
 const SHORT_COMMIT: &[&str] = &[
-    "yes", "confirm", "book", "reserve", "continue", "submit", "proceed", "order",
+    "yes", "confirm", "book", "reserve", "continue", "submit", "proceed", "order", "finish",
+    "complete",
 ];
 const SENSITIVE_AUTOCOMPLETE: &[&str] = &[
     "cc-number",
@@ -256,6 +258,25 @@ mod tests {
     fn continue_is_refused_on_a_review_step_with_an_order_total() {
         let next = action(ActionKind::Click, "Continue", None);
         assert!(refuses(&next, "Review your order. Order total ₹4,532"));
+    }
+
+    #[test]
+    fn reserving_a_seat_is_refused_on_a_page_that_shows_payment() {
+        let reserve = action(ActionKind::Click, "Reserve seat 14C", None);
+        assert!(refuses(
+            &reserve,
+            "Seat fee ₹450 will be charged to your card"
+        ));
+        assert!(!refuses(&reserve, "Seat map"));
+    }
+
+    #[test]
+    fn a_bare_finish_is_refused_on_a_checkout_overview() {
+        let finish = action(ActionKind::Click, "Finish", None);
+        assert!(refuses(
+            &finish,
+            "Checkout: Overview. Payment Information: SauceCard #31337. Total: $32.39"
+        ));
     }
 
     #[test]

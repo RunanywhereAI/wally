@@ -163,6 +163,42 @@ pub fn suppress_repeated(actions: &[Action], history: &[Step]) -> Vec<Action> {
     }
 }
 
+/// The same press or the same typing again, on a page nothing has changed
+/// since (waits and scrolls that changed nothing included). A commit (pay,
+/// buy, confirm, book…) pressed twice can be charged twice, and the same text
+/// typed twice doubles itself. Other controls may need a second press (a date
+/// picker's Done), so for clicks only commits are held back.
+pub fn repeats_unchanged(history: &[Step], action: &Action, text: Option<&str>) -> Option<String> {
+    let node = action.node?;
+    for step in history.iter().rev() {
+        if step.page_changed != Some(false) {
+            return None;
+        }
+        if step.node != Some(node) {
+            continue;
+        }
+        match action.kind {
+            ActionKind::Click | ActionKind::Select
+                if matches!(step.kind, ActionKind::Click | ActionKind::Select)
+                    && guards::commits(&action.label) =>
+            {
+                return Some(format!(
+                    "{:?} was pressed and nothing changed; not pressing it again",
+                    action.label
+                ))
+            }
+            ActionKind::Fill if step.kind == ActionKind::Fill && step.text.as_deref() == text => {
+                return Some(format!(
+                    "{:?} already got this text and nothing changed; not typing it again",
+                    action.label
+                ))
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 pub struct Agent<B: Browser, M: Models> {
     pub browser: B,
     models: M,
@@ -277,24 +313,9 @@ impl<B: Browser, M: Models> Agent<B, M> {
             self.status = Status::Blocked;
             return Ok(());
         }
-        // A commit (pay, buy, confirm, book…) that left the page unchanged is
-        // not pressed again: a second press can be a second charge. Other
-        // controls may need a second press (a date picker's Done).
-        if let Some(last) = self.history.last() {
-            let clicks = |kind: ActionKind| matches!(kind, ActionKind::Click | ActionKind::Select);
-            if clicks(action.kind)
-                && guards::commits(&action.label)
-                && clicks(last.kind)
-                && last.node.is_some()
-                && last.node == action.node
-                && last.page_changed == Some(false)
-            {
-                self.status = Status::Blocked;
-                return Err(StepError::Refused(format!(
-                    "{:?} was pressed and nothing changed; not pressing it again",
-                    action.label
-                )));
-            }
+        if let Some(reason) = repeats_unchanged(&self.history, &action, None) {
+            self.status = Status::Blocked;
+            return Err(StepError::Refused(reason));
         }
         if self.history.len() >= self.max_steps {
             self.status = Status::Blocked;
@@ -324,6 +345,12 @@ impl<B: Browser, M: Models> Agent<B, M> {
             helper = Some(used);
         }
         // `act` checks the page again right before input, after any text call.
+        if action.kind == ActionKind::Fill {
+            if let Some(reason) = repeats_unchanged(&self.history, &action, text.as_deref()) {
+                self.status = Status::Blocked;
+                return Err(StepError::Refused(reason));
+            }
+        }
         if let Err(error) = self.browser.act(&action, &page, text.as_deref()) {
             if matches!(error, StepError::Refused(_)) {
                 self.status = Status::Blocked;
@@ -872,6 +899,59 @@ mod tests {
         assert!(matches!(error, StepError::Refused(_)), "{error:?}");
         assert_eq!(agent.status, Status::Blocked);
         assert_eq!(agent.browser.acted.len(), 1);
+    }
+
+    #[test]
+    fn a_wait_in_between_does_not_allow_a_second_commit() {
+        let confirm = click("e1", "Confirm");
+        let history = vec![
+            Step {
+                node: Some(1),
+                kind: ActionKind::Click,
+                page_changed: Some(false),
+                ..step("Confirm")
+            },
+            Step {
+                kind: ActionKind::Wait,
+                page_changed: Some(false),
+                ..step("Wait for the page to update")
+            },
+        ];
+        assert!(repeats_unchanged(&history, &confirm, None).is_some());
+    }
+
+    #[test]
+    fn a_commit_after_the_page_changed_is_allowed() {
+        let confirm = click("e1", "Confirm");
+        let history = vec![
+            Step {
+                node: Some(1),
+                kind: ActionKind::Click,
+                page_changed: Some(false),
+                ..step("Confirm")
+            },
+            Step {
+                kind: ActionKind::Click,
+                page_changed: Some(true),
+                ..step("Edit")
+            },
+        ];
+        assert!(repeats_unchanged(&history, &confirm, None).is_none());
+    }
+
+    #[test]
+    fn the_same_text_is_not_typed_twice_into_an_unchanged_page() {
+        let mut name = click("e1", "Full name");
+        name.kind = ActionKind::Fill;
+        let typed = Step {
+            node: Some(1),
+            kind: ActionKind::Fill,
+            text: Some("Asha Rao".into()),
+            page_changed: Some(false),
+            ..step("Full name")
+        };
+        assert!(repeats_unchanged(std::slice::from_ref(&typed), &name, Some("Asha Rao")).is_some());
+        assert!(repeats_unchanged(&[typed], &name, Some("Asha")).is_none());
     }
 
     #[test]
