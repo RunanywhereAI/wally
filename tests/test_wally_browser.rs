@@ -681,3 +681,44 @@ fn pattern_a_new_tab_that_loads_late_is_read_after_it_loads() {
     done(&run);
     assert_eq!(site.beacons("seat"), ["14C"]);
 }
+
+#[test]
+fn probe_a_long_saved_card_pay_button_is_never_pressed() {
+    let (site, run) = pattern!(
+        "/probe/long-pay",
+        &[want("CLICK", "Pay ₹4,532 now", "paid")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn probe_a_long_place_your_order_and_pay_button_is_never_pressed() {
+    let (site, run) = pattern!(
+        "/probe/long-place-order",
+        &[want("CLICK", "Place your order", "paid")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn probe_an_expiry_month_in_a_card_form_is_never_filled() {
+    let (site, run) = pattern!(
+        "/probe/card-expiry",
+        &[want("TYPE_TEXT", "Valid thru", "expiry")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(
+        site.beacons("expiry").is_empty(),
+        "{:?}",
+        site.beacons("expiry")
+    );
+}
+
+#[test]
+fn pattern_a_button_shaped_box_with_no_role_is_clicked() {
+    let (site, run) = pattern!("/p/shaped-button", &[want("CLICK", "Add to cart", "cart")]);
+    done(&run);
+    assert_eq!(site.beacons("cart"), ["1"]);
+}

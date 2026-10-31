@@ -190,6 +190,30 @@
     }
     return area>=innerWidth*innerHeight*0.4 ? best : null;
   };
+  // Button-shaped boxes: a box 28-64 px tall and at most 400 px wide whose only
+  // text is one short label (four words or fewer), drawn with a background or
+  // border. React-style apps (Flipkart's "Add to cart") give such a box no role,
+  // no pointer cursor and no handler the page can see.
+  const MAX_SHAPED=80;
+  let shaped=0;
+  const painted = c => c.backgroundColor!=='rgba(0, 0, 0, 0)' || parseFloat(c.borderTopWidth)>0 ||
+    parseFloat(c.borderBottomWidth)>0 || c.boxShadow!=='none';
+  for (const leaf of all(roots,'div,span,p')) {
+    if (shaped>=MAX_SHAPED) break;
+    if (leaf.childElementCount!==0) continue;
+    const words=(leaf.textContent||'').trim().split(/\s+/).filter(Boolean);
+    if (!words.length || words.length>4) continue;
+    if (cache.closest(leaf,selector) || cache.generic.has(leaf)) continue;
+    let box=null;
+    for (let p=leaf, k=0; p && p.nodeType===1 && k<9; p=up(p), k++) {
+      const r=p.getBoundingClientRect();
+      if (r.height>64 || r.width>400) break;
+      if (r.height>=28 && r.width>=60 && painted(p.ownerDocument.defaultView.getComputedStyle(p))) { box=p; break; }
+    }
+    if (!box || cache.generic.has(box) || box.querySelector(selector)) continue;
+    if ((box.textContent||'').trim()!==(leaf.textContent||'').trim()) continue;
+    cache.generic.add(box); shaped++;
+  }
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
     all(cache.roots(),'input,textarea,select').filter(safe)
       .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly]),
