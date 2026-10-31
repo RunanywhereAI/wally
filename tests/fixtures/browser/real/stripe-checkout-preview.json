@@ -1,0 +1,664 @@
+{
+ "url": "https://checkout.stripe.dev/",
+ "title": "Explore Stripe's payments integrations",
+ "frames": [
+  "https://checkout.stripe.dev/"
+ ],
+ "visible_frames": [],
+ "elements": [
+  {
+   "index": 6,
+   "tag": "div",
+   "role": "generic",
+   "name": "No code Low code Full page Launch payments out-of-the-box Customize colors and …",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "context_text": "",
+   "attributes": {
+    "class": "ModalOverlay ModalOverlay--afterOpen"
+   }
+  },
+  {
+   "index": 34,
+   "tag": "div",
+   "role": "generic",
+   "name": "Want to use embedded components? Change demo Start building Embed your prebuilt…",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Want to use embedded components? Change demo Start building Embed your prebuilt form Follow our Quickstart guide to add a checkout to your website. Publish a Stripe-hosted page without code Use the Stripe Dashboard to create a payment link that you can share with your customers.",
+   "context_text": "",
+   "attributes": {
+    "id": "__next"
+   }
+  },
+  {
+   "index": 35,
+   "tag": "div",
+   "role": "generic",
+   "name": "Want to use embedded components? Change demo Start building Embed your prebuilt…",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Want to use embedded components? Change demo Start building Embed your prebuilt form Follow our Quickstart guide to add a checkout to your website. Publish a Stripe-hosted page without code Use the Stripe Dashboard to create a payment link that you can share with your customers.",
+   "context_text": "",
+   "attributes": {
+    "class": "App"
+   }
+  },
+  {
+   "index": 36,
+   "tag": "h1",
+   "role": "heading",
+   "name": "Full page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Full page",
+   "context_text": "",
+   "attributes": {
+    "class": "Header-title is-checkout"
+   }
+  },
+  {
+   "index": 37,
+   "tag": "button",
+   "role": "button",
+   "name": "Change demo",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Change demo Change demo",
+   "context_text": "",
+   "attributes": {
+    "class": "Header-changeIntegrationBtn"
+   }
+  },
+  {
+   "index": 38,
+   "tag": "button",
+   "role": "button",
+   "name": "Start building",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Start building Start building",
+   "context_text": "",
+   "attributes": {
+    "class": "StartBuildingButton-button"
+   }
+  },
+  {
+   "index": 42,
+   "tag": "div",
+   "role": "generic",
+   "name": "No code Low code Full page Launch payments out-of-the-box Customize colors and …",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "context_text": "",
+   "attributes": {
+    "class": "Modal-Portal"
+   }
+  },
+  {
+   "index": 44,
+   "tag": "div",
+   "role": "generic",
+   "name": "No code Low code Full page Launch payments out-of-the-box Customize colors and …",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-card is-active"
+   }
+  },
+  {
+   "index": 45,
+   "tag": "img",
+   "role": "image",
+   "name": "Checkout",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Checkout",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "alt": "Checkout",
+    "class": "IntegrationModal-checkoutImage"
+   }
+  },
+  {
+   "index": 46,
+   "tag": "div",
+   "role": "generic",
+   "name": "More code Elements Build a custom flow with UI components Use custom CSS to mat…",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-card false"
+   }
+  },
+  {
+   "index": 47,
+   "tag": "img",
+   "role": "image",
+   "name": "Elements",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Elements",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "alt": "Elements",
+    "class": "IntegrationModal-elementsImage"
+   }
+  },
+  {
+   "index": 48,
+   "tag": "button",
+   "role": "button",
+   "name": "View demo",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "View demo View demo",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-viewDemoBtn"
+   }
+  },
+  {
+   "index": 126,
+   "tag": "div",
+   "role": "generic",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardHeroImage IntegrationModal-cardImageCheckout"
+   }
+  },
+  {
+   "index": 128,
+   "tag": "div",
+   "role": "none",
+   "name": "No code Low code Full page Launch payments out-of-the-box Customize colors and …",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardDescription"
+   }
+  },
+  {
+   "index": 129,
+   "tag": "div",
+   "role": "none",
+   "name": "No code Low code",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "No code Low code",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "Tag"
+   }
+  },
+  {
+   "index": 130,
+   "tag": "span",
+   "role": "none",
+   "name": "No code",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "No code",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 132,
+   "tag": "div",
+   "role": "none",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 133,
+   "tag": "span",
+   "role": "none",
+   "name": "Low code",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Low code",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 135,
+   "tag": "h1",
+   "role": "heading",
+   "name": "Full page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Full page Full page",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardTitle"
+   }
+  },
+  {
+   "index": 137,
+   "tag": "h2",
+   "role": "heading",
+   "name": "Launch payments out-of-the-box",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Launch payments out-of-the-box Launch payments out-of-the-box",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardSubtitle"
+   }
+  },
+  {
+   "index": 139,
+   "tag": "div",
+   "role": "none",
+   "name": "Customize colors and fonts Support subscriptions, tax, and more",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Customize colors and fonts Support subscriptions, tax, and more",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardFeatures"
+   }
+  },
+  {
+   "index": 140,
+   "tag": "ul",
+   "role": "list",
+   "name": "Customize colors and fonts Support subscriptions, tax, and more",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Customize colors and fonts Support subscriptions, tax, and more",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 141,
+   "tag": "li",
+   "role": "listitem",
+   "name": "Customize colors and fonts",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Customize colors and fonts",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 142,
+   "tag": "div",
+   "role": "none",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-checkmark"
+   }
+  },
+  {
+   "index": 143,
+   "tag": "svg",
+   "role": "image",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "InlineSVG"
+   }
+  },
+  {
+   "index": 146,
+   "tag": "li",
+   "role": "listitem",
+   "name": "Support subscriptions, tax, and more",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Support subscriptions, tax, and more",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 147,
+   "tag": "div",
+   "role": "none",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-checkmark"
+   }
+  },
+  {
+   "index": 148,
+   "tag": "svg",
+   "role": "image",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "InlineSVG"
+   }
+  },
+  {
+   "index": 151,
+   "tag": "div",
+   "role": "generic",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardHeroImage "
+   }
+  },
+  {
+   "index": 153,
+   "tag": "div",
+   "role": "none",
+   "name": "More code Elements Build a custom flow with UI components Use custom CSS to mat…",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardDescription"
+   }
+  },
+  {
+   "index": 154,
+   "tag": "div",
+   "role": "none",
+   "name": "More code",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "More code",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "Tag"
+   }
+  },
+  {
+   "index": 155,
+   "tag": "span",
+   "role": "none",
+   "name": "More code",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "More code",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 157,
+   "tag": "h1",
+   "role": "heading",
+   "name": "Elements",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Elements Elements",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardTitle"
+   }
+  },
+  {
+   "index": 159,
+   "tag": "h2",
+   "role": "heading",
+   "name": "Build a custom flow with UI components",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Build a custom flow with UI components Build a custom flow with UI components",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardSubtitle"
+   }
+  },
+  {
+   "index": 161,
+   "tag": "div",
+   "role": "none",
+   "name": "Use custom CSS to match your brand Reduce friction with built-in logic",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Use custom CSS to match your brand Reduce friction with built-in logic",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-cardFeatures"
+   }
+  },
+  {
+   "index": 162,
+   "tag": "ul",
+   "role": "list",
+   "name": "Use custom CSS to match your brand Reduce friction with built-in logic",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Use custom CSS to match your brand Reduce friction with built-in logic",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 163,
+   "tag": "li",
+   "role": "listitem",
+   "name": "Use custom CSS to match your brand",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Use custom CSS to match your brand",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 164,
+   "tag": "div",
+   "role": "none",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-checkmark"
+   }
+  },
+  {
+   "index": 165,
+   "tag": "svg",
+   "role": "image",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "InlineSVG"
+   }
+  },
+  {
+   "index": 168,
+   "tag": "li",
+   "role": "listitem",
+   "name": "Reduce friction with built-in logic",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Reduce friction with built-in logic",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {}
+  },
+  {
+   "index": 169,
+   "tag": "div",
+   "role": "none",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "IntegrationModal-checkmark"
+   }
+  },
+  {
+   "index": 170,
+   "tag": "svg",
+   "role": "image",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "No code Low code Full page Launch payments out-of-the-box Customize colors and fonts Support subscriptions, tax, and more More code Elements Build a custom flow with UI components Use custom CSS to match your brand Reduce friction with built-in logic View demo",
+   "attributes": {
+    "class": "InlineSVG"
+   }
+  }
+ ]
+}

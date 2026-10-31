@@ -1,0 +1,1215 @@
+{
+ "url": "https://www.google.com/travel/flights",
+ "title": "Find Cheap Flights Worldwide & Book Your Ticket - Google Flights",
+ "w": 1120,
+ "h": 780,
+ "text": "Skip to main content\nAccessibility feedback\nExplore\nFlights\nHotels\nVacation rentals\nSign in\nFlights\n1\nExplore\nFlexible? Discover the best flight deals with AI\nDescribe your ideal trip, and let Google Flights find the best deals for you\nExplore deals with AI\nFind and book cheap flights worldwide and track prices\nFind cheap flights from India to anywhere\nMumbai\nNew Delhi\nBengaluru\nHyderabad",
+ "scroll": {
+  "y": 0,
+  "height": 3034
+ },
+ "actions": [
+  {
+   "node": 1,
+   "role": "button",
+   "label": "Main menu",
+   "rect": {
+    "x": 12,
+    "y": 8,
+    "w": 48,
+    "h": 48
+   },
+   "expanded": "false",
+   "kind": "click",
+   "value": "",
+   "id": "e1"
+  },
+  {
+   "node": 2,
+   "role": "link",
+   "label": "Google",
+   "rect": {
+    "x": 64,
+    "y": 22,
+    "w": 74,
+    "h": 24
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e2"
+  },
+  {
+   "node": 3,
+   "role": "button",
+   "label": "Skip to main content",
+   "rect": {
+    "x": 175,
+    "y": 24,
+    "w": 185.484375,
+    "h": 32
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e3"
+  },
+  {
+   "node": 4,
+   "role": "button",
+   "label": "Accessibility feedback",
+   "rect": {
+    "x": 384.484375,
+    "y": 24,
+    "w": 198.703125,
+    "h": 32
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e4"
+  },
+  {
+   "node": 5,
+   "role": "link",
+   "label": "Explore",
+   "rect": {
+    "x": 167,
+    "y": 12,
+    "w": 106.3046875,
+    "h": 40
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e5"
+  },
+  {
+   "node": 6,
+   "role": "link",
+   "label": "Flights",
+   "rect": {
+    "x": 279.3046875,
+    "y": 12,
+    "w": 98.671875,
+    "h": 40
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e6"
+  },
+  {
+   "node": 7,
+   "role": "link",
+   "label": "Hotels",
+   "rect": {
+    "x": 383.9765625,
+    "y": 12,
+    "w": 98.6484375,
+    "h": 40
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e7"
+  },
+  {
+   "node": 8,
+   "role": "link",
+   "label": "Vacation rentals",
+   "rect": {
+    "x": 488.625,
+    "y": 12,
+    "w": 164.40625,
+    "h": 40
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e8"
+  },
+  {
+   "node": 9,
+   "role": "button",
+   "label": "Change appearance",
+   "rect": {
+    "x": 906,
+    "y": 16,
+    "w": 32,
+    "h": 32
+   },
+   "expanded": "false",
+   "kind": "click",
+   "value": "",
+   "id": "e9"
+  },
+  {
+   "node": 10,
+   "role": "button",
+   "label": "Google apps",
+   "rect": {
+    "x": 948,
+    "y": 12.078125,
+    "w": 40,
+    "h": 40
+   },
+   "expanded": "false",
+   "kind": "click",
+   "value": "",
+   "id": "e10"
+  },
+  {
+   "node": 11,
+   "role": "link",
+   "label": "Sign in",
+   "rect": {
+    "x": 1000,
+    "y": 12,
+    "w": 85,
+    "h": 40
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e11"
+  },
+  {
+   "node": 12,
+   "role": "combobox",
+   "label": "Change ticket type. Round trip",
+   "rect": {
+    "x": 72.5,
+    "y": 390.90625,
+    "w": 137.3359375,
+    "h": 36
+   },
+   "expanded": "false",
+   "kind": "click",
+   "value": "Round trip",
+   "id": "e12"
+  },
+  {
+   "node": 13,
+   "role": "button",
+   "label": "1 passenger, change number of passengers.",
+   "rect": {
+    "x": 213.8359375,
+    "y": 390.90625,
+    "w": 80.0703125,
+    "h": 36
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e13"
+  },
+  {
+   "node": 14,
+   "role": "combobox",
+   "label": "Change seating class. Economy",
+   "rect": {
+    "x": 297.90625,
+    "y": 390.90625,
+    "w": 102.6796875,
+    "h": 36
+   },
+   "expanded": "false",
+   "kind": "click",
+   "value": "Economy",
+   "id": "e14"
+  },
+  {
+   "node": 15,
+   "role": "combobox",
+   "label": "Where from?",
+   "rect": {
+    "x": 72.5,
+    "y": 434.90625,
+    "w": 282,
+    "h": 56
+   },
+   "expanded": "false",
+   "kind": "fill",
+   "value": "Mumbai",
+   "id": "e15"
+  },
+  {
+   "node": 15,
+   "role": "combobox",
+   "label": "Open Where from?",
+   "rect": {
+    "x": 72.5,
+    "y": 434.90625,
+    "w": 282,
+    "h": 56
+   },
+   "expanded": "false",
+   "kind": "click",
+   "value": "Mumbai",
+   "id": "e16"
+  },
+  {
+   "node": 16,
+   "role": "combobox",
+   "label": "Where to? ",
+   "rect": {
+    "x": 362.5,
+    "y": 434.90625,
+    "w": 282,
+    "h": 56
+   },
+   "expanded": "false",
+   "kind": "fill",
+   "value": "",
+   "id": "e17"
+  },
+  {
+   "node": 16,
+   "role": "combobox",
+   "label": "Open Where to? ",
+   "rect": {
+    "x": 362.5,
+    "y": 434.90625,
+    "w": 282,
+    "h": 56
+   },
+   "expanded": "false",
+   "kind": "click",
+   "value": "",
+   "id": "e18"
+  },
+  {
+   "node": 17,
+   "role": "textbox",
+   "label": "Departure",
+   "rect": {
+    "x": 708.5,
+    "y": 435.90625,
+    "w": 138,
+    "h": 54
+   },
+   "kind": "fill",
+   "value": "",
+   "id": "e19"
+  },
+  {
+   "node": 17,
+   "role": "textbox",
+   "label": "Open Departure",
+   "rect": {
+    "x": 708.5,
+    "y": 435.90625,
+    "w": 138,
+    "h": 54
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e20"
+  },
+  {
+   "node": 18,
+   "role": "textbox",
+   "label": "Return",
+   "rect": {
+    "x": 877.5,
+    "y": 435.90625,
+    "w": 138,
+    "h": 54
+   },
+   "kind": "fill",
+   "value": "",
+   "id": "e21"
+  },
+  {
+   "node": 18,
+   "role": "textbox",
+   "label": "Open Return",
+   "rect": {
+    "x": 877.5,
+    "y": 435.90625,
+    "w": 138,
+    "h": 54
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e22"
+  },
+  {
+   "node": 19,
+   "role": "button",
+   "label": "Explore destinations",
+   "rect": {
+    "x": 497.34375,
+    "y": 516.90625,
+    "w": 110.3046875,
+    "h": 40
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e23"
+  },
+  {
+   "node": 20,
+   "role": "button",
+   "label": "Explore deals with AI",
+   "rect": {
+    "x": 826.703125,
+    "y": 606.90625,
+    "w": 189.796875,
+    "h": 40
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e24"
+  },
+  {
+   "node": 21,
+   "role": "button",
+   "label": "Learn more about this section",
+   "rect": {
+    "x": 447.2109375,
+    "y": 719.90625,
+    "w": 20,
+    "h": 16.5
+   },
+   "kind": "click",
+   "value": "",
+   "id": "e25"
+  },
+  {
+   "node": 22,
+   "role": "tab",
+   "label": "Mumbai",
+   "rect": {
+    "x": 58.5,
+    "y": 754.40625,
+    "w": 80.0859375,
+    "h": 34
+   },
+   "selected": "true",
+   "kind": "click",
+   "value": "",
+   "id": "e26"
+  },
+  {
+   "node": 23,
+   "role": "tab",
+   "label": "New Delhi",
+   "rect": {
+    "x": 148.5859375,
+    "y": 754.40625,
+    "w": 94.265625,
+    "h": 34
+   },
+   "selected": "false",
+   "kind": "click",
+   "value": "",
+   "id": "e27"
+  },
+  {
+   "node": 24,
+   "role": "tab",
+   "label": "Bengaluru",
+   "rect": {
+    "x": 252.8515625,
+    "y": 754.40625,
+    "w": 95.6484375,
+    "h": 34
+   },
+   "selected": "false",
+   "kind": "click",
+   "value": "",
+   "id": "e28"
+  },
+  {
+   "node": 25,
+   "role": "tab",
+   "label": "Hyderabad",
+   "rect": {
+    "x": 358.5,
+    "y": 754.40625,
+    "w": 100.8359375,
+    "h": 34
+   },
+   "selected": "false",
+   "kind": "click",
+   "value": "",
+   "id": "e29"
+  },
+  {
+   "id": "scroll_down",
+   "kind": "scroll",
+   "label": "Scroll down",
+   "delta": 560
+  },
+  {
+   "id": "wait",
+   "kind": "wait",
+   "label": "Wait for the page to update"
+  }
+ ],
+ "marker": [
+  1793393188756.9,
+  "https://www.google.com/travel/flights",
+  0,
+  0,
+  1120,
+  780,
+  "Find Cheap Flights Worldwide & Book Your Ticket - Google Flights",
+  "Skip to main content\nAccessibility feedback\nExplore\nFlights\nHotels\nVacation rentals\nSign in\nFlights\n1\nExplore\nFlexible? Discover the best flight deals with AI\nDescribe your ideal trip, and let Google Flights find the best deals for you\nExplore deals with AI\nFind and book cheap flights worldwide and track prices\nFind cheap flights from India to anywhere\nMumbai\nNew Delhi\nBengaluru\nHyderabad",
+  [
+   {
+    "node": 1,
+    "role": "button",
+    "label": "Main menu",
+    "expanded": "false",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 2,
+    "role": "link",
+    "label": "Google",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 3,
+    "role": "button",
+    "label": "Skip to main content",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 4,
+    "role": "button",
+    "label": "Accessibility feedback",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 5,
+    "role": "link",
+    "label": "Explore",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 6,
+    "role": "link",
+    "label": "Flights",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 7,
+    "role": "link",
+    "label": "Hotels",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 8,
+    "role": "link",
+    "label": "Vacation rentals",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 9,
+    "role": "button",
+    "label": "Change appearance",
+    "expanded": "false",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 10,
+    "role": "button",
+    "label": "Google apps",
+    "expanded": "false",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 11,
+    "role": "link",
+    "label": "Sign in",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 12,
+    "role": "combobox",
+    "label": "Change ticket type. Round trip",
+    "expanded": "false",
+    "kind": "click",
+    "value": "Round trip"
+   },
+   {
+    "node": 13,
+    "role": "button",
+    "label": "1 passenger, change number of passengers.",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 14,
+    "role": "combobox",
+    "label": "Change seating class. Economy",
+    "expanded": "false",
+    "kind": "click",
+    "value": "Economy"
+   },
+   {
+    "node": 15,
+    "role": "combobox",
+    "label": "Where from?",
+    "expanded": "false",
+    "kind": "fill",
+    "value": "Mumbai"
+   },
+   {
+    "node": 15,
+    "role": "combobox",
+    "label": "Open Where from?",
+    "expanded": "false",
+    "kind": "click",
+    "value": "Mumbai"
+   },
+   {
+    "node": 16,
+    "role": "combobox",
+    "label": "Where to? ",
+    "expanded": "false",
+    "kind": "fill",
+    "value": ""
+   },
+   {
+    "node": 16,
+    "role": "combobox",
+    "label": "Open Where to? ",
+    "expanded": "false",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 17,
+    "role": "textbox",
+    "label": "Departure",
+    "kind": "fill",
+    "value": ""
+   },
+   {
+    "node": 17,
+    "role": "textbox",
+    "label": "Open Departure",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 18,
+    "role": "textbox",
+    "label": "Return",
+    "kind": "fill",
+    "value": ""
+   },
+   {
+    "node": 18,
+    "role": "textbox",
+    "label": "Open Return",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 19,
+    "role": "button",
+    "label": "Explore destinations",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 20,
+    "role": "button",
+    "label": "Explore deals with AI",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 21,
+    "role": "button",
+    "label": "Learn more about this section",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 22,
+    "role": "tab",
+    "label": "Mumbai",
+    "selected": "true",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 23,
+    "role": "tab",
+    "label": "New Delhi",
+    "selected": "false",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 24,
+    "role": "tab",
+    "label": "Bengaluru",
+    "selected": "false",
+    "kind": "click",
+    "value": ""
+   },
+   {
+    "node": 25,
+    "role": "tab",
+    "label": "Hyderabad",
+    "selected": "false",
+    "kind": "click",
+    "value": ""
+   }
+  ],
+  [
+   [
+    15,
+    "Mumbai",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    26,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    16,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    27,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    17,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    18,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    28,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    29,
+    "",
+    false,
+    null,
+    false,
+    false
+   ]
+  ]
+ ],
+ "page_key": [
+  1793393188756.9,
+  "https://www.google.com/travel/flights",
+  0,
+  0,
+  1120,
+  780,
+  [
+   [
+    15,
+    "Mumbai",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    26,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    16,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    27,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    17,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    18,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    28,
+    "",
+    false,
+    null,
+    false,
+    false
+   ],
+   [
+    29,
+    "",
+    false,
+    null,
+    false,
+    false
+   ]
+  ]
+ ],
+ "guards": {
+  "1": [
+   1,
+   "button",
+   "Main menu",
+   null,
+   null,
+   null,
+   null,
+   false,
+   null,
+   "false",
+   null,
+   null,
+   null,
+   ""
+  ],
+  "2": [
+   2,
+   "link",
+   "Google",
+   null,
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   "/",
+   ""
+  ],
+  "3": [
+   3,
+   "button",
+   "Skip to main content",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "Skip to main content\nAccessibility feedback"
+  ],
+  "4": [
+   4,
+   "button",
+   "Accessibility feedback",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "Skip to main content\nAccessibility feedback"
+  ],
+  "5": [
+   5,
+   "link",
+   "Explore",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "Explore"
+  ],
+  "6": [
+   6,
+   "link",
+   "Flights",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "Flights"
+  ],
+  "7": [
+   7,
+   "link",
+   "Hotels",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "Hotels"
+  ],
+  "8": [
+   8,
+   "link",
+   "Vacation rentals",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "Vacation rentals"
+  ],
+  "9": [
+   9,
+   "button",
+   "Change appearance",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   "false",
+   null,
+   null,
+   null,
+   ""
+  ],
+  "10": [
+   10,
+   "button",
+   "Google apps",
+   null,
+   null,
+   null,
+   null,
+   false,
+   null,
+   "false",
+   null,
+   null,
+   "https://www.google.co.in/intl/en/about/products",
+   ""
+  ],
+  "11": [
+   11,
+   "link",
+   "Sign in",
+   null,
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   "https://accounts.google.com/ServiceLogin?service=searchandassistant&passive=1209600&continue=https://www.google.com/travel/flights&followup=https://www.google.com/travel/flights&ec=GAZAlQM",
+   "Sign in"
+  ],
+  "12": [
+   12,
+   "combobox",
+   "Change ticket type. Round trip",
+   null,
+   null,
+   null,
+   null,
+   false,
+   "false",
+   "false",
+   null,
+   null,
+   null,
+   "Round trip"
+  ],
+  "13": [
+   13,
+   "button",
+   "1 passenger, change number of passengers.",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "1"
+  ],
+  "14": [
+   14,
+   "combobox",
+   "Change seating class. Economy",
+   null,
+   null,
+   null,
+   null,
+   false,
+   "false",
+   "false",
+   null,
+   null,
+   null,
+   "Economy"
+  ],
+  "15": [
+   15,
+   "combobox",
+   "Where from?",
+   "Mumbai",
+   false,
+   null,
+   false,
+   false,
+   null,
+   "false",
+   null,
+   null,
+   null,
+   "Mumbai"
+  ],
+  "16": [
+   16,
+   "combobox",
+   "Where to? ",
+   "",
+   false,
+   null,
+   false,
+   false,
+   null,
+   "false",
+   null,
+   null,
+   null,
+   ""
+  ],
+  "17": [
+   17,
+   "textbox",
+   "Departure",
+   "",
+   false,
+   null,
+   false,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   ""
+  ],
+  "18": [
+   18,
+   "textbox",
+   "Return",
+   "",
+   false,
+   null,
+   false,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   ""
+  ],
+  "19": [
+   19,
+   "button",
+   "Explore destinations",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "Explore"
+  ],
+  "20": [
+   20,
+   "button",
+   "Explore deals with AI",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "Explore deals with AI"
+  ],
+  "21": [
+   21,
+   "button",
+   "Learn more about this section",
+   null,
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   null,
+   null,
+   ""
+  ],
+  "22": [
+   22,
+   "tab",
+   "Mumbai",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   "true",
+   null,
+   "Mumbai\nNew Delhi\nBengaluru\nHyderabad"
+  ],
+  "23": [
+   23,
+   "tab",
+   "New Delhi",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   "false",
+   null,
+   "Mumbai\nNew Delhi\nBengaluru\nHyderabad"
+  ],
+  "24": [
+   24,
+   "tab",
+   "Bengaluru",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   "false",
+   null,
+   "Mumbai\nNew Delhi\nBengaluru\nHyderabad"
+  ],
+  "25": [
+   25,
+   "tab",
+   "Hyderabad",
+   "",
+   null,
+   null,
+   null,
+   false,
+   null,
+   null,
+   null,
+   "false",
+   null,
+   "Mumbai\nNew Delhi\nBengaluru\nHyderabad"
+  ]
+ },
+ "omitted_actions": 0,
+ "fingerprint": "595e044bff0cb8abf436d20a000e0ee4b2093cc06b0f4286ee21878a686bcdaf"
+}

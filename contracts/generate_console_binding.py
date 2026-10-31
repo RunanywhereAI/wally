@@ -43,7 +43,7 @@ FLOAT = "f64"
 # Rust 2021 reserved/keyword identifiers among this contract's field names.
 # Escaped as a raw identifier (`r#type`) everywhere the field is named; the
 # wire key ("type") is untouched.
-RUST_KEYWORDS = {"type"}
+RUST_KEYWORDS = {"type", "true", "false"}
 
 
 def _snake_to_pascal(name: str) -> str:
@@ -65,9 +65,11 @@ def _resolve_type(schema: dict, schemas: dict) -> tuple[str, bool]:
     if "$ref" in schema:
         name = schema["$ref"].split("/")[-1]
         target = schemas.get(name, {})
+        if _is_free_form(target):
+            return "Value", False
         # Constrained scalar aliases have no emitted type of their own -- only
         # objects, unions and enums get one -- so inline their primitive.
-        if target.get("type") in {"string", "integer", "number", "boolean"} and "enum" not in target:
+        if target.get("type") in {"string", "integer", "number", "boolean", "array"} and "enum" not in target:
             return _resolve_type(target, schemas)
         return name, False
     if "const" in schema:
@@ -88,6 +90,8 @@ def _resolve_type(schema: dict, schemas: dict) -> tuple[str, bool]:
     # JSON Schema nullable form `type: ["integer", "null"]`: strip the null,
     # resolve the remaining type, and mark it optional. Same meaning as an
     # anyOf-with-null, just spelled the compact way OpenAPI 3.1 emits.
+    if _is_free_form(schema):
+        return "Value", False
     if isinstance(kind, list):
         non_null = [t for t in kind if t != "null"]
         had_null = "null" in kind
@@ -126,6 +130,14 @@ def _resolve_type(schema: dict, schemas: dict) -> tuple[str, bool]:
     raise SystemExit(f"unsupported schema shape: {schema}")
 
 
+def _is_free_form(schema: dict) -> bool:
+    """Any JSON value: `type` lists two or more non-null types (System One's
+    state, guidance and instructions). Carried as `serde_json::Value`; the
+    schema's size bounds are the server's to enforce."""
+    kind = schema.get("type")
+    return isinstance(kind, list) and len([t for t in kind if t != "null"]) > 1
+
+
 def _is_enum(schema: dict) -> bool:
     return "enum" in schema and schema.get("type") == "string"
 
@@ -137,6 +149,8 @@ def _to_value_expr(base: str, var: str, enums: set[str], objects: set[str], is_r
     (de)ref either way; only `Value::from`/`Value::Bool`, which take an owned
     primitive by value, need an explicit deref when `var` is a reference.
     """
+    if base == "Value":
+        return f"{var}.clone()"
     if base == "String":
         return f"Value::String({var}.clone())"
     if base == INT:
@@ -164,6 +178,8 @@ def _to_value_expr(base: str, var: str, enums: set[str], objects: set[str], is_r
 
 
 def _from_value_expr(base: str, var: str, enums: set[str], objects: set[str]) -> str:
+    if base == "Value":
+        return f"{var}.clone()"
     if base == "String":
         return f'{var}.as_str().ok_or_else(|| "expected a string".to_string())?.to_string()'
     if base == INT:
@@ -273,6 +289,10 @@ def _emit_struct(name: str, schema: dict, schemas: dict, enums: set[str], object
     props = schema.get("properties", {})
     fields = []
     for prop, pschema in props.items():
+        if pschema.get("type") == "null":
+            # A field the contract names only to forbid (`type: null`): never
+            # sent, so it gets no Rust field.
+            continue
         base, nullable = _resolve_type(pschema, schemas)
         optional = nullable or prop not in required
         rust_type = f"Option<{base}>" if optional else base

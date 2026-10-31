@@ -1,0 +1,75 @@
+{
+ "url": "https://braintree.github.io/braintree-web/current/hosted-fields.html",
+ "title": "braintree.github.io/braintree-web/current/hosted-fields.html",
+ "frames": [
+  "https://braintree.github.io/braintree-web/current/hosted-fields.html"
+ ],
+ "visible_frames": [],
+ "elements": [
+  {
+   "index": 46,
+   "tag": "a",
+   "role": "link",
+   "name": "Read the full documentation",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Read the full documentation Read the full documentation",
+   "context_text": "",
+   "attributes": {
+    "href": "https://help.github.com/pages/"
+   }
+  },
+  {
+   "index": 55,
+   "tag": "a",
+   "role": "link",
+   "name": "GitHub Status",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "GitHub Status GitHub Status",
+   "context_text": "",
+   "attributes": {
+    "href": "https://githubstatus.com"
+   }
+  },
+  {
+   "index": 58,
+   "tag": "a",
+   "role": "link",
+   "name": "@githubstatus",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "@githubstatus @githubstatus",
+   "context_text": "",
+   "attributes": {
+    "href": "https://twitter.com/githubstatus"
+   }
+  },
+  {
+   "index": 62,
+   "tag": "a",
+   "role": "link",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "href": "/",
+    "class": "logo logo-img-1x"
+   }
+  }
+ ]
+}
