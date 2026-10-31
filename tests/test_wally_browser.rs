@@ -44,14 +44,18 @@ fn browse(site: &Site, chrome: &Chrome, path: &str, goal: &str, extra: &[&str]) 
     args.extend_from_slice(extra);
     args.push(goal);
     let base = format!("{}/v1", site.origin);
-    let (code, stdout, stderr) = run_wally_env(
-        &home,
-        &args,
-        &[
-            ("WALLY_BROWSER_API_BASE", &base),
-            ("WALLY_BROWSER_API_KEY", "test-key"),
-        ],
-    );
+    let mut env = vec![
+        ("WALLY_BROWSER_API_BASE", base.clone()),
+        ("WALLY_BROWSER_API_KEY", "test-key".to_string()),
+    ];
+    // run_wally_env starts from an empty environment, and Windows sockets do
+    // not initialise without SystemRoot: every connection to the test Chrome
+    // and the fake gateway would fail before it is made.
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        env.push(("SystemRoot", root.to_string_lossy().into_owned()));
+    }
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let (code, stdout, stderr) = run_wally_env(&home, &args, &env);
     Run {
         code,
         stdout,
