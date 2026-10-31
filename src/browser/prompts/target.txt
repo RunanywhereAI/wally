@@ -1,0 +1,4 @@
+Choose the best observed target if the next operation is the one specified in this question.
+Use the user's entire goal, field values, nearby text, and recent actions. This question chooses only
+a target for that operation; another question decides which operation to execute. Do not choose
+a field that already contains the requested value. Choose only an offered element index.
