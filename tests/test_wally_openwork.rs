@@ -119,28 +119,28 @@ fn every_provider_declares_the_opencode_harness() {
 }
 
 #[test]
-fn the_profile_keeps_every_openwork_path_under_its_own_root() {
-    let state = Path::new("/state/runanywhere");
-    let profile = Profile::under(state);
-    let root = state.join("openwork");
+fn the_profile_keeps_every_path_it_sets_under_its_own_root() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let profile = Profile::under(dir.path());
+    let root = dir.path().join("openwork");
     assert_eq!(profile.root, root);
+    let mut paths = 0;
     for (name, value) in profile.environment() {
-        if name.starts_with("OPENWORK_") && !value.starts_with('/') {
+        // Every value is a switch (no separator at all) or a path.
+        if !Path::new(&value).is_absolute() {
+            assert!(
+                !value.contains('/') && !value.contains('\\'),
+                "{name}={value} is neither a switch nor an absolute path"
+            );
             continue;
         }
-        if name.ends_with("_PATH")
-            || name.ends_with("_DB")
-            || name.ends_with("_DIR")
-            || name.ends_with("_STORE")
-            || name.ends_with("_CONFIG")
-            || name.ends_with("_USERDATA")
-        {
-            assert!(
-                Path::new(&value).starts_with(&root),
-                "{name}={value} is outside the profile"
-            );
-        }
+        paths += 1;
+        assert!(
+            Path::new(&value).starts_with(&root),
+            "{name}={value} is outside the profile"
+        );
     }
+    assert!(paths >= 9, "only {paths} paths were checked");
 }
 
 #[test]
@@ -160,6 +160,8 @@ fn the_profile_keeps_chats_on_the_engine_that_reads_wallys_provider() {
         value("OPENWORK_ELECTRON_DISABLE_PROTOCOL_REGISTRATION"),
         Some("1")
     );
+    // opencode's log and saved logins move into the profile.
+    assert!(value("XDG_DATA_HOME").is_some());
     // The person's real home and opencode config stay in reach of the app.
     for kept in ["HOME", "XDG_CONFIG_HOME", "USERPROFILE", "APPDATA"] {
         assert_eq!(value(kept), None, "{kept} must not be overridden");
@@ -180,14 +182,18 @@ fn the_workspace_list_selects_its_one_workspace_by_openworks_id() {
 }
 
 #[test]
-fn a_verbatim_drive_prefix_is_dropped_and_nothing_else() {
+fn verbatim_prefixes_are_spelled_the_way_node_spells_them() {
     assert_eq!(
         without_verbatim_prefix(r"\\?\C:\Users\me\openwork\workspace"),
         r"C:\Users\me\openwork\workspace"
     );
     assert_eq!(
-        without_verbatim_prefix(r"\\?\UNC\server\share"),
-        r"\\?\UNC\server\share"
+        without_verbatim_prefix(r"\\?\UNC\server\share\openwork"),
+        r"\\server\share\openwork"
+    );
+    assert_eq!(
+        without_verbatim_prefix(r"\\?\Volume{0}\openwork"),
+        r"\\?\Volume{0}\openwork"
     );
     assert_eq!(
         without_verbatim_prefix("/state/openwork"),
@@ -207,7 +213,7 @@ fn the_workspace_path_is_the_resolved_folder() {
             .as_path()
             .to_str()
             .map(without_verbatim_prefix)
-            .map(Path::new)
+            .map(PathBuf::from)
             .unwrap()
     );
 }
@@ -224,6 +230,12 @@ fn an_app_is_a_bundle_with_a_plist_or_an_executable_file() {
     let executable = dir.path().join("openwork");
     assert_eq!(app_at(&executable), None, "nothing there");
     std::fs::write(&executable, "").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(app_at(&executable), None, "a file it may not execute");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     assert_eq!(
         app_at(&executable),
         Some(OpenWorkApp::Executable(executable.clone()))

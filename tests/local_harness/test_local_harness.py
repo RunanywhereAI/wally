@@ -147,9 +147,9 @@ def main():
                 workspaces = json.loads((profile_root / "user-data" / "openwork-workspaces.json").read_text())
                 # Resolved on both sides: the runner's temp dir is an 8.3
                 # short name, and wally writes the long, native spelling.
-                written = pathlib.Path(workspaces["workspaces"][0]["path"])
-                assert written.resolve() == (profile_root / "workspace").resolve(), workspaces
-                assert "/" not in str(written) or os.name != "nt", workspaces
+                written = workspaces["workspaces"][0]["path"]
+                assert pathlib.Path(written).resolve() == (profile_root / "workspace").resolve(), workspaces
+                assert "/" not in written or os.name != "nt", workspaces
                 assert not (home / "OpenWork Chat").exists()
                 assert not (home / ".config" / "opencode").exists()
                 address = urllib.parse.urlsplit(captured["url"])
@@ -163,12 +163,17 @@ def main():
             shutil.rmtree(profile)
             profile.mkdir()
 
+            for report in (root / "child.json", root / "backend.json"):
+                report.unlink(missing_ok=True)
             missing = subprocess.run(
                 [str(binary), "--home", str(models_home), "openwork", "-m", "qwen3-4b-instruct"],
                 env=dict(env, WALLY_OPENWORK_APP=str(root / "no-such-openwork")),
                 input="", text=True, capture_output=True, timeout=20)
             assert missing.returncode == 127, missing
             assert "not an OpenWork app" in missing.stderr, missing.stderr
+            if (root / "backend.json").exists():
+                assert json.loads((root / "backend.json").read_text())["created"] == 0
+            assert not (root / "child.json").exists()
             print("PASS a missing OpenWork stops before any model loads")
 
             uncertified_dir = models_home / "Models" / "LlamaCpp" / "qwen3-0.6b"

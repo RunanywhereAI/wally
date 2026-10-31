@@ -107,15 +107,16 @@ impl Profile {
             .unwrap_or_else(|_| self.workspace.clone())
             .to_string_lossy()
             .into_owned();
-        without_verbatim_prefix(&resolved).to_string()
+        without_verbatim_prefix(&resolved)
     }
 
     /// Every variable that moves OpenWork and its engine onto this profile:
     /// OpenWork's own isolation set (`BLANK_SLATE_PATH_ENV_KEYS` in
     /// `apps/desktop/electron/blank-slate-profile.mjs`) minus the home and
-    /// XDG folders, so the person's shell tools and opencode config still
+    /// config folders, so the person's shell tools and opencode config still
     /// work inside the app, plus the two engine switches the module doc
-    /// explains.
+    /// explains. `XDG_DATA_HOME` is moved because opencode writes its log
+    /// (prompts and session metadata) and its saved logins there.
     pub fn environment(&self) -> Vec<(String, String)> {
         let path = |p: PathBuf| p.to_string_lossy().into_owned();
         vec![
@@ -145,6 +146,7 @@ impl Profile {
             ),
             ("OPENWORK_DATA_DIR".into(), path(self.data.clone())),
             ("OPENCODE_DB".into(), path(self.data.join("opencode.db"))),
+            ("XDG_DATA_HOME".into(), path(self.data.join("xdg"))),
             (
                 "OPENWORK_ELECTRON_DISABLE_PROTOCOL_REGISTRATION".into(),
                 "1".into(),
@@ -155,12 +157,16 @@ impl Profile {
     }
 }
 
-/// `path` without the `\\?\` that `canonicalize` puts on a Windows drive
-/// path, which Node's `realpath` never returns. Anything else is unchanged.
-pub fn without_verbatim_prefix(path: &str) -> &str {
+/// `path` spelled as Node's `realpath` spells it on Windows: without the
+/// `\\?\` that `canonicalize` puts on a drive path, and with `\\?\UNC\`
+/// back to `\\`. Anything else is unchanged.
+pub fn without_verbatim_prefix(path: &str) -> String {
+    if let Some(share) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{share}");
+    }
     match path.strip_prefix(r"\\?\") {
-        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest,
-        _ => path,
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => path.to_string(),
     }
 }
 
@@ -238,14 +244,26 @@ pub fn locate_app() -> Option<OpenWorkApp> {
     standard_locations().iter().find_map(|path| app_at(path))
 }
 
-/// What is at `path`, if it is an OpenWork wally can launch.
+/// What is at `path`, if it is an OpenWork wally can launch: a bundle with
+/// an Info.plist, or a file it may execute.
 pub fn app_at(path: &Path) -> Option<OpenWorkApp> {
     if path.extension().is_some_and(|e| e == "app") {
         return (path.join("Contents/Info.plist").is_file())
             .then(|| OpenWorkApp::Bundle(path.to_path_buf()));
     }
+    is_executable(path).then(|| OpenWorkApp::Executable(path.to_path_buf()))
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
     path.is_file()
-        .then(|| OpenWorkApp::Executable(path.to_path_buf()))
 }
 
 #[cfg(target_os = "macos")]
@@ -283,18 +301,40 @@ fn standard_locations() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The AppImage or a packaged `openwork` on PATH.
+/// The AppImage on PATH. A bare `openwork` is not looked for: the npm
+/// package of that name is a different program, and it would be handed the
+/// account token. Any other install is named with `WALLY_OPENWORK_APP`.
 #[cfg(not(any(target_os = "macos", windows)))]
 fn standard_locations() -> Vec<PathBuf> {
     let path = crate::util::getenv("PATH").unwrap_or_default();
     std::env::split_paths(&path)
-        .flat_map(|dir| [dir.join("openwork"), dir.join("OpenWork.AppImage")])
+        .map(|dir| dir.join("OpenWork.AppImage"))
         .collect()
 }
 
-/// The bundle's main executable, `CFBundleExecutable` in OpenWork 0.18.63's
-/// Info.plist.
+/// The bundle's main executable when its Info.plist cannot be read:
+/// `CFBundleExecutable` in OpenWork 0.18.63.
 pub const BUNDLE_EXECUTABLE: &str = "OpenWork";
+
+/// The bundle's `CFBundleExecutable`, so a `WALLY_OPENWORK_APP` bundle with
+/// another executable name still starts.
+#[cfg(target_os = "macos")]
+fn bundle_executable(bundle: &Path) -> String {
+    std::process::Command::new("/usr/libexec/PlistBuddy")
+        .args(["-c", "Print :CFBundleExecutable"])
+        .arg(bundle.join("Contents/Info.plist"))
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|name| !name.is_empty() && !name.contains('/'))
+        .unwrap_or_else(|| BUNDLE_EXECUTABLE.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bundle_executable(_bundle: &Path) -> String {
+    BUNDLE_EXECUTABLE.to_string()
+}
 
 /// The program that starts `app`. A bundle is started from its own
 /// executable rather than through `open`, so the profile environment, which
@@ -303,7 +343,9 @@ pub const BUNDLE_EXECUTABLE: &str = "OpenWork";
 /// it from the terminal and its exit ends the run.
 pub fn program(app: &OpenWorkApp) -> PathBuf {
     match app {
-        OpenWorkApp::Bundle(bundle) => bundle.join("Contents/MacOS").join(BUNDLE_EXECUTABLE),
+        OpenWorkApp::Bundle(bundle) => bundle
+            .join("Contents/MacOS")
+            .join(bundle_executable(bundle)),
         OpenWorkApp::Executable(path) => path.clone(),
     }
 }

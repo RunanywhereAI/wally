@@ -30,12 +30,22 @@ if pgrep -f "OpenWork.app/Contents/MacOS/OpenWork" >/dev/null; then
     exit 1
 fi
 
+# Only a folder this run creates counts against it.
+HOME_WORKSPACE_EXISTED=0
+[[ -e "${HOME}/OpenWork Chat" ]] && HOME_WORKSPACE_EXISTED=1
+
 rm -f "${ENGINES}"
 "${WALLY}" openwork -m "${MODEL}" >"${LOG}" 2>&1 &
 WALLY_PID=$!
 cleanup() {
     osascript -e 'tell application "OpenWork" to quit' >/dev/null 2>&1 || true
-    wait "${WALLY_PID}" 2>/dev/null || true
+    for _ in $(seq 1 30); do
+        kill -0 "${WALLY_PID}" 2>/dev/null || return 0
+        sleep 1
+    done
+    echo "  FAIL  openwork: wally was still running 30 s after the app was asked to quit"
+    kill "${WALLY_PID}" 2>/dev/null || true
+    return 1
 }
 trap cleanup EXIT
 
@@ -99,12 +109,12 @@ for provider, model_id in targets:
     }, timeout=300)
     error = reply.get("info", {}).get("error")
     text = " ".join(p.get("text", "") for p in reply.get("parts", []) if p.get("type") == "text")
-    assert not error and text.strip(), f"{provider}/{model_id}: error={error} text={text!r}"
+    assert not error and text.strip().strip(".").lower() == "pong", f"{provider}/{model_id}: error={error} text={text!r}"
     print(f"  ok    openwork answered on {provider}/{model_id}: {text.strip()[:40]!r}")
 PY
 
-cleanup
 trap - EXIT
+cleanup || exit 1
 # The engine is stopped by the app on its way out, which takes a few seconds.
 for _ in $(seq 1 20); do
     pgrep -f "OpenWork.app/Contents/Resources/sidecars/opencode" >/dev/null || break
@@ -114,11 +124,7 @@ if pgrep -f "OpenWork.app/Contents/Resources/sidecars/opencode" >/dev/null; then
     echo "  FAIL  openwork: its engine is still running after the app quit"
     exit 1
 fi
-if kill -0 "${WALLY_PID}" 2>/dev/null; then
-    echo "  FAIL  openwork: wally did not end with the app"
-    exit 1
-fi
-if [[ -e "${HOME}/OpenWork Chat" && ! -e "${STATE}/user-data/openwork-workspaces.json" ]]; then
+if [[ "${HOME_WORKSPACE_EXISTED}" == 0 && -e "${HOME}/OpenWork Chat" ]]; then
     echo "  FAIL  openwork: the default workspace landed in the real home"
     exit 1
 fi

@@ -107,22 +107,29 @@ fn installed_app() -> Option<OpenWorkApp> {
 }
 
 /// The account's hosted catalog for a local launch, so it shows beside the
-/// local model. None when signed out or the list cannot be read: a local
+/// local model, behind the same image gate a hosted launch gets. An expired
+/// token is refreshed first, as for a hosted launch. None when signed out,
+/// when the session is refused, or when the list cannot be read: a local
 /// launch never fails for want of the network.
 fn hosted_catalog() -> Option<(String, String, Vec<CatalogModel>)> {
-    let credentials = account::load().ok().filter(|c| c.signed_in())?;
+    let mut credentials = account::load().ok().filter(|c| c.signed_in())?;
+    let console = ConsoleClient::default();
+    if let Err(error) = harness::verify_cloud_session(&console, &mut credentials) {
+        if !error.unverified {
+            return None;
+        }
+    }
     let (result, models, _) = account_models_with(
-        &ConsoleClient::default(),
+        &console,
         &credentials.console_url,
         &credentials.access_token,
     );
-    (matches!(result, IdentityResult::Ok) && !models.is_empty()).then(|| {
-        (
-            format!("{}/v1", credentials.console_url),
-            credentials.access_token,
-            models,
-        )
-    })
+    if !matches!(result, IdentityResult::Ok) || models.is_empty() {
+        return None;
+    }
+    let base_url = harness::image_gate::start(&credentials.console_url, &credentials.access_token)
+        .unwrap_or_else(|| format!("{}/v1", credentials.console_url));
+    Some((base_url, credentials.access_token, models))
 }
 
 /// The provider config for a launch on `endpoint`: everything the person can
@@ -196,7 +203,14 @@ fn run(app: &OpenWorkApp, model: &str, options: &GlobalOptions) -> i32 {
         "opening OpenWork on wally's profile in {}",
         profile.root.to_string_lossy()
     ));
-    let status = start(app, &environment);
+    let log = profile.root.join("openwork.log");
+    let status = start(app, &environment, &log);
+    if status != 0 {
+        out::status_line(&format!(
+            "OpenWork exited with {status}; its output is in {}",
+            log.to_string_lossy()
+        ));
+    }
     if let Some(endpoint) = &endpoint {
         harness::release(endpoint);
     }
@@ -205,16 +219,38 @@ fn run(app: &OpenWorkApp, model: &str, options: &GlobalOptions) -> i32 {
 
 /// Starts `app` on `environment` and waits for it. Only the child gets the
 /// environment; this process's own is left as it was. The app's console
-/// chatter is dropped: OpenWork keeps its own logs in the profile.
-fn start(app: &OpenWorkApp, environment: &[(String, String)]) -> i32 {
+/// output goes to `log`, so it does not flood the terminal and a failed
+/// start can still be diagnosed.
+fn start(app: &OpenWorkApp, environment: &[(String, String)], log: &Path) -> i32 {
+    if matches!(app, OpenWorkApp::Bundle(_)) && !cfg!(target_os = "macos") {
+        out::error_line("an OpenWork .app bundle only runs on macOS");
+        return 1;
+    }
+    let output = match std::fs::File::create(log) {
+        Ok(file) => file,
+        Err(error) => {
+            out::error_line(&format!(
+                "could not create {} ({error})",
+                log.to_string_lossy()
+            ));
+            return 1;
+        }
+    };
+    let errors = match output.try_clone() {
+        Ok(file) => file,
+        Err(error) => {
+            out::error_line(&format!("could not open OpenWork's log ({error})"));
+            return 1;
+        }
+    };
     // Ctrl-C reaches the app from the terminal and it quits; wally waits for
     // that, so the local server outlives it.
     let _wait = crate::util::interrupt::on_interrupt(|| {});
     match std::process::Command::new(harness::program(app))
         .envs(environment.iter().map(|(k, v)| (k, v)))
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(output)
+        .stderr(errors)
         .status()
     {
         Ok(status) => status.code().unwrap_or(1),
