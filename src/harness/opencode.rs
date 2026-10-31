@@ -6,7 +6,7 @@ use crate::account::{self, ConsoleClient};
 use crate::io::json::dump;
 use crate::io::output as out;
 
-use super::catalog_models::{catalog_models_with, CatalogModel};
+use super::catalog_models::{catalog_models_with, output_limit, CatalogModel};
 use super::declared_harness::{harness_header_value, DeclaredHarness, HARNESS_HEADER};
 use super::harness::{
     model_id_is_safe, refresh_and_recheck_model, report_cloud_session_invalid,
@@ -302,13 +302,9 @@ pub fn open_code_provider(
         // fire at the model's actual window instead of a wrong default
         // (which makes it nag to compact and never stop). Output is a sane
         // cap, never the whole context — opencode's own docs warn against
-        // that.
-        if model.context_window > 0 {
-            let output = if model.max_output > 0 {
-                model.max_output
-            } else {
-                model.context_window.min(65536)
-            };
+        // that. It becomes opencode's `max_tokens`, the whole budget for
+        // thinking and answer (`output_limit`).
+        if let Some(output) = output_limit(model, 65536) {
             entry["limit"] = json!({ "context": model.context_window, "output": output });
         }
         // Image input exactly where the catalog lists it. opencode 1.18 reads

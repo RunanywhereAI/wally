@@ -11,7 +11,7 @@ use crate::bootstrap::GlobalOptions;
 use crate::io::json::{dump, dump_pretty};
 use crate::io::output as out;
 
-use super::catalog_models::{catalog_models_for, CatalogModel};
+use super::catalog_models::{catalog_models_for, output_limit, CatalogModel};
 use super::declared_harness::{harness_header_value, DeclaredHarness, HARNESS_HEADER};
 use super::harness::{launch, release, resolve, Endpoint};
 
@@ -21,6 +21,13 @@ pub enum Handoff {
     /// extra request headers only from `config.yaml`, never the environment.
     /// Wally does not write those headers. It does set `model.supports_vision`
     /// in that file, because Hermes reads vision from there and from nowhere else.
+    ///
+    /// Nor does wally write an output limit for Hermes. Its requests follow the
+    /// plain API rule, which is the same rule every harness gets: whatever
+    /// `max_tokens` Hermes sends is the hard total, thinking included, and a
+    /// request naming none gets the model's default. Writing a `max_tokens`
+    /// into `config.yaml` is an option only once Hermes is shown to read it
+    /// from there.
     CustomEndpointEnvironment,
     ConfigFile,
     PatchOverlay,
@@ -1097,13 +1104,11 @@ pub fn build_open_claw_config(
         if model.context_window > 0 {
             entry["contextWindow"] = json!(model.context_window);
             // OpenClaw wants a maxTokens beside the window; without one it
-            // budgets the session against a cap it invented.
-            let max_tokens = if model.max_output > 0 {
-                model.max_output
-            } else {
-                model.context_window.min(65536)
-            };
-            entry["maxTokens"] = json!(max_tokens);
+            // budgets the session against a cap it invented. It is the whole
+            // budget for thinking and answer (`output_limit`).
+            if let Some(max_tokens) = output_limit(model, 65536) {
+                entry["maxTokens"] = json!(max_tokens);
+            }
         }
         if model.input_per_mtok > 0 || model.output_per_mtok > 0 {
             // Per-million-token rates, in whole currency units. The catalog
@@ -1202,12 +1207,9 @@ pub fn build_deep_seek_llm_config(
         });
         if model.context_window > 0 {
             entry["contextWindow"] = json!(model.context_window);
-            let max_tokens = if model.max_output > 0 {
-                model.max_output
-            } else {
-                model.context_window.min(32768)
-            };
-            entry["maxTokens"] = json!(max_tokens);
+            if let Some(max_tokens) = output_limit(model, 32768) {
+                entry["maxTokens"] = json!(max_tokens);
+            }
         }
         if let Some(efforts) = deep_seek_reasoning_efforts(model) {
             entry["reasoningEfforts"] = efforts;
@@ -1345,12 +1347,9 @@ pub fn build_prime_agent_models_config(
         });
         if model.context_window > 0 {
             entry["contextWindow"] = json!(model.context_window);
-            let max_tokens = if model.max_output > 0 {
-                model.max_output
-            } else {
-                model.context_window.min(65536)
-            };
-            entry["maxTokens"] = json!(max_tokens);
+            if let Some(max_tokens) = output_limit(model, 65536) {
+                entry["maxTokens"] = json!(max_tokens);
+            }
         }
         if model.input_per_mtok > 0 || model.output_per_mtok > 0 {
             const PER_MICRO: f64 = 1.0 / 1_000_000.0;

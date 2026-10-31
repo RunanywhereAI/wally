@@ -761,6 +761,14 @@ pub fn request_to_openai(anthropic: &Value, model: &str) -> Value {
     }
     openai.insert("messages".into(), Value::Array(messages));
 
+    // One limit, copied as is. Anthropic's `max_tokens` counts thinking (its
+    // thinking budget must fit inside it) and so does the gateway's: a hard
+    // total of everything the model generates, with no server allowance on
+    // top. `thinking.budget_tokens` has no gateway field and is dropped; only
+    // `thinking.type: disabled` crosses, as `reasoning_effort: none`. So a
+    // model that thinks by default may spend all of `max_tokens` thinking
+    // (deepseek-v4.1-flash was seen at 24,426 of 32,000). Mapping
+    // `budget_tokens` onto a `reasoning_effort` level is possible later.
     if let Some(max_tokens) = anthropic.get("max_tokens") {
         openai.insert("max_tokens".into(), max_tokens.clone());
     }
@@ -1744,6 +1752,32 @@ mod tests {
         assert!(request_to_openai(&base, "m")
             .get("reasoning_effort")
             .is_none());
+    }
+
+    /// Anthropic's `max_tokens` already includes thinking (the thinking budget
+    /// must fit inside it), which is what the gateway's `max_tokens` means
+    /// too, so it crosses 1:1 and is the whole budget. `budget_tokens` has no
+    /// gateway field and is not sent, and nothing is added to make room for
+    /// thinking: no `max_completion_tokens`, no second limit.
+    #[test]
+    fn max_tokens_crosses_as_the_whole_budget_and_budget_tokens_is_not_sent() {
+        let request = json!({
+            "max_tokens": 32_000,
+            "thinking": {"type": "enabled", "budget_tokens": 24_000},
+            "messages": [{"role": "user", "content": "hi"}],
+        });
+        let body = request_to_openai(&request, "deepseek-v4.1-flash");
+        assert_eq!(body["max_tokens"], 32_000);
+        assert!(body.get("max_completion_tokens").is_none(), "{body}");
+        assert!(!body.to_string().contains("budget_tokens"), "{body}");
+        assert!(body.get("reasoning_effort").is_none(), "{body}");
+
+        // No limit asked, none sent: the gateway applies the model default.
+        let unbounded = request_to_openai(
+            &json!({"messages": [{"role": "user", "content": "hi"}]}),
+            "deepseek-v4.1-flash",
+        );
+        assert!(unbounded.get("max_tokens").is_none(), "{unbounded}");
     }
 
     #[test]
