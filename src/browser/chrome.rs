@@ -122,7 +122,7 @@ fn listening(port: u16) -> bool {
 /// GET `{origin}/json/version`.
 fn version(origin: &str) -> Option<Value> {
     let config = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_millis(500)))
+        .timeout_global(Some(Duration::from_millis(1000)))
         .build();
     let agent = ureq::Agent::new_with_config(config);
     let text = agent
@@ -139,9 +139,20 @@ fn version(origin: &str) -> Option<Value> {
 pub fn devtools_socket(mode: &ChromeMode) -> Result<String, String> {
     match mode {
         ChromeMode::Attach(origin) => {
-            let reply = version(origin).ok_or_else(|| {
-                format!("no Chrome answered at {origin}; start it with --remote-debugging-port")
-            })?;
+            // A Chrome that has only just started writes its port a moment
+            // before it answers on it.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let reply = loop {
+                if let Some(reply) = version(origin) {
+                    break reply;
+                }
+                if Instant::now() >= deadline {
+                    return Err(format!(
+                        "no Chrome answered at {origin}; start it with --remote-debugging-port"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            };
             reply
                 .get("webSocketDebuggerUrl")
                 .and_then(Value::as_str)
