@@ -122,7 +122,7 @@ fn listening(port: u16) -> bool {
 /// GET `{origin}/json/version`.
 fn version(origin: &str) -> Option<Value> {
     let config = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_millis(1000)))
+        .timeout_global(Some(Duration::from_secs(3)))
         .build();
     let agent = ureq::Agent::new_with_config(config);
     let text = agent

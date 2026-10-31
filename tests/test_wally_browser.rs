@@ -50,9 +50,14 @@ fn browse(site: &Site, chrome: &Chrome, path: &str, goal: &str, extra: &[&str]) 
     ];
     // run_wally_env starts from an empty environment, and Windows sockets do
     // not initialise without SystemRoot: every connection to the test Chrome
-    // and the fake gateway would fail before it is made.
-    if let Some(root) = std::env::var_os("SystemRoot") {
-        env.push(("SystemRoot", root.to_string_lossy().into_owned()));
+    // and the fake gateway would fail before it is made. USERPROFILE stays the
+    // temp home run_wally_env sets.
+    if cfg!(windows) {
+        for name in ["SystemRoot", "WINDIR", "TEMP", "TMP", "LOCALAPPDATA"] {
+            if let Some(value) = std::env::var_os(name) {
+                env.push((name, value.to_string_lossy().into_owned()));
+            }
+        }
     }
     let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let (code, stdout, stderr) = run_wally_env(&home, &args, &env);
