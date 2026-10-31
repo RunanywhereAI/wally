@@ -99,9 +99,7 @@ pub fn parse_request(flags: &Flags) -> Result<Request, String> {
         ("dedicated", None) => ChromeMode::Dedicated,
         ("dedicated", Some(_)) => return Err("--cdp-url goes with --chrome attach".into()),
         ("attach", Some(url)) => ChromeMode::Attach(loopback_devtools_url(url)?),
-        ("attach", None) => {
-            return Err("--chrome attach needs --cdp-url, e.g. http://127.0.0.1:9222".into())
-        }
+        ("attach", None) => ChromeMode::Personal,
         (other, _) => return Err(format!("--chrome must be dedicated or attach, not {other}")),
     };
     Ok(Request {
@@ -203,12 +201,12 @@ pub fn register_browser_use(app: &mut App) {
     cmd.add_option(
         "--chrome",
         ValueType::Text,
-        "dedicated (a Wally browser profile, default) or attach (your running Chrome)",
+        "dedicated (a Wally browser profile, default) or attach (your own Chrome, with remote debugging on at chrome://inspect)",
     );
     cmd.add_option(
         "--cdp-url",
         ValueType::Text,
-        "With --chrome attach: the running Chrome's DevTools URL on this machine",
+        "With --chrome attach: a Chrome started with --remote-debugging-port, e.g. http://127.0.0.1:9222",
     );
     cmd.add_option(
         "--max-steps",
@@ -364,8 +362,9 @@ mod tests {
     }
 
     #[test]
-    fn attach_without_a_cdp_url_is_a_usage_error() {
-        assert!(parse(&["book"], |f| f.chrome = Some("attach")).is_err());
+    fn attach_without_a_cdp_url_uses_the_persons_own_chrome() {
+        let request = parse(&["book"], |f| f.chrome = Some("attach")).unwrap();
+        assert_eq!(request.chrome, ChromeMode::Personal);
     }
 
     #[test]

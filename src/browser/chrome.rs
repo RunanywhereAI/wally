@@ -15,7 +15,44 @@ pub const DEDICATED_PORT: u16 = 9334;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChromeMode {
     Dedicated,
+    /// A Chrome started with `--remote-debugging-port`, at this origin.
     Attach(String),
+    /// The person's everyday Chrome, with remote debugging turned on at
+    /// chrome://inspect/#remote-debugging. Since Chrome 136 the port flag is
+    /// ignored on the default profile; this toggle is the supported route.
+    /// It serves a WebSocket only (no /json/version), named in the profile's
+    /// DevToolsActivePort file, and Chrome asks the person to allow each
+    /// connection.
+    Personal,
+}
+
+/// Chrome's default profile folder, where DevToolsActivePort appears.
+pub fn personal_profile_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "macos") {
+        let home = crate::util::getenv("HOME")?;
+        Some(PathBuf::from(home).join("Library/Application Support/Google/Chrome"))
+    } else if cfg!(windows) {
+        let local = crate::util::getenv("LOCALAPPDATA")?;
+        Some(
+            PathBuf::from(local)
+                .join("Google")
+                .join("Chrome")
+                .join("User Data"),
+        )
+    } else {
+        let home = crate::util::getenv("HOME")?;
+        Some(PathBuf::from(home).join(".config/google-chrome"))
+    }
+}
+
+/// The browser WebSocket named by a DevToolsActivePort file: the port on the
+/// first line, the browser path on the second.
+pub fn socket_from_active_port(contents: &str) -> Option<String> {
+    let mut lines = contents.lines();
+    let port: u16 = lines.next()?.trim().parse().ok()?;
+    let path = lines.next()?.trim();
+    path.starts_with("/devtools/browser/")
+        .then(|| format!("ws://127.0.0.1:{port}{path}"))
 }
 
 /// `--cdp-url` accepted only on loopback: DevTools has no authentication, and
@@ -112,6 +149,16 @@ pub fn devtools_socket(mode: &ChromeMode) -> Result<String, String> {
                 .ok_or_else(|| format!("{origin} answered, but not as Chrome DevTools"))
         }
         ChromeMode::Dedicated => dedicated(),
+        ChromeMode::Personal => {
+            let file = personal_profile_dir()
+                .ok_or("could not find Chrome's profile folder")?
+                .join("DevToolsActivePort");
+            let turn_on = "turn on remote debugging at chrome://inspect/#remote-debugging in your \
+                           Chrome, then run this again";
+            let contents = std::fs::read_to_string(&file).map_err(|_| turn_on.to_string())?;
+            socket_from_active_port(&contents)
+                .ok_or_else(|| format!("{} is not a DevTools port file; {turn_on}", file.display()))
+        }
     }
 }
 
@@ -219,5 +266,24 @@ mod tests {
     #[test]
     fn the_dedicated_profile_lives_under_the_cache() {
         assert!(profile_dir().ends_with(".cache/wally-browser/chrome"));
+    }
+
+    #[test]
+    fn an_active_port_file_names_the_browser_socket() {
+        let socket = socket_from_active_port("9222\n/devtools/browser/abc-123\n");
+        assert_eq!(
+            socket.as_deref(),
+            Some("ws://127.0.0.1:9222/devtools/browser/abc-123")
+        );
+    }
+
+    #[test]
+    fn a_malformed_active_port_file_names_nothing() {
+        assert_eq!(
+            socket_from_active_port("not a port\n/devtools/browser/x"),
+            None
+        );
+        assert_eq!(socket_from_active_port("9222\n/etc/passwd"), None);
+        assert_eq!(socket_from_active_port("9222"), None);
     }
 }

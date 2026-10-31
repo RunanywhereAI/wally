@@ -586,6 +586,9 @@ pub struct Options {
 
 /// Runs the task to done, blocked, or an error, and returns the exit code.
 pub fn run(options: Options, gateway: Gateway) -> i32 {
+    if options.chrome == ChromeMode::Personal {
+        out::status_line("browser-use: allow the connection in your Chrome when it asks");
+    }
     let socket = match chrome::devtools_socket(&options.chrome)
         .and_then(|url| cdp::Socket::connect(&url).map_err(|error| error.to_string()))
     {
