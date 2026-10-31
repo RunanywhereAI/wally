@@ -211,6 +211,8 @@ pub struct Agent<B: Browser, M: Models> {
     max_steps: usize,
     pending_text: Option<(String, String, TextHelper)>,
     started: Option<Instant>,
+    /// Why a guard ended the run, for the person to read.
+    pub stop_reason: Option<String>,
 }
 
 impl<B: Browser, M: Models> Agent<B, M> {
@@ -234,6 +236,7 @@ impl<B: Browser, M: Models> Agent<B, M> {
             max_steps,
             pending_text: None,
             started: None,
+            stop_reason: None,
         })
     }
 
@@ -309,8 +312,12 @@ impl<B: Browser, M: Models> Agent<B, M> {
                 decision.choice
             ))
         })?;
-        if guards::refuses(&action, &page.text) {
+        if guards::refuses_on(&action, &page) {
             self.status = Status::Blocked;
+            self.stop_reason = Some(format!(
+                "refused {:?}: it would pay, place an order, or send a card or password",
+                action.label
+            ));
             return Ok(());
         }
         if let Some(reason) = repeats_unchanged(&self.history, &action, None) {
@@ -702,6 +709,9 @@ pub fn run(options: Options, gateway: Gateway) -> i32 {
             0
         }
         Ok(()) => {
+            if let Some(reason) = &agent.stop_reason {
+                out::error_line(&format!("browser-use stopped: {reason}"));
+            }
             println!("Stopped. The page stays open.");
             println!("{}", agent.page.url);
             1
@@ -724,6 +734,7 @@ mod tests {
             page_key: serde_json::Value::Null,
             guards: serde_json::Value::Null,
             fingerprint: fingerprint.into(),
+            payment_fields: false,
         }
     }
 
@@ -853,6 +864,11 @@ mod tests {
         agent.tick().unwrap();
         assert_eq!(agent.status, Status::Blocked);
         assert!(agent.browser.acted.is_empty());
+        assert!(agent
+            .stop_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("Pay ₹4,532"));
     }
 
     #[test]

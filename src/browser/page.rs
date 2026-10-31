@@ -18,6 +18,7 @@ const HIT_TEST_JS: &str = include_str!("js/hit_test.js");
 const GUARD_READ_JS: &str = include_str!("js/guard_read.js");
 const FOCUS_CHECK_JS: &str = include_str!("js/focus_check.js");
 const SELECT_TEXT_JS: &str = include_str!("js/select_text.js");
+const SET_VALUE_JS: &str = include_str!("js/set_value.js");
 const VIEWPORT: (u32, u32) = (1120, 780);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -64,6 +65,18 @@ pub struct Action {
     /// That link's absolute URL, to tell the tab it opens from others.
     #[serde(default)]
     pub link: Option<String>,
+    /// Where a scroll's wheel goes: over an inner scroll container's middle.
+    #[serde(default)]
+    pub point: Option<[f64; 2]>,
+    /// A native date or time input's type: its value is set in code.
+    #[serde(default)]
+    pub input_type: Option<String>,
+    /// A button or input that submits its form.
+    #[serde(default)]
+    pub submits: Option<bool>,
+    /// Its form holds a card, one-time-code or password field.
+    #[serde(default)]
+    pub form_has_card: Option<bool>,
 }
 
 /// One read of the page. `marker`, `page_key` and `guards` are compared, never
@@ -78,6 +91,8 @@ pub struct Observation {
     pub page_key: Value,
     pub guards: Value,
     pub fingerprint: String,
+    /// A card, one-time-code or password field is visible on the page.
+    pub payment_fields: bool,
 }
 
 #[derive(Deserialize)]
@@ -89,6 +104,8 @@ struct Snapshot {
     marker: Value,
     page_key: Value,
     guards: Value,
+    #[serde(default)]
+    payment_fields: bool,
 }
 
 impl Observation {
@@ -104,6 +121,7 @@ impl Observation {
             page_key: snapshot.page_key,
             guards: snapshot.guards,
             fingerprint: fingerprint(raw),
+            payment_fields: snapshot.payment_fields,
         })
     }
 
@@ -274,6 +292,15 @@ impl<W: Wire> CdpBrowser<W> {
         self.target = Some(target);
         self.after_input = None;
         self.prepare_tab()?;
+        // A new tab starts on about:blank, already "complete"; wait for it to
+        // start loading the page it was opened for.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            match self.evaluate("location.href") {
+                Ok(Value::String(url)) if url != "about:blank" => break,
+                _ => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
         self.wait_loaded();
         self.known_tabs = self.page_tabs()?.into_iter().map(|(id, _, _)| id).collect();
         Ok(())
@@ -393,9 +420,33 @@ impl<W: Wire> Browser for CdpBrowser<W> {
             ActionKind::Scroll => {
                 self.call(
                     "Input.dispatchMouseEvent",
-                    json!({"type": "mouseWheel", "x": 550, "y": 650, "deltaX": 0,
+                    json!({"type": "mouseWheel", "x": action.point.map_or(550.0, |p| p[0]),
+                           "y": action.point.map_or(650.0, |p| p[1]), "deltaX": 0,
                            "deltaY": action.delta.unwrap_or(0)}),
                 )?;
+            }
+            ActionKind::Fill if action.input_type.is_some() => {
+                // A native date or time picker takes no typed keys: the value is
+                // set in code, in the input's own format, or not at all.
+                let kind = action.input_type.as_deref().unwrap_or("");
+                let value = text.unwrap_or("");
+                if !date_value_fits(kind, value) {
+                    return Err(StepError::Model(format!(
+                        "{value:?} is not a {kind} value ({}); nothing typed",
+                        date_format(kind)
+                    )));
+                }
+                let node = action.node.unwrap_or_default();
+                let kept = self.evaluate(&format!(
+                    "{}({})",
+                    SET_VALUE_JS.trim_end(),
+                    json!([node, value])
+                ))?;
+                if kept != Value::Bool(true) {
+                    return Err(StepError::Browser(format!(
+                        "the {kind} input did not take {value:?}"
+                    )));
+                }
             }
             ActionKind::Click | ActionKind::Fill | ActionKind::Select => {
                 if action.node.is_none() {
@@ -496,6 +547,62 @@ pub fn focus_refusal(label: &str, focus: &Value) -> Option<String> {
             focused.label
         )
     })
+}
+
+/// The format a native date or time input's value takes.
+pub fn date_format(kind: &str) -> &'static str {
+    match kind {
+        "date" => "YYYY-MM-DD",
+        "time" => "HH:MM",
+        "month" => "YYYY-MM",
+        "week" => "YYYY-Www",
+        "datetime-local" => "YYYY-MM-DDTHH:MM",
+        _ => "",
+    }
+}
+
+/// `value` is in `kind`'s format, with digits in range.
+pub fn date_value_fits(kind: &str, value: &str) -> bool {
+    let number = |part: &str, low: u32, high: u32| {
+        part.chars().all(|c| c.is_ascii_digit())
+            && !part.is_empty()
+            && part.parse::<u32>().is_ok_and(|n| (low..=high).contains(&n))
+    };
+    let date = |v: &str| {
+        let parts: Vec<&str> = v.split('-').collect();
+        parts.len() == 3
+            && parts[0].len() == 4
+            && number(parts[0], 1, 9999)
+            && parts[1].len() == 2
+            && number(parts[1], 1, 12)
+            && parts[2].len() == 2
+            && number(parts[2], 1, 31)
+    };
+    let time = |v: &str| {
+        let parts: Vec<&str> = v.split(':').collect();
+        (parts.len() == 2 || parts.len() == 3)
+            && parts[0].len() == 2
+            && number(parts[0], 0, 23)
+            && parts[1].len() == 2
+            && number(parts[1], 0, 59)
+            && parts
+                .get(2)
+                .is_none_or(|s| s.len() == 2 && number(s, 0, 59))
+    };
+    match kind {
+        "date" => date(value),
+        "time" => time(value),
+        "month" => value.split_once('-').is_some_and(|(y, m)| {
+            y.len() == 4 && number(y, 1, 9999) && m.len() == 2 && number(m, 1, 12)
+        }),
+        "week" => value.split_once("-W").is_some_and(|(y, w)| {
+            y.len() == 4 && number(y, 1, 9999) && w.len() == 2 && number(w, 1, 53)
+        }),
+        "datetime-local" => value
+            .split_once('T')
+            .is_some_and(|(d, t)| date(d) && time(t)),
+        _ => false,
+    }
 }
 
 /// `scheme://host[:port]` of a URL, the part a redirect keeps.
@@ -633,5 +740,19 @@ mod tests {
             origin_of("https://mail.google.com/")
         );
         assert_eq!(origin_of("about:blank"), None);
+    }
+
+    #[test]
+    fn date_values_must_fit_the_inputs_format() {
+        assert!(date_value_fits("date", "2026-11-20"));
+        assert!(!date_value_fits("date", "20/11/2026"));
+        assert!(!date_value_fits("date", "2026-13-01"));
+        assert!(date_value_fits("time", "07:30"));
+        assert!(!date_value_fits("time", "7:30 pm"));
+        assert!(date_value_fits("month", "2026-11"));
+        assert!(date_value_fits("week", "2026-W47"));
+        assert!(date_value_fits("datetime-local", "2026-11-20T07:30"));
+        assert!(!date_value_fits("datetime-local", "2026-11-20 07:30"));
+        assert!(!date_value_fits("color", "#ffffff"));
     }
 }

@@ -119,6 +119,15 @@
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
   cache.name=name;
+  // Native date and time pickers take no typed keys; their value is set in
+  // code from what the text model writes in the field's format.
+  const DATE_TYPES=['date','time','month','week','datetime-local'];
+  // A field that takes a card, a one-time code or a password. A form holding
+  // one is a payment or sign-in form in any language.
+  const secret = f => f.type==='password' ||
+    (f.getAttribute('autocomplete')||'').toLowerCase().split(/\s+/)
+      .some(t=>t.startsWith('cc-') || ['one-time-code','current-password','new-password'].includes(t));
+  const holdsSecrets = form => !!form && [...form.querySelectorAll('input,select,textarea')].some(secret);
   const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',
     'menuitemcheckbox','option','treeitem','gridcell','combobox','textbox','searchbox','spinbutton'];
   const selector='a[href],button,input,textarea,select,summary,[contenteditable="true"],'+
@@ -135,6 +144,7 @@
       if (['button','submit','reset','image'].includes(e.type)) return 'button';
       if (e.type==='search') return 'searchbox';
       if (e.type==='number') return 'spinbutton';
+      if (DATE_TYPES.includes(e.type)) return 'textbox';
       if (['text','email','url','tel'].includes(e.type)) return 'textbox';
     }
     if (cache.generic?.has(e)) return 'button';
@@ -165,9 +175,49 @@
     if (!label || label.length>200) continue;
     cache.generic.add(e); generic++;
   }
+  // The main scroll container when the document itself does not scroll (many
+  // app-style pages scroll an inner div): the largest one covering at least
+  // 40% of the viewport.
+  cache.scroller=()=>{
+    let best=null, area=0;
+    for (const e of document.querySelectorAll('*')) {
+      if (e.scrollHeight<=e.clientHeight+2) continue;
+      if (!/(auto|scroll|overlay)/.test(getComputedStyle(e).overflowY)) continue;
+      const r=e.getBoundingClientRect();
+      const a=Math.max(0,Math.min(r.right,innerWidth)-Math.max(r.left,0))*
+        Math.max(0,Math.min(r.bottom,innerHeight)-Math.max(r.top,0));
+      if (a>area) { area=a; best=e; }
+    }
+    return area>=innerWidth*innerHeight*0.4 ? best : null;
+  };
+  // Button-shaped boxes: a box 28-64 px tall and at most 400 px wide whose only
+  // text is one short label (four words or fewer), drawn with a background or
+  // border. React-style apps (Flipkart's "Add to cart") give such a box no role,
+  // no pointer cursor and no handler the page can see.
+  const MAX_SHAPED=80;
+  let shaped=0;
+  const painted = c => c.backgroundColor!=='rgba(0, 0, 0, 0)' || parseFloat(c.borderTopWidth)>0 ||
+    parseFloat(c.borderBottomWidth)>0 || c.boxShadow!=='none';
+  for (const leaf of all(roots,'div,span,p')) {
+    if (shaped>=MAX_SHAPED) break;
+    if (leaf.childElementCount!==0) continue;
+    const words=(leaf.textContent||'').trim().split(/\s+/).filter(Boolean);
+    if (!words.length || words.length>4) continue;
+    if (cache.closest(leaf,selector) || cache.generic.has(leaf)) continue;
+    let box=null;
+    for (let p=leaf, k=0; p && p.nodeType===1 && k<9; p=up(p), k++) {
+      const r=p.getBoundingClientRect();
+      if (r.height>64 || r.width>400) break;
+      if (r.height>=28 && r.width>=60 && painted(p.ownerDocument.defaultView.getComputedStyle(p))) { box=p; break; }
+    }
+    if (!box || cache.generic.has(box) || box.querySelector(selector)) continue;
+    if ((box.textContent||'').trim()!==(leaf.textContent||'').trim()) continue;
+    cache.generic.add(box); shaped++;
+  }
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
     all(cache.roots(),'input,textarea,select').filter(safe)
-      .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly])];
+      .map(e=>[identity(e),e.value,e.checked,e.selectedIndex,e.disabled,e.readOnly]),
+    cache.scroller()?.scrollTop ?? 0];
   cache.guard=e=>{
     if (!e?.isConnected || !visible(e)) return null;
     const scope=cache.closest(e,'form,dialog,[role="dialog"],article,li,tr,[role="row"]') || up(e);
@@ -192,6 +242,11 @@
     // named target ("_self", "_top" and "_parent" stay in this one).
     const link=cache.closest(e,'a[href]'), aim=(link?.target||'').trim().toLowerCase();
     if (link && aim && !['_self','_top','_parent'].includes(aim)) { base.opens_tab=true; base.link=link.href; }
+    if (e.tagName==='INPUT' && DATE_TYPES.includes(e.type)) base.input_type=e.type;
+    const form=e.form || cache.closest(e,'form');
+    if ((e.tagName==='BUTTON' && (e.getAttribute('type')||'submit').toLowerCase()==='submit' && form) ||
+        (e.tagName==='INPUT' && ['submit','image'].includes(e.type))) base.submits=true;
+    if (holdsSecrets(form)) base.form_has_card=true;
     // The guards read this to tell a card or password field from an address one.
     const autocomplete=e.getAttribute('autocomplete');
     if (autocomplete) base.autocomplete=autocomplete;
@@ -211,7 +266,7 @@
       const value='value' in e ? String(e.value) :
         e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
       actions.push({...base,kind:editable?'fill':'click',value});
-      if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
+      if (editable && !base.input_type) actions.push({...base,kind:'click',value,label:'Open '+base.label});
     }
   }
   const words=[]; let length=0;
@@ -241,13 +296,25 @@
   // Compare meaning and identity. Geometry is always resolved and hit-tested just before input.
   const semantics=actions.map(({rect,...action})=>action);
   const marker=[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
-    document.title,text,semantics,page_key[6]];
+    document.title,text,semantics,page_key[6],page_key[7]];
   const omitted_actions=Math.max(0,actions.length-250);
   actions.splice(250);
   actions.forEach((a,i)=>a.id='e'+(i+1));
-  if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
-  if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
+  const inner=scrollY+innerHeight<height-2 || scrollY>0 ? null : cache.scroller();
+  if (inner) {
+    // Scroll the inner container: the wheel goes over its visible middle.
+    const r=inner.getBoundingClientRect();
+    const point=[Math.round((Math.max(r.left,0)+Math.min(r.right,innerWidth))/2),
+      Math.round((Math.max(r.top,0)+Math.min(r.bottom,innerHeight))/2)];
+    if (inner.scrollTop+inner.clientHeight<inner.scrollHeight-2)
+      actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560,point});
+    if (inner.scrollTop>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560,point});
+  } else {
+    if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
+    if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
+  }
   actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
-  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
-    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
+  const payment_fields=all(roots,'input,select,textarea').some(f=>secret(f) && visible(f));
+  return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,payment_fields,
+    scroll:{y:scrollY,height,inner:inner?.scrollTop ?? 0},actions,marker,page_key,guards,omitted_actions};
 })()

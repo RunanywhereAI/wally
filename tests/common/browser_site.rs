@@ -263,6 +263,55 @@ customElements.define('shop-item', class extends HTMLElement {
 <script>card.onload=()=>beacon('frame=loaded');card.src='__ALT__'+'/probe/card-frame';
 fullname.addEventListener('keydown',()=>card.focus())</script>"#
         }
+        "/p/date" => {
+            r#"<title>Dates</title>
+<label>Departure date <input type=date aria-label="Departure date" onchange="beacon('date='+this.value)"></label>"#
+        }
+        "/p/datetime" => {
+            r#"<title>Pickup</title>
+<label>Pickup time <input type=datetime-local aria-label="Pickup time" onchange="beacon('pickup='+encodeURIComponent(this.value))"></label>"#
+        }
+        "/probe/german-checkout" => {
+            r#"<title>Kasse</title><p>Gesamtsumme 49,99 €</p>
+<form onsubmit="beacon('paid=1');return false">
+  <label>Kartennummer <input autocomplete="cc-number" aria-label="Kartennummer"></label>
+  <button>Zahlungspflichtig bestellen</button>
+</form>"#
+        }
+        "/p/inner-scroll" => {
+            r#"<title>App</title>
+<style>html,body{height:100%;margin:0;overflow:hidden}#main{height:100vh;overflow-y:auto}</style>
+<div id=main><p>Top of the app</p><div style="height:2600px"></div>
+<button onclick="beacon('more=1')">Load more</button></div>"#
+        }
+        "/p/slow-new-tab" => {
+            r#"<title>Results</title>
+<button onclick="const w=window.open('about:blank');setTimeout(()=>{w.location='/p/new-tab-target'},700)">Open seat map</button>"#
+        }
+        "/probe/long-pay" => {
+            r#"<title>Review</title><p>Total ₹4,532</p>
+<button onclick="beacon('paid=1')">Pay ₹4,532 now using your saved Visa card ending 4242</button>"#
+        }
+        "/probe/long-place-order" => {
+            r#"<title>Review</title><p>Total ₹4,532</p>
+<button onclick="beacon('paid=1')">Place your order and pay with your saved card ending 4242</button>"#
+        }
+        "/probe/card-expiry" => {
+            r#"<title>Card</title>
+<form><label>Card number <input autocomplete="cc-number" aria-label="Card number"></label>
+<label>Valid thru <input type=month aria-label="Valid thru" onchange="beacon('expiry='+this.value)"></label></form>"#
+        }
+        "/p/shaped-button" => {
+            r#"<title>Bottle</title><p>Milton Thermosteel 1 L · ₹799</p>
+<div style="display:flex;gap:8px">
+ <div style="width:238px;height:44px;background:#ff9f00;display:flex;align-items:center;justify-content:center"
+   onpointerup="beacon('cart=1')"><div><div>Add to cart</div></div></div>
+</div>"#
+        }
+        "/probe/standalone-expiry" => {
+            r#"<title>Card</title><p>Add a card</p>
+<label>Valid thru <input type=month aria-label="Valid thru" onchange="beacon('expiry='+this.value)"></label>"#
+        }
         _ => return None,
     };
     Some(format!("<!doctype html><meta charset=utf-8>{BEACON}{body}"))
@@ -556,6 +605,9 @@ fn field_value(request: &Value) -> String {
         ("message", "Hello"),
         ("quantity", "2"),
         ("full name", "Asha Rao"),
+        ("departure", "2026-11-20"),
+        ("pickup", "2026-11-20T07:30"),
+        ("valid thru", "2029-08"),
     ]
     .iter()
     .find(|(key, _)| label.starts_with(key))

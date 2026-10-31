@@ -636,3 +636,103 @@ fn probe_a_keydown_handler_cannot_pull_text_into_a_cross_origin_card_frame() {
         run.stderr
     );
 }
+
+#[test]
+fn pattern_a_native_date_input_is_set_in_its_own_format() {
+    let (site, run) = pattern!("/p/date", &[want("TYPE_TEXT", "Departure date", "date")]);
+    done(&run);
+    assert_eq!(site.beacons("date"), ["2026-11-20"]);
+}
+
+#[test]
+fn pattern_a_native_datetime_input_is_set_in_its_own_format() {
+    let (site, run) = pattern!("/p/datetime", &[want("TYPE_TEXT", "Pickup time", "pickup")]);
+    done(&run);
+    assert_eq!(site.beacons("pickup"), ["2026-11-20T07:30"]);
+}
+
+#[test]
+fn probe_a_checkout_in_another_language_is_never_submitted() {
+    let (site, run) = pattern!(
+        "/probe/german-checkout",
+        &[want("CLICK", "Zahlungspflichtig bestellen", "paid")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn pattern_a_control_below_the_fold_of_an_inner_scroller_is_reached() {
+    let (site, run) = pattern!("/p/inner-scroll", &[want("CLICK", "Load more", "more")]);
+    done(&run);
+    assert_eq!(site.beacons("more"), ["1"]);
+    assert!(run.stdout.contains("scroll  Scroll down"), "{}", run.stdout);
+}
+
+#[test]
+fn pattern_a_new_tab_that_loads_late_is_read_after_it_loads() {
+    let (site, run) = pattern!(
+        "/p/slow-new-tab",
+        &[
+            want("CLICK", "Open seat map", "tab"),
+            want("CLICK", "Reserve seat 14C", "seat")
+        ]
+    );
+    done(&run);
+    assert_eq!(site.beacons("seat"), ["14C"]);
+}
+
+#[test]
+fn probe_a_long_saved_card_pay_button_is_never_pressed() {
+    let (site, run) = pattern!(
+        "/probe/long-pay",
+        &[want("CLICK", "Pay ₹4,532 now", "paid")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn probe_a_long_place_your_order_and_pay_button_is_never_pressed() {
+    let (site, run) = pattern!(
+        "/probe/long-place-order",
+        &[want("CLICK", "Place your order", "paid")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn probe_an_expiry_month_in_a_card_form_is_never_filled() {
+    let (site, run) = pattern!(
+        "/probe/card-expiry",
+        &[want("TYPE_TEXT", "Valid thru", "expiry")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(
+        site.beacons("expiry").is_empty(),
+        "{:?}",
+        site.beacons("expiry")
+    );
+}
+
+#[test]
+fn pattern_a_button_shaped_box_with_no_role_is_clicked() {
+    let (site, run) = pattern!("/p/shaped-button", &[want("CLICK", "Add to cart", "cart")]);
+    done(&run);
+    assert_eq!(site.beacons("cart"), ["1"]);
+}
+
+#[test]
+fn probe_a_standalone_valid_thru_month_is_never_filled() {
+    let (site, run) = pattern!(
+        "/probe/standalone-expiry",
+        &[want("TYPE_TEXT", "Valid thru", "expiry")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(
+        site.beacons("expiry").is_empty(),
+        "{:?}",
+        site.beacons("expiry")
+    );
+}
