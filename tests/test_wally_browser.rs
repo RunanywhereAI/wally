@@ -722,3 +722,17 @@ fn pattern_a_button_shaped_box_with_no_role_is_clicked() {
     done(&run);
     assert_eq!(site.beacons("cart"), ["1"]);
 }
+
+#[test]
+fn probe_a_standalone_valid_thru_month_is_never_filled() {
+    let (site, run) = pattern!(
+        "/probe/standalone-expiry",
+        &[want("TYPE_TEXT", "Valid thru", "expiry")]
+    );
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(
+        site.beacons("expiry").is_empty(),
+        "{:?}",
+        site.beacons("expiry")
+    );
+}

@@ -306,6 +306,10 @@ fullname.addEventListener('keydown',()=>card.focus())</script>"#
    onpointerup="beacon('cart=1')"><div><div>Add to cart</div></div></div>
 </div>"#
         }
+        "/probe/standalone-expiry" => {
+            r#"<title>Card</title><p>Add a card</p>
+<label>Valid thru <input type=month aria-label="Valid thru" onchange="beacon('expiry='+this.value)"></label>"#
+        }
         _ => return None,
     };
     Some(format!("<!doctype html><meta charset=utf-8>{BEACON}{body}"))

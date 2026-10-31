@@ -67,6 +67,9 @@ const SENSITIVE: &[&str] = &[
     "expiration",
     "security code",
     "net banking",
+    "valid thru",
+    "valid through",
+    "valid till",
 ];
 const POSTAL: &[&str] = &["pincode", "postal"];
 /// A bare label that commits whatever the page around it describes.
@@ -142,6 +145,10 @@ pub fn commits(label: &str) -> bool {
 /// field, or pressing a commit while such a field is on screen.
 pub fn refuses_on(action: &Action, page: &Observation) -> bool {
     if refuses(action, &page.text) {
+        return true;
+    }
+    // A date or month while a card field is on the page is its expiry.
+    if action.kind == ActionKind::Fill && action.input_type.is_some() && page.payment_fields {
         return true;
     }
     if !matches!(action.kind, ActionKind::Click | ActionKind::Select) {
@@ -442,8 +449,24 @@ mod tests {
         expiry.input_type = Some("month".into());
         expiry.form_has_card = Some(true);
         assert!(refuses(&expiry, ""));
-        expiry.form_has_card = None;
-        assert!(!refuses(&expiry, ""));
+        let mut travel = action(ActionKind::Fill, "Travel month", None);
+        travel.input_type = Some("month".into());
+        assert!(!refuses(&travel, ""));
+    }
+
+    #[test]
+    fn a_standalone_valid_thru_month_is_refused() {
+        let mut expiry = action(ActionKind::Fill, "Valid thru", None);
+        expiry.input_type = Some("month".into());
+        assert!(refuses(&expiry, ""));
+    }
+
+    #[test]
+    fn a_date_fill_while_card_fields_are_on_the_page_is_refused() {
+        let mut date = action(ActionKind::Fill, "MM / YY", None);
+        date.input_type = Some("month".into());
+        assert!(refuses_on(&date, &page("", true)));
+        assert!(!refuses_on(&date, &page("", false)));
     }
 
     #[test]
