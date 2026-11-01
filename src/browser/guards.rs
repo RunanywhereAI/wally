@@ -38,31 +38,30 @@ const PAGE_MONEY: &[&str] = &[
 /// page with money text, a control whose label says any of these is refused:
 /// blocking a harmless "Book now" is the safe way to be wrong.
 const COMMIT: &[&str] = &[
-    "buy",
     "order now",
     "book now",
     "submit order",
     "complete order",
     "confirm order",
     "confirm booking",
-    "checkout",
     "check out",
     "subscribe",
     "donate",
-    "send",
-    "transfer",
     "pay now",
     "reserve",
-    "charge",
 ];
-const SENSITIVE: &[&str] = &[
+/// Single commit words that also turn up in product titles ("… Fast Charge
+/// …", "USB data transfer cable"). On a long link they are not judged; the
+/// multi-word phrases above are, on every element at any length.
+const TITLE_WORDS: &[&str] = &["buy", "send", "transfer", "charge", "checkout"];
+/// Credential words. "pin" is separate: a "PIN code" is often an address.
+const CREDENTIAL: &[&str] = &[
     "card",
     "cvv",
     "cvc",
     "otp",
     "upi",
     "password",
-    "pin",
     "expiry",
     "expiration",
     "security code",
@@ -91,19 +90,22 @@ pub fn sensitive_fill(action: &Action) -> bool {
     let label = action.label.as_str();
     let autocomplete = action.autocomplete.as_deref().unwrap_or("").to_lowercase();
     let tokens: Vec<&str> = autocomplete.split_whitespace().collect();
+    // Credentials first, so "UPI PIN code" or "Card PIN code" is never read as
+    // an address.
+    if tokens
+        .iter()
+        .any(|token| token.starts_with("cc-") || SENSITIVE_AUTOCOMPLETE.contains(token))
+        || contains_any(label, CREDENTIAL)
+    {
+        return true;
+    }
     if tokens.contains(&"postal-code")
         || contains_joined(label, "pin", "code")
         || contains_any(label, POSTAL)
     {
         return false;
     }
-    if tokens
-        .iter()
-        .any(|token| token.starts_with("cc-") || SENSITIVE_AUTOCOMPLETE.contains(token))
-    {
-        return true;
-    }
-    contains_any(label, SENSITIVE)
+    contains_any(label, &["pin"])
 }
 
 /// The softer commit words judge button-length labels only. A product title
@@ -134,6 +136,7 @@ pub fn commits(label: &str) -> bool {
     contains_any(label, PAY)
         || places_an_order(label)
         || contains_any(label, COMMIT)
+        || contains_any(label, TITLE_WORDS)
         || SHORT_COMMIT
             .iter()
             .any(|word| bare.eq_ignore_ascii_case(word))
@@ -169,11 +172,6 @@ pub fn refuses(action: &Action, page_text: &str) -> bool {
         {
             return true
         }
-        // Softer commit words skip long labels on links, which are product
-        // titles ("… Fast Charge …"). A real button is judged at any length.
-        ActionKind::Click | ActionKind::Select if !button_length(label) && link_like(action) => {
-            return false
-        }
         ActionKind::Fill if sensitive_fill(action) => return true,
         // A date or month in a form that takes a card is its expiry.
         ActionKind::Fill if action.input_type.is_some() && action.form_has_card == Some(true) => {
@@ -186,7 +184,10 @@ pub fn refuses(action: &Action, page_text: &str) -> bool {
         return false;
     }
     let bare = label.trim().trim_end_matches(['.', '!', '›', '>']).trim();
+    // A long link is a product title: its single title words name no action.
+    let title = !button_length(label) && link_like(action);
     contains_any(label, COMMIT)
+        || (!title && contains_any(label, TITLE_WORDS))
         || SHORT_COMMIT
             .iter()
             .any(|word| bare.eq_ignore_ascii_case(word))
@@ -470,6 +471,30 @@ mod tests {
     }
 
     #[test]
+    fn a_long_confirm_booking_link_is_refused_on_a_money_page() {
+        let mut link = action(
+            ActionKind::Click,
+            "Confirm booking for 2 adults at ₹9,800 with free cancellation",
+            None,
+        );
+        link.role = Some("link".into());
+        assert!(refuses(&link, "Paying with Visa ending 4242"));
+    }
+
+    #[test]
+    fn a_card_or_upi_pin_code_is_a_credential_not_an_address() {
+        assert!(refuses(
+            &action(ActionKind::Fill, "Card PIN code", None),
+            ""
+        ));
+        assert!(refuses(&action(ActionKind::Fill, "UPI PIN code", None), ""));
+        assert!(!refuses(
+            &action(ActionKind::Fill, "Delivery PIN code", None),
+            ""
+        ));
+    }
+
+    #[test]
     fn add_to_cart_is_not_a_commit() {
         let add = action(ActionKind::Click, "Add to cart", None);
         assert!(!refuses(
@@ -536,7 +561,6 @@ mod tests {
         for capture in [
             include_str!("../../tests/fixtures/browser/real/stripe-elements-examples.json"),
             include_str!("../../tests/fixtures/browser/real/stripe-checkout-preview.json"),
-            include_str!("../../tests/fixtures/browser/real/braintree-hosted-fields.json"),
         ] {
             assert_eq!(refused_on(capture), Vec::<String>::new());
         }

@@ -78,14 +78,16 @@ pub fn loopback_devtools_url(url: &str) -> Result<String, String> {
     Ok(format!("http://{authority}"))
 }
 
-pub fn profile_dir() -> PathBuf {
-    let home = crate::util::getenv("HOME")
-        .or_else(|| crate::util::getenv("USERPROFILE"))
-        .unwrap_or_default();
-    PathBuf::from(home)
-        .join(".cache")
-        .join("wally-browser")
-        .join("chrome")
+/// The dedicated profile under the home folder; `None` without one, so it is
+/// never created relative to the working directory.
+pub fn profile_dir() -> Option<PathBuf> {
+    let home = crate::util::getenv("HOME").or_else(|| crate::util::getenv("USERPROFILE"))?;
+    Some(
+        PathBuf::from(home)
+            .join(".cache")
+            .join("wally-browser")
+            .join("chrome"),
+    )
 }
 
 fn chrome_binary() -> Option<PathBuf> {
@@ -177,7 +179,8 @@ fn dedicated() -> Result<String, String> {
     let port = DEDICATED_PORT;
     if !listening(port) {
         let binary = chrome_binary().ok_or("Chrome is not installed.")?;
-        let profile = profile_dir();
+        let profile = profile_dir()
+            .ok_or("no home folder (HOME or USERPROFILE) for the Wally browser profile")?;
         std::fs::create_dir_all(&profile)
             .map_err(|error| format!("could not create {}: {error}", profile.display()))?;
         let mut command = Command::new(binary);
@@ -276,7 +279,7 @@ mod tests {
 
     #[test]
     fn the_dedicated_profile_lives_under_the_cache() {
-        assert!(profile_dir().ends_with(".cache/wally-browser/chrome"));
+        assert!(profile_dir().is_some_and(|dir| dir.ends_with(".cache/wally-browser/chrome")));
     }
 
     #[test]

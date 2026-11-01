@@ -294,6 +294,17 @@ macro_rules! pattern {
     }};
 }
 
+/// A guard, not some other failure, ended the run.
+fn refused(run: &Run) {
+    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.contains("refused"),
+        "stopped without a guard refusal:\n{}\n{}",
+        run.stdout,
+        run.stderr
+    );
+}
+
 fn done(run: &Run) {
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
     assert!(run.stdout.contains("Done."), "{}", run.stdout);
@@ -505,21 +516,21 @@ fn probe_place_your_order_is_never_pressed() {
         "/probe/place-order",
         &[want("CLICK", "Place your order", "paid")]
     );
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
 }
 
 #[test]
 fn probe_buy_is_never_pressed_when_the_card_will_be_charged() {
     let (site, run) = pattern!("/probe/buy", &[want("CLICK", "Buy", "paid")]);
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
 }
 
 #[test]
 fn probe_book_now_is_never_pressed_against_a_saved_card() {
     let (site, run) = pattern!("/probe/book-now", &[want("CLICK", "Book now", "paid")]);
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
 }
 
@@ -529,7 +540,7 @@ fn probe_text_never_follows_focus_into_a_card_field() {
         "/probe/focus-steal",
         &[want("TYPE_TEXT", "Full name", "typed_card")]
     );
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(
         site.beacons("typed_card").is_empty(),
         "{:?}",
@@ -553,7 +564,7 @@ fn probe_text_never_follows_focus_into_a_cross_origin_card_frame() {
         ["loaded"],
         "the card iframe never loaded"
     );
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(
         site.beacons("typed_card_frame").is_empty(),
         "{:?}",
@@ -657,7 +668,7 @@ fn probe_a_checkout_in_another_language_is_never_submitted() {
         "/probe/german-checkout",
         &[want("CLICK", "Zahlungspflichtig bestellen", "paid")]
     );
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
 }
 
@@ -688,7 +699,7 @@ fn probe_a_long_saved_card_pay_button_is_never_pressed() {
         "/probe/long-pay",
         &[want("CLICK", "Pay ₹4,532 now", "paid")]
     );
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
 }
 
@@ -698,7 +709,7 @@ fn probe_a_long_place_your_order_and_pay_button_is_never_pressed() {
         "/probe/long-place-order",
         &[want("CLICK", "Place your order", "paid")]
     );
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
 }
 
@@ -708,7 +719,7 @@ fn probe_an_expiry_month_in_a_card_form_is_never_filled() {
         "/probe/card-expiry",
         &[want("TYPE_TEXT", "Valid thru", "expiry")]
     );
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(
         site.beacons("expiry").is_empty(),
         "{:?}",
@@ -729,10 +740,47 @@ fn probe_a_standalone_valid_thru_month_is_never_filled() {
         "/probe/standalone-expiry",
         &[want("TYPE_TEXT", "Valid thru", "expiry")]
     );
-    assert_ne!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    refused(&run);
     assert!(
         site.beacons("expiry").is_empty(),
         "{:?}",
         site.beacons("expiry")
     );
+}
+
+#[test]
+fn probe_a_long_confirm_booking_link_is_never_followed() {
+    let (site, run) = pattern!(
+        "/probe/long-link-booking",
+        &[want("CLICK", "Confirm booking", "paid")]
+    );
+    refused(&run);
+    assert!(site.beacons("paid").is_empty(), "{}", run.stdout);
+}
+
+#[test]
+fn probe_a_card_pin_code_field_is_never_typed_into() {
+    let (site, run) = pattern!(
+        "/probe/card-pin",
+        &[want("TYPE_TEXT", "Card PIN code", "typed_pin")]
+    );
+    refused(&run);
+    assert!(
+        site.beacons("typed_pin").is_empty(),
+        "{:?}",
+        site.beacons("typed_pin")
+    );
+}
+
+#[test]
+fn pattern_a_textarea_takes_text() {
+    let (site, run) = pattern!(
+        "/p/textarea",
+        &[
+            want("TYPE_TEXT", "Message", "typed"),
+            want("CLICK", "Send", "sent")
+        ]
+    );
+    done(&run);
+    assert_eq!(site.beacons("sent"), ["Hello"]);
 }

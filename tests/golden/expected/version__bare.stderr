@@ -31,6 +31,9 @@ Security tools:
   deepsec                     Scan your own repos with DeepSec
   vvah                        Scan your own repos with VVAH
 
+Browser:
+  browser-use                 Do a web task in Chrome, stopping before payment
+
 Account:
   account login               Sign in through the browser
   account logout              Sign out and revoke the session

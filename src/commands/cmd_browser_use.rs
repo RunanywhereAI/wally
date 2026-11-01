@@ -146,6 +146,14 @@ fn hosted_session(request: &Request) -> Option<Gateway> {
 fn run(request: Request) -> i32 {
     let gateway = match gateway_override() {
         Some(gateway) => gateway,
+        // No RunAnywhere route serves jev-latest: say so before Chrome opens.
+        None if request.decision_model == JEV_MODEL => {
+            out::error_line(
+                "jev-latest is served by another gateway: set WALLY_BROWSER_API_BASE and \
+                 WALLY_BROWSER_API_KEY, or use -m eve",
+            );
+            return 2;
+        }
         None => match hosted_session(&request) {
             Some(gateway) => gateway,
             None => return 1,
@@ -171,7 +179,7 @@ fn run(request: Request) -> i32 {
 pub fn register_browser_use(app: &mut App) {
     let cmd = app.add_subcommand(
         "browser-use",
-        "Do a web task in a browser with eve, stopping at the payment page",
+        "Do a web task in Chrome, stopping before payment",
     );
     cmd.footer(&examples_footer(&[
         Example::new(
@@ -216,7 +224,13 @@ pub fn register_browser_use(app: &mut App) {
     .int_bounds(1, 500);
     cmd.add_option("words", ValueType::Text, "[eve] and what to do")
         .multi();
-    cmd.callback(|p, _options| {
+    cmd.callback(|p, options| {
+        // The run prints one line per step and leaves a browser open; there is
+        // no single JSON document to give.
+        if options.json {
+            out::error_line("browser-use has no --json output");
+            return 2;
+        }
         let words = p.get_strs("words");
         let model = p.get_str("--model");
         let text_model = p.get_str("--text-model");

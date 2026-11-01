@@ -12,7 +12,9 @@
     const ids=(field?.getAttribute('aria-controls')||field?.getAttribute('aria-owns')||'')
       .split(/\s+/).filter(Boolean);
     const home=field?.getRootNode?.() || document;
-    const roots=ids.length ? ids.map(id=>(home.getElementById?.(id))||document.getElementById(id)).filter(Boolean) : [document];
+    // Without aria-controls/owns, look in the field's own tree only, so an
+    // unrelated visible option elsewhere does not end the wait early.
+    const roots=ids.length ? ids.map(id=>(home.getElementById?.(id))||document.getElementById(id)).filter(Boolean) : [home];
     const options=roots.flatMap(root=>[...root.querySelectorAll('[role="option"]')]);
     if (++frames>=2 && (!autocomplete || options.some(e=>{
       const r=e.getBoundingClientRect();

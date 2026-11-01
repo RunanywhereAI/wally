@@ -3,7 +3,8 @@
 // The value's format is checked in Rust first.
 (([node, value]) => {
   const e=window.__jevFast?.nodes.get(node);
-  if (!e || e.tagName!=='INPUT' || e.disabled || e.readOnly) return false;
+  if (!e || e.tagName!=='INPUT' || e.disabled || e.readOnly ||
+      !['date','time','month','week','datetime-local'].includes(e.type)) return false;
   const setter=Object.getOwnPropertyDescriptor(e.ownerDocument.defaultView.HTMLInputElement.prototype,'value').set;
   setter.call(e,value);
   e.dispatchEvent(new Event('input',{bubbles:true}));

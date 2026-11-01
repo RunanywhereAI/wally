@@ -44,10 +44,9 @@ impl Gateway {
             Key::Fixed(key) => Ok(key.clone()),
             Key::Session(credentials) => {
                 if credentials.access_token_expired(account::epoch_seconds(), EXPIRY_SKEW_SECONDS) {
+                    // The console may be busy rather than the session gone: keep its words.
                     crate::harness::refresh_session(&ConsoleClient::default(), credentials)
-                        .map_err(|_| {
-                            "the Wally session expired; run `wally account login`".to_string()
-                        })?;
+                        .map_err(|error| error.message)?;
                 }
                 Ok(credentials.access_token.clone())
             }

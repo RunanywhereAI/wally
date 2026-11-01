@@ -124,6 +124,10 @@ pub fn configure_app(app: &mut App) {
             names: &["models"],
         },
         Section {
+            group: "Browser",
+            names: &["browser-use"],
+        },
+        Section {
             group: "Coding tools",
             names: &[
                 "opencode",

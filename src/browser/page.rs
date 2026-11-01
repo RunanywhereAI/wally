@@ -198,6 +198,7 @@ impl<W: Wire> CdpBrowser<W> {
         };
         browser.prepare_tab()?;
         browser.call("Page.navigate", json!({"url": url}))?;
+        browser.wait_left_blank();
         browser.wait_loaded();
         browser.known_tabs = browser.page_tabs()?.into_iter().map(|tab| tab.0).collect();
         Ok(browser)
@@ -216,6 +217,18 @@ impl<W: Wire> CdpBrowser<W> {
             json!({"enabled": true}),
         )?;
         Ok(())
+    }
+
+    /// A tab starts on about:blank, which already reports "complete": wait up
+    /// to 10 s for it to start loading the page it was sent to.
+    fn wait_left_blank(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            match self.evaluate("location.href") {
+                Ok(Value::String(url)) if url != "about:blank" => break,
+                _ => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
     }
 
     /// Up to 15 s for the document to finish loading.
@@ -292,15 +305,7 @@ impl<W: Wire> CdpBrowser<W> {
         self.target = Some(target);
         self.after_input = None;
         self.prepare_tab()?;
-        // A new tab starts on about:blank, already "complete"; wait for it to
-        // start loading the page it was opened for.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline {
-            match self.evaluate("location.href") {
-                Ok(Value::String(url)) if url != "about:blank" => break,
-                _ => std::thread::sleep(Duration::from_millis(50)),
-            }
-        }
+        self.wait_left_blank();
         self.wait_loaded();
         self.known_tabs = self.page_tabs()?.into_iter().map(|(id, _, _)| id).collect();
         Ok(())
@@ -483,8 +488,9 @@ impl<W: Wire> Browser for CdpBrowser<W> {
                     // page's keydown handler could move focus after the check.
                     let node = action.node.unwrap_or_default();
                     self.evaluate(&format!("{}({node})", SELECT_TEXT_JS.trim_end()))?;
-                    // Nothing runs between this check and the text: it goes only
-                    // to a plain, safe text field, judged as it is now.
+                    // The check runs as the last call before the text, with no input
+                    // event in between. A page task can still run in the gap between
+                    // the two DevTools calls; that window is the known residual.
                     let focus = self.evaluate(&format!("{}({node})", FOCUS_CHECK_JS.trim_end()))?;
                     if let Some(reason) = focus_refusal(&action.label, &focus) {
                         return Err(StepError::Refused(reason));
@@ -570,13 +576,26 @@ pub fn date_value_fits(kind: &str, value: &str) -> bool {
     };
     let date = |v: &str| {
         let parts: Vec<&str> = v.split('-').collect();
-        parts.len() == 3
-            && parts[0].len() == 4
-            && number(parts[0], 1, 9999)
-            && parts[1].len() == 2
-            && number(parts[1], 1, 12)
-            && parts[2].len() == 2
-            && number(parts[2], 1, 31)
+        if parts.len() != 3
+            || parts[0].len() != 4
+            || !number(parts[0], 1, 9999)
+            || parts[1].len() != 2
+            || !number(parts[1], 1, 12)
+            || parts[2].len() != 2
+        {
+            return false;
+        }
+        let year: u32 = parts[0].parse().unwrap_or(0);
+        let month: u32 = parts[1].parse().unwrap_or(0);
+        let leap =
+            (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
+        let days = match month {
+            2 if leap => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            _ => 31,
+        };
+        number(parts[2], 1, days)
     };
     let time = |v: &str| {
         let parts: Vec<&str> = v.split(':').collect();
@@ -747,6 +766,9 @@ mod tests {
         assert!(date_value_fits("date", "2026-11-20"));
         assert!(!date_value_fits("date", "20/11/2026"));
         assert!(!date_value_fits("date", "2026-13-01"));
+        assert!(!date_value_fits("date", "2026-02-31"));
+        assert!(date_value_fits("date", "2028-02-29"));
+        assert!(!date_value_fits("date", "2026-02-29"));
         assert!(date_value_fits("time", "07:30"));
         assert!(!date_value_fits("time", "7:30 pm"));
         assert!(date_value_fits("month", "2026-11"));

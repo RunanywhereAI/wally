@@ -513,7 +513,9 @@ impl Models for HostedModels {
         let request = chat_request(&self.text_model, context, &today, prompts::TEXT_VALUE);
         let body = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
         let raw = self.gateway.post("/chat/completions", &body)?;
-        let reply: text::ChatResponse = serde_json::from_value(raw).unwrap_or_default();
+        let reply: text::ChatResponse = serde_json::from_value(raw).map_err(|error| {
+            format!("The text model's reply did not parse ({error}); nothing typed.")
+        })?;
         let content = reply
             .choices
             .into_iter()

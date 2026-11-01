@@ -19,10 +19,19 @@
   }
   if (!active || active===active.ownerDocument.body) return {focus:'nothing'};
   // Writable as the page itself declares it, the way the snapshot judges.
-  const text=['text','search','email','url','tel','number',''].includes(active.type ?? '') &&
+  const text=(active.tagName==='TEXTAREA' || ['text','search','email','url','tel','number',''].includes(active.type ?? '')) &&
     (['INPUT','TEXTAREA'].includes(active.tagName) || active.isContentEditable) &&
     !active.readOnly && !active.disabled && active.getAttribute('aria-readonly')!=='true' &&
     !(c?.closest ? c.closest(active,'[aria-disabled="true"],[inert]') : active.closest('[aria-disabled="true"],[inert]'));
+  // Select the receiving field's old value, so the text replaces it even when
+  // the page moved focus to another plain field.
+  if (text) {
+    if (typeof active.select==='function') active.select();
+    else if (active.isContentEditable) {
+      const range=active.ownerDocument.createRange(), selection=active.ownerDocument.getSelection();
+      range.selectNodeContents(active); selection.removeAllRanges(); selection.addRange(range);
+    }
+  }
   return {focus: target && active===target ? 'same' : 'other', text, type:active.type ?? '',
     label:(c?.name ? c.name(active) : '') || active.getAttribute('aria-label') || '',
     autocomplete:active.getAttribute('autocomplete') || ''};

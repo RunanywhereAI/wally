@@ -178,12 +178,14 @@ fn capitalised_phrases(chars: &[char]) -> Vec<String> {
     found
 }
 
-/// Words: `\b[a-zA-Z][a-zA-Z0-9-]{1,}\b`, backing off a trailing hyphen.
+/// Words: `\b[a-zA-Z0-9][a-zA-Z0-9-]{1,}\b`, backing off a trailing hyphen. A
+/// leading digit is allowed, so dates, postal codes and flight numbers in the
+/// goal can be typed when the text model refuses.
 fn goal_words(chars: &[char]) -> Vec<String> {
     let mut found = Vec::new();
     let mut at = 0;
     while at < chars.len() {
-        if !boundary(chars, at) || !chars[at].is_ascii_alphabetic() {
+        if !boundary(chars, at) || !chars[at].is_ascii_alphanumeric() {
             at += 1;
             continue;
         }
@@ -216,8 +218,13 @@ pub fn goal_strings(goal: &str, today: &str) -> Vec<String> {
     if contains_phrase(goal, "today") {
         found.push(today.to_string());
     }
+    let in_phrase = |word: &str, found: &[String]| {
+        found
+            .iter()
+            .any(|phrase| phrase.contains(' ') && phrase.split(' ').any(|part| part == word))
+    };
     for word in goal_words(&chars) {
-        if is_stop(&word) || found.contains(&word) {
+        if is_stop(&word) || found.contains(&word) || in_phrase(&word, &found) {
             continue;
         }
         found.push(word);
@@ -462,5 +469,19 @@ mod tests {
             panic!("the fallback must not be asked")
         });
         assert!(matches!(resolved, Ok(Some(Resolved::Typed(v))) if v == "Delhi"));
+    }
+
+    #[test]
+    fn goal_strings_keep_dates_and_postal_codes() {
+        let strings = goal_strings("Deliver to postal code 560001 on 2026-11-20", "2026-10-31");
+        assert!(strings.contains(&"560001".to_string()), "{strings:?}");
+        assert!(strings.contains(&"2026-11-20".to_string()), "{strings:?}");
+    }
+
+    #[test]
+    fn words_inside_a_phrase_are_not_repeated() {
+        let strings = goal_strings("Fly to New Delhi", "2026-10-31");
+        assert!(strings.contains(&"New Delhi".to_string()));
+        assert!(!strings.contains(&"Delhi".to_string()), "{strings:?}");
     }
 }

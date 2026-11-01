@@ -312,6 +312,19 @@ fullname.addEventListener('keydown',()=>card.focus())</script>"#
             r#"<title>Card</title><p>Add a card</p>
 <label>Valid thru <input type=month aria-label="Valid thru" onchange="beacon('expiry='+this.value)"></label>"#
         }
+        "/probe/long-link-booking" => {
+            r#"<title>Review</title><p>Paying with Visa ending 4242</p>
+<a href="/probe/long-link-booking?go" onclick="beacon('paid=1');return false">Confirm booking for 2 adults at ₹9,800 with free cancellation</a>"#
+        }
+        "/probe/card-pin" => {
+            r#"<title>Card</title>
+<label>Card PIN code <input aria-label="Card PIN code" oninput="beacon('typed_pin=1')"></label>"#
+        }
+        "/p/textarea" => {
+            r#"<title>Contact</title>
+<label>Message <textarea aria-label="Message" oninput="beacon('typed=1')"></textarea></label>
+<button onclick="beacon('sent='+encodeURIComponent(document.querySelector('textarea').value))">Send</button>"#
+        }
         _ => return None,
     };
     Some(format!("<!doctype html><meta charset=utf-8>{BEACON}{body}"))
@@ -833,7 +846,13 @@ impl Chrome {
             .stderr(Stdio::null())
             .spawn()
             .expect("start headless Chrome");
-        let port_file = profile.path().join("DevToolsActivePort");
+        // Owned from here, so a readiness timeout below kills it on unwind.
+        let mut chrome = Chrome {
+            child,
+            origin: String::new(),
+            _profile: profile,
+        };
+        let port_file = chrome._profile.path().join("DevToolsActivePort");
         let deadline = Instant::now() + Duration::from_secs(20);
         let port = loop {
             if let Ok(text) = std::fs::read_to_string(&port_file) {
@@ -870,11 +889,8 @@ impl Chrome {
             );
             std::thread::sleep(Duration::from_millis(200));
         };
-        Chrome {
-            child,
-            origin,
-            _profile: profile,
-        }
+        chrome.origin = origin;
+        chrome
     }
 
     pub fn running(&mut self) -> bool {
