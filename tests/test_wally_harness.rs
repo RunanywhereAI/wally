@@ -1359,17 +1359,17 @@ fn deepseek_web_ui_takes_a_free_port_unless_one_was_chosen() {
 }
 
 // The limit a harness config writes becomes that harness's `max_tokens`, and
-// the API reads `max_tokens` as a hard total of everything the model
-// generates, thinking included (OpenAI, Anthropic and OpenRouter define it the
-// same way; the server adds no reasoning allowance on top). So the config, not
+// once InferenceInfra#5737 ships the API reads `max_tokens` as a hard total of
+// everything the model generates, thinking included (OpenAI, Anthropic and
+// OpenRouter define it the same way), with no reasoning allowance on top. So the config, not
 // the server, has to make the limit big enough: a reasoning model given 8,192
 // can spend all of it thinking and answer nothing (the 2026-09-22 OpenCode
 // incident). Every writer declares the model list's `max_output`: never below
 // min(16,384, max_output), never above max_output. A model the list gives a
 // window but no output cap gets the writer's own fallback, min(window, 65,536)
 // for OpenCode, OpenClaw and Prime Agent and min(window, 32,768) for dsh; one
-// with no window at all (a private id the catalogue lists without limits) gets
-// no limit, so the harness sends its own and the server applies the model's
+// with neither a window nor an output cap (a private id the catalogue lists
+// without limits) gets no limit, so the harness sends its own and the server applies the model's
 // default.
 #[test]
 fn every_harness_config_writes_an_output_limit_within_the_models_own_bounds() {
@@ -1385,6 +1385,8 @@ fn every_harness_config_writes_an_output_limit_within_the_models_own_bounds() {
         model("deepseek-v4.1-flash", 1_048_576, 65_536),
         model("glm-5.3-flash", 202_752, 131_072),
         model("short-output", 32_768, 8_192),
+        // An output cap with no window reported: the cap still applies.
+        model("output-only", 0, 32_768),
     ];
     // A window but no output cap: the writer's fallback. No window: nothing.
     let uncapped = [
@@ -1477,7 +1479,10 @@ fn every_harness_config_writes_an_output_limit_within_the_models_own_bounds() {
                 .unwrap_or_else(|| panic!("{writer} did not declare {id}"))
                 .1
         };
-        for model in &capped {
+        // opencode's `limit` needs a context size, so it writes none for a
+        // model reported without a window; the other writers keep the cap.
+        let windowless = |model: &CatalogModel| *writer == "opencode" && model.context_window <= 0;
+        for model in capped.iter().filter(|model| !windowless(model)) {
             let limit = limit_of(&model.id)
                 .unwrap_or_else(|| panic!("{writer} wrote no limit for {}", model.id));
             assert!(
@@ -1500,9 +1505,14 @@ fn every_harness_config_writes_an_output_limit_within_the_models_own_bounds() {
         );
         // The one rule all four writers share.
         for model in &catalog {
+            let expected = if windowless(model) {
+                None
+            } else {
+                harness::output_limit(model, *fallback)
+            };
             assert_eq!(
                 limit_of(&model.id),
-                harness::output_limit(model, *fallback),
+                expected,
                 "{writer}: {} must follow output_limit",
                 model.id
             );

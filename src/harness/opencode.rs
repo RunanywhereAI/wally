@@ -288,7 +288,9 @@ pub fn build_open_code_config(
         // cap, never the whole context — opencode's own docs warn against
         // that. It becomes opencode's `max_tokens`, the whole budget for
         // thinking and answer (`output_limit`).
-        if let Some(output) = output_limit(model, 65536) {
+        // opencode's `limit` needs the context size beside the output, so a
+        // model the list reports without a window gets no limit here.
+        if let Some(output) = output_limit(model, 65536).filter(|_| model.context_window > 0) {
             entry["limit"] = json!({ "context": model.context_window, "output": output });
         }
         // Image input exactly where the catalog lists it. opencode 1.18 reads

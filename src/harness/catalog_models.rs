@@ -37,31 +37,27 @@ pub struct CatalogModel {
 
 /// The output limit a harness config declares for `model`, which the harness
 /// then sends as its `max_tokens`. The model list's `max_output` when it has
-/// one; `min(context_window, fallback)` when it gives a window but no output
-/// cap; None when it gives no window either (a private id the catalogue lists
+/// one, with or without a context window (the list reports the two
+/// separately); `min(context_window, fallback)` when it gives a window but no
+/// output cap; None when it gives neither (a private id the catalogue lists
 /// without limits), so the config writes no limit and the server applies the
 /// model's documented default.
 ///
-/// `max_tokens` is a hard total: it caps everything the model generates,
-/// thinking included, which is how OpenAI (`max_completion_tokens`),
+/// `max_tokens` is meant as a hard total: it caps everything the model
+/// generates, thinking included, which is how OpenAI (`max_completion_tokens`),
 /// Anthropic (the thinking budget fits inside `max_tokens`) and OpenRouter
-/// define it. The API adds no reasoning allowance on top for any caller, so
-/// this limit is the whole budget for a turn's thinking and its answer. It is
-/// the client's job to make it large enough, never the server's: a reasoning
-/// model given 8,192 can spend all of it thinking and answer nothing (the
-/// 2026-09-22 OpenCode incident). The writers therefore declare the model's
-/// full `max_output`, which is never below min(16,384, max_output) and never
-/// above max_output, and the server clamps anything above the model's ceiling
-/// anyway, reporting it in `X-RA-Max-Tokens-Granted`.
+/// define it. Once InferenceInfra#5737 ships, the API adds no reasoning
+/// allowance on top for any caller, so this limit is the whole budget for a
+/// turn's thinking and its answer. Making it large enough is the client's job:
+/// a reasoning model given 8,192 can spend all of it thinking and answer
+/// nothing (the 2026-09-22 OpenCode incident). The writers therefore declare
+/// the model's full `max_output`, which is never below min(16,384, max_output)
+/// and never above max_output.
 pub fn output_limit(model: &CatalogModel, fallback: i64) -> Option<i64> {
-    if model.context_window <= 0 {
-        return None;
+    if model.max_output > 0 {
+        return Some(model.max_output);
     }
-    Some(if model.max_output > 0 {
-        model.max_output
-    } else {
-        model.context_window.min(fallback)
-    })
+    (model.context_window > 0).then(|| model.context_window.min(fallback))
 }
 
 /// Moves the entry whose id is `primary` to the front, or inserts a bare one

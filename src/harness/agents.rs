@@ -1103,12 +1103,13 @@ pub fn build_open_claw_config(
         });
         if model.context_window > 0 {
             entry["contextWindow"] = json!(model.context_window);
-            // OpenClaw wants a maxTokens beside the window; without one it
-            // budgets the session against a cap it invented. It is the whole
-            // budget for thinking and answer (`output_limit`).
-            if let Some(max_tokens) = output_limit(model, 65536) {
-                entry["maxTokens"] = json!(max_tokens);
-            }
+        }
+        // OpenClaw wants a maxTokens beside the window; without one it
+        // budgets the session against a cap it invented. It is the whole
+        // budget for thinking and answer (`output_limit`), and a known cap is
+        // written even when the list reports no window.
+        if let Some(max_tokens) = output_limit(model, 65536) {
+            entry["maxTokens"] = json!(max_tokens);
         }
         if model.input_per_mtok > 0 || model.output_per_mtok > 0 {
             // Per-million-token rates, in whole currency units. The catalog
@@ -1207,9 +1208,9 @@ pub fn build_deep_seek_llm_config(
         });
         if model.context_window > 0 {
             entry["contextWindow"] = json!(model.context_window);
-            if let Some(max_tokens) = output_limit(model, 32768) {
-                entry["maxTokens"] = json!(max_tokens);
-            }
+        }
+        if let Some(max_tokens) = output_limit(model, 32768) {
+            entry["maxTokens"] = json!(max_tokens);
         }
         if let Some(efforts) = deep_seek_reasoning_efforts(model) {
             entry["reasoningEfforts"] = efforts;
@@ -1347,9 +1348,9 @@ pub fn build_prime_agent_models_config(
         });
         if model.context_window > 0 {
             entry["contextWindow"] = json!(model.context_window);
-            if let Some(max_tokens) = output_limit(model, 65536) {
-                entry["maxTokens"] = json!(max_tokens);
-            }
+        }
+        if let Some(max_tokens) = output_limit(model, 65536) {
+            entry["maxTokens"] = json!(max_tokens);
         }
         if model.input_per_mtok > 0 || model.output_per_mtok > 0 {
             const PER_MICRO: f64 = 1.0 / 1_000_000.0;

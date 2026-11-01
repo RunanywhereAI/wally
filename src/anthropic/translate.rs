@@ -762,9 +762,9 @@ pub fn request_to_openai(anthropic: &Value, model: &str) -> Value {
     openai.insert("messages".into(), Value::Array(messages));
 
     // One limit, copied as is. Anthropic's `max_tokens` counts thinking (its
-    // thinking budget must fit inside it) and so does the gateway's: a hard
-    // total of everything the model generates, with no server allowance on
-    // top. `thinking.budget_tokens` has no gateway field and is dropped; only
+    // thinking budget must fit inside it), and once InferenceInfra#5737 ships
+    // the gateway's does too: a hard total of everything the model generates,
+    // with no server allowance on top. `thinking.budget_tokens` has no gateway field and is dropped; only
     // `thinking.type: disabled` crosses, as `reasoning_effort: none`. So a
     // model that thinks by default may spend all of `max_tokens` thinking
     // (deepseek-v4.1-flash was seen at 24,426 of 32,000). Mapping

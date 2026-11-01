@@ -6,12 +6,12 @@
 //! first, then a substring match over the User-Agent.
 //!
 //! The attribution is bookkeeping only (usage by tool, the ledger's harness
-//! column). It never changes what a request is served: `max_tokens` is a hard
-//! total of everything the model generates, thinking included, for every
-//! caller, harness or plain API alike. InferenceInfra once added a reasoning
-//! allowance on top of a named `max_tokens` (with
-//! `RA_REASONING_ALLOWANCE_HARNESS_ONLY` limiting it to recognised harnesses);
-//! that allowance is being removed, and wally does not rely on it. A harness
+//! column). InferenceInfra currently adds a reasoning allowance on top of a
+//! named `max_tokens` (with `RA_REASONING_ALLOWANCE_HARNESS_ONLY` limiting it
+//! to recognised harnesses). Once InferenceInfra#5737 ships, that allowance is
+//! gone and `max_tokens` is a hard total of everything the model generates,
+//! thinking included, for every caller alike. wally does not rely on the
+//! allowance either way. A harness
 //! gets room to think from the limit wally writes into its config
 //! (`catalog_models::output_limit`), never from the header.
 //!
