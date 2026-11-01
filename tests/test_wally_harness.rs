@@ -1385,7 +1385,8 @@ fn every_harness_config_writes_an_output_limit_within_the_models_own_bounds() {
         model("deepseek-v4.1-flash", 1_048_576, 65_536),
         model("glm-5.3-flash", 202_752, 131_072),
         model("short-output", 32_768, 8_192),
-        // An output cap with no window reported: the cap still applies.
+        // An output cap with no window reported: OpenClaw, Prime Agent and dsh
+        // apply it; OpenCode writes no limit without a window.
         model("output-only", 0, 32_768),
     ];
     // A window but no output cap: the writer's fallback. No window: nothing.

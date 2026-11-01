@@ -41,7 +41,9 @@ pub struct CatalogModel {
 /// separately); `min(context_window, fallback)` when it gives a window but no
 /// output cap; None when it gives neither (a private id the catalogue lists
 /// without limits), so the config writes no limit and the server applies the
-/// model's documented default.
+/// model's documented default. OpenCode is the one caller that also needs a
+/// window: its `limit` pairs the output with a context size, so it writes no
+/// limit for a model reported without one.
 ///
 /// `max_tokens` is meant as a hard total: it caps everything the model
 /// generates, thinking included, which is how OpenAI (`max_completion_tokens`),
