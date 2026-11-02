@@ -157,6 +157,8 @@ jobs:
         with:
           platform: macos-arm64
           kit-dir: ${{ github.workspace }}/kit
+      - name: Update download failures (built product)
+        run: python3 scripts/test/test-update-download.py ./build/wally
       - name: Unit tests
         if: env.WALLY_CONSOLE_OPTIONAL != '1'
         run: ctest --test-dir build --output-on-failure
@@ -233,6 +235,8 @@ jobs:
           platform: linux-x64
           kit-dir: ${{ github.workspace }}/kit
           package: 'true'
+      - name: Update download failures (built product)
+        run: python3 scripts/test/test-update-download.py ./build/wally
       - name: Linux ABI floor
         run: python3 scripts/release/check-linux-abi.py "dist/wally-${WALLY_VERSION}-linux-x86_64.tar.gz"
       - name: Clean-distro install

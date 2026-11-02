@@ -165,22 +165,30 @@ fn install_script_url() -> String {
         .unwrap_or_else(|| INSTALL_URL.to_string())
 }
 
-/// `sh -c 'curl <script> | sh -s -- <args>'`, with the URL and every argument
-/// passed as positional parameters. `timeout_secs` bounds the download.
+/// Downloads the complete installer before any of its contents can execute.
+/// The caller supplies the URL and optional timeout as positional parameters;
+/// the remaining parameters belong to the installer or the cache writer.
+#[cfg(not(windows))]
+const DOWNLOAD_INSTALLER: &str = r#"url="$1"; max="$2"; shift 2
+installer=$(mktemp "${TMPDIR:-/tmp}/wally-update.XXXXXXXXXX") || exit 1
+trap 'rm -f "$installer"' 0
+trap 'exit 1' HUP INT TERM
+if [ -n "$max" ]; then
+    curl -fsSL --max-time "$max" --output "$installer" -- "$url" || exit 1
+else
+    curl -fsSL --output "$installer" -- "$url" || exit 1
+fi"#;
+
+/// Runs a fully downloaded installer, preserving its exit status and arguments.
+/// `timeout_secs` bounds the download, not the installer's execution.
 #[cfg(not(windows))]
 fn installer_command(args: &[String], timeout_secs: Option<&str>) -> std::process::Command {
-    let script = match timeout_secs {
-        Some(_) => {
-            r#"url="$1"; max="$2"; shift 2; curl -fsSL --max-time "$max" "$url" | sh -s -- "$@""#
-        }
-        None => r#"url="$1"; shift; curl -fsSL "$url" | sh -s -- "$@""#,
-    };
+    let script = format!("{DOWNLOAD_INSTALLER}\nsh -s -- \"$@\" < \"$installer\"");
     let mut command = std::process::Command::new("sh");
     command.arg("-c").arg(script).arg("wally-update");
-    command.arg(install_script_url());
-    if let Some(max) = timeout_secs {
-        command.arg(max);
-    }
+    command
+        .arg(install_script_url())
+        .arg(timeout_secs.unwrap_or_default());
     command.args(args);
     command
 }
@@ -333,9 +341,13 @@ fn refresh_cache_in_background(path: &std::path::Path) {
 
 #[cfg(not(windows))]
 fn background_refresh_command(path: &std::path::Path) -> std::process::Command {
-    let script = r#"url="$1"; max="$2"; cache="$3"; tmp="$cache.$$"
-curl -fsSL --max-time "$max" "$url" | sh -s -- --check > "$tmp" 2>/dev/null \
-    && [ -s "$tmp" ] && mv -f "$tmp" "$cache" || rm -f "$tmp""#;
+    let script = format!(
+        r#"{DOWNLOAD_INSTALLER}
+cache="$1"; tmp="$cache.$$"
+trap 'rm -f "$installer" "$tmp"' 0
+sh -s -- --check < "$installer" > "$tmp" 2>/dev/null \
+    && [ -s "$tmp" ] && mv -f "$tmp" "$cache""#
+    );
     let mut command = std::process::Command::new("sh");
     command
         .arg("-c")
