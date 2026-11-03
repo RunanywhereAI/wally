@@ -1,0 +1,95 @@
+//! Word-bounded matching, the subset of Python `re` the guards and the goal
+//! strings were written in. `\b` is Unicode-aware there: a word character is
+//! a letter, a digit or `_`, in any script, and a combining mark is not.
+//!
+//! Rust's `is_alphanumeric` also counts marks that carry the Alphabetic
+//! property. The common combining blocks are excluded below, so "pay" followed
+//! by U+0345 still ends at a word boundary. Marks inside Indic and other
+//! script blocks (vowel signs such as U+0903) are not tabulated here; they
+//! only matter adjacent to a guard word, on either side.
+
+fn combining_mark(ch: char) -> bool {
+    matches!(ch as u32,
+        0x0300..=0x036F | 0x0483..=0x0489 | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF
+        | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
+}
+
+pub fn is_word(ch: char) -> bool {
+    (ch.is_alphanumeric() && !combining_mark(ch)) || ch == '_'
+}
+
+/// `\b` between `chars[at - 1]` and `chars[at]`.
+pub fn boundary(chars: &[char], at: usize) -> bool {
+    let before = at > 0 && is_word(chars[at - 1]);
+    let after = at < chars.len() && is_word(chars[at]);
+    before != after
+}
+
+/// `re.search(r"\b(phrase)\b", text, re.I)` for a literal ASCII phrase.
+pub fn contains_phrase(text: &str, phrase: &str) -> bool {
+    let hay: Vec<char> = text.to_lowercase().chars().collect();
+    let needle: Vec<char> = phrase.to_lowercase().chars().collect();
+    if needle.is_empty() || needle.len() > hay.len() {
+        return false;
+    }
+    (0..=hay.len() - needle.len()).any(|start| {
+        hay[start..start + needle.len()] == needle[..]
+            && boundary(&hay, start)
+            && boundary(&hay, start + needle.len())
+    })
+}
+
+/// Any of the phrases, each word-bounded.
+pub fn contains_any(text: &str, phrases: &[&str]) -> bool {
+    phrases.iter().any(|phrase| contains_phrase(text, phrase))
+}
+
+/// `re.search(r"\bfirst\s*second\b", text, re.I)`.
+pub fn contains_joined(text: &str, first: &str, second: &str) -> bool {
+    let hay: Vec<char> = text.to_lowercase().chars().collect();
+    let first: Vec<char> = first.to_lowercase().chars().collect();
+    let second: Vec<char> = second.to_lowercase().chars().collect();
+    (0..hay.len()).any(|start| {
+        if !boundary(&hay, start) || !hay[start..].starts_with(&first) {
+            return false;
+        }
+        let mut at = start + first.len();
+        while at < hay.len() && hay[at].is_whitespace() {
+            at += 1;
+        }
+        hay[at..].starts_with(&second) && boundary(&hay, at + second.len())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_phrase_matches_only_on_word_boundaries() {
+        assert!(contains_phrase("Pay ₹4,532", "pay"));
+        assert!(contains_phrase("Place Order now", "place order"));
+        assert!(!contains_phrase("Paypal", "pay"));
+        assert!(!contains_phrase("repay", "pay"));
+        assert!(!contains_phrase("payé", "pay"));
+    }
+
+    #[test]
+    fn joined_words_allow_any_whitespace_or_none_between() {
+        assert!(contains_joined("PIN code", "pin", "code"));
+        assert!(contains_joined("pincode", "pin", "code"));
+        assert!(contains_joined("pin \t code", "pin", "code"));
+        assert!(!contains_joined("pin codes", "pin", "code"));
+        assert!(!contains_joined("spin code", "pin", "code"));
+    }
+
+    #[test]
+    fn a_combining_mark_ends_a_word() {
+        assert!(contains_phrase("pay\u{345}", "pay"));
+    }
+
+    #[test]
+    fn joined_words_fold_case_on_both_sides() {
+        assert!(contains_joined("PIN code", "PIN", "Code"));
+    }
+}

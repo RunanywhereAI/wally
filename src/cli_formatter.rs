@@ -1233,6 +1233,11 @@ mod tests {
                     "Security tools",
                 ),
                 leaf("vvah", "Scan your own repos with VVAH", "Security tools"),
+                leaf(
+                    "browser-use",
+                    "Do a web task in Chrome, stopping before payment",
+                    "Browser",
+                ),
                 namespace(
                     "account",
                     "Account",

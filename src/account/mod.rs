@@ -10,6 +10,7 @@ pub mod decisions_contract;
 pub mod decisions_output;
 pub mod model_cache;
 pub mod session;
+pub mod systemone_contract;
 pub mod usage_requests;
 
 pub use cancel_worker::*;

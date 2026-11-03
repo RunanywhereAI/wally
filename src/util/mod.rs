@@ -77,6 +77,17 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (year as i64, m, d)
 }
 
+/// Days in `month` (1-12) of a proleptic Gregorian `year`.
+pub fn days_in_month(year: i64, month: u32) -> u32 {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => 31,
+    }
+}
+
 /// The inverse of `civil_from_days`: days since 1970-01-01 for a proleptic
 /// Gregorian date. The caller supplies a real date (month 1-12, a day the
 /// month has); `year` is limited to what a timestamp can carry.
@@ -130,6 +141,15 @@ mod tests {
         let (year, month, day) = civil_from_days(i64::MIN);
         assert!(year < -25_000_000_000_000_000, "{year}");
         assert!((1..=12).contains(&month) && (1..=31).contains(&day));
+    }
+
+    #[test]
+    fn days_in_month_follows_the_gregorian_leap_rule() {
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(1900, 2), 28);
+        assert_eq!(days_in_month(2000, 2), 29);
+        assert_eq!(days_in_month(2023, 4), 30);
+        assert_eq!(days_in_month(2023, 12), 31);
     }
 
     #[test]

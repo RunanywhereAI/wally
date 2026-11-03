@@ -56,6 +56,13 @@ fn binding_matches_the_pinned_contract() {
 }
 
 #[test]
+fn systemone_binding_matches_the_pinned_contract() {
+    use sha2::{Digest, Sha256};
+    let digest = hex::encode(Sha256::digest(DECISIONS_CONTRACT_BYTES));
+    assert_eq!(digest, wally::account::systemone_contract::CONTRACT_SHA256);
+}
+
+#[test]
 fn decisions_binding_matches_the_pinned_contract() {
     use sha2::{Digest, Sha256};
     use wally::account::decisions_contract;

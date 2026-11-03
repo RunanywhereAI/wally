@@ -1,0 +1,3136 @@
+{
+ "url": "https://docs.stripe.com/payments/accept-a-payment?platform=web&ui=elements",
+ "title": "Accept a payment | Stripe Documentation",
+ "frames": [
+  "https://b.stripecdn.com/stripethirdparty-srv/assets/v32.18/GoogleTagManager.html?id=dc22c7c9-c7df-4f8e-a4ae-4b3326cdfa21&origin=https%3A%2F%2Fdocs.stripe.com",
+  "https://b.stripecdn.com/stripethirdparty-srv/assets/v32.18/HCaptchaInvisible.html?id=29846c01-5cc7-416a-9fc4-6f1e2bc36c7c&origin=https%3A%2F%2Fdocs.stripe.com",
+  "https://docs.stripe.com/payments/accept-a-payment?platform=web&ui=elements",
+  "https://js.stripe.com/v3/controller-with-preconnect-ceaf7b535d49bf0693c95dde0a73423d.html",
+  "https://js.stripe.com/v3/controller-with-preconnect-ceaf7b535d49bf0693c95dde0a73423d.html#__shared_params__[version]=dahlia&__shared_params__[light_experiment_assignments]=%7B%22token%22%3A%22b2e6642a-46ba-43b6-9284-e7de53bd38df%22%2C%22assignments%22%3A%7B%7D%2C%22unqualifiedExperiments%22%3A%7B%7D%7D&apiKey=pk_test_51K1yvAK258Vuxm4DefLCmuJHyQole8qXDOAXoeOFlGAvvGeFwYlkeMutePA37wn4qcO7io15Zrs0KjD1m5qZiVtN00v35dmhXA&apiVersion=2026-03-25.dahlia&stripeJsId=b2e6642a-46ba-43b6-9284-e7de53bd38df&stripeObjId=sobj-b7c38304-ff4c-4d86-bda0-897b67db41cc&firstStripeInstanceCreatedLatency=12&controllerCount=1&isCheckout=false&stripeJsLoadTime=1791058895814.7&manualBrowserDeprecationRollout=false&mids[guid]=NA&mids[muid]=NA&mids[sid]=NA&referrer=https%3A%2F%2Fdocs.stripe.com%2Fpayments%2Faccept-a-payment%3Fplatform%3Dweb%26ui%3Delements&controllerId=__privateStripeController6171",
+  "https://js.stripe.com/v3/m-outer-3437aaddcdf6922d623e172c2d6f9278.html",
+  "https://js.stripe.com/v3/m-outer-3437aaddcdf6922d623e172c2d6f9278.html#url=https%3A%2F%2Fdocs.stripe.com%2Fpayments%2Faccept-a-payment%3Fplatform%3Dweb%26ui%3Delements&title=Accept%20a%20payment%20%7C%20Stripe%20Documentation&referrer=&muid=NA&sid=NA&version=6&preview=true&__shared_params__[version]=dahlia",
+  "https://m.stripe.network/inner-preview.html",
+  "https://newassets.hcaptcha.com/captcha/v1/05219f0822161da4c4a6f3aed6bf6d6fae1ba8e1/static/hcaptcha.html"
+ ],
+ "visible_frames": [],
+ "elements": [
+  {
+   "index": 1,
+   "tag": "div",
+   "role": "generic",
+   "name": "Checkout",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Checkout",
+   "context_text": "",
+   "attributes": {
+    "class": "PressableCore PressableCore--cursor--pointer PressableCore--height--medium PressableCore--radius--all PressableCore--width PressableCore--width--auto PressableToggle Box-root Flex-inlineFlex"
+   }
+  },
+  {
+   "index": 2,
+   "tag": "div",
+   "role": "none",
+   "name": "Checkout",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Checkout",
+   "context_text": "",
+   "attributes": {
+    "class": "ToggleItem-fill Box-root Padding-horizontal--8 Padding-vertical--4 Flex-flex Flex-alignItems--center Flex-direction--row"
+   }
+  },
+  {
+   "index": 3,
+   "tag": "div",
+   "role": "generic",
+   "name": "Elements",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Elements",
+   "context_text": "",
+   "attributes": {
+    "class": "PressableCore PressableCore--cursor--pointer PressableCore--height--medium PressableCore--radius--all PressableCore--width PressableCore--width--auto PressableToggle Box-root Flex-inlineFlex"
+   }
+  },
+  {
+   "index": 4,
+   "tag": "div",
+   "role": "none",
+   "name": "Elements",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Elements",
+   "context_text": "",
+   "attributes": {
+    "class": "ToggleItem-fill Box-root Padding-horizontal--8 Padding-vertical--4 Flex-flex Flex-alignItems--center Flex-direction--row"
+   }
+  },
+  {
+   "index": 5,
+   "tag": "div",
+   "role": "generic",
+   "name": "Mobile",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Mobile",
+   "context_text": "",
+   "attributes": {
+    "class": "PressableCore PressableCore--cursor--pointer PressableCore--height--medium PressableCore--radius--all PressableCore--width PressableCore--width--auto PressableToggle Box-root Flex-inlineFlex"
+   }
+  },
+  {
+   "index": 6,
+   "tag": "div",
+   "role": "none",
+   "name": "Mobile",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Mobile",
+   "context_text": "",
+   "attributes": {
+    "class": "ToggleItem-fill Box-root Padding-horizontal--8 Padding-vertical--4 Flex-flex Flex-alignItems--center Flex-direction--row"
+   }
+  },
+  {
+   "index": 12,
+   "tag": "div",
+   "role": "none",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "Box-root Box-hideIfEmpty Margin-top--4 Margin-left--4"
+   }
+  },
+  {
+   "index": 20,
+   "tag": "div",
+   "role": "none",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "Box-root Box-hideIfEmpty Margin-top--4 Margin-left--4"
+   }
+  },
+  {
+   "index": 21,
+   "tag": "div",
+   "role": "generic",
+   "name": "Gemfile",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Gemfile",
+   "context_text": "",
+   "attributes": {
+    "class": "Box-root Box-hideIfEmpty Margin-top--4 Margin-left--4"
+   }
+  },
+  {
+   "index": 85,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Try it out",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Try it out Try it out",
+   "context_text": "",
+   "attributes": {
+    "href": "https://checkout.stripe.dev/",
+    "class": "⚙ rs-2 rs-3 rs-4 rs-7 rs-3 rs-2 rs-5 rs-6 rs-4 as-8 as-9 as-a as-w as-2e as-1k as-y as-14 as-3r as-3s as-4c as-3t as-21 as-3u as-18 as-19 as-3v as-3b as-2s as-3w as-1u as-1v as-3f as-3g as-41 as-42 as-43 as-4d as-4e as-1s as-22 as-23 as-25 as-26 as-27 as-29 as-2a as-2b as-2c as-2d as-8l as-8m ⚙16ycs39"
+   }
+  },
+  {
+   "index": 87,
+   "tag": "input",
+   "role": "textbox",
+   "name": "Search",
+   "input_type": "text",
+   "autocomplete": "",
+   "placeholder": "Search",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Search Search",
+   "context_text": "",
+   "attributes": {
+    "placeholder": "Search",
+    "type": "text",
+    "id": "react-aria-:R9cp4miq:",
+    "class": "⚙ rs-2 rs-3 rs-4 rs-7 rs-8  rs-3 as-1z as-2z as-30 as-31 as-32 as-2n as-w as-33 as-x as-34 as-35 as-36 as-37 as-38 as-39 as-3a as-3b as-3c as-3d as-3e as-1v as-3f as-3g as-9 as-3h ⚙13d8t1p"
+   }
+  },
+  {
+   "index": 100,
+   "tag": "a",
+   "role": "link",
+   "name": "Skip to content",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Skip to content Skip to content",
+   "context_text": "",
+   "attributes": {
+    "href": "#main-content",
+    "class": "⚙ rs-2 rs-3  as-8 as-9 as-a as-b as-c as-d as-e as-f as-g as-h as-i as-j as-k as-l as-m as-n as-o as-p as-q as-r as-s as-t ⚙1fpnohr"
+   }
+  },
+  {
+   "index": 104,
+   "tag": "a",
+   "role": "link",
+   "name": "The Stripe Docs logo",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "The Stripe Docs logo The Stripe Docs logo",
+   "context_text": "",
+   "attributes": {
+    "class": "UnstyledLink InlineLink Text-color--blue",
+    "href": "/"
+   }
+  },
+  {
+   "index": 105,
+   "tag": "a",
+   "role": "button",
+   "name": "​ Search Search /",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Search Search / Search Search /",
+   "context_text": "",
+   "attributes": {
+    "class": "SearchPrompt ⚙ rs-2 rs-3 rs-4 rs-2 rs-5 rs-6 as-8 as-9 as-a as-b as-c as-w as-y as-1r as-6 as-1s as-1t as-p as-1u as-1v as-1w as-1x as-1y as-1z as-20 as-21 as-22 as-23 as-24 as-25 as-26 as-27 as-28 as-29 as-2a as-2b as-2c as-2d ⚙1p0fc08",
+    "role": "button"
+   }
+  },
+  {
+   "index": 106,
+   "tag": "a",
+   "role": "button",
+   "name": "Stripe Assistant",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Stripe Assistant Ask AI",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "StripeAssistant--Header-AskAI",
+    "aria-label": "Stripe Assistant",
+    "class": "tooltip-trigger-isolate ⚙ rs-2 rs-3 rs-4 rs-7 rs-3 rs-2 rs-5 rs-6 rs-3 as-8 as-9 as-a as-w as-2e as-1k as-y as-14 as-3r as-3s as-p as-3t as-21 as-3u as-18 as-19 as-3v as-3b as-2n as-3w as-3x as-3y as-3z as-40 as-41 as-42 as-43 as-3n as-3o as-1s as-22 as-23 as-25 as-26 as-27 as-29 as-2a as-2b as-2c as-2d ⚙qm4ya9",
+    "role": "button"
+   }
+  },
+  {
+   "index": 107,
+   "tag": "a",
+   "role": "link",
+   "name": "Create account",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Create account Create account",
+   "context_text": "",
+   "attributes": {
+    "href": "https://dashboard.stripe.com/register",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-3 as-8 as-9 as-a as-12 as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h as-4b ⚙7d7ugr"
+   }
+  },
+  {
+   "index": 108,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Sign in",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Sign in Sign in",
+   "context_text": "",
+   "attributes": {
+    "href": "https://dashboard.stripe.com/login?redirect=https%3A%2F%2Fdocs.stripe.com%2Fpayments%2Faccept-a-payment",
+    "data-testid": "docs-sign-in-button-selector",
+    "class": "⚙ rs-2 rs-3 rs-4 rs-7 rs-3 rs-2 rs-5 rs-6 as-8 as-9 as-a as-w as-2e as-1k as-y as-14 as-3r as-3s as-4c as-3t as-21 as-3u as-18 as-19 as-3v as-3b as-2s as-3w as-1u as-1v as-3f as-3g as-41 as-42 as-43 as-4d as-4e as-1s as-22 as-23 as-25 as-26 as-27 as-29 as-2a as-2b as-2c as-2d ⚙188tuz7"
+   }
+  },
+  {
+   "index": 109,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Get started",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Get started Get started",
+   "context_text": "",
+   "attributes": {
+    "id": "/get-started",
+    "href": "/get-started",
+    "data-testid": "docs-header-get-started-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-3n as-3o as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-4u as-4v as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-bs as-59 as-5a ⚙1q3d1x0"
+   }
+  },
+  {
+   "index": 110,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Payments",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Payments Payments",
+   "context_text": "",
+   "attributes": {
+    "id": "/payments",
+    "href": "/payments",
+    "data-testid": "docs-header-payments-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-1d as-1e as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-1g as-1f as-1h as-5b as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-1c as-59 as-5a ⚙1v9u4cu"
+   }
+  },
+  {
+   "index": 111,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Revenue",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Revenue Revenue",
+   "context_text": "",
+   "attributes": {
+    "id": "/revenue",
+    "href": "/revenue",
+    "data-testid": "docs-header-revenue-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-3n as-3o as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-4u as-4v as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-59 as-5a ⚙mc1526"
+   }
+  },
+  {
+   "index": 112,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Risk",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Risk Risk",
+   "context_text": "",
+   "attributes": {
+    "id": "/risk",
+    "href": "/risk",
+    "data-testid": "docs-header-risk-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-3n as-3o as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-4u as-4v as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-59 as-5a ⚙mc1526"
+   }
+  },
+  {
+   "index": 113,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Data",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Data Data",
+   "context_text": "",
+   "attributes": {
+    "id": "/data",
+    "href": "/data",
+    "data-testid": "docs-header-data-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-3n as-3o as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-4u as-4v as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-59 as-5a ⚙mc1526"
+   }
+  },
+  {
+   "index": 114,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Money management",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Money management Money management",
+   "context_text": "",
+   "attributes": {
+    "id": "/money-management",
+    "href": "/money-management",
+    "data-testid": "docs-header-money-management-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-3n as-3o as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-4u as-4v as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-59 as-5a ⚙mc1526"
+   }
+  },
+  {
+   "index": 115,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Stablecoins",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Stablecoins Stablecoins",
+   "context_text": "",
+   "attributes": {
+    "id": "/stablecoins",
+    "href": "/stablecoins",
+    "data-testid": "docs-header-stablecoins-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-3n as-3o as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-4u as-4v as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-59 as-5a ⚙mc1526"
+   }
+  },
+  {
+   "index": 116,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Embedded Finance",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Embedded Finance Embedded Finance",
+   "context_text": "",
+   "attributes": {
+    "id": "/connect",
+    "href": "/connect",
+    "data-testid": "docs-header-embedded-finance-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-3n as-3o as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-4u as-4v as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-59 as-5a ⚙mc1526"
+   }
+  },
+  {
+   "index": 117,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Developer resources",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Developer resources Developer resources",
+   "context_text": "",
+   "attributes": {
+    "id": "/development",
+    "href": "/development",
+    "data-testid": "docs-header-developer-resources-tab-selector",
+    "class": "⚙ rs-2 rs-3 rs-3 rs-4 rs-7   rs-9 as-8 as-9 as-a as-3s as-14 as-2s as-3n as-3o as-3r as-w as-2l as-1k as-3x as-3y as-4q as-4r as-4s as-4t as-4u as-4v as-4w as-4x as-4y as-4z as-50 as-51 as-52 as-53 as-54 as-55 as-56 as-57 as-58 as-5j as-59 as-5a ⚙zh9ww0"
+   }
+  },
+  {
+   "index": 119,
+   "tag": "a",
+   "role": "button",
+   "name": "​ APIs & SDKs",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ APIs & SDKs APIs & SDKs",
+   "context_text": "",
+   "attributes": {
+    "role": "button",
+    "id": "react-aria-:Rd94miq:",
+    "class": "⚙ rs-2 rs-3 rs-4 rs-3 as-8 as-9 as-a as-w as-1r as-2s as-3n as-3o as-14 ⚙1g5s9dr"
+   }
+  },
+  {
+   "index": 120,
+   "tag": "a",
+   "role": "button",
+   "name": "​ Help",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Help Help",
+   "context_text": "",
+   "attributes": {
+    "role": "button",
+    "id": "react-aria-:Rl94miq:",
+    "class": "⚙ rs-2 rs-3 rs-4 rs-3 as-8 as-9 as-a as-w as-1r as-2s as-3n as-3o as-14 ⚙1g5s9dr"
+   }
+  },
+  {
+   "index": 121,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Overview",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Overview Overview",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/payments",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 122,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Use Payment Links",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Use Payment Links Use Payment Links",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 123,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Build a payments page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Build a payments page Build a payments page",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 124,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Build a custom integration with Elements",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Build a custom integration with Elements Build a custom integration with Elements",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 125,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Build an in-app integration",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Build an in-app integration Build an in-app integration",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 126,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Use Managed Payments",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Use Managed Payments Use Managed Payments",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 127,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Terminal overview",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Terminal overview Terminal overview",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 128,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Readers",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Readers Readers",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 129,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Ready-made apps",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Ready-made apps Ready-made apps",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 130,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Custom integration",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Custom integration Custom integration",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 131,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Add payment methods",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Add payment methods Add payment methods",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 132,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Manage payment methods",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Manage payment methods Manage payment methods",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 133,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Faster checkout with Link",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Faster checkout with Link Faster checkout with Link",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 134,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Analytics",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Analytics Analytics",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 135,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Compliance and security",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Compliance and security Compliance and security",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 136,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Currencies",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Currencies Currencies",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 137,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Declines",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Declines Declines",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 138,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Disputes",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Disputes Disputes",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 139,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Payouts",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Payouts Payouts",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 140,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Custom payment flows",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Custom payment flows Custom payment flows",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 141,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Flexible acquiring",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Flexible acquiring Flexible acquiring",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 142,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Off-Session Payments",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Off-Session Payments Off-Session Payments",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 143,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Multiprocessor orchestration",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Multiprocessor orchestration Multiprocessor orchestration",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 144,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Incorporate your company",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Incorporate your company Incorporate your company",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 145,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Agentic commerce",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Agentic commerce Agentic commerce",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 146,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Financial Connections",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Financial Connections Financial Connections",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 147,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Dropdown closed Climate",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Dropdown closed Climate Climate",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3 as-w as-1b as-9 as-5t as-5u as-4b as-2r ⚙i5s66a"
+   }
+  },
+  {
+   "index": 148,
+   "tag": "a",
+   "role": "button",
+   "name": "Change the country setting",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Change the country setting India",
+   "context_text": "",
+   "attributes": {
+    "aria-label": "Change the country setting",
+    "role": "button",
+    "id": "react-aria-:Rclkmiq:",
+    "class": "⚙ rs-2 rs-3 rs-4 as-8 as-9 as-a as-b as-c as-w as-1r as-1m as-y as-6e as-6f as-6g as-6h ⚙t70e14"
+   }
+  },
+  {
+   "index": 149,
+   "tag": "a",
+   "role": "button",
+   "name": "Change the language setting",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Change the language setting English (United Kingdom)",
+   "context_text": "",
+   "attributes": {
+    "aria-label": "Change the language setting",
+    "role": "button",
+    "id": "react-aria-:Rklkmiq:",
+    "class": "⚙ rs-2 rs-3 rs-4 as-8 as-9 as-a as-b as-c as-w as-1r as-1m as-y as-6e as-6f as-6g as-6h ⚙t70e14"
+   }
+  },
+  {
+   "index": 150,
+   "tag": "a",
+   "role": "button",
+   "name": "Click to collapse the sidebar and hide the navigation",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Click to collapse the sidebar and hide the navigation",
+   "context_text": "",
+   "attributes": {
+    "role": "button",
+    "class": "⚙ rs-2 rs-3 rs-2 as-8 as-9 as-a as-b as-c as-6j as-6k as-d as-6l as-6m ⚙bg10ay"
+   }
+  },
+  {
+   "index": 153,
+   "tag": "a",
+   "role": "link",
+   "name": "Home",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Home Home",
+   "context_text": "",
+   "attributes": {
+    "href": "/",
+    "class": "⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-c as-17 as-18 as-19 as-1a as-1b as-1c as-71 as-1e as-1f as-1g as-1h as-72 ⚙1y25943"
+   }
+  },
+  {
+   "index": 154,
+   "tag": "a",
+   "role": "link",
+   "name": "Payments",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Payments Payments",
+   "context_text": "",
+   "attributes": {
+    "href": "/payments",
+    "class": "⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-c as-17 as-18 as-19 as-1a as-1b as-1c as-71 as-1e as-1f as-1g as-1h as-72 ⚙1y25943"
+   }
+  },
+  {
+   "index": 156,
+   "tag": "button",
+   "role": "button",
+   "name": "Ask about this page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Ask about this page Ask about this page",
+   "context_text": "",
+   "attributes": {
+    "class": "tooltip-trigger-isolate ⚙ rs-3 as-7j as-3n as-2z ⚙ld2wwb"
+   }
+  },
+  {
+   "index": 157,
+   "tag": "button",
+   "role": "button",
+   "name": "Copy for LLM",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Copy for LLM Copy for LLM",
+   "context_text": "",
+   "attributes": {
+    "class": "tooltip-trigger-isolate ⚙ rs-3 as-7j as-3n as-2z ⚙ld2wwb"
+   }
+  },
+  {
+   "index": 158,
+   "tag": "button",
+   "role": "button",
+   "name": "​ View as Markdown",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ View as Markdown View as Markdown",
+   "context_text": "",
+   "attributes": {
+    "class": "tooltip-trigger-isolate ⚙ rs-3 rs-4 as-7j as-3n as-2z as-w as-1k as-y as-1r ⚙r943wj"
+   }
+  },
+  {
+   "index": 159,
+   "tag": "button",
+   "role": "button",
+   "name": "Install tools",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Install tools Install tools",
+   "context_text": "",
+   "attributes": {
+    "class": "tooltip-trigger-isolate ⚙ rs-3 as-7j as-3n as-2z ⚙ld2wwb"
+   }
+  },
+  {
+   "index": 160,
+   "tag": "a",
+   "role": "link",
+   "name": "no-code options",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "no-code options no-code options",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/no-code"
+   }
+  },
+  {
+   "index": 161,
+   "tag": "a",
+   "role": "link",
+   "name": "our partners",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "our partners our partners",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "https://stripe.partners/"
+   }
+  },
+  {
+   "index": 162,
+   "tag": "button",
+   "role": "tab",
+   "name": "Stripe-hosted page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Stripe-hosted page Stripe-hosted page",
+   "context_text": "",
+   "attributes": {
+    "class": "UnstyledLink ContentTab-link",
+    "id": "tab-Stripe-hosted page",
+    "role": "tab",
+    "type": "button"
+   }
+  },
+  {
+   "index": 163,
+   "tag": "button",
+   "role": "tab",
+   "name": "Full embedded page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Full embedded page Full embedded page",
+   "context_text": "",
+   "attributes": {
+    "class": "UnstyledLink ContentTab-link",
+    "id": "tab-Full embedded page",
+    "role": "tab",
+    "type": "button"
+   }
+  },
+  {
+   "index": 164,
+   "tag": "a",
+   "role": "link",
+   "name": "Stripe Checkout",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Stripe Checkout Stripe Checkout",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/payments/checkout"
+   }
+  },
+  {
+   "index": 165,
+   "tag": "a",
+   "role": "link",
+   "name": "compares to Stripe’s other integration types",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "compares to Stripe’s other integration types compares to Stripe’s other integration types",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/payments/online-payments#compare-features-and-availability"
+   }
+  },
+  {
+   "index": 166,
+   "tag": "a",
+   "role": "link",
+   "name": "code quickstart",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "code quickstart code quickstart",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/checkout/quickstart"
+   }
+  },
+  {
+   "index": 168,
+   "tag": "a",
+   "role": "button",
+   "name": "Limited customization",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Limited customization Limited customization",
+   "context_text": "",
+   "attributes": {
+    "class": "tooltip-trigger-isolate ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-8e as-b as-16 as-17 as-18 as-19 as-1a as-1b as-42 as-6e as-6f as-8f as-8g as-8h as-8i as-8j as-6g as-6h as-8k ⚙1j42vq5",
+    "role": "button"
+   }
+  },
+  {
+   "index": 169,
+   "tag": "a",
+   "role": "link",
+   "name": "register",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "register register",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "https://dashboard.stripe.com/register"
+   }
+  },
+  {
+   "index": 170,
+   "tag": "a",
+   "role": "button",
+   "name": "Select a language",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Select a language Ruby",
+   "context_text": "",
+   "attributes": {
+    "id": "react-aria-:R1j4mq7ceqt9kmiq:",
+    "role": "button",
+    "class": "⚙ rs-2 rs-3 rs-4 rs-7 rs-3 rs-2 rs-5 rs-6 rs-4 rs-3 rs-2 rs-5 rs-7 rs-6 rs-8 rs-b rs-7 as-8 as-9 as-a as-w as-5z as-1k as-y as-14 as-3r as-3s as-31 as-3t as-21 as-3u as-18 as-82 as-3v as-4t as-8r as-3c as-8s as-8t as-7j as-8u as-1u as-1v as-3f as-3g as-41 as-42 as-8v as-32 as-4e as-8w as-8x as-8y as-25 as-8z as-27 as-90 as-91 as-2a as-92 as-2c as-93 as-94 as-17 as-95 as-30 as-3d as-96 as-97 as-98 as-99 as-9a as-9b as-9c ⚙pf2sqa"
+   }
+  },
+  {
+   "index": 179,
+   "tag": "button",
+   "role": "button",
+   "name": "Report incorrect code",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Report incorrect code",
+   "context_text": "",
+   "attributes": {
+    "aria-label": "Report incorrect code",
+    "class": "UnstyledLink tooltip-trigger-isolate",
+    "type": "button"
+   }
+  },
+  {
+   "index": 180,
+   "tag": "button",
+   "role": "button",
+   "name": "Copy",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Copy",
+   "context_text": "",
+   "attributes": {
+    "class": "UnstyledLink CodeBlock-copy-button tooltip-trigger-isolate",
+    "aria-label": "Copy",
+    "type": "button"
+   }
+  },
+  {
+   "index": 181,
+   "tag": "button",
+   "role": "button",
+   "name": "Explain using AI",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Explain using AI",
+   "context_text": "",
+   "attributes": {
+    "aria-label": "Explain using AI",
+    "class": "UnstyledLink tooltip-trigger-isolate",
+    "type": "button"
+   }
+  },
+  {
+   "index": 182,
+   "tag": "a",
+   "role": "button",
+   "name": "Select a language",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Select a language Ruby",
+   "context_text": "",
+   "attributes": {
+    "id": "react-aria-:R1j4qq7ceqt9kmiq:",
+    "role": "button",
+    "class": "⚙ rs-2 rs-3 rs-4 rs-7 rs-3 rs-2 rs-5 rs-6 rs-4 rs-3 rs-2 rs-5 rs-7 rs-6 rs-8 rs-b rs-7 as-8 as-9 as-a as-w as-5z as-1k as-y as-14 as-3r as-3s as-31 as-3t as-21 as-3u as-18 as-82 as-3v as-4t as-8r as-3c as-8s as-8t as-7j as-8u as-1u as-1v as-3f as-3g as-41 as-42 as-8v as-32 as-4e as-8w as-8x as-8y as-25 as-8z as-27 as-90 as-91 as-2a as-92 as-2c as-93 as-94 as-17 as-95 as-30 as-3d as-96 as-97 as-98 as-99 as-9a as-9b as-9c ⚙pf2sqa"
+   }
+  },
+  {
+   "index": 191,
+   "tag": "button",
+   "role": "button",
+   "name": "Report incorrect code",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Report incorrect code",
+   "context_text": "",
+   "attributes": {
+    "aria-label": "Report incorrect code",
+    "class": "UnstyledLink tooltip-trigger-isolate",
+    "type": "button"
+   }
+  },
+  {
+   "index": 192,
+   "tag": "button",
+   "role": "button",
+   "name": "Copy",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Copy",
+   "context_text": "",
+   "attributes": {
+    "class": "UnstyledLink CodeBlock-copy-button tooltip-trigger-isolate",
+    "aria-label": "Copy",
+    "type": "button"
+   }
+  },
+  {
+   "index": 193,
+   "tag": "button",
+   "role": "button",
+   "name": "Explain using AI",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Explain using AI",
+   "context_text": "",
+   "attributes": {
+    "aria-label": "Explain using AI",
+    "class": "UnstyledLink tooltip-trigger-isolate",
+    "type": "button"
+   }
+  },
+  {
+   "index": 194,
+   "tag": "a",
+   "role": "link",
+   "name": "Redirect your customer to Stripe Checkout​ Client-side ​ Server-side",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Redirect your customer to Stripe Checkout​ Client-side ​ Server-side Redirect your customer to Stripe Checkout Client-side Server-side",
+   "context_text": "",
+   "attributes": {
+    "class": "UnstyledLink InlineLink Text-color--blue",
+    "href": "#redirect-customers"
+   }
+  },
+  {
+   "index": 195,
+   "tag": "span",
+   "role": "button",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "button",
+    "class": "⚙  as-3r as-1e as-1u as-1v as-7v ⚙sm5kdb"
+   }
+  },
+  {
+   "index": 196,
+   "tag": "a",
+   "role": "link",
+   "name": "Checkout Session",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Checkout Session Checkout Session",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/api/checkout/sessions/create"
+   }
+  },
+  {
+   "index": 197,
+   "tag": "a",
+   "role": "link",
+   "name": "line_items",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "line_items line_items",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/api/checkout/sessions/create#create_checkout_session-line_items"
+   }
+  },
+  {
+   "index": 198,
+   "tag": "a",
+   "role": "link",
+   "name": "success_url",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "success_url success_url",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/api/checkout/sessions/create#create_checkout_session-success_url"
+   }
+  },
+  {
+   "index": 199,
+   "tag": "a",
+   "role": "link",
+   "name": "integration_identifier",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "integration_identifier integration_identifier",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/api/checkout/sessions/create#create_checkout_session-integration_identifier"
+   }
+  },
+  {
+   "index": 296,
+   "tag": "div",
+   "role": "generic",
+   "name": "The Stripe Docs logo",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "The Stripe Docs logo",
+   "context_text": "",
+   "attributes": {
+    "class": "⚙  as-1p as-1q ⚙a43k5a"
+   }
+  },
+  {
+   "index": 414,
+   "tag": "a",
+   "role": "generic",
+   "name": "Accept a payment",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Accept a payment",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5v as-4b as-z as-1d as-1c as-1e as-5w as-5x as-5y ⚙1ra6csd"
+   }
+  },
+  {
+   "index": 419,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙   as-5z as-60 as-61 as-62 as-63 as-64 as-65 as-66 as-67 as-x ⚙qs21ju"
+   }
+  },
+  {
+   "index": 422,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Overview",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Overview Overview",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/payments/online-payments",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 427,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Find your use case",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Find your use case Find your use case",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/payments/use-cases/get-started",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 434,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 442,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 450,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 458,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 466,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 472,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Recurring payments",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Recurring payments Recurring payments",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/recurring-payments",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 477,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Migrate legacy integrations",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Migrate legacy integrations Migrate legacy integrations",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/payments/migrations",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 482,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙   as-5z as-60 as-61 as-62 as-63 as-64 as-65 as-66 as-67 as-x ⚙qs21ju"
+   }
+  },
+  {
+   "index": 487,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 493,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Availability",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Availability Availability",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/terminal/payments/collect-card-payment/supported-card-brands",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 500,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 508,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 516,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 522,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙   as-5z as-60 as-61 as-62 as-63 as-64 as-65 as-66 as-67 as-x ⚙qs21ju"
+   }
+  },
+  {
+   "index": 527,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 535,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 543,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 549,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙   as-5z as-60 as-61 as-62 as-63 as-64 as-65 as-66 as-67 as-x ⚙qs21ju"
+   }
+  },
+  {
+   "index": 554,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 560,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Balances and settlement time",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Balances and settlement time Balances and settlement time",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/payments/balances",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 567,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 575,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 583,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 591,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 599,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 605,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Receipts",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Receipts Receipts",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/receipts",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 610,
+   "tag": "a",
+   "role": "link",
+   "name": "​ Refunds and cancellations",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "​ Refunds and cancellations Refunds and cancellations",
+   "context_text": "",
+   "attributes": {
+    "data-testid": "docs-sidebar-node-link",
+    "href": "/refunds",
+    "class": "⚙ rs-4 rs-3  as-w as-1b as-9 as-5t as-5u as-4b as-z as-2r ⚙374x3o"
+   }
+  },
+  {
+   "index": 615,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙   as-5z as-60 as-61 as-62 as-63 as-64 as-65 as-66 as-67 as-x ⚙qs21ju"
+   }
+  },
+  {
+   "index": 620,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 628,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 636,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 644,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 650,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙   as-5z as-60 as-61 as-62 as-63 as-64 as-65 as-66 as-67 as-x ⚙qs21ju"
+   }
+  },
+  {
+   "index": 655,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 663,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 671,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 679,
+   "tag": "svg",
+   "role": "image",
+   "name": "Dropdown closed",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Dropdown closed",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "data-testid": "docs-sidebar-node-chevron",
+    "aria-label": "Dropdown closed",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-6a as-6b ⚙17666w7"
+   }
+  },
+  {
+   "index": 703,
+   "tag": "svg",
+   "role": "image",
+   "name": "Click to collapse the sidebar and hide the navigation",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Click to collapse the sidebar and hide the navigation",
+   "context_text": "",
+   "attributes": {
+    "role": "img",
+    "aria-label": "Click to collapse the sidebar and hide the navigation",
+    "class": "⚙   as-2e as-2f as-2g as-2h as-3o as-2j as-2k as-6n ⚙4ujh7x"
+   }
+  },
+  {
+   "index": 706,
+   "tag": "a",
+   "role": "generic",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "id": "main-content"
+   }
+  },
+  {
+   "index": 734,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙  as-5z as-60 as-61 as-62 as-63 as-64 as-65 ⚙1nm6b28"
+   }
+  },
+  {
+   "index": 741,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙  as-5z as-60 as-61 as-62 as-63 as-64 as-65 ⚙1nm6b28"
+   }
+  },
+  {
+   "index": 749,
+   "tag": "span",
+   "role": "separator",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "role": "separator",
+    "class": "⚙  as-5z as-60 as-61 as-62 as-63 as-64 as-65 ⚙1nm6b28"
+   }
+  },
+  {
+   "index": 774,
+   "tag": "div",
+   "role": "generic",
+   "name": "Checkout",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Checkout",
+   "context_text": "",
+   "attributes": {
+    "class": "PressableCore-base Box-root"
+   }
+  },
+  {
+   "index": 775,
+   "tag": "span",
+   "role": "none",
+   "name": "Checkout",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Checkout",
+   "context_text": "",
+   "attributes": {
+    "class": "ToggleItem-label Text-color--blue Text-fontSize--14 Text-fontWeight--medium Text-lineHeight--20 Text-numericSpacing--proportional Text-typeface--base Text-wrap--wrap Text-display--inline"
+   }
+  },
+  {
+   "index": 780,
+   "tag": "div",
+   "role": "generic",
+   "name": "Elements",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Elements",
+   "context_text": "",
+   "attributes": {
+    "class": "PressableCore-base Box-root"
+   }
+  },
+  {
+   "index": 781,
+   "tag": "span",
+   "role": "none",
+   "name": "Elements",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Elements",
+   "context_text": "",
+   "attributes": {
+    "class": "ToggleItem-label Text-color--default Text-fontSize--14 Text-fontWeight--medium Text-lineHeight--20 Text-numericSpacing--proportional Text-typeface--base Text-wrap--wrap Text-display--inline"
+   }
+  },
+  {
+   "index": 786,
+   "tag": "div",
+   "role": "generic",
+   "name": "Mobile",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Mobile",
+   "context_text": "",
+   "attributes": {
+    "class": "PressableCore-base Box-root"
+   }
+  },
+  {
+   "index": 787,
+   "tag": "span",
+   "role": "none",
+   "name": "Mobile",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Mobile",
+   "context_text": "",
+   "attributes": {
+    "class": "ToggleItem-label Text-color--default Text-fontSize--14 Text-fontWeight--medium Text-lineHeight--20 Text-numericSpacing--proportional Text-typeface--base Text-wrap--wrap Text-display--inline"
+   }
+  },
+  {
+   "index": 792,
+   "tag": "div",
+   "role": "generic",
+   "name": "Stripe-hosted page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Stripe-hosted page",
+   "context_text": "",
+   "attributes": {
+    "class": "ContentTab Subselector-tab ContentTab--active Box-root"
+   }
+  },
+  {
+   "index": 793,
+   "tag": "div",
+   "role": "generic",
+   "name": "Stripe-hosted page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Stripe-hosted page",
+   "context_text": "",
+   "attributes": {}
+  },
+  {
+   "index": 794,
+   "tag": "div",
+   "role": "none",
+   "name": "Stripe-hosted page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Stripe-hosted page",
+   "context_text": "",
+   "attributes": {
+    "class": "Box-root Flex-flex"
+   }
+  },
+  {
+   "index": 800,
+   "tag": "div",
+   "role": "none",
+   "name": "Full embedded page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Full embedded page",
+   "context_text": "",
+   "attributes": {
+    "class": "ContentTab Subselector-tab Box-root"
+   }
+  },
+  {
+   "index": 801,
+   "tag": "div",
+   "role": "generic",
+   "name": "Full embedded page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Full embedded page",
+   "context_text": "",
+   "attributes": {}
+  },
+  {
+   "index": 802,
+   "tag": "div",
+   "role": "none",
+   "name": "Full embedded page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Full embedded page",
+   "context_text": "",
+   "attributes": {
+    "class": "Box-root Flex-flex"
+   }
+  },
+  {
+   "index": 821,
+   "tag": "a",
+   "role": "link",
+   "name": "Checkout preview",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Checkout preview",
+   "context_text": "",
+   "attributes": {
+    "href": "https://checkout.stripe.dev/",
+    "class": "⚙  as-5z as-0 as-x as-84 ⚙ny205v"
+   }
+  },
+  {
+   "index": 830,
+   "tag": "svg",
+   "role": "",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "⚙   as-2e as-2f as-2g as-2h as-8c as-2j as-2k ⚙113hstx"
+   }
+  },
+  {
+   "index": 834,
+   "tag": "svg",
+   "role": "",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "⚙   as-2e as-2f as-2g as-2h as-8c as-2j as-2k ⚙113hstx"
+   }
+  },
+  {
+   "index": 838,
+   "tag": "svg",
+   "role": "",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "⚙   as-2e as-2f as-2g as-2h as-8d as-2j as-2k ⚙gd9mll"
+   }
+  },
+  {
+   "index": 842,
+   "tag": "svg",
+   "role": "",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "⚙   as-2e as-2f as-2g as-2h as-8d as-2j as-2k ⚙gd9mll"
+   }
+  },
+  {
+   "index": 876,
+   "tag": "div",
+   "role": "",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "SVGInline SVGInline--cleaned SVG Icon Icon--api CodeBlock-file-icon Icon-color Icon-color--gray300 Box-root Flex-flex"
+   }
+  },
+  {
+   "index": 877,
+   "tag": "svg",
+   "role": "",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "SVGInline-svg SVGInline--cleaned-svg SVG-svg Icon-svg Icon--api-svg CodeBlock-file-icon-svg Icon-color-svg Icon-color--gray300-svg"
+   }
+  },
+  {
+   "index": 934,
+   "tag": "span",
+   "role": "",
+   "name": "sudo",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "sudo",
+   "context_text": "",
+   "attributes": {
+    "class": "token function"
+   }
+  },
+  {
+   "index": 936,
+   "tag": "span",
+   "role": "",
+   "name": "gem",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "gem",
+   "context_text": "",
+   "attributes": {
+    "class": "token function"
+   }
+  },
+  {
+   "index": 944,
+   "tag": "div",
+   "role": "",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "SVGInline SVGInline--cleaned SVG Icon Icon--document CodeBlock-file-icon Icon-color Icon-color--gray300 Box-root Flex-flex"
+   }
+  },
+  {
+   "index": 945,
+   "tag": "svg",
+   "role": "",
+   "name": "",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "",
+   "context_text": "",
+   "attributes": {
+    "class": "SVGInline-svg SVGInline--cleaned-svg SVG-svg Icon-svg Icon--document-svg CodeBlock-file-icon-svg Icon-color-svg Icon-color--gray300-svg"
+   }
+  },
+  {
+   "index": 1002,
+   "tag": "span",
+   "role": "",
+   "name": "gem",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "gem",
+   "context_text": "",
+   "attributes": {
+    "class": "token unknown-token"
+   }
+  },
+  {
+   "index": 1033,
+   "tag": "div",
+   "role": "generic",
+   "name": "Add an endpoint on your server that creates a Checkout Session . A Checkout Ses…",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Add an endpoint on your server that creates a Checkout Session . A Checkout Session is the programmatic representation of what your customer sees when they’re redirected to the payment form. You can configure it with parameters such as: line_items to set the price and currency of what you’re charging success_url to redirect your customer after they complete the payment integration_identifier to group and track Checkout Sessions Many other parameters are available, such as customer , which lets you prefill Checkout fields with known contact information and unify your purchase history. See create a Checkout Session for a full list of parameters. After creating a Checkout Session, redirect your customer to the URL returned in the response. Note Checkout Sessions expire 24 hours after creation by default. Select a language Ruby Ruby Python PHP Java Node.js Go .NET # This example sets up an endpoint using the Sinatra framework. require 'json' require 'sinatra' require 'stripe' # Don't put a … hods on or off in the Stripe Dashboard . In Checkout, Stripe evaluates the currency and any restrictions, then dynamically presents the supported payment methods to the customer. To see how your payment methods appear to customers, enter a transaction ID or set an order amount and currency in the Dashboard’s payment methods review page. Checkout supports Apple Pay and Google Pay with no integration changes. Learn how to test wallets . Verify your integration You should now have a working checkout button that redirects your customer to Stripe Checkout. Click the checkout button. You’re redirected to the Stripe Checkout payment form. If your integration isn’t working: Open the Network tab in your browser’s developer tools. Click the checkout button and confirm it sent an XHR request to your server-side endpoint ( POST /create-checkout-session ). Verify the request is returning a 200 status. Use console . log(session) inside your button click listener to confirm the correct data returned.",
+   "context_text": "",
+   "attributes": {
+    "class": "Section-content Box-root Padding-top--0 Padding-bottom--32"
+   }
+  },
+  {
+   "index": 1062,
+   "tag": "a",
+   "role": "link",
+   "name": "customer",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "customer customer",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/api/checkout/sessions/create#create_checkout_session-customer"
+   }
+  },
+  {
+   "index": 1067,
+   "tag": "a",
+   "role": "link",
+   "name": "create a Checkout Session",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "create a Checkout Session create a Checkout Session",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/api/checkout/sessions/create"
+   }
+  },
+  {
+   "index": 1074,
+   "tag": "a",
+   "role": "link",
+   "name": "URL",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "URL URL",
+   "context_text": "",
+   "attributes": {
+    "class": "Link ⚙ rs-2 rs-3 rs-3 as-8 as-9 as-a as-b as-6i as-17 as-18 as-19 as-1a as-1b as-1c as-1d as-1e as-1f as-1g as-1h ⚙3jnnh",
+    "href": "/api/checkout/sessions/object#checkout_session_object-url"
+   }
+  },
+  {
+   "index": 1094,
+   "tag": "a",
+   "role": "button",
+   "name": "Select a language",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Select a language Ruby",
+   "context_text": "",
+   "attributes": {
+    "id": "react-aria-:R6cj6inceqt9kmiq:",
+    "role": "button",
+    "class": "⚙ rs-2 rs-3 rs-4 rs-7 rs-3 rs-2 rs-5 rs-6 rs-4 rs-3 rs-2 rs-5 rs-7 rs-6 rs-8 rs-b rs-7 as-8 as-9 as-a as-w as-5z as-1k as-y as-14 as-3r as-3s as-31 as-3t as-21 as-3u as-18 as-82 as-3v as-4t as-8r as-3c as-8s as-8t as-7j as-8u as-1u as-1v as-3f as-3g as-41 as-42 as-8v as-32 as-4e as-8w as-8x as-8y as-25 as-8z as-27 as-90 as-91 as-2a as-92 as-2c as-93 as-94 as-17 as-95 as-30 as-3d as-96 as-97 as-98 as-99 as-9a as-9b as-9c ⚙pf2sqa"
+   }
+  },
+  {
+   "index": 1134,
+   "tag": "button",
+   "role": "button",
+   "name": "Report incorrect code",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Report incorrect code",
+   "context_text": "",
+   "attributes": {
+    "aria-label": "Report incorrect code",
+    "class": "UnstyledLink tooltip-trigger-isolate",
+    "type": "button"
+   }
+  },
+  {
+   "index": 1139,
+   "tag": "button",
+   "role": "button",
+   "name": "Copy",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Copy",
+   "context_text": "",
+   "attributes": {
+    "class": "UnstyledLink CodeBlock-copy-button tooltip-trigger-isolate",
+    "aria-label": "Copy",
+    "type": "button"
+   }
+  },
+  {
+   "index": 1144,
+   "tag": "button",
+   "role": "button",
+   "name": "Explain using AI",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Explain using AI",
+   "context_text": "",
+   "attributes": {
+    "aria-label": "Explain using AI",
+    "class": "UnstyledLink tooltip-trigger-isolate",
+    "type": "button"
+   }
+  },
+  {
+   "index": 1160,
+   "tag": "span",
+   "role": "",
+   "name": "'json'",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "'json'",
+   "context_text": "",
+   "attributes": {
+    "class": "token string"
+   }
+  },
+  {
+   "index": 2546,
+   "tag": "a",
+   "role": "link",
+   "name": "Redirect your customer to Stripe Checkout",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Redirect your customer to Stripe Checkout Redirect your customer to Stripe Checkout",
+   "context_text": "",
+   "attributes": {
+    "href": "#redirect-customers",
+    "title": "Redirect your customer to Stripe Checkout",
+    "class": "⚙ rs-3 as-12 as-2n as-1c as-1d as-1e ⚙1ggc3c3"
+   }
+  },
+  {
+   "index": 2551,
+   "tag": "a",
+   "role": "link",
+   "name": "Add a checkout button to your website",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Add a checkout button to your website Add a checkout button to your website",
+   "context_text": "",
+   "attributes": {
+    "href": "#add-a-checkout-button-to-your-website",
+    "title": "Add a checkout button to your website",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2556,
+   "tag": "a",
+   "role": "link",
+   "name": "Payment methods",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Payment methods Payment methods",
+   "context_text": "",
+   "attributes": {
+    "href": "#payment-methods",
+    "title": "Payment methods",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2561,
+   "tag": "a",
+   "role": "link",
+   "name": "Verify your integration",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Verify your integration Verify your integration",
+   "context_text": "",
+   "attributes": {
+    "href": "#redirect-stripe-checkout-testing",
+    "title": "Verify your integration",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2566,
+   "tag": "a",
+   "role": "link",
+   "name": "Show a success page",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Show a success page Show a success page",
+   "context_text": "",
+   "attributes": {
+    "href": "#success-page",
+    "title": "Show a success page",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2571,
+   "tag": "a",
+   "role": "link",
+   "name": "Handle post-payment events",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Handle post-payment events Handle post-payment events",
+   "context_text": "",
+   "attributes": {
+    "href": "#post-payment",
+    "title": "Handle post-payment events",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2576,
+   "tag": "a",
+   "role": "link",
+   "name": "Test your integration",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Test your integration Test your integration",
+   "context_text": "",
+   "attributes": {
+    "href": "#additional-testing-resources",
+    "title": "Test your integration",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2581,
+   "tag": "a",
+   "role": "link",
+   "name": "Create products and pricesOptional",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Create products and pricesOptional Create products and prices Optional",
+   "context_text": "",
+   "attributes": {
+    "href": "#create-product-prices-upfront",
+    "title": "Create products and prices",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2588,
+   "tag": "a",
+   "role": "link",
+   "name": "Prefill customer dataOptional",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Prefill customer dataOptional Prefill customer data Optional",
+   "context_text": "",
+   "attributes": {
+    "href": "#prefill-customer-data",
+    "title": "Prefill customer data",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2595,
+   "tag": "a",
+   "role": "link",
+   "name": "Save payment method detailsOptional",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Save payment method detailsOptional Save payment method details Optional",
+   "context_text": "",
+   "attributes": {
+    "href": "#save-payment-method-details",
+    "title": "Save payment method details",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2602,
+   "tag": "a",
+   "role": "link",
+   "name": "Separate authorisation and captureOptional",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "Separate authorisation and captureOptional Separate authorisation and capture Optional",
+   "context_text": "",
+   "attributes": {
+    "href": "#auth-and-capture",
+    "title": "Separate authorisation and capture",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  },
+  {
+   "index": 2609,
+   "tag": "a",
+   "role": "link",
+   "name": "See also",
+   "input_type": "",
+   "autocomplete": "",
+   "placeholder": "",
+   "value": "",
+   "frame_url": "",
+   "full_text": "See also See also",
+   "context_text": "",
+   "attributes": {
+    "href": "#see-also",
+    "title": "See also",
+    "class": "⚙ rs-3 as-2n as-2r ⚙1m3bffg"
+   }
+  }
+ ]
+}
