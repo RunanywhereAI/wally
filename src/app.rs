@@ -77,6 +77,7 @@ pub fn configure_app(app: &mut App) {
     crate::commands::register_chatgpt(app);
     crate::commands::register_openwork(app);
     crate::commands::register_harness(app); // coding agents
+    crate::commands::register_pls(app); // hybrid router, development entry
     crate::commands::register_default_models(app);
 
     crate::commands::register_account(app); // account login/logout/whoami/usage
@@ -225,7 +226,7 @@ fn root_flags_before_passthrough(argv: &[String]) -> Vec<&str> {
 /// `--context-window` take a following value; the rest are booleans. The `=`
 /// forms carry their value inline.
 fn consumes_following_value(token: &str) -> bool {
-    token == "-m" || token == "--model" || token == "--context-window"
+    token == "-m" || token == "--model" || token == "--context-window" || token == "--cloud-model"
 }
 
 fn is_wally_flag(token: &str) -> bool {
@@ -238,6 +239,9 @@ fn is_wally_flag(token: &str) -> bool {
         || token == "--serve"
         || token == "--restore"
         || token == "--cloud"
+        || token == "--hybrid"
+        || token == "--cloud-model"
+        || token.starts_with("--cloud-model=")
         || token == "-h"
         || token == "--help"
 }
@@ -493,6 +497,40 @@ mod tests {
 
     fn argv(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn hybrid_flags_stay_on_wally_side_of_the_passthrough_split() {
+        // `--hybrid` and `--cloud-model` are wally's own; without them in the
+        // wally-flag list a `--` is inserted before them and dsh rejects them.
+        let split = split_passthrough_argv(&argv(&[
+            "wally",
+            "deepseek",
+            "--hybrid",
+            "-m",
+            "qwen3-4b",
+            "--cloud-model",
+            "glm-5.3-flash",
+            "do",
+            "the",
+            "thing",
+        ]));
+        assert_eq!(
+            split,
+            argv(&[
+                "wally",
+                "deepseek",
+                "--hybrid",
+                "-m",
+                "qwen3-4b",
+                "--cloud-model",
+                "glm-5.3-flash",
+                "--",
+                "do",
+                "the",
+                "thing",
+            ])
+        );
     }
 
     #[test]

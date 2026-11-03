@@ -200,6 +200,17 @@ pub fn register_harness(app: &mut App) {
             ValueType::Text,
             "A model on this machine, or a hosted one from your account",
         );
+        if agent.id == "deepseek" {
+            command.add_flag(
+                "--hybrid",
+                "Route the parent to the cloud and subagents to a local model",
+            );
+            command.add_option(
+                "--cloud-model",
+                ValueType::Text,
+                "The cloud model the parent lane uses (defaults to your default model)",
+            );
+        }
         command
             .add_option("args", ValueType::Text, "Passed through to the tool")
             .multi();
@@ -213,12 +224,18 @@ pub fn register_harness(app: &mut App) {
             if !harness::ensure_installed(agent.command) {
                 return 127;
             }
-            harness::launch_agent(
-                &agent,
-                &resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color),
-                &p.get_strs("args"),
-                g,
-            )
+            if agent.id == "deepseek" && p.flag("--hybrid") {
+                // `-m` names the *local* model here, so an absent one must not
+                // be filled with the cloud default.
+                let local = p.get_str("--model").unwrap_or_default();
+                let cloud = p
+                    .get_str("--cloud-model")
+                    .unwrap_or_else(|| resolve_default_model("", g.no_color));
+                return harness::launch_deep_seek_hybrid(&local, &cloud, &p.get_strs("args"), g);
+            }
+            let model =
+                resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color);
+            harness::launch_agent(&agent, &model, &p.get_strs("args"), g)
         });
     }
 }

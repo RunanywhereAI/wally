@@ -8,12 +8,14 @@ use serde_json::{json, Value};
 
 use crate::account::{self, ConsoleClient};
 use crate::bootstrap::GlobalOptions;
+use crate::catalog;
 use crate::io::json::{dump, dump_pretty};
 use crate::io::output as out;
 
 use super::catalog_models::{catalog_models_for, CatalogModel};
 use super::declared_harness::{harness_header_value, DeclaredHarness, HARNESS_HEADER};
 use super::harness::{launch, release, resolve, Endpoint};
+use super::local_models::local_models;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handoff {
@@ -1428,6 +1430,228 @@ pub fn build_deep_seek_patch(llm_config: &str, model: &str) -> String {
     )
 }
 
+/// The model id the router exposes. One id on both providers, so the picker
+/// shows one model and the lane is decided by the provider, not the id.
+pub const HYBRID_MODEL_ID: &str = "Hybird-Wally-0.1";
+
+/// The two-provider `llm-pi-ai` config. Both providers carry the same model;
+/// `wally` is the parent lane (cloud) and `wally-local` the child lane (local).
+fn build_hybrid_llm_config(base_url: &str, key_variable: &str) -> String {
+    let model = json!({
+        "id": HYBRID_MODEL_ID,
+        "name": HYBRID_MODEL_ID,
+        "input": ["text"],
+        "contextWindow": 57344,
+        "maxTokens": 8192,
+        "reasoningEfforts": false,
+    });
+    let provider = |name: &str, path: &str| {
+        json!({
+            "displayName": name,
+            "api": "openai-completions",
+            "baseURL": format!("{base_url}{path}"),
+            "apiKeyEnv": key_variable,
+            "models": [model.clone()],
+        })
+    };
+    dump(&json!({
+        "providers": {
+            PROVIDER_ID: provider("Wally", "/v1"),
+            "wally-local": provider("Wally (local)", "/local/v1"),
+        }
+    }))
+}
+
+/// The patch for a hybrid launch: both providers, the parent on the cloud
+/// lane, and every subagent pinned to the local lane.
+fn build_hybrid_patch(llm_config: &str) -> String {
+    let mut patch = format!(
+        "- id: llm-pi-ai\n  config: {llm_config}\n\
+         - id: agent-default-model\n  config:\n    provider: {PROVIDER_ID}\n    model: {}\n\
+         - id: tool-subagent\n  disabled: false\n  config:\n    provider: spawn\n    agentOptions:\n      provider: wally-local\n      model: {}\n",
+        yaml_single_quoted(HYBRID_MODEL_ID),
+        yaml_single_quoted(HYBRID_MODEL_ID),
+    );
+    // The web profile mounts its own copy of the tool from the `standard`
+    // agent preset, so the row above is inert there. The preset is a root
+    // entry, and a patch replaces its whole config, so its plugin list is
+    // copied from the installed preset with the child route injected.
+    if let Some(preset) = hybrid_preset_patch() {
+        patch.push_str(&preset);
+    }
+    patch
+}
+
+/// `preset-standard` with `agentOptions` added to its `tool-subagent` row, or
+/// `None` when the installed preset cannot be read or no longer has that row.
+fn hybrid_preset_patch() -> Option<String> {
+    let dsh = find_on_path("dsh")?;
+    let root = dsh.canonicalize().ok()?.parent()?.parent()?.to_path_buf();
+    let file = root.join("node_modules/@deepseek-ai/dsh-web-app/presets/standard.patch.yml");
+    let text = std::fs::read_to_string(file).ok()?;
+
+    let mut block: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("- id: preset-standard") {
+            inside = true;
+            continue;
+        }
+        if inside {
+            let indent = line.len() - line.trim_start().len();
+            if !line.trim().is_empty() && indent <= 4 {
+                break;
+            }
+            block.push(line);
+        }
+    }
+    if !block.iter().any(|line| line.trim() == "- id: tool-subagent") {
+        return None;
+    }
+
+    let mut out = String::from("- id: preset-standard\n");
+    let mut injected = false;
+    for line in block {
+        let stripped = line.strip_prefix("    ").unwrap_or(line);
+        let trimmed = stripped.trim_start();
+        if trimmed.starts_with("name:") && !injected && out.ends_with("- id: preset-standard\n") {
+            continue;
+        }
+        out.push_str(stripped);
+        out.push('\n');
+        if !injected && trimmed == "config:" && out.contains("- id: tool-subagent\n") {
+            let indent = stripped.len() - trimmed.len();
+            let pad = " ".repeat(indent + 2);
+            out.push_str(&format!(
+                "{pad}agentOptions:\n{pad}  provider: wally-local\n{pad}  model: {}\n",
+                yaml_single_quoted(HYBRID_MODEL_ID),
+            ));
+            injected = true;
+        }
+    }
+    injected.then_some(out)
+}
+
+fn find_on_path(tool: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(tool))
+        .find(|candidate| candidate.is_file())
+}
+
+/// The first downloaded MLX model certified for a harness, as a catalog id.
+fn default_hybrid_model(options: &GlobalOptions) -> Option<String> {
+    let env = crate::bootstrap::bootstrap(options).ok()?;
+    local_models(&env.home)
+        .into_iter()
+        .filter(|candidate| candidate.framework == "MLX")
+        .find_map(|candidate| {
+            let entry = catalog::all().iter().find(|entry| {
+                entry.harness_compatible && candidate.id.contains(entry.id)
+            })?;
+            Some(entry.id.to_string())
+        })
+}
+
+/// The directory of the local model `model` names, if it is an MLX model on
+/// this machine.
+fn hybrid_model_directory(model: &str, options: &GlobalOptions) -> Option<String> {
+    if Path::new(model).is_dir() {
+        return Some(model.to_string());
+    }
+    let env = crate::bootstrap::bootstrap(options).ok()?;
+    let entry = catalog::find(model)?;
+    let installed = local_models(&env.home);
+    let found = installed.iter().find(|candidate| {
+        candidate.framework == "MLX"
+            && (candidate.id == model
+                || candidate.id == entry.id
+                || candidate.id.contains(&entry.id)
+                || catalog::merge_key_for(&candidate.id) == model)
+    })?;
+    if found.dir.is_empty() {
+        out::error_line(&format!("{model} is on this machine but has no directory"));
+        return None;
+    }
+    Some(found.dir.clone())
+}
+
+/// `wally deepseek --hybrid`: route the parent to the cloud and every
+/// subagent to the local model through the PLS router.
+pub fn launch_deep_seek_hybrid(
+    model: &str,
+    cloud_model: &str,
+    args: &[String],
+    options: &GlobalOptions,
+) -> i32 {
+    clean_leftover_configs();
+    // No -m: use the first downloaded MLX model certified for a harness, so
+    // `wally deepseek --hybrid` alone is enough.
+    let picked;
+    let model = if model.is_empty() {
+        match default_hybrid_model(options) {
+            Some(id) => {
+                picked = id;
+                picked.as_str()
+            }
+            None => {
+                out::error_line("--hybrid needs -m <local model> and none is downloaded");
+                return 2;
+            }
+        }
+    } else {
+        model
+    };
+    let Some(directory) = hybrid_model_directory(model, options) else {
+        out::error_line(&format!("{model} is not a downloaded MLX model"));
+        out::status_line("pull one first: wally models pull <model>");
+        return 1;
+    };
+    if cloud_model.is_empty() {
+        out::error_line("--hybrid needs a cloud model: pass --cloud-model <id> or set a default");
+        return 2;
+    }
+    super::pls::configure(&directory, cloud_model);
+    let Some(router) = super::pls::start(&directory) else {
+        return 1;
+    };
+
+    let llm_config = build_hybrid_llm_config(&router.base_url, KEY_VARIABLE);
+    let mut config = TemporaryConfig::new();
+    if let Err(failure) = config.write(&build_hybrid_patch(&llm_config), ".yaml") {
+        out::error_line(&failure);
+        return 1;
+    }
+    let key = ScopedEnv::new(KEY_VARIABLE, "local");
+    if !key.applied() {
+        out::error_line("could not set the router key");
+        return 1;
+    }
+
+    let names_profile = args.iter().any(|arg| arg == "--profile");
+    let mut launch_args: Vec<String> = if names_profile {
+        vec!["--patch".to_string(), config.path()]
+    } else if deep_seek_wants_headless(args) {
+        vec![
+            "--profile".to_string(),
+            "headless".to_string(),
+            "--patch".to_string(),
+            config.path(),
+        ]
+    } else {
+        out::status_line("opening the dsh web ui; pass a prompt to run headless instead");
+        deep_seek_web_args(&config.path(), args)
+    };
+    launch_args.extend(args.iter().cloned());
+    out::status_line(&format!(
+        "hybrid: parent on the cloud, subagents on {model} through {}",
+        router.base_url
+    ));
+    let status = launch("dsh", "", &launch_args, options);
+    drop(router);
+    status
+}
+
 pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &GlobalOptions) -> i32 {
     // Command Code takes its lock and checks for its own subcommands before
     // an endpoint is resolved, so it runs its own launch from the start.
@@ -2306,6 +2530,34 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn hybrid_patch_registers_both_lanes_and_pins_subagents_local() {
+        let config = build_hybrid_llm_config("http://127.0.0.1:1234", "WALLY_PLS_KEY");
+        let parsed: Value = serde_json::from_str(&config).unwrap();
+        assert_eq!(
+            parsed["providers"][PROVIDER_ID]["baseURL"],
+            json!("http://127.0.0.1:1234/v1")
+        );
+        assert_eq!(
+            parsed["providers"]["wally-local"]["baseURL"],
+            json!("http://127.0.0.1:1234/local/v1")
+        );
+        assert_eq!(
+            parsed["providers"]["wally-local"]["models"][0]["id"],
+            json!(HYBRID_MODEL_ID)
+        );
+
+        let patch = build_hybrid_patch(&config);
+        // The row's own provider must survive the overlay, or dsh rejects the
+        // whole config with "$.provider missing required value".
+        assert!(patch.contains("provider: spawn"));
+        // The web profile disables this row; without the override the parent
+        // has no subagent tool and nothing ever reaches the local lane.
+        assert!(patch.contains("disabled: false"));
+        assert!(patch.contains("provider: wally-local"));
+        assert!(patch.contains(&format!("model: '{HYBRID_MODEL_ID}'")));
     }
 
     #[test]

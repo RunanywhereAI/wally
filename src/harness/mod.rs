@@ -19,6 +19,7 @@ pub mod local_models;
 pub mod opencode;
 pub mod openwork;
 pub mod path_reload;
+pub mod pls;
 pub mod shannon;
 pub mod vvah;
 

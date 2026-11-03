@@ -299,6 +299,86 @@ unsafe extern "C" fn callback(proto_bytes: *const u8, proto_size: usize, _user_d
     });
 }
 
+// -----------------------------------------------------------------------------
+// Indeterminate
+// -----------------------------------------------------------------------------
+
+/// A spinner for work with no measurable fraction: a fixed-width cell cycling
+/// braille frames on stderr, cleared before the next line. Non-TTY prints one
+/// plain line per label change instead.
+pub struct Indeterminate {
+    interactive: bool,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    label: Arc<Mutex<String>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+    line_open: bool,
+}
+
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+impl Indeterminate {
+    pub fn new(interactive: bool) -> Self {
+        let interactive = interactive && term::stderr_is_tty();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let label = Arc::new(Mutex::new(String::new()));
+        let handle = if interactive {
+            let stop = Arc::clone(&stop);
+            let label = Arc::clone(&label);
+            Some(std::thread::spawn(move || {
+                let mut frame = 0;
+                while !stop.load(Ordering::SeqCst) {
+                    let text = label.lock().map(|l| l.clone()).unwrap_or_default();
+                    if !text.is_empty() {
+                        eprint!("\r\x1b[2K{} {text}", SPINNER[frame % SPINNER.len()]);
+                        let _ = std::io::stderr().flush();
+                    }
+                    frame += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                }
+            }))
+        } else {
+            None
+        };
+        Indeterminate {
+            interactive,
+            stop,
+            label,
+            handle,
+            line_open: false,
+        }
+    }
+
+    pub fn set(&mut self, text: &str) {
+        if let Ok(mut label) = self.label.lock() {
+            *label = text.to_string();
+        }
+        if self.interactive {
+            self.line_open = true;
+        } else {
+            output::status_line(text);
+        }
+    }
+
+    /// Stop the spinner and terminate its line.
+    pub fn finish(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        if self.line_open {
+            eprintln!();
+            let _ = std::io::stderr().flush();
+            self.line_open = false;
+        }
+    }
+}
+
+impl Drop for Indeterminate {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
