@@ -1,7 +1,7 @@
 """Exercise the built Unix Wally updater against a loopback installer server.
 
-The served scripts only record their arguments and print fixture output. No
-release is downloaded and no existing installation changes.
+The served scripts create and remove a scratch directory, record their arguments,
+and print fixture output. No release is downloaded or existing installation changed.
 Run on macOS and Linux: python3 scripts/test/test-update-download.py ./build/wally
 """
 
@@ -21,6 +21,9 @@ from urllib.parse import parse_qs, urlsplit
 
 
 SCRIPT = b"""printf 'executed\\n' > "$WALLY_UPDATE_TEST_MARKER"
+scratch=$(mktemp -d) || exit 1
+rmdir "$scratch" || exit 1
+printf '%s\\n' "$TMPDIR" > "$WALLY_UPDATE_TEST_TMPDIR"
 printf '%s\\n' "$@" > "$WALLY_UPDATE_TEST_ARGS"
 if [ "$1" = --check ]; then
     if [ "$WALLY_UPDATE_TEST_MODE" != empty ]; then printf '999.0.0\\n'; fi
@@ -62,6 +65,7 @@ class Fixture:
         self.state = root / "state" / "runanywhere"
         self.marker = root / "executed"
         self.arguments = root / "arguments"
+        self.installer_tmpdir = root / "installer-tempdir"
         self.downloads.mkdir()
         self.state.mkdir(parents=True)
         # Preserve runtime library paths, but isolate configuration and curl's
@@ -78,6 +82,7 @@ class Fixture:
             WALLY_UPDATE_SCRIPT_URL=f"http://127.0.0.1:{server.server_port}{self.request_target}",
             WALLY_UPDATE_TEST_MODE=mode, WALLY_UPDATE_TEST_MARKER=str(self.marker),
             WALLY_UPDATE_TEST_ARGS=str(self.arguments),
+            WALLY_UPDATE_TEST_TMPDIR=str(self.installer_tmpdir),
         )
         self.fallback = tempdir != "usable"
         if self.fallback:
@@ -89,6 +94,11 @@ class Fixture:
     def assert_request_target(self):
         """Check that the encoded path and complete query reached the server."""
         assert self.server.request_target == self.request_target, self.server.request_target
+
+    def assert_installer_tmpdir(self):
+        """The installer can create its own scratch directory in the selected location."""
+        expected = "/tmp" if self.fallback else str(self.downloads)
+        assert self.installer_tmpdir.read_text().strip() == expected
 
     def assert_clean(self):
         assert not list(self.downloads.iterdir()), "installer temporary file leaked"
@@ -129,6 +139,7 @@ def foreground(binary, fixture, mode, args, version):
         assert "fixture installer ran" not in result.stderr, result.stderr
     else:
         assert fixture.marker.read_text() == "executed\n"
+        fixture.assert_installer_tmpdir()
         assert fixture.arguments.read_text().splitlines() == [f"--version={version}"]
         assert "fixture installer ran" in result.stderr, result.stderr
     fixture.assert_clean()
@@ -184,6 +195,7 @@ def background(binary, fixture, mode, server, fresh=False):
             assert not fixture.marker.exists(), "failed refresh download executed script bytes"
         else:
             assert fixture.marker.read_text() == "executed\n"
+            fixture.assert_installer_tmpdir()
             assert fixture.arguments.read_text().splitlines() == ["--check"]
         fixture.assert_clean()
     finally:
