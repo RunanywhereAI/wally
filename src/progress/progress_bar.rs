@@ -155,7 +155,8 @@ impl ProgressRenderer {
     /// Erase/terminate the in-place line (call before printing results).
     pub fn finish(&mut self) {
         if self.line_open {
-            eprintln!();
+            // Clear the frame first: leaving it behind reads as still running.
+            eprintln!("\r\x1b[2K");
             let _ = std::io::stderr().flush();
             self.line_open = false;
         }
@@ -312,6 +313,8 @@ pub struct Indeterminate {
     label: Arc<Mutex<String>>,
     handle: Option<std::thread::JoinHandle<()>>,
     line_open: bool,
+    /// Last label written in non-TTY mode, so a repeat does not print twice.
+    printed: String,
 }
 
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -345,6 +348,7 @@ impl Indeterminate {
             label,
             handle,
             line_open: false,
+            printed: String::new(),
         }
     }
 
@@ -354,8 +358,9 @@ impl Indeterminate {
         }
         if self.interactive {
             self.line_open = true;
-        } else {
+        } else if self.printed != text {
             output::status_line(text);
+            self.printed = text.to_string();
         }
     }
 
@@ -366,7 +371,8 @@ impl Indeterminate {
             let _ = handle.join();
         }
         if self.line_open {
-            eprintln!();
+            // Clear the frame first: leaving it behind reads as still running.
+            eprintln!("\r\x1b[2K");
             let _ = std::io::stderr().flush();
             self.line_open = false;
         }

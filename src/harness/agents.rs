@@ -1432,11 +1432,11 @@ pub fn build_deep_seek_patch(llm_config: &str, model: &str) -> String {
 
 /// The model id the router exposes. One id on both providers, so the picker
 /// shows one model and the lane is decided by the provider, not the id.
-pub const HYBRID_MODEL_ID: &str = "Hybird-Wally-0.1";
+pub const HYBRID_MODEL_ID: &str = "Hybrid-Wally-0.1";
 
 /// The two-provider `llm-pi-ai` config. Both providers carry the same model;
 /// `wally` is the parent lane (cloud) and `wally-local` the child lane (local).
-fn build_hybrid_llm_config(base_url: &str, key_variable: &str) -> String {
+fn build_hybrid_llm_config(base_url: &str, key_variable: &str, token: &str) -> String {
     let model = json!({
         "id": HYBRID_MODEL_ID,
         "name": HYBRID_MODEL_ID,
@@ -1451,6 +1451,9 @@ fn build_hybrid_llm_config(base_url: &str, key_variable: &str) -> String {
             "api": "openai-completions",
             "baseURL": format!("{base_url}{path}"),
             "apiKeyEnv": key_variable,
+            // The router port is loopback but shared, so every request carries
+            // the launch secret.
+            "headers": { "x-pls-token": token },
             "models": [model.clone()],
         })
     };
@@ -1476,8 +1479,12 @@ fn build_hybrid_patch(llm_config: &str) -> String {
     // agent preset, so the row above is inert there. The preset is a root
     // entry, and a patch replaces its whole config, so its plugin list is
     // copied from the installed preset with the child route injected.
-    if let Some(preset) = hybrid_preset_patch() {
-        patch.push_str(&preset);
+    match hybrid_preset_patch() {
+        Some(preset) => patch.push_str(&preset),
+        None => out::error_line(
+            "hybrid: could not read the installed dsh web preset; \
+             subagents in the web profile will not use the local lane",
+        ),
     }
     patch
 }
@@ -1505,7 +1512,10 @@ fn hybrid_preset_patch() -> Option<String> {
             block.push(line);
         }
     }
-    if !block.iter().any(|line| line.trim() == "- id: tool-subagent") {
+    if !block
+        .iter()
+        .any(|line| line.trim() == "- id: tool-subagent")
+    {
         return None;
     }
 
@@ -1546,9 +1556,9 @@ fn default_hybrid_model(options: &GlobalOptions) -> Option<String> {
         .into_iter()
         .filter(|candidate| candidate.framework == "MLX")
         .find_map(|candidate| {
-            let entry = catalog::all().iter().find(|entry| {
-                entry.harness_compatible && candidate.id.contains(entry.id)
-            })?;
+            let entry = catalog::all()
+                .iter()
+                .find(|entry| entry.harness_compatible && candidate.id.contains(entry.id))?;
             Some(entry.id.to_string())
         })
 }
@@ -1566,7 +1576,7 @@ fn hybrid_model_directory(model: &str, options: &GlobalOptions) -> Option<String
         candidate.framework == "MLX"
             && (candidate.id == model
                 || candidate.id == entry.id
-                || candidate.id.contains(&entry.id)
+                || candidate.id.contains(entry.id)
                 || catalog::merge_key_for(&candidate.id) == model)
     })?;
     if found.dir.is_empty() {
@@ -1616,7 +1626,7 @@ pub fn launch_deep_seek_hybrid(
         return 1;
     };
 
-    let llm_config = build_hybrid_llm_config(&router.base_url, KEY_VARIABLE);
+    let llm_config = build_hybrid_llm_config(&router.base_url, KEY_VARIABLE, &router.token);
     let mut config = TemporaryConfig::new();
     if let Err(failure) = config.write(&build_hybrid_patch(&llm_config), ".yaml") {
         out::error_line(&failure);
@@ -2534,7 +2544,7 @@ mod tests {
 
     #[test]
     fn hybrid_patch_registers_both_lanes_and_pins_subagents_local() {
-        let config = build_hybrid_llm_config("http://127.0.0.1:1234", "WALLY_PLS_KEY");
+        let config = build_hybrid_llm_config("http://127.0.0.1:1234", "WALLY_PLS_KEY", "tok");
         let parsed: Value = serde_json::from_str(&config).unwrap();
         assert_eq!(
             parsed["providers"][PROVIDER_ID]["baseURL"],

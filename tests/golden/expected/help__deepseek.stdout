@@ -9,6 +9,10 @@ Options:
   -h, --help                  Show help
   -m, --model TEXT            A model on this machine, or a hosted one from your
                               account
+      --hybrid                Route the parent to the cloud and subagents to a
+                              local model
+      --cloud-model TEXT      The cloud model the parent lane uses (defaults to
+                              your default model)
 
 Examples:
   # Download the certified local model once

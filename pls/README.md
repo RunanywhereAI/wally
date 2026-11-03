@@ -24,8 +24,9 @@ wally deepseek --hybrid -m <local-model> --cloud-model <cloud-model> [prompt]
 The router asks wally for the account's entitlement over a unix socket at
 `~/.config/wally/pls/entitlement.sock` (mode `0600`). Without a subscription
 every request goes to the cloud and the local model is never loaded. The
-answer is cached five seconds; an unreachable socket keeps the last answer, so
-a lost wally fails closed to the cloud.
+answer is cached five seconds. An unreachable socket keeps the last answer, so
+a premium account keeps the local lanes after wally goes away; only a last
+answer of non-premium fails closed to the cloud.
 
 Premium accounts get the mode file and the two lanes.
 
@@ -39,8 +40,9 @@ holds the backlog, `/debug/events` is the stream. Remove once the MVP ships.
 
 Every request is scanned for emails, phone numbers, API keys, IPv4 addresses and
 IBANs. Counts are attributed to the file path the text mentions and travel to
-the cloud in `x-pls-pii`, plus `/stats`. Only counts leave the machine, never
-the values.
+the cloud in `x-pls-pii`, plus `/stats`. So paths and counts leave the machine,
+never the values: the cloud-bound messages are redacted to `[email]`, `[phone]`,
+`[key]`, `[iban]` and `[ipv4]` before they are sent.
 
 ## Mode
 

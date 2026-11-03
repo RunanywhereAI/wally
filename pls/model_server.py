@@ -22,12 +22,13 @@ from typing import Any
 
 import mlx.core as mx
 import mlx_vlm
+from mlx_vlm.models.cache import make_prompt_cache
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 
 MODEL_PATH = os.environ["PLS_MODEL"]
-MODEL_ID = os.environ.get("PLS_MODEL_ID", "Hybird-Wally-0.1")
+MODEL_ID = os.environ.get("PLS_MODEL_ID", "Hybrid-Wally-0.1")
 MAX_KV = int(os.environ.get("PLS_MAX_KV", "57344"))
 MAX_OUT = int(os.environ.get("PLS_MAX_OUT", "8192"))
 PROMPT_CACHE_MAX = int(os.environ.get("PLS_PROMPT_CACHE_MAX", "8"))
@@ -49,6 +50,7 @@ STATS: dict[str, Any] = {
     "peak_context": 0,
     "max_kv": MAX_KV,
     "trims": 0,
+    "cache_misses": 0,
     "last": None,
 }
 
@@ -70,15 +72,21 @@ def cache_key(request: Request) -> str:
     return "default"
 
 
-def trim_cache(cache) -> None:
-    """Keep the live KV under the cap by dropping the oldest half."""
+def trim_cache(cache, reserve: int = 0) -> None:
+    """Keep the live KV under the cap by trimming each cache from its end.
+
+    `trim()` removes the newest tokens, not the oldest, so the next prompt is
+    re-prefilled from what is left. `reserve` is the room the pending
+    completion still needs, so the cap is checked before generation rather
+    than after it overflows.
+    """
     try:
         used = max((c.size() for c in cache if hasattr(c, "size")), default=0)
     except Exception:
         return
-    if used <= MAX_KV:
+    if used + reserve <= MAX_KV:
         return
-    keep = MAX_KV // 2
+    keep = max(0, MAX_KV // 2 - reserve)
     for c in cache:
         trimmable = getattr(c, "is_trimmable", None)
         if not hasattr(c, "trim") or (trimmable is not None and not trimmable()):
@@ -91,10 +99,10 @@ def trim_cache(cache) -> None:
 
 
 def take_cache(key: str):
-    cache = PROMPT_CACHES.get(key)
-    if cache is not None:
+    entry = PROMPT_CACHES.get(key)
+    if entry is not None:
         PROMPT_CACHES.move_to_end(key)
-    return cache
+    return entry
 
 
 def put_cache(key: str, cache) -> None:
@@ -201,16 +209,20 @@ async def chat(request: Request):
     )
 
     key = cache_key(request)
-    cache = take_cache(key)
-    if cache is None:
+    entry = take_cache(key)
+    # The reused cache is only valid when this prompt extends the one it was
+    # built for. mlx-vlm trims to the common prefix, so a rewritten turn would
+    # otherwise keep tokens that are no longer there.
+    if entry is not None and prompt.startswith(entry["prompt"]):
+        cache = entry["cache"]
+    else:
         try:
-            cache = model.language_model.make_cache()
-        except AttributeError:
-            from mlx_vlm.models.cache import make_prompt_cache
-
+            cache = make_prompt_cache(model.language_model, max_kv_size=MAX_KV)
+        except TypeError:
             cache = make_prompt_cache(model.language_model)
-        put_cache(key, cache)
-    trim_cache(cache)
+        STATS["cache_misses"] += 1
+    put_cache(key, {"cache": cache, "prompt": prompt})
+    trim_cache(cache, reserve=max_tokens)
     kwargs["prompt_cache"] = cache
 
     loop = asyncio.get_running_loop()
@@ -218,6 +230,7 @@ async def chat(request: Request):
     created = int(time.time())
     started = time.monotonic()
     STATS["in_flight"] += 1
+    streaming = False
 
     try:
         if not stream:
@@ -255,6 +268,7 @@ async def chat(request: Request):
         async def sse():
             acc = ""
             held = ""
+            pending = ""
             in_call = False
             call_index = 0
             pt = ct = 0
@@ -306,6 +320,16 @@ async def chat(request: Request):
                     else:
                         yield content_delta(block)
 
+            def leave_call():
+                """A call just closed: keep text after it, resume streaming."""
+                nonlocal held, pending, in_call
+                if held and not held.lstrip().startswith("<tool_call>"):
+                    pending = held
+                    held = ""
+                    in_call = False
+                else:
+                    in_call = bool(held)
+
             first = {
                 "id": cid,
                 "object": "chat.completion.chunk",
@@ -313,68 +337,108 @@ async def chat(request: Request):
                 "model": MODEL_ID,
                 "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
             }
-            yield f"data: {json.dumps(first)}\n\n"
+            try:
+                yield f"data: {json.dumps(first)}\n\n"
 
-            it = await loop.run_in_executor(
-                POOL, lambda: mlx_vlm.stream_generate(model, processor, prompt, **kwargs)
-            )
-            for chunk in it:
-                last = chunk
-                piece = chunk.text if hasattr(chunk, "text") else str(chunk)
-                pt = getattr(chunk, "prompt_tokens", pt) or pt
-                ct = getattr(chunk, "generation_tokens", ct) or ct
-                if not piece:
-                    continue
-                if not ttft:
-                    ttft = (time.monotonic() - started) * 1000
-                acc += piece
+                # Generation runs on the pool thread; it must not be iterated
+                # from here or every chunk waits on the event loop.
+                queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+                done = object()
 
-                if in_call:
-                    held += piece
-                    for out in flush_held():
-                        yield f"data: {json.dumps(out)}\n\n"
-                    if "</tool_call>" in held or not held.lstrip().startswith("<tool_call>"):
-                        in_call = held.lstrip().startswith("<tool_call>")
-                    continue
+                def pump():
+                    try:
+                        for item in mlx_vlm.stream_generate(model, processor, prompt, **kwargs):
+                            asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+                    except BaseException as error:  # noqa: BLE001 - relayed below
+                        asyncio.run_coroutine_threadsafe(queue.put(error), loop).result()
+                    finally:
+                        asyncio.run_coroutine_threadsafe(queue.put(done), loop).result()
 
-                if "<tool_call>" in piece:
-                    head, _, tail = piece.partition("<tool_call>")
-                    if head:
-                        yield f"data: {json.dumps(content_delta(head))}\n\n"
-                    in_call = True
-                    held = "<tool_call>" + tail
-                    for out in flush_held():
-                        yield f"data: {json.dumps(out)}\n\n"
-                    if "</tool_call>" in held:
-                        in_call = False
-                    continue
+                loop.run_in_executor(POOL, pump)
 
-                yield f"data: {json.dumps(content_delta(piece))}\n\n"
+                while True:
+                    chunk = await queue.get()
+                    if chunk is done:
+                        break
+                    if isinstance(chunk, BaseException):
+                        raise chunk
+                    last = chunk
+                    piece = chunk.text if hasattr(chunk, "text") else str(chunk)
+                    pt = getattr(chunk, "prompt_tokens", pt) or pt
+                    ct = getattr(chunk, "generation_tokens", ct) or ct
+                    if not piece:
+                        continue
+                    if not ttft:
+                        ttft = (time.monotonic() - started) * 1000
+                    acc += piece
+                    pending += piece
 
-            if held:
-                for out in flush_held():
-                    yield f"data: {json.dumps(out)}\n\n"
+                    if in_call:
+                        held += pending
+                        pending = ""
+                        for out in flush_held():
+                            yield f"data: {json.dumps(out)}\n\n"
+                        leave_call()
+                        continue
+
+                    # The opener can be split across chunks, so a tail the
+                    # length of it is always held back before flushing text.
+                    cut = pending.rfind("<tool_call>")
+                    if cut >= 0:
+                        head, tail = pending[:cut], pending[cut:]
+                        if head:
+                            yield f"data: {json.dumps(content_delta(head))}\n\n"
+                        held = tail
+                        pending = ""
+                        in_call = True
+                        for out in flush_held():
+                            yield f"data: {json.dumps(out)}\n\n"
+                        leave_call()
+                        continue
+                    keep = len("<tool_call>") - 1
+                    if len(pending) > keep:
+                        emit = pending[:-keep]
+                        pending = pending[-keep:]
+                        yield f"data: {json.dumps(content_delta(emit))}\n\n"
+
+                if pending:
+                    if in_call:
+                        held += pending
+                    else:
+                        yield f"data: {json.dumps(content_delta(pending))}\n\n"
+                    pending = ""
                 if held:
-                    yield f"data: {json.dumps(content_delta(held))}\n\n"
+                    for out in flush_held():
+                        yield f"data: {json.dumps(out)}\n\n"
+                    if held:
+                        yield f"data: {json.dumps(content_delta(held))}\n\n"
 
-            calls = parse_tool_calls(acc)
-            usage = usage_of(last, pt, ct)
-            record(cid, usage, ttft, (time.monotonic() - started) * 1000,
-                   "tool_calls" if calls else "stop")
-            final = {
-                "id": cid,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": MODEL_ID,
-                "choices": [
-                    {"index": 0, "delta": {}, "finish_reason": "tool_calls" if calls else "stop"}
-                ],
-            }
-            yield f"data: {json.dumps(final)}\n\n"
-            if want_usage:
-                yield f"data: {json.dumps({'id': cid, 'object': 'chat.completion.chunk', 'model': MODEL_ID, 'choices': [], 'usage': usage})}\n\n"
-            yield "data: [DONE]\n\n"
+                calls = parse_tool_calls(acc)
+                usage = usage_of(last, pt, ct)
+                record(cid, usage, ttft, (time.monotonic() - started) * 1000,
+                       "tool_calls" if calls else "stop")
+                final = {
+                    "id": cid,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": MODEL_ID,
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "tool_calls" if calls else "stop"}
+                    ],
+                }
+                yield f"data: {json.dumps(final)}\n\n"
+                if want_usage:
+                    yield f"data: {json.dumps({'id': cid, 'object': 'chat.completion.chunk', 'model': MODEL_ID, 'choices': [], 'usage': usage})}\n\n"
+                yield "data: [DONE]\n\n"
+            except Exception as error:
+                STATS["errors"] += 1
+                log({"event": "error", "id": cid, "stream": True,
+                     "error": f"{type(error).__name__}: {error}"})
+                raise
+            finally:
+                STATS["in_flight"] -= 1
 
+        streaming = True
         return StreamingResponse(sse(), media_type="text/event-stream")
 
     except Exception as error:
@@ -382,7 +446,8 @@ async def chat(request: Request):
         log({"event": "error", "id": cid, "error": f"{type(error).__name__}: {error}"})
         raise
     finally:
-        STATS["in_flight"] -= 1
+        if not streaming:
+            STATS["in_flight"] -= 1
 
 
 @app.on_event("startup")

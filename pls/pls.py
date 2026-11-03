@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import signal
 import socket
 import subprocess
@@ -33,7 +34,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import uvicorn
 
-MODEL_ID = "Hybird-Wally-0.1"
+MODEL_ID = "Hybrid-Wally-0.1"
 DEFAULT_MODE = "hybrid"
 DEFAULT_MAX_TURNS = 20
 QUEUE_MAX = 8
@@ -102,7 +103,17 @@ SUMMARY_PROMPT = (
     "names and numbers. Answer with the summary only.\n\n"
 )
 
+# Returned instead of the raw result when the summariser fails, so a failed
+# summary does not silently become a full-content leak.
+SUMMARISE_FAILED = (
+    "[summary unavailable: the local summariser failed and the full result was "
+    "not returned]"
+)
+
 ENTITLEMENT_SOCKET = os.environ.get("PLS_ENTITLEMENT_SOCKET", "")
+# Per-launch secret. The port is loopback but shared, so without it any local
+# process could spend the account's cloud quota through this bearer token.
+TOKEN = os.environ.get("PLS_TOKEN", "")
 # Debug console: remove once the MVP ships.
 DEBUG = os.environ.get("PLS_DEBUG") == "1"
 EVENTS: "collections.deque[dict]" = collections.deque(maxlen=1000)
@@ -190,6 +201,33 @@ def redact(text: str) -> str:
     for name, pattern in PII_PATTERNS.items():
         text = pattern.sub(f"[{name}]", text)
     return text
+
+
+def redact_messages(messages: list) -> list:
+    """Redact every non-system message before it goes to the cloud.
+
+    Counts alone still leave the values in the transcript, and a pasted file
+    body carries them. Placeholders do not match the patterns, so a turn that
+    passes through this twice keeps the same text.
+    """
+    out = []
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "system":
+            out.append(message)
+        elif isinstance(content, str):
+            out.append({**message, "content": redact(content)})
+        elif isinstance(content, list):
+            parts = [
+                {**part, "text": redact(part["text"])}
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+                else part
+                for part in content
+            ]
+            out.append({**message, "content": parts})
+        else:
+            out.append(message)
+    return out
 
 
 def take_disclosure(messages: list, fallback: str) -> tuple[str, list]:
@@ -503,7 +541,7 @@ def read_config() -> dict:
         "mode": mode,
         "pii_mode": pii_mode,
         "max_turns": max(1, max_turns),
-        "model_path": data.get("model_path") or os.environ.get("PLS_MODEL", ""),
+        "model_path": os.environ.get("PLS_MODEL") or data.get("model_path") or "",
         "cloud_model": data.get("cloud_model") or os.environ.get("PLS_CLOUD_MODEL", ""),
     }
 
@@ -689,7 +727,7 @@ async def summarise(text: str) -> str:
         return ((result.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     except Exception as error:
         log({"event": "summary_failed", "error": str(error)})
-        return text
+        return SUMMARISE_FAILED
 
 
 # --------------------------------------------------------------------------
@@ -752,6 +790,7 @@ button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6
 <table><thead><tr><th>time</th><th>event</th><th>lane</th><th>path / file</th><th>detail</th></tr></thead><tbody id="rows"></tbody></table>
 <script>
 const rows=document.getElementById('rows');let paused=false,n={local:0,cloud:0,pii:0};
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 document.getElementById('pause').onclick=e=>{paused=!paused;e.target.textContent=paused?'resume':'pause'};
 document.getElementById('clear').onclick=()=>{rows.innerHTML=''};
 function add(e){
@@ -767,9 +806,9 @@ function add(e){
  if(e.sub!==undefined)document.getElementById('sub').textContent=e.sub;
  const detail={...e};delete detail.ts;delete detail.event;delete detail.lane;delete detail.path;delete detail.file;
  const cls=e.event==='pii_file'?'file':e.reason==='no-subscription'?'blocked':e.event==='hint'?'warn':lane;
- const text=e.counts?'<span class=pii>'+JSON.stringify(e.counts)+'</span> <span class=dim>'+e.action+'</span>':(e.message||JSON.stringify(detail));
- tr.innerHTML=`<td class=dim>${t}</td><td>${e.event}</td><td class=${cls}>${lane}</td>`+
-   `<td class=${cls}>${e.path||e.file||''}</td>`+
+ const text=e.counts?'<span class=pii>'+esc(JSON.stringify(e.counts))+'</span> <span class=dim>'+esc(e.action)+'</span>':esc(e.message||JSON.stringify(detail));
+ tr.innerHTML=`<td class=dim>${esc(t)}</td><td>${esc(e.event)}</td><td class=${esc(cls)}>${esc(lane)}</td>`+
+   `<td class=${esc(cls)}>${esc(e.path||e.file||'')}</td>`+
    `<td>${text}<button class=copy title="copy json">copy</button></td>`;
  tr.querySelector('.copy').onclick=ev=>{
    navigator.clipboard.writeText(JSON.stringify(e)).then(()=>{
@@ -836,6 +875,11 @@ async def route(path: str, request: Request):
 
     if path in ("v1/models", "local/v1/models", "local-only/v1/models"):
         return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "wally"}]}
+
+    if TOKEN and not secrets.compare_digest(request.headers.get("x-pls-token", ""), TOKEN):
+        return JSONResponse(
+            {"error": {"message": "missing or wrong x-pls-token"}}, status_code=401
+        )
 
     body: dict = {}
     if request.method == "POST":
@@ -927,6 +971,9 @@ async def route(path: str, request: Request):
 
     if lane == "cloud":
         mode = config["pii_mode"] if pii["total"] else WORK_MODE
+        if pii["total"]:
+            # The transcript still carries the values it was scanned for.
+            body["messages"] = redact_messages(body["messages"])
         return await cloud(upstream_path, body, request, pii, sub,
                            guard=guard, mode=mode)
     return await local(upstream_path, body, request, config, disclosure)
@@ -953,6 +1000,34 @@ def _unauthorized(payload: bytes) -> bytes:
         "message": f"{message} — run `wally account login` to sign in again",
     }
     return json.dumps(parsed).encode()
+
+
+def calls_from_json(payload: dict) -> dict[int, dict]:
+    """Tool calls in a buffered completion, shaped like `parse_calls`."""
+    calls: dict[int, dict] = {}
+    for choice in payload.get("choices") or []:
+        for index, call in enumerate((choice.get("message") or {}).get("tool_calls") or []):
+            function = call.get("function") or {}
+            calls[index] = {"name": function.get("name") or "",
+                            "arguments": function.get("arguments") or ""}
+    return calls
+
+
+def synthetic_json(body: dict, pii: dict, mode: str) -> JSONResponse:
+    """`synthetic_call` for a client that asked for a single JSON answer."""
+    calls = {0: {"name": PII_TOOL, "arguments": ""}}
+    patch_call_args(calls, body, pii, mode)
+    message = {"role": "assistant", "content": None, "tool_calls": [
+        {"id": f"call_pls_{index}", "type": "function", "function": call}
+        for index, call in calls.items()
+    ]}
+    return JSONResponse({
+        "id": "chatcmpl-pls-patch",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": MODEL_ID,
+        "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls"}],
+    })
 
 
 async def cloud(path: str, body: dict, request: Request,
@@ -1009,45 +1084,10 @@ async def cloud(path: str, body: dict, request: Request,
     # an event stream. Relaying it as one makes dsh report a transport error
     # ("Stream ended without finish_reason") instead of the real status.
     content_type = response.headers.get("content-type", "")
-    if response.status_code >= 400 or "text/event-stream" not in content_type:
-        payload = await response.aread()
-        await response.aclose()
-        if response.status_code == 401:
-            payload = _unauthorized(payload)
-        elif response.status_code < 400:
-            payload = _with_model(payload)
-        return Response(payload, status_code=response.status_code,
-                        media_type="application/json")
+    event_stream = response.status_code < 400 and "text/event-stream" in content_type
 
-    if not stream:
-        payload = await response.aread()
-        await response.aclose()
-        try:
-            parsed = json.loads(payload)
-            usage = parsed.get("usage") or {}
-            STATS["cloud_tokens"] += int(usage.get("total_tokens") or 0)
-            payload = _with_model(payload)
-        except Exception:
-            pass
-        return Response(
-            payload, status_code=response.status_code,
-            media_type=response.headers.get("content-type", "application/json"),
-        )
-
-    # Loop ownership: file work must happen on the local lane. dsh keeps
-    # dispatching `read` from its own registry whatever tools we send, so the
-    # reply is held and checked: a file tool, a text answer, or an empty call is
-    # dropped and asked again. After GUARD_RETRIES the router emits the call.
-    if guard and stream:
-        buffered = b""
-        async for piece in response.aiter_bytes():
-            buffered += piece
-        await response.aclose()
-        if config_cloud_model:
-            buffered = buffered.replace(
-                f'"model":"{config_cloud_model}"'.encode(), f'"model":"{MODEL_ID}"'.encode()
-            )
-        calls = parse_calls(buffered)
+    async def settle(calls: dict[int, dict], raw: bytes | None):
+        """Accept, patch, re-ask or synthesise, for either body shape."""
         names = {call["name"] for call in calls.values()}
         # A PII turn accepts the subagent call alone. A work turn also accepts
         # bash/edit/write, but never a file tool: dsh would run it up here.
@@ -1058,9 +1098,13 @@ async def cloud(path: str, body: dict, request: Request,
         if clean:
             if patch_call_args(calls, body, pii or {"files": {}}, mode):
                 log({"event": "guard", "outcome": "patched", "attempt": attempt})
-                return calls_stream(calls)
+                if raw is not None:
+                    return calls_stream(calls)
+                return synthetic_json(body, pii or {"files": {}}, mode)
             log({"event": "guard", "outcome": "delegated", "attempt": attempt})
-            return Response(buffered, media_type="text/event-stream")
+            if raw is not None:
+                return Response(raw, media_type="text/event-stream")
+            return None
 
         STATS["guard_retries"] += 1
         log({"event": "guard", "outcome": "rejected", "attempt": attempt,
@@ -1068,7 +1112,9 @@ async def cloud(path: str, body: dict, request: Request,
         if attempt >= GUARD_RETRIES:
             STATS["guard_synth"] += 1
             log({"event": "guard", "outcome": "synthesised", "saw": sorted(names)})
-            return synthetic_call(body, pii or {"files": {}}, mode)
+            if raw is not None:
+                return synthetic_call(body, pii or {"files": {}}, mode)
+            return synthetic_json(body, pii or {"files": {}}, mode)
 
         saw = ", ".join(sorted(names)) or "no tool call"
         if pii and pii.get("total"):
@@ -1084,6 +1130,50 @@ async def cloud(path: str, body: dict, request: Request,
         }]}
         return await cloud(path, nudged, request, pii, sub,
                            guard=True, mode=mode, attempt=attempt + 1)
+
+    if not event_stream:
+        payload = await response.aread()
+        await response.aclose()
+        if response.status_code == 401:
+            payload = _unauthorized(payload)
+            return Response(payload, status_code=401, media_type="application/json")
+        if response.status_code >= 400:
+            return Response(payload, status_code=response.status_code,
+                            media_type="application/json")
+        try:
+            parsed = json.loads(payload)
+        except Exception:
+            parsed = None
+        if guard and isinstance(parsed, dict):
+            calls = calls_from_json(parsed)
+            settled = await settle(calls, None)
+            if settled is not None:
+                return settled
+            payload = _with_model(payload)
+            return Response(payload, status_code=response.status_code,
+                            media_type="application/json")
+        try:
+            usage = (parsed or {}).get("usage") or {}
+            STATS["cloud_tokens"] += int(usage.get("total_tokens") or 0)
+        except Exception:
+            pass
+        payload = _with_model(payload)
+        return Response(payload, status_code=response.status_code,
+                        media_type="application/json")
+
+    buffered = b""
+    if guard:
+        async for piece in response.aiter_bytes():
+            buffered += piece
+        await response.aclose()
+        if config_cloud_model:
+            buffered = buffered.replace(
+                f'"model":"{config_cloud_model}"'.encode(), f'"model":"{MODEL_ID}"'.encode()
+            )
+        settled = await settle(parse_calls(buffered), buffered)
+        return settled if settled is not None else Response(
+            buffered, media_type="text/event-stream"
+        )
 
     async def relay():
         # Raw bytes, not lines: a provider may split one `data:` event across
@@ -1114,12 +1204,18 @@ async def local(path: str, body: dict, request: Request, config: dict, disclosur
     global waiting
 
     overflow = False
+    queued = False
     if local_sem.locked():
         if waiting >= QUEUE_MAX:
             overflow = True
         else:
             waiting += 1
+            queued = True
             STATS["queued"] += 1
+    # A withheld answer must not be answered by the cloud, or the file reaches
+    # it after all; that request waits for the slot instead of overflowing.
+    if overflow and disclosure == "local_only":
+        overflow = False
     if overflow:
         STATS["overflow"] += 1
         response = await cloud(path, body, request)
@@ -1128,17 +1224,25 @@ async def local(path: str, body: dict, request: Request, config: dict, disclosur
 
     try:
         async with local_sem:
-            waiting = max(0, waiting - 1)
+            if queued:
+                waiting = max(0, waiting - 1)
+                queued = False
             return await local_inner(path, body, request, config, disclosure)
     finally:
-        pass
+        # Cancelled while still queued: nothing else gives the slot back.
+        if queued:
+            waiting = max(0, waiting - 1)
 
 
 async def local_inner(path: str, body: dict, request: Request, config: dict, disclosure: str):
     key = session_key(request, body)
     local_sessions.add(key)
-    count = turns.get(key, 0) + 1
-    turns[key] = count
+    # A key can serve several child runs; a fresh run starts with a shorter
+    # transcript than the previous one ended with, so the cap restarts there.
+    depth = len(body.get("messages") or [])
+    count, last_depth = turns.get(key, (0, 0))
+    count = count + 1 if depth > last_depth else 1
+    turns[key] = (count, depth)
     STATS["local_turns"] += 1
 
     messages = list(body.get("messages") or [])

@@ -1,10 +1,10 @@
-//! Lifecycle for the PLS router: locate `pls.py`, build its venv once, spawn
-//! it on port 0, read the handshake, and tear it down without leaving an
+//! Lifecycle for the PLS router: write its assets out, build the venv once,
+//! spawn it on port 0, read the handshake, and tear it down without leaving an
 //! orphan holding the GPU.
 //!
-//! `pls.py` is Python so it can be edited without rebuilding wally. The copy
-//! in the profile directory wins; the one beside the binary is the fallback a
-//! clean install uses.
+//! The router scripts are compiled into wally, so an installed binary carries
+//! them. They are written to the profile directory on start; a hand edit there
+//! wins until the next launch overwrites it.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -12,6 +12,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 
 use crate::account;
@@ -20,10 +21,17 @@ use crate::io::output as out;
 /// How long the router gets to print its port before the launch is abandoned.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+const SCRIPT: &str = include_str!("../../pls/pls.py");
+const MODEL_SERVER: &str = include_str!("../../pls/model_server.py");
+const LOCK: &str = include_str!("../../pls/requirements.lock");
+
 /// A running router. Dropping it stops the process.
 pub struct Router {
     child: Child,
     pub base_url: String,
+    /// Per-launch secret; the providers send it as `x-pls-token` so another
+    /// local process cannot spend the account's cloud quota.
+    pub token: String,
     #[allow(dead_code)] // held for its Drop; the router reads it over the socket
     entitlement: Option<Entitlement>,
 }
@@ -41,10 +49,12 @@ impl Drop for Router {
         // path, which a SIGKILL would skip.
         #[cfg(unix)]
         {
-            // SAFETY: the pid is this child's, still unreaped, so it cannot
-            // have been reused yet.
-            unsafe {
-                libc::kill(self.child.id() as i32, libc::SIGTERM);
+            // SAFETY: only signalled when the pid is still unreaped by us, so
+            // `kill` cannot land on a recycled pid. `try_wait` reaps it.
+            if matches!(self.child.try_wait(), Ok(None)) {
+                unsafe {
+                    libc::kill(self.child.id() as i32, libc::SIGTERM);
+                }
             }
         }
         #[cfg(not(unix))]
@@ -52,6 +62,9 @@ impl Drop for Router {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
+        // A normal exit leaves no record, so the next launch has nothing to
+        // sweep; only a crashed one leaves a pidfile behind.
+        let _ = std::fs::remove_file(pid_path());
     }
 }
 
@@ -173,7 +186,10 @@ fn check_entitlement() -> bool {
 }
 
 fn plan_is_premium(plan: &str) -> bool {
-    matches!(plan.to_ascii_lowercase().as_str(), "pro" | "premium" | "paid" | "beta")
+    matches!(
+        plan.to_ascii_lowercase().as_str(),
+        "pro" | "premium" | "paid" | "beta"
+    )
 }
 
 fn config_dir() -> PathBuf {
@@ -189,13 +205,30 @@ pub fn config_file() -> PathBuf {
     config_dir().join("config.json")
 }
 
-fn script_path() -> Option<PathBuf> {
-    let override_path = config_dir().join("pls.py");
-    if override_path.is_file() {
-        return Some(override_path);
+/// Write the router scripts into the profile directory, keeping the venv
+/// marker honest. Returns the script path, or the reason it could not be
+/// written.
+fn materialise() -> Option<PathBuf> {
+    let dir = config_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    let wanted = format!(
+        "{:x}",
+        fnv1a(format!("{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{LOCK}").as_bytes())
+    );
+    let marker = dir.join("assets.sha");
+    let script = dir.join("pls.py");
+    if std::fs::read_to_string(&marker).unwrap_or_default().trim() == wanted && script.is_file() {
+        return Some(script);
     }
-    let beside = std::env::current_exe().ok()?.parent()?.join("pls.py");
-    beside.is_file().then_some(beside)
+    for (name, body) in [
+        ("pls.py", SCRIPT),
+        ("model_server.py", MODEL_SERVER),
+        ("requirements.lock", LOCK),
+    ] {
+        std::fs::write(dir.join(name), body).ok()?;
+    }
+    std::fs::write(&marker, wanted).ok()?;
+    Some(script)
 }
 
 fn uv_path() -> Option<PathBuf> {
@@ -287,20 +320,25 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 }
 
 /// Kill a router left behind by a previous wally that did not get to clean up.
+///
+/// The pid may be recycled by now, so the recorded command line is checked
+/// against the router script before the signal is sent.
 pub fn sweep_stale() {
     let Ok(text) = std::fs::read_to_string(pid_path()) else {
         return;
     };
-    let Ok(pid) = text.trim().parse::<i32>() else {
+    let mut parts = text.split_whitespace();
+    let Ok(pid) = parts.next().unwrap_or_default().parse::<i32>() else {
         let _ = std::fs::remove_file(pid_path());
         return;
     };
+    let recorded = parts.next().unwrap_or_default();
     #[cfg(unix)]
     {
         // SAFETY: signal 0 only probes for the pid's existence.
         let alive = unsafe { libc::kill(pid, 0) } == 0;
-        if alive {
-            // SAFETY: same pid, probed alive immediately above.
+        if alive && process_is_router(pid, recorded) {
+            // SAFETY: probed alive and identified as a router just above.
             unsafe {
                 libc::kill(pid, libc::SIGTERM);
             }
@@ -308,6 +346,24 @@ pub fn sweep_stale() {
         }
     }
     let _ = std::fs::remove_file(pid_path());
+}
+
+/// Whether `pid` is the recorded router script, not an unrelated process that
+/// inherited the number.
+fn process_is_router(pid: i32, recorded: &str) -> bool {
+    if recorded.is_empty() {
+        return false;
+    }
+    let Ok(out) = Command::new("ps")
+        .arg("-p")
+        .arg(pid.to_string())
+        .arg("-o")
+        .arg("command=")
+        .output()
+    else {
+        return false;
+    };
+    String::from_utf8_lossy(&out.stdout).contains(recorded)
 }
 
 /// Record the model paths in the config file, preserving the person's mode and
@@ -326,14 +382,15 @@ pub fn configure(model_path: &str, cloud_model: &str) {
 
 /// Start the router for `model_path`. Returns `None` after reporting why.
 pub fn start(model_path: &str) -> Option<Router> {
-    let script = script_path().or_else(|| {
-        out::error_line("pls.py was not found beside the binary or in the profile directory");
+    let script = materialise().or_else(|| {
+        out::error_line("could not write the router scripts to the profile directory");
         None
     })?;
     let python = ensure_venv(&script)?;
 
     sweep_stale();
     std::fs::create_dir_all(config_dir()).ok()?;
+    let token = launch_token();
 
     let mut bar = crate::progress::progress_bar::Indeterminate::new(true);
     bar.set("starting router");
@@ -342,7 +399,11 @@ pub fn start(model_path: &str) -> Option<Router> {
         .arg(&script)
         .env("PLS_MODEL", model_path)
         .env("PLS_PARENT_PID", std::process::id().to_string())
-        .env("PLS_ENTITLEMENT_SOCKET", config_dir().join("entitlement.sock"))
+        .env("PLS_TOKEN", &token)
+        .env(
+            "PLS_ENTITLEMENT_SOCKET",
+            config_dir().join("entitlement.sock"),
+        )
         // The debug console is temporary; forwarded only when set.
         .env("PLS_DEBUG", std::env::var("PLS_DEBUG").unwrap_or_default())
         .env("PYTHONUNBUFFERED", "1")
@@ -353,51 +414,54 @@ pub fn start(model_path: &str) -> Option<Router> {
         .ok()?;
 
     let stdout = child.stdout.take()?;
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    let started = std::time::Instant::now();
-    let port = loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                bar.finish();
-                out::error_line("the router exited before it reported a port");
-                let _ = child.wait();
-                return None;
+    // The read must not block the timeout, so the lines arrive over a channel
+    // and this side waits with a deadline.
+    let (sender, receiver) = mpsc::channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if sender.send(Some(line)).is_err() {
+                        return;
+                    }
+                }
             }
-            Ok(_) => {
+        }
+        let _ = sender.send(None);
+    });
+
+    let deadline = std::time::Instant::now() + HANDSHAKE_TIMEOUT;
+    let port = loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match receiver.recv_timeout(remaining) {
+            Ok(Some(line)) => {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
                     if let Some(port) = value.get("port").and_then(|p| p.as_u64()) {
                         break port as u16;
                     }
                 }
             }
+            Ok(None) => {
+                bar.finish();
+                out::error_line("the router exited before it reported a port");
+                let _ = child.wait();
+                return None;
+            }
             Err(_) => {
                 bar.finish();
-                out::error_line("could not read the router handshake");
+                out::error_line("the router did not report a port in time");
+                let _ = child.kill();
                 let _ = child.wait();
                 return None;
             }
         }
-        if started.elapsed() > HANDSHAKE_TIMEOUT {
-            bar.finish();
-            out::error_line("the router did not report a port in time");
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
     };
     bar.finish();
 
-    // Keep draining stdout so the pipe never fills.
-    std::thread::spawn(move || {
-        let mut sink = String::new();
-        while reader.read_line(&mut sink).unwrap_or(0) > 0 {
-            sink.clear();
-        }
-    });
-
-    let _ = std::fs::write(pid_path(), child.id().to_string());
+    let _ = std::fs::write(pid_path(), format!("{} {}", child.id(), script.display()));
     let base_url = format!("http://127.0.0.1:{port}");
     out::status_line(&format!("router ready on {base_url}"));
     if std::env::var("PLS_DEBUG").as_deref() == Ok("1") {
@@ -406,13 +470,42 @@ pub fn start(model_path: &str) -> Option<Router> {
     Some(Router {
         child,
         base_url,
+        token,
         entitlement: Entitlement::start(),
     })
+}
+
+/// A fresh 128-bit hex secret for this launch.
+fn launch_token() -> String {
+    let mut bytes = [0u8; 16];
+    let filled = std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .is_ok();
+    if !filled {
+        let seed = format!(
+            "{}{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        return format!("{:x}", fnv1a(seed.as_bytes()));
+    }
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_launch_token_is_128_bits_of_hex() {
+        let first = launch_token();
+        assert_eq!(first.len(), 32);
+        assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(first, launch_token());
+    }
 
     #[test]
     fn a_plan_the_console_does_not_describe_is_not_premium() {

@@ -231,7 +231,18 @@ pub fn register_harness(app: &mut App) {
                 let cloud = p
                     .get_str("--cloud-model")
                     .unwrap_or_else(|| resolve_default_model("", g.no_color));
+                if harness::refuse_decisions_model(Some(cloud.as_str())) {
+                    return 2;
+                }
                 return harness::launch_deep_seek_hybrid(&local, &cloud, &p.get_strs("args"), g);
+            }
+            if agent.id == "deepseek" {
+                if let Some(cloud) = p.get_str("--cloud-model") {
+                    if !cloud.is_empty() {
+                        out::error_line("--cloud-model only applies with --hybrid");
+                        return 2;
+                    }
+                }
             }
             let model =
                 resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color);

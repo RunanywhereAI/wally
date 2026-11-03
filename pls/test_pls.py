@@ -4,6 +4,7 @@ The model server and the cloud are both replaced at the module boundary, so
 these run in a second.
 """
 
+import asyncio
 import json
 import os
 import socket as socket_mod
@@ -84,11 +85,11 @@ class RouterTest(unittest.TestCase):
     def mode(self, value):
         self.config.write_text(json.dumps({"mode": value, "max_turns": 20}))
 
-    def post(self, path, body=None):
+    def post(self, path, body=None, headers=None):
         return self.client.post(
             path,
             json=body or {"model": "x", "messages": [{"role": "user", "content": "hi"}]},
-            headers={"x-session-id": "s"},
+            headers=headers or {"x-session-id": "s"},
         )
 
     def test_local_lane_returns_the_model_answer(self):
@@ -156,8 +157,10 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(self.local_bodies, [])
 
     def test_subscription_allows_the_local_lane(self):
+        # Seeded false, so a broken socket read falls back to the cloud and
+        # fails this test rather than passing on the cached value.
         pls.ENTITLEMENT_SOCKET = self.socket(True)
-        pls.premium_cache.update(value=True, at=0.0)
+        pls.premium_cache.update(value=False, at=0.0)
         response = self.post("/local/v1/chat/completions")
         self.assertEqual(response.json()["choices"][0]["message"]["content"], "local answer")
 
@@ -248,12 +251,18 @@ class RouterTest(unittest.TestCase):
         self.assertIn("maya@x.com", response.json()["choices"][0]["message"]["content"])
 
     def test_the_child_is_told_the_disclosure_ceiling(self):
+        # Through the router, not by calling the helper: the rule has to reach
+        # the body that is actually sent to the local model.
         self.mode("local")
-        self.post("/local/v1/chat/completions")
-        system = [m for m in self.local_bodies[-1]["messages"] if m["role"] == "system"]
-        self.assertEqual(system, [])  # no system message in this fixture
-        body = {"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "x"}]}
-        pls.inject_child_rules(body, "title")
+        self.post("/local/v1/chat/completions", {
+            "model": "x",
+            "messages": [{"role": "system", "content": "s"},
+                         {"role": "user", "content": "disclosure: title\ngo"}],
+        })
+        body = self.local_bodies[-1]
+        system = [m for m in body["messages"] if m["role"] == "system"]
+        self.assertEqual(system[0]["content"], "s Answer with one line, no content.")
+        self.assertEqual([m for m in body["messages"] if m["role"] == "user"][-1]["content"], "go")
         self.assertIn("one line", body["messages"][0]["content"])
 
     def test_home_is_shortened_in_a_summary(self):
@@ -342,7 +351,7 @@ class RouterTest(unittest.TestCase):
         prompt = json.loads(call["arguments"])["prompt"]
         self.assertTrue(prompt.startswith("disclosure: local_only"))
         self.assertIn("/w/a.csv", prompt)
-        self.assertIn("maya@x.com", prompt)
+        self.assertIn("[email]", prompt)  # the transcript redacted before the cloud
 
     def test_a_subagent_call_beside_a_read_is_rejected(self):
         sent = []
@@ -367,6 +376,84 @@ class RouterTest(unittest.TestCase):
         })
         self.assertEqual(len(sent), 1)
         self.assertNotIn("disclosure:", sent[0]["messages"][-1]["content"])
+
+    # -- launch token, non-stream guard, queue, failures -------------------
+
+    def test_a_request_without_the_launch_token_is_refused(self):
+        pls.TOKEN = "s3cret"
+        try:
+            self.assertEqual(self.post("/v1/chat/completions").status_code, 401)
+            pls.http.send = _fake_send_sse([], None)
+            response = self.post("/v1/chat/completions", {
+                "messages": [{"role": "user", "content": "hi"}],
+            }, headers={"x-session-id": "s", "x-pls-token": "s3cret"})
+            self.assertEqual(response.status_code, 200)
+        finally:
+            pls.TOKEN = ""
+
+    def test_the_guard_runs_on_a_non_streaming_request(self):
+        sent = []
+        pls.http.send = _fake_send_json(
+            sent, completion(None, [{"id": "c", "type": "function",
+                                     "function": {"name": "read", "arguments": "{}"}}]),
+            completion(None, [{"id": "c", "type": "function",
+                               "function": {"name": "subagent", "arguments": "{}"}}]))
+        response = self.post("/v1/chat/completions", {
+            "messages": [{"role": "user", "content": "read /w/a.csv, maya@x.com"}],
+            "tools": [{"type": "function", "function": {"name": n}}
+                      for n in ("read", "subagent")],
+        })
+        self.assertEqual(len(sent), 2)
+        message = response.json()["choices"][0]["message"]
+        self.assertEqual(message["tool_calls"][0]["function"]["name"], "subagent")
+
+    def test_a_local_only_request_waits_instead_of_overflowing(self):
+        config = {"mode": "hybrid", "pii_mode": "local_only", "max_turns": 20,
+                  "model_path": "/m", "cloud_model": "c"}
+        sent = []
+        pls.http.send = _fake_send_sse(sent, None)
+
+        async def scenario():
+            await pls.local_sem.acquire()
+            pls.waiting = pls.QUEUE_MAX
+            task = asyncio.create_task(
+                pls.local("v1/chat/completions", {"messages": [
+                    {"role": "user", "content": "x"}]}, FakeRequest(), config, "local_only"))
+            await asyncio.sleep(0.05)
+            self.assertFalse(task.done())
+            pls.local_sem.release()
+            return await asyncio.wait_for(task, 2)
+
+        response = asyncio.run(scenario())
+        self.assertEqual(sent, [])  # never went to the cloud
+        self.assertEqual(response.status_code, 200)
+
+    def test_a_summary_that_fails_says_so_instead_of_leaking_the_result(self):
+        self.mode("local")
+
+        async def summary_fails(url, json=None, headers=None):
+            if "Summarise" in json["messages"][0]["content"]:
+                raise RuntimeError("no model")
+            return FakeResponse(completion("x" * 500))
+
+        pls.http.post = summary_fails
+        response = self.post("/local/v1/chat/completions",
+                             {"model": "x", "messages": [{"role": "user", "content": "go"}]})
+        self.assertEqual(response.json()["choices"][0]["message"]["content"],
+                         pls.SUMMARISE_FAILED)
+
+    def test_the_values_are_redacted_before_the_cloud_sees_them(self):
+        sent = []
+        pls.http.send = _fake_send_sse(sent, "subagent")
+        self.post("/v1/chat/completions", {
+            "stream": True,
+            "messages": [{"role": "user", "content": "read /w/a.csv, maya@x.com, +44 7700 900123"}],
+            "tools": [{"type": "function", "function": {"name": "subagent"}}],
+        })
+        sent_text = json.dumps(sent[0]["messages"])
+        self.assertNotIn("maya@x.com", sent_text)
+        self.assertIn("[email]", sent_text)
+        self.assertIn("/w/a.csv", sent_text)
 
     # -- the same guard on a plain work turn -------------------------------
 
@@ -468,6 +555,11 @@ def _sse(name, args="{}"):
     return "".join(parts).encode()
 
 
+class FakeRequest:
+    method = "POST"
+    headers = {"x-session-id": "s"}
+
+
 def _fake_send_sse(sent, *replies):
     """Answer successive cloud sends with these tool names; the last repeats."""
     queue = list(replies)
@@ -478,6 +570,17 @@ def _fake_send_sse(sent, *replies):
         if isinstance(reply, tuple):
             return FakeStream(_sse(*reply))
         return FakeStream(_sse(reply))
+
+    return send
+
+
+def _fake_send_json(sent, *payloads):
+    """Answer successive cloud sends with these JSON completions; the last repeats."""
+    queue = list(payloads)
+
+    async def send(request, stream=False):
+        sent.append(json.loads(request.content))
+        return FakeResponse(queue.pop(0) if len(queue) > 1 else queue[0])
 
     return send
 
