@@ -37,6 +37,7 @@ class InstallerHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         mode = parse_qs(urlsplit(self.path).query)["mode"][0]
+        self.server.request_target = self.path
         self.server.requested.set()
         # Background cases hold the response until their download is visible.
         if not self.server.release.wait(10):
@@ -52,8 +53,11 @@ class InstallerHandler(BaseHTTPRequestHandler):
 
 
 class Fixture:
-    def __init__(self, root, mode, server):
+    def __init__(self, root, mode, server, tempdir="usable"):
         self.root = root
+        self.server = server
+        self.server.request_target = None
+        self.request_target = f"/installer%20script.sh?mode={mode}&quote='literal'"
         self.downloads = root / "temporary downloads"
         self.state = root / "state" / "runanywhere"
         self.marker = root / "executed"
@@ -71,12 +75,20 @@ class Fixture:
             XDG_DATA_HOME=str(root / "data"), XDG_STATE_HOME=str(root / "state"),
             RUNANYWHERE_HOME=str(root / "models"), WALLY_PROFILE_DIR=str(root / "profile"),
             TMPDIR=str(self.downloads), NO_PROXY="127.0.0.1", no_proxy="127.0.0.1",
-            WALLY_UPDATE_SCRIPT_URL=(
-                f"http://127.0.0.1:{server.server_port}/installer%20script.sh?mode={mode}&quote='literal'"
-            ),
+            WALLY_UPDATE_SCRIPT_URL=f"http://127.0.0.1:{server.server_port}{self.request_target}",
             WALLY_UPDATE_TEST_MODE=mode, WALLY_UPDATE_TEST_MARKER=str(self.marker),
             WALLY_UPDATE_TEST_ARGS=str(self.arguments),
         )
+        self.fallback = tempdir != "usable"
+        if self.fallback:
+            unusable = root / "unusable temporary directory"
+            if tempdir == "not-directory":
+                unusable.write_text("not a directory\n")
+            self.env["TMPDIR"] = str(unusable)
+
+    def assert_request_target(self):
+        """Check that the encoded path and complete query reached the server."""
+        assert self.server.request_target == self.request_target, self.server.request_target
 
     def assert_clean(self):
         assert not list(self.downloads.iterdir()), "installer temporary file leaked"
@@ -106,6 +118,8 @@ def foreground(binary, fixture, mode, args, version):
             port = closed_port.getsockname()[1]
         fixture.env["WALLY_UPDATE_SCRIPT_URL"] = f"http://127.0.0.1:{port}/installer.sh"
     result = invoke(binary, fixture.env, *args)
+    if mode != "connection-failure":
+        fixture.assert_request_target()
     failed_download = mode in {"http-failure", "connection-failure", "partial"}
     expected = 1 if failed_download or mode == "installer-failure" else 0
     assert result.returncode == expected, (args, mode, result.returncode, result.stderr)
@@ -120,15 +134,17 @@ def foreground(binary, fixture, mode, args, version):
     fixture.assert_clean()
 
 
-def background(binary, fixture, mode, server):
+def background(binary, fixture, mode, server, fresh=False):
     """Reach the real notice through TTYs, then wait for download cleanup."""
     import pty
 
     fixture.env.pop("CI", None)
     cache = fixture.state / "update-check"
     cache.write_text("0.0.1\n")
-    old = time.time() - 2 * 24 * 60 * 60
-    os.utime(cache, (old, old))
+    if not fresh:
+        old = time.time() - 2 * 24 * 60 * 60
+        os.utime(cache, (old, old))
+    initial_mtime = cache.stat().st_mtime_ns
     server.requested.clear()
     server.release.clear()
     master, slave = pty.openpty()
@@ -142,11 +158,22 @@ def background(binary, fixture, mode, server):
                 process.communicate()
                 raise
             assert process.returncode == 0, stdout
+        if fresh:
+            assert not server.requested.wait(5), "fresh cache triggered a refresh"
+            assert cache.read_text() == "0.0.1\n"
+            assert cache.stat().st_mtime_ns == initial_mtime, "fresh cache was touched"
+            fixture.assert_clean()
+            return
         assert server.requested.wait(10), "interactive help did not request a refresh"
-        wait_until(lambda: list(fixture.downloads.iterdir())
-                   or list(fixture.state.glob("update-check.*")),
-                   "background download never started")
+        fixture.assert_request_target()
+        if not fixture.fallback:
+            wait_until(lambda: list(fixture.downloads.iterdir())
+                       or list(fixture.state.glob("update-check.*")),
+                       "background download never started")
         server.release.set()
+        if fixture.fallback:
+            wait_until(lambda: cache.read_text() == "999.0.0\n",
+                       "background refresh did not fall back from unusable TMPDIR")
         wait_until(lambda: not list(fixture.downloads.iterdir())
                    and not list(fixture.state.glob("update-check.*")),
                    "background refresh did not clean up")
@@ -163,6 +190,9 @@ def background(binary, fixture, mode, server):
         server.release.set()
         os.close(slave)
         os.close(master)
+        wait_until(lambda: not list(fixture.downloads.iterdir())
+                   and not list(fixture.state.glob("update-check.*")),
+                   "background refresh did not clean up before fixture removal")
 
 
 def main():
@@ -178,8 +208,11 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     failures = []
+    checks = 0
 
     def check(name, run):
+        nonlocal checks
+        checks += 1
         with tempfile.TemporaryDirectory(prefix="wally update ") as directory:
             try:
                 run(pathlib.Path(directory))
@@ -204,6 +237,16 @@ def main():
         for mode in ("http-failure", "partial", "success", "installer-failure", "empty"):
             check(f"background / {mode}",
                   lambda root: background(binary, Fixture(root, mode, server), mode, server))
+        for tempdir in ("missing", "not-directory"):
+            check(f"update / {tempdir} TMPDIR",
+                  lambda root: foreground(binary, Fixture(root, "success", server, tempdir),
+                                          "success", ["update"], version))
+            check(f"background / {tempdir} TMPDIR",
+                  lambda root: background(binary, Fixture(root, "success", server, tempdir),
+                                         "success", server))
+        check("background / fresh cache",
+              lambda root: background(binary, Fixture(root, "success", server),
+                                      "success", server, fresh=True))
     finally:
         server.release.set()
         server.shutdown()
@@ -211,7 +254,7 @@ def main():
         thread.join(timeout=5)
     if failures:
         raise SystemExit(f"{len(failures)} update download checks failed")
-    print("all 20 update download checks passed")
+    print(f"all {checks} update download checks passed")
 
 
 if __name__ == "__main__":

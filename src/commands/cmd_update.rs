@@ -170,7 +170,8 @@ fn install_script_url() -> String {
 /// the remaining parameters belong to the installer or the cache writer.
 #[cfg(not(windows))]
 const DOWNLOAD_INSTALLER: &str = r#"url="$1"; max="$2"; shift 2
-installer=$(mktemp "${TMPDIR:-/tmp}/wally-update.XXXXXXXXXX") || exit 1
+installer=$(mktemp "${TMPDIR:-/tmp}/wally-update.XXXXXXXXXX" 2>/dev/null \
+    || mktemp "/tmp/wally-update.XXXXXXXXXX") || exit 1
 trap 'rm -f "$installer"' 0
 trap 'exit 1' HUP INT TERM
 if [ -n "$max" ]; then
