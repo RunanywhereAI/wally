@@ -238,6 +238,50 @@ fn without_a_start_url_it_is_a_usage_error() {
 }
 
 #[test]
+fn jev_latest_without_a_gateway_override_is_refused_before_chrome_opens() {
+    let home = TempHome::new();
+    let (code, _, stderr) = run_wally_env(
+        &home,
+        &[
+            "browser-use",
+            "-m",
+            "jev-latest",
+            "--start-url",
+            "https://example.com",
+            "task",
+        ],
+        &[],
+    );
+    assert_eq!(code, 2);
+    assert!(
+        stderr.contains("jev-latest is served by another gateway"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn json_output_is_refused() {
+    let home = TempHome::new();
+    let (code, _, stderr) = run_wally_env(
+        &home,
+        &[
+            "browser-use",
+            "--json",
+            "--start-url",
+            "https://example.com",
+            "eve",
+            "task",
+        ],
+        &[],
+    );
+    assert_eq!(code, 2);
+    assert!(
+        stderr.contains("browser-use has no --json output"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn a_remote_cdp_url_is_a_usage_error() {
     let home = TempHome::new();
     let (code, _, stderr) = run_wally_env(

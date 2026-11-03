@@ -106,13 +106,7 @@ fn parse_rfc3339(value: &str) -> Option<(i64, u32)> {
         _ => return None,
     };
 
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let month_days = match month {
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => 31,
-    };
+    let month_days = crate::util::days_in_month(i64::from(year), month);
     if year == 0
         || !(1..=12).contains(&month)
         || !(1..=month_days).contains(&day)

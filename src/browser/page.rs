@@ -171,7 +171,8 @@ pub struct CdpBrowser<W: Wire> {
 }
 
 impl<W: Wire> CdpBrowser<W> {
-    /// Opens a background tab on `url` and waits up to 15 s for it to load.
+    /// Opens a background tab on `url` and waits up to 25 s for it to load:
+    /// 10 s to leave about:blank, then 15 s for the load.
     pub fn open(mut cdp: Cdp<W>, url: &str) -> Result<Self, StepError> {
         let created = cdp
             .call(
@@ -587,15 +588,7 @@ pub fn date_value_fits(kind: &str, value: &str) -> bool {
         }
         let year: u32 = parts[0].parse().unwrap_or(0);
         let month: u32 = parts[1].parse().unwrap_or(0);
-        let leap =
-            (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
-        let days = match month {
-            2 if leap => 29,
-            2 => 28,
-            4 | 6 | 9 | 11 => 30,
-            _ => 31,
-        };
-        number(parts[2], 1, days)
+        number(parts[2], 1, crate::util::days_in_month(year as i64, month))
     };
     let time = |v: &str| {
         let parts: Vec<&str> = v.split(':').collect();

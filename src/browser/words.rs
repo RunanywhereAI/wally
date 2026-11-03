@@ -6,7 +6,7 @@
 //! property. The common combining blocks are excluded below, so "pay" followed
 //! by U+0345 still ends at a word boundary. Marks inside Indic and other
 //! script blocks (vowel signs such as U+0903) are not tabulated here; they
-//! only matter right after an ASCII guard word.
+//! only matter adjacent to a guard word, on either side.
 
 fn combining_mark(ch: char) -> bool {
     matches!(ch as u32,
