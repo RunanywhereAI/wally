@@ -249,7 +249,13 @@ const SERVE_HEADER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[cfg(wally_has_server)]
 const SERVE_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 #[cfg(wally_has_server)]
-const SERVE_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const SERVE_WRITE_TIMEOUT_FLOOR: std::time::Duration = std::time::Duration::from_secs(2);
+#[cfg(wally_has_server)]
+const SERVE_WRITE_TIMEOUT_CAP: std::time::Duration = std::time::Duration::from_secs(30);
+// Budget response transfer at 1 MiB/s, plus the fixed allowance above for
+// scheduling and headers. The cap bounds serial service even for huge bodies.
+#[cfg(wally_has_server)]
+const SERVE_WRITE_BYTES_PER_SECOND: usize = 1024 * 1024;
 #[cfg(wally_has_server)]
 const SERVE_IO_POLL: std::time::Duration = std::time::Duration::from_millis(20);
 #[cfg(wally_has_server)]
@@ -318,8 +324,9 @@ fn parse_head(head: &[u8]) -> Result<(String, String, usize), String> {
     Ok((method, path, length))
 }
 
-/// Best-effort response on a nonblocking connection, with one write budget
-/// shared by the headers and body.
+/// Best-effort response on a nonblocking connection, with one size-dependent
+/// absolute write budget shared by the headers and body. Progress never
+/// renews it; responses that cannot finish within the capped budget close.
 #[cfg(wally_has_server)]
 fn write_response(stream: &mut std::net::TcpStream, status: u16, reason: &str, body: &str) {
     use std::io::{ErrorKind, Write};
@@ -327,7 +334,12 @@ fn write_response(stream: &mut std::net::TcpStream, status: u16, reason: &str, b
         "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    let deadline = std::time::Instant::now() + SERVE_WRITE_TIMEOUT;
+    let transfer_seconds = body.len().div_ceil(SERVE_WRITE_BYTES_PER_SECOND);
+    let timeout = SERVE_WRITE_TIMEOUT_FLOOR
+        + std::time::Duration::from_secs(
+            transfer_seconds.min(SERVE_WRITE_TIMEOUT_CAP.as_secs() as usize) as u64,
+        );
+    let deadline = std::time::Instant::now() + timeout.min(SERVE_WRITE_TIMEOUT_CAP);
     for mut bytes in [head.as_bytes(), body.as_bytes()] {
         while !bytes.is_empty() {
             let Ok(wait) = serve_io_wait(deadline) else {
