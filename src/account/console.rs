@@ -82,12 +82,28 @@ pub enum CancelOutcome {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountKind {
+    Personal,
+    Team,
+}
+
+/// The account a credential acts on (team accounts). Optional on the wire:
+/// a server without teams, or with them off, sends none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Account {
+    pub id: String,
+    pub name: String,
+    pub kind: AccountKind,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Identity {
     pub email: String,
     pub plan: String,
     pub tokens_this_month: i64,
     pub monthly_token_limit: i64,
+    pub account: Option<Account>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1717,6 +1733,21 @@ impl ConsoleClient {
             );
         }
         identity.plan = plan_text(Some(parsed.plan));
+        // Additive and optional: a name that is not safe to print is dropped,
+        // never a reason to fail whoami.
+        identity.account = parsed.account.and_then(|account| {
+            if !display_text_is_safe(&account.name, 120) || !display_text_is_safe(&account.id, 64) {
+                return None;
+            }
+            Some(Account {
+                id: account.id,
+                name: account.name,
+                kind: match account.kind {
+                    contract::AccountKind::KTeam => AccountKind::Team,
+                    contract::AccountKind::KPersonal => AccountKind::Personal,
+                },
+            })
+        });
         identity.tokens_this_month = parsed.tokens_this_month;
         identity.monthly_token_limit = parsed.monthly_token_limit;
         if identity.tokens_this_month < 0 || identity.monthly_token_limit < 0 {

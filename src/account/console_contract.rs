@@ -10,7 +10,31 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "f0cd9d02482c6bbf041500133d48b6ce2ca35643efcd7d925bd3c4e70220a5cc";
+    "fd2c17d9504d2259c61c4bfa9b476bdc31a94467ce8c6392d1cf96e21ad98280";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccountKind {
+    #[default]
+    KPersonal,
+    KTeam,
+}
+
+impl AccountKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AccountKind::KPersonal => "personal",
+            AccountKind::KTeam => "team",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "personal" => Ok(AccountKind::KPersonal),
+            "team" => Ok(AccountKind::KTeam),
+            other => Err(format!("unknown AccountKind: {other}")),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ApiErrorCode {
@@ -56,6 +80,11 @@ pub enum ApiErrorCode {
     KAccessProgrammeClosed,
     KNotStaff,
     KInvalidTransition,
+    KTeamAccessDenied,
+    KTeamSessionStale,
+    KTeamRoleRequired,
+    KPersonalAccountOnly,
+    KLastTeamOwner,
 }
 
 impl ApiErrorCode {
@@ -102,6 +131,11 @@ impl ApiErrorCode {
             ApiErrorCode::KAccessProgrammeClosed => "access_programme_closed",
             ApiErrorCode::KNotStaff => "not_staff",
             ApiErrorCode::KInvalidTransition => "invalid_transition",
+            ApiErrorCode::KTeamAccessDenied => "team_access_denied",
+            ApiErrorCode::KTeamSessionStale => "team_session_stale",
+            ApiErrorCode::KTeamRoleRequired => "team_role_required",
+            ApiErrorCode::KPersonalAccountOnly => "personal_account_only",
+            ApiErrorCode::KLastTeamOwner => "last_team_owner",
         }
     }
 
@@ -148,6 +182,11 @@ impl ApiErrorCode {
             "access_programme_closed" => Ok(ApiErrorCode::KAccessProgrammeClosed),
             "not_staff" => Ok(ApiErrorCode::KNotStaff),
             "invalid_transition" => Ok(ApiErrorCode::KInvalidTransition),
+            "team_access_denied" => Ok(ApiErrorCode::KTeamAccessDenied),
+            "team_session_stale" => Ok(ApiErrorCode::KTeamSessionStale),
+            "team_role_required" => Ok(ApiErrorCode::KTeamRoleRequired),
+            "personal_account_only" => Ok(ApiErrorCode::KPersonalAccountOnly),
+            "last_team_owner" => Ok(ApiErrorCode::KLastTeamOwner),
             other => Err(format!("unknown ApiErrorCode: {other}")),
         }
     }
@@ -1638,7 +1677,64 @@ impl GrantResponse {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+pub struct IdentityAccount {
+    pub id: String,
+    pub kind: AccountKind,
+    pub name: String,
+}
+
+impl IdentityAccount {
+    pub fn from_json(value: &Value) -> Result<Self, String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| "expected a JSON object".to_string())?;
+        let mut result = Self::default();
+        match object.get("id") {
+            Some(field) if !field.is_null() => {
+                result.id = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        match object.get("kind") {
+            Some(field) if !field.is_null() => {
+                result.kind = AccountKind::parse(
+                    field
+                        .as_str()
+                        .ok_or_else(|| "expected a string".to_string())?,
+                )?;
+            }
+            _ => {}
+        }
+        match object.get("name") {
+            Some(field) if !field.is_null() => {
+                result.name = field
+                    .as_str()
+                    .ok_or_else(|| "expected a string".to_string())?
+                    .to_string();
+            }
+            _ => {}
+        }
+        Ok(result)
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = serde_json::Map::new();
+        map.insert("id".to_string(), Value::String(self.id.clone()));
+        map.insert(
+            "kind".to_string(),
+            Value::String(self.kind.as_str().to_string()),
+        );
+        map.insert("name".to_string(), Value::String(self.name.clone()));
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct IdentityResponse {
+    pub account: Option<IdentityAccount>,
     pub email: String,
     pub monthly_token_limit: i64,
     pub plan: CliPlan,
@@ -1651,6 +1747,12 @@ impl IdentityResponse {
             .as_object()
             .ok_or_else(|| "expected a JSON object".to_string())?;
         let mut result = Self::default();
+        match object.get("account") {
+            Some(field) if !field.is_null() => {
+                result.account = Some(IdentityAccount::from_json(field)?);
+            }
+            _ => {}
+        }
         match object.get("email") {
             Some(field) if !field.is_null() => {
                 result.email = field
@@ -1691,6 +1793,9 @@ impl IdentityResponse {
 
     pub fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
+        if let Some(item) = &self.account {
+            map.insert("account".to_string(), item.to_json());
+        }
         map.insert("email".to_string(), Value::String(self.email.clone()));
         map.insert(
             "monthly_token_limit".to_string(),

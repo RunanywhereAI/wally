@@ -2612,3 +2612,76 @@ fn a_refreshed_session_expires_on_the_clock_it_was_opened_with() {
     ConsoleSession::resume(client, credentials, NOW).expect("refreshed on open");
     assert_eq!(account::load().expect("load").expires_at, NOW + 3600);
 }
+
+/// One `/v1/me` answer through the real client.
+fn identity_from(body: serde_json::Value) -> (IdentityResult, account::Identity, String) {
+    let transport: Transport = Arc::new(
+        move |request: &HttpRequest| -> Result<HttpResponse, String> {
+            assert!(request.url.ends_with("/v1/me"));
+            Ok(HttpResponse {
+                status: 200,
+                body: json(body.clone()),
+                ..Default::default()
+            })
+        },
+    );
+    ConsoleClient::new(Some(transport)).who_am_i("https://console.example.test", "access-one")
+}
+
+#[test]
+fn identity_parses_a_team_account_when_the_server_sends_one() {
+    let (result, identity, error) = identity_from(serde_json::json!({
+        "email": "dev@example.test",
+        "plan": "beta",
+        "tokens_this_month": 0,
+        "monthly_token_limit": 0,
+        "account": {"id": "00000000-0000-0000-0000-00000000a001", "name": "Acme Labs", "kind": "team"},
+    }));
+    assert_eq!(result, IdentityResult::Ok, "{error}");
+    let account = identity.account.expect("account");
+    assert_eq!(account.name, "Acme Labs");
+    assert_eq!(account.kind, account::AccountKind::Team);
+    assert_eq!(account.id, "00000000-0000-0000-0000-00000000a001");
+}
+
+#[test]
+fn identity_without_an_account_field_still_parses_for_an_old_server() {
+    let (result, identity, error) = identity_from(serde_json::json!({
+        "email": "dev@example.test",
+        "plan": "beta",
+        "tokens_this_month": 3,
+        "monthly_token_limit": 0,
+    }));
+    assert_eq!(result, IdentityResult::Ok, "{error}");
+    assert_eq!(identity.account, None);
+    assert_eq!(identity.tokens_this_month, 3);
+}
+
+#[test]
+fn identity_parses_a_personal_account() {
+    let (result, identity, error) = identity_from(serde_json::json!({
+        "email": "dev@example.test",
+        "plan": "beta",
+        "tokens_this_month": 0,
+        "monthly_token_limit": 0,
+        "account": {"id": "00000000-0000-0000-0000-000000000001", "name": "dev@example.test", "kind": "personal"},
+    }));
+    assert_eq!(result, IdentityResult::Ok, "{error}");
+    assert_eq!(
+        identity.account.expect("account").kind,
+        account::AccountKind::Personal
+    );
+}
+
+#[test]
+fn an_unsafe_account_name_is_dropped_not_printed() {
+    let (result, identity, _) = identity_from(serde_json::json!({
+        "email": "dev@example.test",
+        "plan": "beta",
+        "tokens_this_month": 0,
+        "monthly_token_limit": 0,
+        "account": {"id": "00000000-0000-0000-0000-00000000a001", "name": "Acme\u{1b}[2J", "kind": "team"},
+    }));
+    assert_eq!(result, IdentityResult::Ok);
+    assert_eq!(identity.account, None);
+}
