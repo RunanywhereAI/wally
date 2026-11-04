@@ -58,6 +58,13 @@ wally_host_platform() {
   esac
 }
 
+# "a/b//" -> "a/b"; "/" stays "/".
+strip_trailing_slashes() {
+  local path="$1"
+  while [[ "${path}" == */ && "${path}" != "/" ]]; do path="${path%/}"; done
+  printf '%s' "${path}"
+}
+
 log_step() { printf '== %s ==\n' "$*" >&2; }
 log_ok()   { printf '  ok   %s\n' "$*" >&2; }
 log_fail() { printf '  FAIL %s\n' "$*" >&2; }

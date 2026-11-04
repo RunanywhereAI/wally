@@ -35,9 +35,10 @@ cd "${ROOT}"
 
 DEFAULT_KIT_DIR="${ROOT}/kit"
 DEFAULT_SDK_DIR="${ROOT}/.deps/runanywhere-sdks"
-KIT_DIR="${WALLY_KIT_DIR:-${DEFAULT_KIT_DIR}}"
-SDK_DIR="${WALLY_SDK_SWIFT_PATH:-${DEFAULT_SDK_DIR}}"
-BUILD_DIR="${WALLY_BUILD_DIR:-${ROOT}/build}"
+# A trailing slash would put sibling temp dirs ("${KIT_DIR}.download.$$") inside the dir.
+KIT_DIR="$(strip_trailing_slashes "${WALLY_KIT_DIR:-${DEFAULT_KIT_DIR}}")"
+SDK_DIR="$(strip_trailing_slashes "${WALLY_SDK_SWIFT_PATH:-${DEFAULT_SDK_DIR}}")"
+BUILD_DIR="$(strip_trailing_slashes "${WALLY_BUILD_DIR:-${ROOT}/build}")"
 BUILD_TYPE="${WALLY_BUILD_TYPE:-Release}"
 BINDGEN_VERSION="0.73.2"
 KIT_STAMP=".wally-kit-version"
