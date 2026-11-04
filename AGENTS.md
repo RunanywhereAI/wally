@@ -1,9 +1,43 @@
 # AGENTS.md — Wally
 
-> **`AGENTS.md` is the real file.** `CLAUDE.md` is a committed symlink to it.
-> Editing either name edits the same bytes. `bash scripts/ci/check-agents-sync.sh --fix`
-> recreates the link and mirrors `.claude/skills/` → `.agents/skills/`. CI fails
-> if the pair drifts.
+> **`AGENTS.md` is the real file.** `CLAUDE.md` is the single line `@AGENTS.md`,
+> which Claude Code expands into this file. Edit only `AGENTS.md`.
+> `bash scripts/ci/check-agents-sync.sh --fix` rewrites `CLAUDE.md` and mirrors
+> `.claude/skills/` → `.agents/skills/`. CI fails if either drifts.
+
+## Quick-Build
+
+`./actor.sh` runs a local build with the same commands CI runs. Commands run
+in order and stop at the first one that fails. Inside a command every step
+runs, and the summary lists each one that failed.
+
+```bash
+cp .env.example .env          # fill in the two console endpoints first
+./actor.sh setup build test   # first build on a clean machine
+./actor.sh ci                 # what a PR has to pass, before pushing
+```
+
+| Command | What it does |
+|---|---|
+| `deps` | Checks git, cmake (≥ `cmake_minimum`), ninja, the pinned rust toolchain, python3, `gh auth`, and on macOS xcrun and swift. Also checks both `WALLY_BAKED_CONSOLE_*` values are set in the env or `.env`. Lists optional lint tools: shellcheck, dash, ruby, bindgen. |
+| `kit` | Downloads the pinned kit through `fetch-kit.sh` to `$WALLY_KIT_DIR` (default `./kit`). Skips the download when the stamp matches `kit_version` and downloads again after a pin bump. |
+| `sdk` | macOS: checks out `runanywhere-sdks` at `sdk_ci_ref` into `.deps/runanywhere-sdks` for the MLX host. |
+| `setup` | `deps` + `kit` + `sdk`. |
+| `configure` | `cmake -B build -G Ninja` against the kit. On macOS it pins `SDKROOT` to Xcode's SDK, because a newer Command Line Tools SDK fails to link with `unknown architecture arm64e.x1`. |
+| `build` | Configures if needed, builds on all cores, prints `wally --version`. |
+| `test` | `ctest` (which runs `cargo test`) plus `test-update-download.py` against the binary. |
+| `lint` | `cargo fmt --check`, `cargo clippy -D warnings` (after a build), shell syntax, shellcheck, dash, `ruby -c` on the formula, and `check-agents-sync.sh`. |
+| `check` | Hermetic CI checks: the console contract and binding, `versions.toml`, the generator guard, retired model ids, the C++ test ledger, release tooling, and the `install.sh` tests. |
+| `bindings` | macOS: `gen-sys-bindings.sh --check` with bindgen 0.73.2. |
+| `e2e` | `scripts/test/e2e.sh` on the built binary against the kit. |
+| `ci` | `check` + `build` + `test` + `lint`. |
+| `all` | `setup` + `ci` + `bindings`. |
+| `clean` | Deletes the build tree. |
+
+Knobs: `WALLY_KIT_DIR`, `WALLY_SDK_SWIFT_PATH`, `WALLY_BUILD_DIR`,
+`WALLY_BUILD_TYPE` (Release), `WALLY_JOBS`, `WALLY_APPLE_MLX_HOST=OFF` (builds
+`build/wally-cxx`, with no Swift tree needed), and `WALLY_CONSOLE_OPTIONAL=1`
+for builds without console endpoints, such as forks.
 
 This repository is the official `wally` product CLI. The application is a Rust
 crate (`Cargo.toml`); it consumes a **packaged C++ desktop kit** via CMake's
@@ -261,8 +295,9 @@ pinned kit (`scripts/build/fetch-kit.sh`) → configure → build → ctest → 
 Fail on pin / schema mismatch. `cargo fmt --check`, `cargo clippy --all-targets
 -- -D warnings`, `python3 scripts/test/test-ledger.py` and (macOS)
 `scripts/build/gen-sys-bindings.sh --check` gate every PR.
-`scripts/ci/check-agents-sync.sh` fails the PR when `CLAUDE.md` is not a
-symlink to `AGENTS.md`, or when `.claude/skills` and `.agents/skills` differ.
+`scripts/ci/check-agents-sync.sh` fails the PR when `CLAUDE.md` is anything
+other than the line `@AGENTS.md`, or when `.claude/skills` and `.agents/skills`
+differ.
 
 Linux bottles are not a v1 merge blocker. Windows x64 and macOS arm64 are.
 

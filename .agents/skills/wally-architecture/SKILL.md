@@ -79,4 +79,4 @@ applied. Public bottles stay OSS.
 
 Canonical: `.claude/skills/`. Mirror: `.agents/skills/`. Edit canonical, then
 `bash scripts/ci/check-agents-sync.sh --fix`. Never hand-edit the mirror.
-`CLAUDE.md` is a symlink to `AGENTS.md`.
+`CLAUDE.md` is the single line `@AGENTS.md`.

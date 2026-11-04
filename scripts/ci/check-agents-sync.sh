@@ -2,8 +2,9 @@
 #
 # check-agents-sync.sh — keep AGENTS.md/CLAUDE.md and .claude/.agents skills identical.
 #
-# CLAUDE.md is a symlink to the sibling AGENTS.md (same pattern as the SDK
-# repo). .claude/skills/ is canonical; .agents/skills/ is a generated copy
+# CLAUDE.md is the single line `@AGENTS.md`, which Claude Code expands into
+# AGENTS.md. A plain file, unlike a symlink, survives Windows checkouts without
+# core.symlinks. .claude/skills/ is canonical; .agents/skills/ is a generated copy
 # (not a directory symlink) so Windows checkouts without core.symlinks still
 # work. CI fails if either pair drifts.
 #
@@ -20,7 +21,7 @@ usage() {
 check-agents-sync.sh — AGENTS.md ↔ CLAUDE.md and .claude/skills ↔ .agents/skills.
 
   scripts/ci/check-agents-sync.sh          check (CI / pre-commit)
-  scripts/ci/check-agents-sync.sh --fix    repair symlink + regenerate the skills mirror
+  scripts/ci/check-agents-sync.sh --fix    rewrite CLAUDE.md + regenerate the skills mirror
   scripts/ci/check-agents-sync.sh --help
 
 Exit codes: 0 ok/fixed | 1 drift | 2 tooling error
@@ -52,27 +53,29 @@ if [ ! -f AGENTS.md ]; then
   exit 1
 fi
 
+CLAUDE_IMPORT='@AGENTS.md'
+
 claude_ok=0
-if [ -L CLAUDE.md ] && [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]; then
+if [ -f CLAUDE.md ] && [ ! -L CLAUDE.md ] && [ "$(cat CLAUDE.md)" = "${CLAUDE_IMPORT}" ]; then
   claude_ok=1
 fi
 
 if [ "${MODE}" = fix ]; then
   rm -f CLAUDE.md
-  ln -s AGENTS.md CLAUDE.md
-  printf 'linked CLAUDE.md -> AGENTS.md\n'
+  printf '%s\n' "${CLAUDE_IMPORT}" > CLAUDE.md
+  printf 'wrote CLAUDE.md as %s\n' "${CLAUDE_IMPORT}"
 else
   if [ "${claude_ok}" -ne 1 ]; then
-    if [ ! -e CLAUDE.md ]; then
-      printf 'error: missing CLAUDE.md (should be a symlink -> AGENTS.md; run --fix)\n' >&2
-    elif [ ! -L CLAUDE.md ]; then
-      printf 'error: CLAUDE.md is a regular file, not a symlink -> AGENTS.md (run --fix)\n' >&2
+    if [ ! -e CLAUDE.md ] && [ ! -L CLAUDE.md ]; then
+      printf 'error: missing CLAUDE.md (should be the line %s; run --fix)\n' "${CLAUDE_IMPORT}" >&2
+    elif [ -L CLAUDE.md ]; then
+      printf 'error: CLAUDE.md is a symlink; it should be a file holding %s (run --fix)\n' "${CLAUDE_IMPORT}" >&2
     else
-      printf 'error: CLAUDE.md points to %s, expected AGENTS.md (run --fix)\n' "$(readlink CLAUDE.md)" >&2
+      printf 'error: CLAUDE.md must contain only %s; put instructions in AGENTS.md (run --fix)\n' "${CLAUDE_IMPORT}" >&2
     fi
     status=1
   elif ! is_tracked CLAUDE.md; then
-    printf 'error: CLAUDE.md is a correct symlink but untracked — git add CLAUDE.md\n' >&2
+    printf 'error: CLAUDE.md is correct but untracked — git add CLAUDE.md\n' >&2
     status=1
   fi
 fi
@@ -117,4 +120,4 @@ if [ "${status}" -ne 0 ]; then
   exit 1
 fi
 
-printf 'AGENTS.md/CLAUDE.md symlink ok; .claude/skills and .agents/skills match.\n'
+printf 'CLAUDE.md imports AGENTS.md; .claude/skills and .agents/skills match.\n'
