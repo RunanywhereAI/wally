@@ -212,6 +212,12 @@ wally claude-code -m glm-5.3-flash
 `wally account login` opens the console in a browser and waits for you to
 approve the machine. `wally account logout` deletes the session.
 
+Team accounts need the teams backend, which is rolling out and not live
+everywhere. On one, the approval page asks which account the machine signs in
+to; the key it gets bills that account. `wally account whoami` then shows an
+`account` row, `Acme Labs (team)` or `personal`, and `--json` an `account`
+object. A console without team accounts sends neither, and nothing changes.
+
 Where the credential is kept depends on the platform, and `WALLY_PROFILE_DIR`
 moves it anywhere:
 

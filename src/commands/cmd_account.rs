@@ -420,7 +420,18 @@ fn login(requested_console: &str, open: bool) -> i32 {
                 } else {
                     credentials.email.clone()
                 };
-                out::status_line(&format!("signed in as {identity}"));
+                // Which account the browser approved this terminal on (team
+                // accounts). Best effort: a server without teams says nothing,
+                // and a failed read leaves the line as it always was.
+                let (who, approved, _) =
+                    client.who_am_i(&credentials.console_url, &credentials.access_token);
+                let on = match (who, approved.account) {
+                    (IdentityResult::Ok, Some(account)) => {
+                        format!(" ({})", account_label(&account))
+                    }
+                    _ => String::new(),
+                };
+                out::status_line(&format!("signed in as {identity}{on}"));
                 out::status_line(&format!(
                     "cloud session stored in {}",
                     account::profile_directory()
@@ -466,6 +477,16 @@ fn logout() -> i32 {
     }
 }
 
+/// `Acme Labs (team)`, `team` when its name cannot be shown, or `personal` for
+/// the person's own account.
+fn account_label(account: &account::Account) -> String {
+    match (account.kind, account.name.as_deref()) {
+        (account::AccountKind::KTeam, Some(name)) => format!("{name} (team)"),
+        (account::AccountKind::KTeam, None) => "team".to_string(),
+        (account::AccountKind::KPersonal, _) => "personal".to_string(),
+    }
+}
+
 fn who_am_i(as_json: bool) -> i32 {
     let Some(mut credentials) = load_credentials() else {
         return 1;
@@ -506,12 +527,27 @@ fn who_am_i(as_json: bool) -> i32 {
         json.begin_object()
             .field_str("email", &identity.email)
             .field_str("session", "active")
-            .field_str("console", &credentials.console_url)
-            .end_object();
+            .field_str("console", &credentials.console_url);
+        // Only when the server names one (teams): absent, not null, otherwise,
+        // so a script reading today's document sees exactly today's keys.
+        if let Some(account) = &identity.account {
+            json.begin_object_field("account");
+            if let Some(id) = &account.id {
+                json.field_str("id", id);
+            }
+            if let Some(name) = &account.name {
+                json.field_str("name", name);
+            }
+            json.field_str("kind", account.kind.as_str()).end_object();
+        }
+        json.end_object();
         out::result_line(json.str());
         return 0;
     }
     out::result_line(&format!("{:<14} {}", "email", identity.email));
+    if let Some(account) = &identity.account {
+        out::result_line(&format!("{:<14} {}", "account", account_label(account)));
+    }
     out::result_line(&format!("{:<14} {}", "session", "active"));
     // The console endpoint is an internal URL that means nothing to the
     // reader, the same call `wally about` makes; it stays in --json for

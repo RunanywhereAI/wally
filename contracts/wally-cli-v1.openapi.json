@@ -207,7 +207,7 @@
             }
           }
         },
-        "description": "Entitlement or GPU admission capacity limit",
+        "description": "A per-key or per-account limit (capacity and overload, on every route, are 503 with Retry-After)",
         "headers": {
           "Access-Control-Expose-Headers": {
             "description": "Response headers a browser client may read",
@@ -269,6 +269,14 @@
         "description": "The response headers a browser client may read, as a comma-separated list; it names x-request-id, Retry-After and Server-Timing when the response carries them.",
         "maxLength": 1024,
         "minLength": 1,
+        "type": "string"
+      },
+      "AccountKind": {
+        "enum": [
+          "personal",
+          "team"
+        ],
+        "title": "AccountKind",
         "type": "string"
       },
       "ApiError": {
@@ -334,7 +342,12 @@
           "access_request_closed",
           "access_programme_closed",
           "not_staff",
-          "invalid_transition"
+          "invalid_transition",
+          "team_access_denied",
+          "team_session_stale",
+          "team_role_required",
+          "personal_account_only",
+          "last_team_owner"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -958,9 +971,46 @@
         "title": "Harness",
         "type": "string"
       },
+      "IdentityAccount": {
+        "additionalProperties": false,
+        "description": "The account a credential acts on (teams). Additive: a CLI that does not\nknow it ignores it, and it is absent while teams are off.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "title": "IdentityAccount",
+        "type": "object"
+      },
       "IdentityResponse": {
         "additionalProperties": false,
         "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityAccount"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "email": {
             "maxLength": 320,
             "minLength": 3,
@@ -2464,8 +2514,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "feat/model-access-review",
-    "commit": "aa1298ba044ea8e0570991c0e7543ede0c85c8af",
+    "branch": "feat/teams",
+    "commit": "810be26b7297195d03f6c48ce1844757aef8210d",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

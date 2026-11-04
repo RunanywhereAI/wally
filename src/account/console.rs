@@ -82,12 +82,28 @@ pub enum CancelOutcome {
     Failed,
 }
 
+/// The generated contract's kind, used as is: there is one enum for it.
+pub use contract::AccountKind;
+
+/// The account a credential acts on (team accounts). Optional on the wire:
+/// a server without teams, or with them off, sends none. `id` and `name` are
+/// the display-safe subset of what the contract carries: one that cannot be
+/// printed is `None`, and `kind` always survives it, so a team never reads as
+/// personal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Account {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub kind: AccountKind,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Identity {
     pub email: String,
     pub plan: String,
     pub tokens_this_month: i64,
     pub monthly_token_limit: i64,
+    pub account: Option<Account>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1140,6 +1156,23 @@ fn parse_object(response: &HttpResponse) -> Result<serde_json::Value, String> {
     Ok(parsed)
 }
 
+/// The generated reader fills a missing field with its default, and a missing
+/// `kind` defaults to personal, which would present a team's credential as the
+/// person's own. An `account` that does not say what kind it is is treated as
+/// absent instead, the same as a server without teams.
+fn without_incomplete_account(mut object: serde_json::Value) -> serde_json::Value {
+    let has_kind = object
+        .get("account")
+        .and_then(|account| account.get("kind"))
+        .is_some_and(|kind| !kind.is_null());
+    if !has_kind {
+        if let Some(map) = object.as_object_mut() {
+            map.remove("account");
+        }
+    }
+    object
+}
+
 const CONTRACT_MISMATCH: &str = "console returned a response that did not match the contract";
 
 fn display_text_is_safe(value: &str, maximum: usize) -> bool {
@@ -1698,6 +1731,7 @@ impl ConsoleClient {
             Ok(object) => object,
             Err(error) => return (IdentityResult::Failed, identity, error),
         };
+        let object = without_incomplete_account(object);
         let parsed = match contract::IdentityResponse::from_json(&object) {
             Ok(parsed) => parsed,
             Err(_) => {
@@ -1717,6 +1751,16 @@ impl ConsoleClient {
             );
         }
         identity.plan = plan_text(Some(parsed.plan));
+        // Additive and optional, and never a reason to fail whoami. What cannot
+        // be printed (a name or id with control or non-ASCII characters, or a
+        // blank one) is left out; the kind is kept, because dropping it would
+        // turn a team into a personal-looking credential.
+        identity.account = parsed.account.map(|account| Account {
+            id: Some(account.id).filter(|id| display_text_is_safe(id, 64)),
+            name: Some(account.name)
+                .filter(|name| display_text_is_safe(name, 120) && !name.trim().is_empty()),
+            kind: account.kind,
+        });
         identity.tokens_this_month = parsed.tokens_this_month;
         identity.monthly_token_limit = parsed.monthly_token_limit;
         if identity.tokens_this_month < 0 || identity.monthly_token_limit < 0 {

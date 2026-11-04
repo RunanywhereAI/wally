@@ -126,6 +126,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     # False stands in for every console deployed before windowed totals, which
     # is all of them until /v1/cli/usage ships.
     serves_windows = True
+    # The `account` object a teams-aware server adds to /v1/me (InferenceInfra
+    # team accounts). None is a server without it, which every old server is.
+    me_account = None
+    # A status other than 200 for /v1/me, to prove a failed read changes nothing.
+    me_status = 200
     # Everything but the cursor that the first page of the current walk was
     # asked with. A later page must repeat all of it.
     export_query = None
@@ -215,7 +220,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.requests.append(("GET", self.path, self.headers.get("Authorization"), None))
         if self.path == "/v1/me":
-            self.reply(200, {"email": EMAIL})
+            if self.me_status != 200:
+                self.reply(self.me_status, {"code": "internal_error", "message": "down"})
+                return
+            body = {"email": EMAIL}
+            if self.me_account is not None:
+                body["account"] = self.me_account
+            self.reply(200, body)
         elif self.path == "/v1/models":
             # Login primes the model cache from here; a minimal catalog is enough.
             self.reply(200, {"data": [{"id": "glm-5.3-flash"}]})
@@ -467,6 +478,93 @@ def main():
                 raise AssertionError("whoami did not report the active identity")
             if "plan" in whoami or "tokens" in whoami or "quota" in whoami:
                 raise AssertionError("whoami exposed launch-out-of-scope billing fields")
+            if "account" in whoami:
+                raise AssertionError(f"whoami invented an account the server never sent:\n{whoami}")
+
+            # A teams-aware server names the account the key acts on.
+            ConsoleHandler.me_account = {
+                "id": "00000000-0000-0000-0000-00000000a001",
+                "name": "Acme Labs",
+                "kind": "team",
+            }
+            try:
+                team = run(binary, ["account", "whoami"], environment)
+                if not any(
+                    line.split() == ["account", "Acme", "Labs", "(team)"] for line in team.splitlines()
+                ):
+                    raise AssertionError(f"whoami did not name the team account:\n{team}")
+                document = json.loads(run(binary, ["account", "whoami", "--json"], environment))
+                if document.get("account") != {
+                    "id": "00000000-0000-0000-0000-00000000a001",
+                    "name": "Acme Labs",
+                    "kind": "team",
+                }:
+                    raise AssertionError(f"whoami --json did not carry the account: {document}")
+                ConsoleHandler.me_account = {
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "name": EMAIL,
+                    "kind": "personal",
+                }
+                personal = run(binary, ["account", "whoami"], environment)
+                if not any(line.split() == ["account", "personal"] for line in personal.splitlines()):
+                    raise AssertionError(f"whoami did not say personal:\n{personal}")
+                # The sign-in names the account it was approved on.
+                ConsoleHandler.me_account = {
+                    "id": "00000000-0000-0000-0000-00000000a001",
+                    "name": "Acme Labs",
+                    "kind": "team",
+                }
+                with tempfile.TemporaryDirectory(prefix="wally-account-team-") as other:
+                    team_login = run(
+                        binary,
+                        ["account", "login", "--no-browser"],
+                        dict(environment, WALLY_PROFILE_DIR=other),
+                    )
+                    if f"signed in as {EMAIL} (Acme Labs (team))" not in team_login:
+                        raise AssertionError(f"login did not name the team account:\n{team_login}")
+
+                # A name that is not safe to print is left out; the account is
+                # still a team, never a personal-looking one.
+                ConsoleHandler.me_account = {
+                    "id": "00000000-0000-0000-0000-00000000a001",
+                    "name": "Acme\x1b[2J Labs",
+                    "kind": "team",
+                }
+                unsafe = run(binary, ["account", "whoami"], environment)
+                if "\x1b" in unsafe or not any(
+                    line.split() == ["account", "team"] for line in unsafe.splitlines()
+                ):
+                    raise AssertionError(f"whoami did not show a nameless team:\n{unsafe!r}")
+                document = json.loads(run(binary, ["account", "whoami", "--json"], environment))
+                if document.get("account") != {
+                    "id": "00000000-0000-0000-0000-00000000a001",
+                    "kind": "team",
+                }:
+                    raise AssertionError(f"whoami --json lost the team kind: {document}")
+
+                # An account with no kind is not guessed to be personal.
+                ConsoleHandler.me_account = {
+                    "id": "00000000-0000-0000-0000-00000000a001",
+                    "name": "Acme Labs",
+                }
+                partial = run(binary, ["account", "whoami"], environment)
+                if "account" in partial or "personal" in partial:
+                    raise AssertionError(f"whoami read a kindless account:\n{partial}")
+
+                # A failing /v1/me while signing in leaves the line as it was.
+                ConsoleHandler.me_account = None
+                ConsoleHandler.me_status = 503
+                with tempfile.TemporaryDirectory(prefix="wally-account-down-") as other:
+                    down = run(
+                        binary,
+                        ["account", "login", "--no-browser"],
+                        dict(environment, WALLY_PROFILE_DIR=other),
+                    )
+                    if not any(line.strip() == f"signed in as {EMAIL}" for line in down.splitlines()):
+                        raise AssertionError(f"a failed /v1/me changed the sign-in line:\n{down}")
+            finally:
+                ConsoleHandler.me_account = None
+                ConsoleHandler.me_status = 200
 
             usage = run(binary, ["account", "usage"], environment)
             # What San asked for and nothing else: the balance, then input,
@@ -532,6 +630,9 @@ def main():
             ("POST", "/auth/cli/poll", None),
             ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/models/catalog", f"Bearer {ACCESS_TOKEN}"),
+            # Every approved sign-in reads /v1/me once, to name the account it
+            # was approved on (team accounts); best effort.
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),
             # The sign-in left to expire: two polls 29 s apart, then it stops.
             ("POST", "/auth/cli/start", None),
             ("POST", "/auth/cli/poll", None),
@@ -541,6 +642,25 @@ def main():
             ("POST", "/auth/cli/start", None),
             ("POST", "/auth/cli/poll", None),
             ("POST", "/auth/cli/poll", None),
+            ("POST", "/auth/cli/poll", None),
+            ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
+            ("GET", "/v1/models/catalog", f"Bearer {ACCESS_TOKEN}"),
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),  # the sign-in's account
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),  # whoami
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),  # whoami, team account
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),  # whoami --json, team account
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),  # whoami, personal account
+            # The sign-in approved on a team names it.
+            ("POST", "/auth/cli/start", None),
+            ("POST", "/auth/cli/poll", None),
+            ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
+            ("GET", "/v1/models/catalog", f"Bearer {ACCESS_TOKEN}"),
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),  # whoami, unsafe team name
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),  # whoami --json, unsafe team name
+            ("GET", "/v1/me", f"Bearer {ACCESS_TOKEN}"),  # whoami, account without a kind
+            # The sign-in whose /v1/me read failed.
+            ("POST", "/auth/cli/start", None),
             ("POST", "/auth/cli/poll", None),
             ("GET", "/v1/models", f"Bearer {ACCESS_TOKEN}"),
             ("GET", "/v1/models/catalog", f"Bearer {ACCESS_TOKEN}"),
