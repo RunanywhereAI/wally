@@ -2639,9 +2639,12 @@ fn identity_parses_a_team_account_when_the_server_sends_one() {
     }));
     assert_eq!(result, IdentityResult::Ok, "{error}");
     let account = identity.account.expect("account");
-    assert_eq!(account.name, "Acme Labs");
-    assert_eq!(account.kind, account::AccountKind::Team);
-    assert_eq!(account.id, "00000000-0000-0000-0000-00000000a001");
+    assert_eq!(account.name.as_deref(), Some("Acme Labs"));
+    assert_eq!(account.kind, account::AccountKind::KTeam);
+    assert_eq!(
+        account.id.as_deref(),
+        Some("00000000-0000-0000-0000-00000000a001")
+    );
 }
 
 #[test]
@@ -2669,19 +2672,51 @@ fn identity_parses_a_personal_account() {
     assert_eq!(result, IdentityResult::Ok, "{error}");
     assert_eq!(
         identity.account.expect("account").kind,
-        account::AccountKind::Personal
+        account::AccountKind::KPersonal
     );
 }
 
-#[test]
-fn an_unsafe_account_name_is_dropped_not_printed() {
-    let (result, identity, _) = identity_from(serde_json::json!({
+fn identity_with_account(
+    account: serde_json::Value,
+) -> (IdentityResult, account::Identity, String) {
+    identity_from(serde_json::json!({
         "email": "dev@example.test",
         "plan": "beta",
         "tokens_this_month": 0,
         "monthly_token_limit": 0,
-        "account": {"id": "00000000-0000-0000-0000-00000000a001", "name": "Acme\u{1b}[2J", "kind": "team"},
-    }));
-    assert_eq!(result, IdentityResult::Ok);
-    assert_eq!(identity.account, None);
+        "account": account,
+    }))
+}
+
+#[test]
+fn an_unsafe_account_name_is_not_printed_but_the_team_is_still_a_team() {
+    for name in ["Acme\u{1b}[2J", "Acm\u{e9} Labs", "   "] {
+        let (result, identity, error) = identity_with_account(serde_json::json!(
+            {"id": "00000000-0000-0000-0000-00000000a001", "name": name, "kind": "team"}
+        ));
+        assert_eq!(result, IdentityResult::Ok, "{error}");
+        let account = identity.account.unwrap_or_else(|| {
+            panic!("name {name:?} dropped the whole account, so a team looks personal")
+        });
+        assert_eq!(account.kind, account::AccountKind::KTeam, "{name:?}");
+        assert_eq!(
+            account.id.as_deref(),
+            Some("00000000-0000-0000-0000-00000000a001")
+        );
+        assert_eq!(account.name, None, "{name:?} must not be kept for display");
+    }
+}
+
+#[test]
+fn an_account_without_a_kind_is_absent_not_personal() {
+    for account in [
+        serde_json::json!({"id": "00000000-0000-0000-0000-00000000a001", "name": "Acme Labs"}),
+        serde_json::json!({"id": "00000000-0000-0000-0000-00000000a001", "name": "Acme Labs", "kind": null}),
+        serde_json::json!({}),
+    ] {
+        let (result, identity, error) = identity_with_account(account.clone());
+        assert_eq!(result, IdentityResult::Ok, "{error}");
+        assert_eq!(identity.account, None, "{account} was read as an account");
+        assert_eq!(identity.email, "dev@example.test");
+    }
 }

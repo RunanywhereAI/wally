@@ -477,18 +477,13 @@ fn logout() -> i32 {
     }
 }
 
-fn account_kind(kind: account::AccountKind) -> &'static str {
-    match kind {
-        account::AccountKind::Personal => "personal",
-        account::AccountKind::Team => "team",
-    }
-}
-
-/// `Acme Labs (team)`, or `personal` for the person's own account.
+/// `Acme Labs (team)`, `team` when its name cannot be shown, or `personal` for
+/// the person's own account.
 fn account_label(account: &account::Account) -> String {
-    match account.kind {
-        account::AccountKind::Team => format!("{} (team)", account.name),
-        account::AccountKind::Personal => "personal".to_string(),
+    match (account.kind, account.name.as_deref()) {
+        (account::AccountKind::KTeam, Some(name)) => format!("{name} (team)"),
+        (account::AccountKind::KTeam, None) => "team".to_string(),
+        (account::AccountKind::KPersonal, _) => "personal".to_string(),
     }
 }
 
@@ -536,11 +531,14 @@ fn who_am_i(as_json: bool) -> i32 {
         // Only when the server names one (teams): absent, not null, otherwise,
         // so a script reading today's document sees exactly today's keys.
         if let Some(account) = &identity.account {
-            json.begin_object_field("account")
-                .field_str("id", &account.id)
-                .field_str("name", &account.name)
-                .field_str("kind", account_kind(account.kind))
-                .end_object();
+            json.begin_object_field("account");
+            if let Some(id) = &account.id {
+                json.field_str("id", id);
+            }
+            if let Some(name) = &account.name {
+                json.field_str("name", name);
+            }
+            json.field_str("kind", account.kind.as_str()).end_object();
         }
         json.end_object();
         out::result_line(json.str());
