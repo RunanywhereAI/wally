@@ -843,9 +843,8 @@ pub fn start(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Ro
 /// A fresh 128-bit hex secret for this launch.
 fn launch_token() -> String {
     let mut bytes = [0u8; 16];
-    let filled = std::fs::File::open("/dev/urandom")
-        .and_then(|mut file| file.read_exact(&mut bytes))
-        .is_ok();
+    // The OS CSPRNG on every platform; `/dev/urandom` does not exist on Windows.
+    let filled = getrandom::fill(&mut bytes).is_ok();
     if !filled {
         let seed = format!(
             "{}{}",
