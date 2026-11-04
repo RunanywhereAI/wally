@@ -583,6 +583,12 @@ fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
         return limits;
     }
 
+    console_limits(model)
+}
+
+/// What the console says a hosted model costs and how much it can hold.
+fn console_limits(model: &str) -> ModelLimits {
+    let mut limits = ModelLimits::default();
     let credentials = match account::load() {
         Ok(c) => c,
         Err(_) => return limits,
@@ -1436,16 +1442,44 @@ pub const HYBRID_MODEL_ID: &str = "Hybrid-Wally-0.1";
 
 /// The two-provider `llm-pi-ai` config. Both providers carry the same model;
 /// `wally` is the parent lane (cloud) and `wally-local` the child lane (local).
-fn build_hybrid_llm_config(base_url: &str, key_variable: &str, token: &str) -> String {
-    let model = json!({
-        "id": HYBRID_MODEL_ID,
-        "name": HYBRID_MODEL_ID,
-        "input": ["text"],
-        "contextWindow": 57344,
-        "maxTokens": 8192,
-        "reasoningEfforts": false,
-    });
-    let provider = |name: &str, path: &str| {
+/// The local lane's limits: the model server's KV cap and reply cap.
+const HYBRID_LOCAL_CONTEXT: i64 = 57344;
+const HYBRID_LOCAL_OUTPUT: i64 = 8192;
+
+/// `cloud` is what the console says the parent's cloud model can hold. The
+/// parent provider declares those limits and the subagent provider the local
+/// ones; sharing the local cap cut cloud replies off at 8192 tokens once the
+/// parent started writing whole files itself under the cost policy.
+fn build_hybrid_llm_config(
+    base_url: &str,
+    key_variable: &str,
+    token: &str,
+    cloud: &ModelLimits,
+) -> String {
+    let model = |context: i64, output: i64| {
+        json!({
+            "id": HYBRID_MODEL_ID,
+            "name": HYBRID_MODEL_ID,
+            "input": ["text"],
+            "contextWindow": context,
+            "maxTokens": output,
+            "reasoningEfforts": false,
+        })
+    };
+    let local_model = model(HYBRID_LOCAL_CONTEXT, HYBRID_LOCAL_OUTPUT);
+    let cloud_model = model(
+        if cloud.context_window > 0 {
+            cloud.context_window
+        } else {
+            HYBRID_LOCAL_CONTEXT
+        },
+        if cloud.max_output > 0 {
+            cloud.max_output
+        } else {
+            HYBRID_LOCAL_OUTPUT
+        },
+    );
+    let provider = |name: &str, path: &str, model: &Value| {
         json!({
             "displayName": name,
             "api": "openai-completions",
@@ -1459,8 +1493,8 @@ fn build_hybrid_llm_config(base_url: &str, key_variable: &str, token: &str) -> S
     };
     dump(&json!({
         "providers": {
-            PROVIDER_ID: provider("Wally", "/v1"),
-            "wally-local": provider("Wally (local)", "/local/v1"),
+            PROVIDER_ID: provider("Wally", "/v1", &cloud_model),
+            "wally-local": provider("Wally (local)", "/local/v1", &local_model),
         }
     }))
 }
@@ -1591,9 +1625,17 @@ fn hybrid_model_directory(model: &str, options: &GlobalOptions) -> Option<String
 pub fn launch_deep_seek_hybrid(
     model: &str,
     cloud_model: &str,
+    policy: &str,
     args: &[String],
     options: &GlobalOptions,
 ) -> i32 {
+    let policy = match super::pls::parse_policy(policy) {
+        Ok(policy) => policy,
+        Err(error) => {
+            out::error_line(&error);
+            return 2;
+        }
+    };
     clean_leftover_configs();
     // No -m: use the first downloaded MLX model certified for a harness, so
     // `wally deepseek --hybrid` alone is enough.
@@ -1621,12 +1663,21 @@ pub fn launch_deep_seek_hybrid(
         out::error_line("--hybrid needs a cloud model: pass --cloud-model <id> or set a default");
         return 2;
     }
-    super::pls::configure(&directory, cloud_model);
-    let Some(router) = super::pls::start(&directory) else {
+    super::pls::configure(&directory, cloud_model, policy);
+    let decider = super::pls::resolve_decider(options);
+    let Some(router) = super::pls::start(&directory, decider) else {
         return 1;
     };
 
-    let llm_config = build_hybrid_llm_config(&router.base_url, KEY_VARIABLE, &router.token);
+    let cloud_limits = console_limits(cloud_model);
+    if cloud_limits.max_output <= 0 {
+        out::status_line(&format!(
+            "hybrid: the console gave no output limit for {cloud_model}; \
+             the parent keeps {HYBRID_LOCAL_OUTPUT} tokens per reply"
+        ));
+    }
+    let llm_config =
+        build_hybrid_llm_config(&router.base_url, KEY_VARIABLE, &router.token, &cloud_limits);
     let mut config = TemporaryConfig::new();
     if let Err(failure) = config.write(&build_hybrid_patch(&llm_config), ".yaml") {
         out::error_line(&failure);
@@ -1654,7 +1705,8 @@ pub fn launch_deep_seek_hybrid(
     };
     launch_args.extend(args.iter().cloned());
     out::status_line(&format!(
-        "hybrid: parent on the cloud, subagents on {model} through {}",
+        "hybrid ({} policy): parent on the cloud, subagents on {model} through {}",
+        policy.as_str(),
         router.base_url
     ));
     let status = launch("dsh", "", &launch_args, options);
@@ -2543,8 +2595,30 @@ mod tests {
     }
 
     #[test]
+    fn the_hybrid_parent_gets_the_cloud_models_limits_and_the_subagent_the_local_ones() {
+        let cloud = ModelLimits {
+            context_window: 1_000_000,
+            max_output: 65_536,
+            ..ModelLimits::default()
+        };
+        let config = build_hybrid_llm_config("http://127.0.0.1:1234", "K", "tok", &cloud);
+        let parsed: Value = serde_json::from_str(&config).unwrap();
+        let parent = &parsed["providers"][PROVIDER_ID]["models"][0];
+        let local = &parsed["providers"]["wally-local"]["models"][0];
+        assert_eq!(parent["maxTokens"], json!(65_536));
+        assert_eq!(parent["contextWindow"], json!(1_000_000));
+        assert_eq!(local["maxTokens"], json!(HYBRID_LOCAL_OUTPUT));
+        assert_eq!(local["contextWindow"], json!(HYBRID_LOCAL_CONTEXT));
+    }
+
+    #[test]
     fn hybrid_patch_registers_both_lanes_and_pins_subagents_local() {
-        let config = build_hybrid_llm_config("http://127.0.0.1:1234", "WALLY_PLS_KEY", "tok");
+        let config = build_hybrid_llm_config(
+            "http://127.0.0.1:1234",
+            "WALLY_PLS_KEY",
+            "tok",
+            &ModelLimits::default(),
+        );
         let parsed: Value = serde_json::from_str(&config).unwrap();
         assert_eq!(
             parsed["providers"][PROVIDER_ID]["baseURL"],

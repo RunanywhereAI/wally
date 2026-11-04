@@ -16,7 +16,240 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 use crate::account;
+use crate::account::decisions_contract as contract;
+use crate::commands::model_setup::ResolvedModelPaths;
 use crate::io::output as out;
+
+/// The local decision model the policies ask about each new prompt. The MLX
+/// row: `clef-flash-9b` resolves to its GGUF file, which the kit's local
+/// decision component refuses ("Feature/operation is not supported").
+pub const DECISION_MODEL: &str = "mlx-clef-flash-9b-4bit";
+/// Longest prompt text the decision model is shown.
+const DECIDE_TEXT_MAX: usize = 32 * 1024;
+/// Largest `/decide` request body read off the socket.
+const DECIDE_BODY_MAX: usize = 256 * 1024;
+/// How long one decision may take, load included, before the router is told no.
+const DECIDE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// What the router optimises for on the hybrid lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Policy {
+    /// Private work stays on the device; the cloud only orchestrates.
+    Privacy,
+    /// Large tasks go to the local subagent; the cloud plans.
+    Cost,
+}
+
+impl Policy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Policy::Privacy => "privacy",
+            Policy::Cost => "cost",
+        }
+    }
+}
+
+pub(crate) fn parse_policy(value: &str) -> Result<Policy, String> {
+    match value {
+        "privacy" => Ok(Policy::Privacy),
+        "cost" => Ok(Policy::Cost),
+        other => Err(format!("unknown policy '{other}': use privacy or cost")),
+    }
+}
+
+/// The one yes/no question each policy asks about a prompt.
+pub(crate) fn decide_question(policy: Policy) -> contract::YesNoQuestion {
+    let question = match policy {
+        Policy::Privacy => {
+            "Does this request contain or ask to work on private data: proprietary \
+             source code, internal documents, personal identifiers or credentials?"
+        }
+        // Picked on clef-flash 9B over six sample prompts: it scores 0.81 and
+        // 0.88 for exploring a codebase into an HTML page and fixing a failing
+        // build, 0.19 or less for a rename, a one-liner and small talk. The
+        // earlier "Is this a large task" wording scored the first one 0.18.
+        Policy::Cost => {
+            "Would doing this request take many steps of tool use, such as \
+             exploring a codebase, reading several files, writing or editing code, \
+             building, running or debugging?"
+        }
+    };
+    contract::YesNoQuestion {
+        id: "route".to_string(),
+        question: question.to_string(),
+        r#type: "yes_no".to_string(),
+        yes: None,
+        no: None,
+    }
+}
+
+pub(crate) fn build_decide_request(policy: Policy, text: &str) -> contract::DecisionsRequest {
+    contract::DecisionsRequest {
+        images: None,
+        input: text.to_string(),
+        model: DECISION_MODEL.to_string(),
+        prompt_format_version: None,
+        questions: vec![contract::DecisionQuestion::YesNoQuestion(decide_question(
+            policy,
+        ))],
+        temperature: None,
+    }
+}
+
+/// A parsed `POST /decide` body.
+pub(crate) struct DecideBody {
+    pub policy: Policy,
+    pub text: String,
+}
+
+pub(crate) fn parse_decide_body(bytes: &[u8]) -> Result<DecideBody, String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|error| format!("body is not JSON: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "body is not a JSON object".to_string())?;
+    let policy = object
+        .get("policy")
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| "policy is missing".to_string())
+        .and_then(parse_policy)?;
+    let text = object
+        .get("text")
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| "text is missing".to_string())?;
+    if text.trim().is_empty() {
+        return Err("text is empty".to_string());
+    }
+    let mut end = text.len().min(DECIDE_TEXT_MAX);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Ok(DecideBody {
+        policy,
+        text: text[..end].to_string(),
+    })
+}
+
+/// The `/decide` reply for a scored request. `error` is set when the model
+/// gave no yes probability for the `route` question.
+pub(crate) fn decide_reply(response: &contract::DecisionsResponse, ms: u128) -> serde_json::Value {
+    let p_yes = response
+        .answers
+        .0
+        .get("route")
+        .and_then(|answer| answer.probabilities.0.get("yes"))
+        .copied();
+    match p_yes {
+        Some(p_yes) => serde_json::json!({
+            "answer": if p_yes >= 0.5 { "yes" } else { "no" },
+            "p_yes": p_yes,
+            "model": response.model,
+            "ms": ms as u64,
+        }),
+        None => serde_json::json!({ "error": "the decision model gave no yes probability" }),
+    }
+}
+
+/// `config.json` after a launch: the launch's values over whatever the file held.
+pub(crate) fn configure_value(
+    existing: serde_json::Value,
+    model_path: &str,
+    cloud_model: &str,
+    policy: Policy,
+) -> serde_json::Value {
+    let mut value = if existing.is_object() {
+        existing
+    } else {
+        serde_json::json!({})
+    };
+    value["model_path"] = serde_json::json!(model_path);
+    value["cloud_model"] = serde_json::json!(cloud_model);
+    value["policy"] = serde_json::json!(policy.as_str());
+    value
+}
+
+/// Resolve the decision model before the harness starts, so a missing one
+/// can be offered for download on the terminal instead of failing mid-session.
+pub fn resolve_decider(options: &crate::bootstrap::GlobalOptions) -> Option<ResolvedModelPaths> {
+    let offline = crate::bootstrap::GlobalOptions {
+        offline: true,
+        ..options.clone()
+    };
+    if crate::bootstrap::bootstrap(&offline).is_err() {
+        out::error_line(
+            "policy: the SDK did not start, so prompts are not routed by a decision model",
+        );
+        return None;
+    }
+    match crate::commands::model_setup::ensure_model_ready(&offline, DECISION_MODEL) {
+        Ok(paths) => Some(paths),
+        Err(_) => {
+            out::error_line(&format!(
+                "policy: {DECISION_MODEL} is not available; privacy keeps every prompt local, \
+                 cost lets the cloud do everything"
+            ));
+            None
+        }
+    }
+}
+
+struct DecideJob {
+    body: DecideBody,
+    reply: mpsc::Sender<Result<serde_json::Value, String>>,
+}
+
+/// Owns the loaded decision component on one thread, so its handle never
+/// moves between threads. Loads on the first request.
+pub(crate) struct Decider {
+    jobs: mpsc::Sender<DecideJob>,
+}
+
+impl Decider {
+    fn start(model: ResolvedModelPaths) -> Option<Self> {
+        let (jobs, inbox) = mpsc::channel::<DecideJob>();
+        std::thread::Builder::new()
+            .name("pls-decider".to_string())
+            .spawn(move || {
+                let mut loaded = None;
+                for job in inbox {
+                    if loaded.is_none() {
+                        let _hush = crate::util::hush::HushedStdout::mute();
+                        match crate::commands::cmd_decisions::load_decisions_component(&model) {
+                            Ok(component) => loaded = Some(component),
+                            Err(error) => {
+                                let _ = job.reply.send(Err(error));
+                                continue;
+                            }
+                        }
+                    }
+                    let Some(component) = loaded.as_ref() else {
+                        continue;
+                    };
+                    let request = build_decide_request(job.body.policy, &job.body.text);
+                    let started = std::time::Instant::now();
+                    let scored = {
+                        let _hush = crate::util::hush::HushedStdout::mute();
+                        crate::commands::cmd_decisions::score_loaded(component, &request)
+                    };
+                    let reply = scored
+                        .map(|response| decide_reply(&response, started.elapsed().as_millis()));
+                    let _ = job.reply.send(reply);
+                }
+            })
+            .ok()?;
+        Some(Decider { jobs })
+    }
+
+    fn decide(&self, body: DecideBody) -> Result<serde_json::Value, String> {
+        let (reply, answer) = mpsc::channel();
+        self.jobs
+            .send(DecideJob { body, reply })
+            .map_err(|_| "the decision thread has stopped".to_string())?;
+        answer
+            .recv_timeout(DECIDE_TIMEOUT)
+            .map_err(|_| "the decision model did not answer in time".to_string())?
+    }
+}
 
 /// How long the router gets to print its port before the launch is abandoned.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -81,7 +314,8 @@ pub struct Entitlement {
 }
 
 impl Entitlement {
-    fn start() -> Option<Self> {
+    fn start(decider: Option<ResolvedModelPaths>) -> Option<Self> {
+        let decider = decider.and_then(Decider::start).map(Arc::new);
         let socket = config_dir().join("entitlement.sock");
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).ok()?;
@@ -98,7 +332,13 @@ impl Entitlement {
             std::thread::spawn(move || {
                 while !stop.load(Ordering::SeqCst) {
                     match listener.accept() {
-                        Ok((stream, _)) => answer(stream, premium.load(Ordering::SeqCst)),
+                        Ok((stream, _)) => {
+                            let premium = premium.load(Ordering::SeqCst);
+                            let decider = decider.clone();
+                            // A decision can take seconds; it must not hold up
+                            // the entitlement answers the router polls for.
+                            std::thread::spawn(move || answer(stream, premium, decider));
+                        }
                         Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
                     }
                 }
@@ -142,18 +382,107 @@ impl Drop for Entitlement {
     }
 }
 
-fn answer(mut stream: UnixStream, premium: bool) {
-    let mut buffer = [0u8; 256];
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-    let _ = stream.read(&mut buffer);
-    let body = format!("{{\"sub\":{premium}}}");
+/// One request off the socket: its request line and body.
+fn read_request(stream: &mut UnixStream) -> Result<(String, Vec<u8>), String> {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut raw = Vec::new();
+    let mut buffer = [0u8; 4096];
+    let header_end = loop {
+        if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            break end;
+        }
+        if raw.len() > 16 * 1024 {
+            return Err("request headers are too large".to_string());
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => return Err("connection closed before the headers ended".to_string()),
+            Ok(n) => raw.extend_from_slice(&buffer[..n]),
+            Err(error) => return Err(format!("read failed: {error}")),
+        }
+    };
+    let head = String::from_utf8_lossy(&raw[..header_end]).to_string();
+    let request_line = head.lines().next().unwrap_or_default().to_string();
+    let length = head
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    if length > DECIDE_BODY_MAX {
+        return Err("request body is too large".to_string());
+    }
+    let mut body = raw[header_end + 4..].to_vec();
+    while body.len() < length {
+        match stream.read(&mut buffer) {
+            Ok(0) => return Err("connection closed before the body ended".to_string()),
+            Ok(n) => body.extend_from_slice(&buffer[..n]),
+            Err(error) => return Err(format!("read failed: {error}")),
+        }
+    }
+    body.truncate(length);
+    Ok((request_line, body))
+}
+
+fn respond(stream: &mut UnixStream, status: &str, body: &serde_json::Value) {
+    let body = body.to_string();
     let _ = write!(
         stream,
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n\
          content-length: {}\r\nconnection: close\r\n\r\n{}",
         body.len(),
         body
     );
+}
+
+fn answer(mut stream: UnixStream, premium: bool, decider: Option<Arc<Decider>>) {
+    let (request_line, body) = match read_request(&mut stream) {
+        Ok(request) => request,
+        Err(error) => {
+            respond(
+                &mut stream,
+                "400 Bad Request",
+                &serde_json::json!({ "error": error }),
+            );
+            return;
+        }
+    };
+    if !request_line.starts_with("POST /decide ") {
+        respond(
+            &mut stream,
+            "200 OK",
+            &serde_json::json!({ "sub": premium }),
+        );
+        return;
+    }
+    let parsed = match parse_decide_body(&body) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            respond(
+                &mut stream,
+                "400 Bad Request",
+                &serde_json::json!({ "error": error }),
+            );
+            return;
+        }
+    };
+    let Some(decider) = decider else {
+        respond(
+            &mut stream,
+            "503 Service Unavailable",
+            &serde_json::json!({ "error": format!("{DECISION_MODEL} is not loaded") }),
+        );
+        return;
+    };
+    match decider.decide(parsed) {
+        Ok(reply) if reply.get("error").is_none() => respond(&mut stream, "200 OK", &reply),
+        Ok(reply) => respond(&mut stream, "503 Service Unavailable", &reply),
+        Err(error) => respond(
+            &mut stream,
+            "503 Service Unavailable",
+            &serde_json::json!({ "error": error }),
+        ),
+    }
 }
 
 /// Whether the signed-in account may run work on the local model.
@@ -368,20 +697,21 @@ fn process_is_router(pid: i32, recorded: &str) -> bool {
 
 /// Record the model paths in the config file, preserving the person's mode and
 /// cap. Called before `start`.
-pub fn configure(model_path: &str, cloud_model: &str) {
+pub(crate) fn configure(model_path: &str, cloud_model: &str, policy: Policy) {
     let _ = std::fs::create_dir_all(config_dir());
     let path = config_file();
-    let mut value: serde_json::Value = std::fs::read_to_string(&path)
+    let existing: serde_json::Value = std::fs::read_to_string(&path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_else(|| serde_json::json!({}));
-    value["model_path"] = serde_json::json!(model_path);
-    value["cloud_model"] = serde_json::json!(cloud_model);
+    let value = configure_value(existing, model_path, cloud_model, policy);
     let _ = std::fs::write(&path, value.to_string());
 }
 
-/// Start the router for `model_path`. Returns `None` after reporting why.
-pub fn start(model_path: &str) -> Option<Router> {
+/// Start the router for `model_path`, with `decider` answering `/decide`
+/// on the entitlement socket when it is given. Returns `None` after
+/// reporting why.
+pub fn start(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Router> {
     let script = materialise().or_else(|| {
         out::error_line("could not write the router scripts to the profile directory");
         None
@@ -471,7 +801,7 @@ pub fn start(model_path: &str) -> Option<Router> {
         child,
         base_url,
         token,
-        entitlement: Entitlement::start(),
+        entitlement: Entitlement::start(decider),
     })
 }
 
@@ -494,6 +824,10 @@ fn launch_token() -> String {
     }
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+#[cfg(test)]
+#[path = "pls_policy_tests.rs"]
+mod policy_tests;
 
 #[cfg(test)]
 mod tests {

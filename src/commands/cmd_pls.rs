@@ -27,7 +27,9 @@ pub fn register_pls(app: &mut App) {
             out::error_line(&format!("{model} is not a directory"));
             return 2;
         }
-        let Some(router) = pls::start(&model) else {
+        // Development runs have no decision model; the router then applies
+        // each policy's failure rule.
+        let Some(router) = pls::start(&model, None) else {
             return 1;
         };
         let mut router = router;

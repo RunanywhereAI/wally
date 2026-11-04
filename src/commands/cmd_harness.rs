@@ -210,6 +210,11 @@ pub fn register_harness(app: &mut App) {
                 ValueType::Text,
                 "The cloud model the parent lane uses (defaults to your default model)",
             );
+            command.add_option(
+                "--policy",
+                ValueType::Text,
+                "What --hybrid optimises for: privacy (default) or cost",
+            );
         }
         command
             .add_option("args", ValueType::Text, "Passed through to the tool")
@@ -234,12 +239,21 @@ pub fn register_harness(app: &mut App) {
                 if harness::refuse_decisions_model(Some(cloud.as_str())) {
                     return 2;
                 }
-                return harness::launch_deep_seek_hybrid(&local, &cloud, &p.get_strs("args"), g);
+                let policy = p
+                    .get_str("--policy")
+                    .unwrap_or_else(|| "privacy".to_string());
+                return harness::launch_deep_seek_hybrid(
+                    &local,
+                    &cloud,
+                    &policy,
+                    &p.get_strs("args"),
+                    g,
+                );
             }
             if agent.id == "deepseek" {
-                if let Some(cloud) = p.get_str("--cloud-model") {
-                    if !cloud.is_empty() {
-                        out::error_line("--cloud-model only applies with --hybrid");
+                for flag in ["--cloud-model", "--policy"] {
+                    if p.get_str(flag).is_some_and(|value| !value.is_empty()) {
+                        out::error_line(&format!("{flag} only applies with --hybrid"));
                         return 2;
                     }
                 }

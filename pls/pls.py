@@ -2,12 +2,14 @@
 
 A loopback router that exposes one model id and two lanes:
 
-    /v1/...            cloud
-    /local/v1/...      local MLX model, result summarised
-    /local-only/v1/... local MLX model, result withheld
+    /v1/...            cloud parent
+    /local/v1/...      local subagent; its answer is summarised or withheld
 
-The harness is pointed at this process by wally. Mode comes from a JSON file
-re-read on every request. The local model server is spawned lazily and killed
+Under a policy (`privacy` or `cost`) a local decision model, served by wally
+over the entitlement socket, reads each new user prompt and decides what the
+cloud parent is told to do: delegate to a local subagent, and with which
+summary type, or do it itself. Mode and policy come from a JSON file re-read
+on every request. The local model server is spawned lazily and killed
 on exit, including on SIGTERM and when the parent disappears.
 
 Binds port 0 and prints `{"port": N}` on stdout once listening.
@@ -36,6 +38,9 @@ import uvicorn
 
 MODEL_ID = "Hybrid-Wally-0.1"
 DEFAULT_MODE = "hybrid"
+MODES = ("hybrid", "cloud")
+DEFAULT_POLICY = "privacy"
+POLICIES = ("privacy", "cost")
 DEFAULT_MAX_TURNS = 20
 QUEUE_MAX = 8
 SUMMARY_MAX_TOKENS = 512
@@ -48,54 +53,53 @@ WRAP_UP = (
     "You have reached the turn limit. Wrap up now: synthesize the best result "
     "available and answer in text only."
 )
-DELEGATION = (
-    "\n\nYou are the cloud half of a hybrid pair. File exploration — reading, "
-    "grepping, listing, summarising files — belongs to the `subagent` tool: it "
-    "runs on a local model and its result comes back filtered. Do it yourself "
-    "only for small things, or when the subagent fails."
-    "\n\nBegin every `subagent` prompt with a disclosure marker on its own line:"
-    "\n  disclosure: local_only  — nothing but a placeholder comes back; use when the file must not reach the cloud at all."
-    "\n  disclosure: title      — a one-line title comes back; use for a file inventory."
-    "\n  disclosure: summary    — a short summary comes back; the default for reading content."
-    "\n  disclosure: none       — the full result comes back; use when you need exact text."
-)
+# The cloud parent's job under each policy, appended to its system prompt once.
+POLICY_PROMPTS = {
+    "privacy": (
+        "\n\nYou are the orchestrator in a privacy-first pair. Your only jobs are "
+        "to talk with the user, launch the `subagent` tool, and relay what it "
+        "returns. The subagent is the worker: it plans builds and explores files, "
+        "folders and the system on the user's device. You never read, write or "
+        "run anything yourself, and you have no other tool. When an instruction "
+        "carries a `pls-task:` line, copy that line exactly as the first line of "
+        "the subagent prompt."
+    ),
+    "cost": (
+        "\n\nYou are the planner in a cost-saving pair. Talk with the user and "
+        "plan with them. Hand coding, execution and debugging to the `subagent` "
+        "tool, which runs on the user's device. Do a task yourself only when the "
+        "router says it is small. When an instruction carries a `pls-task:` line, "
+        "copy that line exactly as the first line of the subagent prompt."
+    ),
+}
 
-# File tools the parent loses in hybrid, so exploration has to go through the
-# subagent instead of relying on the model's judgement.
-PARENT_DENIED = {"read", "grep", "glob"}
-# The gateway drops tool arguments when `tool_choice` is pinned, so a forced
-# call arrives as `subagent {}` and dsh rejects it. Off until it is fixed.
-FORCE_DELEGATION = False
+# Where a delegated task names itself on the subagent prompt. The router, not
+# the cloud model, owns what the id means, so the cloud cannot loosen it.
+TASK_MARKER = "pls-task:"
+TASK_RE = re.compile(r"^\s*pls-task:\s*(t\d+)\b[ \t]*\n?")
+ROUTER_TAG = "[router]"
 
-# The guard is router-owned, not model-owned: the router says what to call and
-# checks the answer. A reply that reaches for a file tool is dropped and asked
-# again; after GUARD_RETRIES the router emits the call itself. PII turns also
-# get a spoken instruction and a forced mode; a plain work turn keeps the mode
-# the model named.
-PII_MODE = "local_only"
-WORK_MODE = "summary"
+# The guard is router-owned: the router says what to call and checks the
+# answer. A rejected reply is dropped and asked again; after GUARD_RETRIES the
+# router emits the subagent call itself.
 GUARD_RETRIES = 2
-PII_TOOL = "subagent"
-NUDGE_PREFIX = "Wrong: you answered with"
-INSTRUCTION_PREFIX = "Route this turn locally:"
+SUBAGENT_TOOL = "subagent"
+# Tools a local subagent loses under privacy: each sends text to the parent
+# without passing through the summary-type filter.
+CHILD_DENIED = {"send_message"}
 
-WORK_RE = re.compile(
-    r"(\b(read|list|find|search|grep|open|summar|review|explain|audit|inspect)\b"
-    r"|/[\w.-]+|\bsrc/|\bdocs/)",
-    re.I,
-)
-
-# The cloud names the disclosure mode on the child prompt, the way PPLX's
-# `disclosureMode` field does. First token wins; the marker is stripped.
-DISCLOSURE_RE = re.compile(r"^\s*disclosure:\s*(local_only|summary|title|none)\b[ \t]*\n?", re.I)
-
-# Told to the local child. The ceiling is enforced by the router; this keeps
-# the model from pasting rows the filter then has to strip.
+# Told to the local subagent, so it knows who sees its answer. The router
+# enforces the same rule on the answer afterwards.
 CHILD_RULES = {
-    "title": " Answer with one line, no content.",
-    "summary": " Answer in at most 120 words. Keep counts, column names and shapes; "
-               "do not paste rows or raw values.",
-    "none": " Answer normally; the full result is returned.",
+    "summary": (
+        " When you finish, end with a short summary of what you found or did. "
+        "Only that summary goes back to the main agent, so keep file paths, "
+        "names and numbers in it, and do not paste file contents or raw values."
+    ),
+    "local_only": (
+        " Nothing you return leaves this device: the main agent only learns that "
+        "the task ran. Finish the task completely here."
+    ),
 }
 
 SUMMARY_PROMPT = (
@@ -127,6 +131,7 @@ PROFILE_DIR = Path(
 )
 CONFIG_DIR = PROFILE_DIR / "pls"
 CONFIG_PATH = CONFIG_DIR / "config.json"
+TASKS_PATH = CONFIG_DIR / "tasks.json"
 CREDENTIALS_PATH = PROFILE_DIR / "credentials.json"
 PID_PATH = CONFIG_DIR / "pls.pid"
 SERVER_SCRIPT = Path(__file__).with_name("model_server.py")
@@ -154,14 +159,16 @@ STATS: dict[str, Any] = {
     "cloud_tokens": 0,
     "local_tokens": 0,
     "cap_hits": 0,
-    "disclosure": {"summary": 0, "local_only": 0, "title": 0},
+    "disclosure": {"summary": 0, "local_only": 0},
     "pii_files": 0,
     "pii_hits": 0,
     "premium_blocked": 0,
-    "hints": 0,
+    "decisions": 0,
+    "decision_failures": 0,
     "guard_retries": 0,
     "guard_synth": 0,
     "mode": DEFAULT_MODE,
+    "policy": DEFAULT_POLICY,
     "last": None,
 }
 
@@ -179,21 +186,6 @@ PATH_RE = re.compile(r"(?<![\w.-])((?:~|\.{1,2})?/[\w./@-]+)")
 def short_paths(text: str) -> str:
     home = str(Path.home())
     return text.replace(home, "~") if home else text
-
-
-def inject_child_rules(body: dict, disclosure: str) -> None:
-    rule = CHILD_RULES.get(disclosure)
-    if not rule:
-        return
-    messages = body.get("messages")
-    if not isinstance(messages, list):
-        return
-    for message in messages:
-        if message.get("role") != "system":
-            continue
-        if isinstance(message.get("content"), str):
-            message["content"] += rule
-        return
 
 
 def redact(text: str) -> str:
@@ -230,104 +222,308 @@ def redact_messages(messages: list) -> list:
     return out
 
 
-def take_disclosure(messages: list, fallback: str) -> tuple[str, list]:
-    """Pull a `disclosure:` marker off the child prompt and strip it."""
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if not isinstance(content, str):
-            return fallback, messages
-        found = DISCLOSURE_RE.match(content)
-        if not found:
-            return fallback, messages
-        updated = list(messages)
-        updated[index] = {**message, "content": content[found.end():]}
-        return found.group(1).lower(), updated
-    return fallback, messages
+# Harness context sent as `user` messages after the person's own prompt. dsh
+# and Claude Code wrap theirs in <system-reminder>; dsh also adds a runtime
+# snapshot. These are not what the person asked, so routing skips them.
+INJECTED_PREFIXES = ("<system-reminder>", "Current runtime context.")
 
 
-def last_is_work(body: dict) -> bool:
-    messages = [m for m in body.get("messages") or [] if m.get("role") != "system"]
-    last = messages[-1] if messages else None
-    return bool(last and last.get("role") == "user" and WORK_RE.search(str(last.get("content") or "")))
+def message_text(message: dict) -> str:
+    content = message.get("content")
+    if isinstance(content, list):
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return str(content or "")
 
 
-def shape_hybrid(body: dict, pii: dict | None = None) -> tuple[int, list, bool, bool]:
-    """Remove the parent's file tools and force delegation on a first work turn.
+def is_injected(message: dict) -> bool:
+    return message.get("role") == "user" and message_text(message).lstrip().startswith(INJECTED_PREFIXES)
 
-    Returns the tools left on the request and whether `tool_choice` was pinned.
+
+# dsh hands a subagent's output to the parent as a `user` message. These are
+# not the person speaking, so they are never decided or instructed.
+AGENT_MESSAGE_RE = re.compile(
+    r"^\s*(Agent [0-9a-f-]{36} sent a message:|Background subagent [0-9a-f-]{36} )"
+)
+AGENT_MESSAGE_MASK = (
+    "[router] A subagent sent a message here. Under the privacy policy it stays "
+    "on this device."
+)
+
+
+def is_agent_message(message: dict) -> bool:
+    return message.get("role") == "user" and bool(AGENT_MESSAGE_RE.match(message_text(message)))
+
+
+def is_router_turn(message: dict) -> bool:
+    """A user turn the router added itself (a guard re-ask)."""
+    return message.get("role") == "user" and message_text(message).lstrip().startswith(ROUTER_TAG)
+
+
+def is_prompt(message: dict) -> bool:
+    """A user message the person wrote: not harness context, not the router,
+    not a subagent reporting back."""
+    return (
+        message.get("role") == "user"
+        and not is_injected(message)
+        and not is_router_turn(message)
+        and not is_agent_message(message)
+    )
+
+
+def last_turn(body: dict) -> dict | None:
+    """The newest message that is not system text or harness-injected context."""
+    for message in reversed(body.get("messages") or []):
+        if message.get("role") != "system" and not is_injected(message):
+            return message
+    return None
+
+
+# --------------------------------------------------------------------------
+# task records: one per user prompt, decided once, re-applied on every request
+# --------------------------------------------------------------------------
+
+TASKS: dict[str, dict] = {}
+TASK_TEXT: dict[str, str] = {}
+task_counter = {"next": 1}
+
+
+def prompt_key(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def persisted(record: dict) -> bool:
+    """Only privacy records outlive the router: they keep a resumed session
+    masked. A cost record is re-decided each launch, so a decision made with
+    an older question or model is never reused."""
+    return record.get("policy") == "privacy"
+
+
+def load_tasks() -> None:
+    """Restore privacy records (never text) so a resumed session stays masked."""
+    try:
+        data = json.loads(TASKS_PATH.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    for key, record in data.items():
+        if isinstance(record, dict) and isinstance(record.get("id"), str) and persisted(record):
+            TASKS[key] = record
+            number = record["id"][1:]
+            if number.isdigit():
+                task_counter["next"] = max(task_counter["next"], int(number) + 1)
+
+
+def save_tasks() -> None:
+    try:
+        TASKS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(TASKS_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump({key: r for key, r in TASKS.items() if persisted(r)}, handle)
+        os.chmod(TASKS_PATH, 0o600)
+    except OSError as error:
+        log({"event": "tasks_save_failed", "error": str(error)})
+
+
+def new_record(policy: str, verdict: dict | None) -> dict:
+    """The record a decision produces. A failed decision fails safe."""
+    decided = verdict is not None
+    yes = bool(verdict and verdict.get("answer") == "yes")
+    if policy == "privacy":
+        private = yes if decided else True
+        summary = "local_only" if private else "summary"
+        big = True
+    else:
+        private = False
+        big = yes if decided else False
+        summary = "summary" if big else None
+    record = {"id": f"t{task_counter['next']}", "policy": policy, "private": private,
+              "big": big, "summary": summary, "decided": decided}
+    task_counter["next"] += 1
+    return record
+
+
+async def decide(policy: str, text: str) -> dict | None:
+    """Ask wally's decision model about one prompt. None on any failure."""
+    if not ENTITLEMENT_SOCKET:
+        return None
+    payload = json.dumps({"policy": policy, "text": text}).encode()
+    try:
+        reader, writer = await asyncio.open_unix_connection(ENTITLEMENT_SOCKET)
+        writer.write(
+            b"POST /decide HTTP/1.1\r\nHost: local\r\ncontent-type: application/json\r\n"
+            + f"content-length: {len(payload)}\r\n\r\n".encode() + payload
+        )
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(), 5)
+        writer.close()
+    except (OSError, TimeoutError) as error:
+        log({"event": "decide_failed", "error": str(error) or type(error).__name__})
+        return None
+    head, _, body = raw.partition(b"\r\n\r\n")
+    if not head.startswith(b"HTTP/1.1 200"):
+        log({"event": "decide_failed", "status": head.split(b"\r\n", 1)[0].decode(errors="replace")})
+        return None
+    try:
+        verdict = json.loads(body)
+    except ValueError:
+        log({"event": "decide_failed", "error": "bad body"})
+        return None
+    if verdict.get("answer") not in ("yes", "no"):
+        return None
+    return verdict
+
+
+async def ensure_tasks(body: dict, policy: str) -> list[dict]:
+    """Decide every prompt in the request that has no settled record yet.
+
+    Returns the records created or re-decided by this call.
     """
-    tools = body.get("tools")
-    if not isinstance(tools, list):
-        return 0, [], False, False
-    names = [t.get("function", {}).get("name") for t in tools]
-    kept = [t for t, name in zip(tools, names) if name not in PARENT_DENIED]
-    removed = sorted(PARENT_DENIED.intersection(names))
-    body["tools"] = kept
+    fresh = []
+    for message in body.get("messages") or []:
+        if not is_prompt(message):
+            continue
+        text = message_text(message)
+        key = prompt_key(text)
+        existing = TASKS.get(key)
+        if existing and existing.get("policy") == policy and existing.get("decided"):
+            TASK_TEXT.setdefault(existing["id"], text)
+            continue
+        verdict = await decide(policy, text)
+        STATS["decisions"] += 1
+        if verdict is None:
+            STATS["decision_failures"] += 1
+        record = new_record(policy, verdict)
+        if existing and existing.get("policy") == policy:
+            # A retry keeps the id the cloud may already have been told.
+            record["id"] = existing["id"]
+        TASKS[key] = record
+        TASK_TEXT[record["id"]] = text
+        fresh.append(record)
+        log({"event": "decided", "task": record["id"], "policy": policy,
+             "private": record["private"], "big": record["big"],
+             "summary": record["summary"], "decided": record["decided"],
+             "p_yes": (verdict or {}).get("p_yes")})
+    if fresh:
+        save_tasks()
+    return fresh
 
-    force = False
-    by_pii = bool(pii and pii.get("total"))
-    trigger = "pii" if by_pii else ("work" if last_is_work(body) else "")
-    pinned = isinstance(body.get("tool_choice"), dict)
-    if FORCE_DELEGATION and "subagent" in names and not pinned:
-        # Every turn where the user just spoke, not only the first: a long
-        # session would otherwise never be pinned again.
-        messages = [m for m in body.get("messages") or [] if m.get("role") != "system"]
-        last = messages[-1] if messages else None
-        if (
-            last is not None
-            and last.get("role") == "user"
-            and (by_pii or WORK_RE.search(str(last.get("content") or "")))
-        ):
-            body["tool_choice"] = {"type": "function", "function": {"name": "subagent"}}
-            force = True
-    return len(kept), removed, force, trigger
+
+def placeholder(record: dict) -> str:
+    return (
+        "[The user's request is private and stays on this device.] Launch the "
+        f"`{SUBAGENT_TOOL}` tool now. Its prompt must be exactly:\n"
+        f"{TASK_MARKER} {record['id']}"
+    )
 
 
-def inject_delegation(body: dict, pii: dict | None = None) -> bool:
-    """Append the hybrid instruction to the system message, once."""
-    messages = body.get("messages")
-    if not isinstance(messages, list):
-        return False
-    extra = DELEGATION
-    for message in messages:
+def instruction(record: dict) -> str:
+    if record.get("summary") is None:
+        return f"{ROUTER_TAG} This task is small: do it yourself, no subagent."
+    return (
+        f"{ROUTER_TAG} Launch the `{SUBAGENT_TOOL}` tool for this task. Begin its "
+        f"prompt with the line `{TASK_MARKER} {record['id']}`, then state the task."
+    )
+
+
+def rewrite_prompt(message: dict, record: dict) -> dict:
+    if record["policy"] == "privacy" and record["private"]:
+        return {**message, "content": placeholder(record)}
+    extra = "\n\n" + instruction(record)
+    content = message.get("content")
+    if isinstance(content, list):
+        return {**message, "content": [*content, {"type": "text", "text": extra}]}
+    return {**message, "content": str(content or "") + extra}
+
+
+def apply_policy(body: dict, policy: str) -> dict:
+    """The cloud-bound copy of `body` under `policy`. Never mutates `body`.
+
+    Every prompt with a record is rewritten the same way on every request, so
+    a private prompt stays masked on later turns and the cloud prefix is stable.
+    """
+    messages = []
+    for message in body.get("messages") or []:
+        if policy == "privacy" and is_agent_message(message):
+            # A subagent's `send_message` skips the summary-type filter on its
+            # final answer, so under privacy what it says never reaches the cloud.
+            messages.append({**message, "content": AGENT_MESSAGE_MASK})
+            continue
+        record = TASKS.get(prompt_key(message_text(message))) if is_prompt(message) else None
+        messages.append(rewrite_prompt(message, record) if record else message)
+    shaped = {**body, "messages": messages}
+
+    prompt = POLICY_PROMPTS[policy]
+    for index, message in enumerate(messages):
         if message.get("role") != "system":
             continue
         content = message.get("content")
         if isinstance(content, list):
-            text = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-            if DELEGATION.strip() in text:
-                return False
-            content.append({"type": "text", "text": extra})
-            return True
-        content = content or ""
-        if DELEGATION.strip() in content:
-            return False
-        message["content"] = content + extra
-        return True
-    return False
+            if not any(isinstance(p, dict) and p.get("text") == prompt for p in content):
+                messages[index] = {**message, "content": [*content, {"type": "text", "text": prompt}]}
+        elif prompt not in str(content or ""):
+            messages[index] = {**message, "content": str(content or "") + prompt}
+        break
+
+    if policy == "privacy" and isinstance(body.get("tools"), list):
+        shaped["tools"] = [t for t in body["tools"]
+                           if (t.get("function") or {}).get("name") == SUBAGENT_TOOL]
+    return shaped
 
 
-def pii_instruction(pii: dict, mode: str) -> str:
-    """The turn instruction that makes the cloud delegate a PII file.
+def pending_task(body: dict) -> dict | None:
+    """The record of a prompt no assistant turn has answered yet, if any."""
+    last = last_turn(body)
+    if not last or not is_prompt(last):
+        return None
+    return TASKS.get(prompt_key(message_text(last)))
 
-    Names the file, what was found in it, and the mode the child must answer
-    in, so neither the lane nor the disclosure is left to the model.
+
+# --------------------------------------------------------------------------
+# the local subagent side
+# --------------------------------------------------------------------------
+
+def resolve_child(messages: list, policy: str) -> tuple[str, list]:
+    """Read the `pls-task:` id off the child's prompt and apply its record.
+
+    Returns the summary type and the messages with the marker stripped and,
+    for a private task, the placeholder swapped for the real prompt. A child
+    without a known id fails safe: `local_only` under privacy.
     """
-    files = list(pii["files"])[:8]
-    named = ", ".join(files)
-    kinds = sorted({kind for counts in pii["files"].values() for kind in counts})
-    plural = "files" if len(files) > 1 else "file"
-    verb = "carry" if len(files) > 1 else "carries"
-    return (
-        f"Route this turn locally: {named} {verb} PII ({', '.join(kinds)}) and "
-        f"must be processed locally. Call the `{PII_TOOL}` tool now for this "
-        f"{plural}, and begin its prompt with this line:\n  disclosure: {mode}\n"
-        f"Then state the task. Answer with the tool call only — a `read`, `grep` "
-        f"or `glob` call here puts the file on the cloud."
-    )
+    fallback = "local_only" if policy == "privacy" else "summary"
+    for index, message in enumerate(messages):
+        if not is_prompt(message):
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            return fallback, messages
+        found = TASK_RE.match(content)
+        if not found:
+            return fallback, messages
+        task_id = found.group(1)
+        record = next((r for r in TASKS.values() if r.get("id") == task_id), None)
+        if record is None or record.get("summary") is None:
+            log({"event": "child_unknown_task", "task": task_id})
+            return fallback, messages
+        rest = content[found.end():].strip()
+        if record["private"] and task_id in TASK_TEXT:
+            rest = TASK_TEXT[task_id] + (f"\n\n{rest}" if rest else "")
+        updated = list(messages)
+        updated[index] = {**message, "content": rest}
+        return record["summary"], updated
+    return fallback, messages
+
+
+def inject_child_rules(body: dict, summary: str) -> None:
+    rule = CHILD_RULES.get(summary)
+    if not rule:
+        return
+    for message in body.get("messages") or []:
+        if message.get("role") != "system":
+            continue
+        if isinstance(message.get("content"), str) and rule not in message["content"]:
+            message["content"] += rule
+        return
 
 
 def parse_calls(buffered: bytes) -> dict[int, dict]:
@@ -358,52 +554,42 @@ def parse_calls(buffered: bytes) -> dict[int, dict]:
     return calls
 
 
-def child_prompt(body: dict, pii: dict, mode: str) -> str:
-    """The prompt for a call the router had to emit itself."""
-    files = list(pii["files"])[:8]
-    task = ""
-    for message in reversed(body.get("messages") or []):
-        if message.get("role") != "user" or not isinstance(message.get("content"), str):
-            continue
-        text = message["content"].strip()
-        if text.startswith(NUDGE_PREFIX) or text.startswith(INSTRUCTION_PREFIX):
-            continue
-        task = text
-        break
-    if not files:
-        return f"disclosure: {mode}\n\n{task}"
-    return (
-        f"disclosure: {mode}\n\n"
-        f"Read {', '.join(files)}. It carries PII, so work from the file itself.\n\n"
-        f"Task: {task}"
-    )
+def subagent_prompt(record: dict) -> str:
+    """The prompt for a subagent call the router has to write itself."""
+    marker = f"{TASK_MARKER} {record['id']}"
+    if record.get("private"):
+        return marker
+    text = TASK_TEXT.get(record["id"], "")
+    return f"{marker}\n\n{text}" if text else marker
 
 
-def patch_call_args(calls: dict[int, dict], body: dict, pii: dict, mode: str) -> bool:
-    """Fill a subagent call the model left empty or without the mode marker.
+def patch_call_args(calls: dict[int, dict], record: dict | None) -> bool:
+    """Make every subagent call carry a prompt that names its task.
 
     A pinned `tool_choice` makes the gateway strip arguments, so a call can
-    arrive as `subagent {}`; dsh rejects that.
+    arrive as `subagent {}`; dsh rejects that. A call without the task line
+    gets it, so the subagent side knows its summary type.
     """
     changed = False
     for call in calls.values():
-        if call.get("name") != PII_TOOL:
+        if call.get("name") != SUBAGENT_TOOL:
             continue
         try:
             arguments = json.loads(call.get("arguments") or "{}")
-        except Exception:
+        except ValueError:
             arguments = {}
         if not isinstance(arguments, dict):
             arguments = {}
         prompt = str(arguments.get("prompt") or "")
-        if not prompt:
-            arguments["prompt"] = child_prompt(body, pii, mode)
-            changed = True
-        elif not DISCLOSURE_RE.match(prompt):
-            arguments["prompt"] = f"disclosure: {mode}\n\n{prompt}"
-            changed = True
+        if record is not None:
+            if not prompt:
+                arguments["prompt"] = subagent_prompt(record)
+                changed = True
+            elif not TASK_RE.match(prompt):
+                arguments["prompt"] = f"{TASK_MARKER} {record['id']}\n\n{prompt}"
+                changed = True
         if not arguments.get("description"):
-            arguments["description"] = "Read PII file locally"
+            arguments["description"] = "Run the task on this device"
             changed = True
         call["arguments"] = json.dumps(arguments)
     return changed
@@ -429,14 +615,14 @@ def calls_stream(calls: dict[int, dict]) -> Response:
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
-def synthetic_call(body: dict, pii: dict, mode: str) -> Response:
+def synthetic_call(record: dict) -> Response:
     """Emit the subagent call ourselves when the model will not.
 
     dsh executes whatever tool call the stream carries, so this is the only
-    hard guarantee that a PII file never lands on the cloud.
+    hard guarantee that a private task never runs on the cloud.
     """
-    calls = {0: {"name": PII_TOOL, "arguments": ""}}
-    patch_call_args(calls, body, pii, mode)
+    calls = {0: {"name": SUBAGENT_TOOL, "arguments": ""}}
+    patch_call_args(calls, record)
     return calls_stream(calls)
 
 
@@ -527,19 +713,21 @@ def read_config() -> dict:
         data = json.loads(CONFIG_PATH.read_text())
     except Exception:
         data = {}
+    if not isinstance(data, dict):
+        data = {}
     mode = data.get("mode")
-    if mode not in ("cloud", "hybrid", "local"):
+    if mode not in MODES:
         mode = DEFAULT_MODE
-    pii_mode = data.get("pii_mode")
-    if pii_mode not in CHILD_RULES:
-        pii_mode = PII_MODE
+    policy = data.get("policy")
+    if policy not in POLICIES:
+        policy = DEFAULT_POLICY
     try:
         max_turns = int(data.get("max_turns", DEFAULT_MAX_TURNS))
     except Exception:
         max_turns = DEFAULT_MAX_TURNS
     return {
         "mode": mode,
-        "pii_mode": pii_mode,
+        "policy": policy,
         "max_turns": max(1, max_turns),
         "model_path": os.environ.get("PLS_MODEL") or data.get("model_path") or "",
         "cloud_model": data.get("cloud_model") or os.environ.get("PLS_CLOUD_MODEL", ""),
@@ -753,9 +941,9 @@ def stats():
 def stats_reset():
     for key in ("requests", "errors", "queued", "overflow", "local_turns",
                 "cloud_tokens", "local_tokens", "cap_hits", "guard_retries",
-                "guard_synth"):
+                "guard_synth", "decisions", "decision_failures"):
         STATS[key] = 0
-    STATS["disclosure"] = {"summary": 0, "local_only": 0, "title": 0}
+    STATS["disclosure"] = {"summary": 0, "local_only": 0}
     STATS["last"] = None
     return {"ok": True}
 
@@ -871,9 +1059,7 @@ async def debug_events():
 
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 async def route(path: str, request: Request):
-    global waiting, model_port
-
-    if path in ("v1/models", "local/v1/models", "local-only/v1/models"):
+    if path in ("v1/models", "local/v1/models"):
         return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "wally"}]}
 
     if TOKEN and not secrets.compare_digest(request.headers.get("x-pls-token", ""), TOKEN):
@@ -885,29 +1071,18 @@ async def route(path: str, request: Request):
     if request.method == "POST":
         try:
             body = await request.json()
-        except Exception:
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
             body = {}
 
     config = read_config()
+    policy = config["policy"]
     STATS["mode"] = config["mode"]
+    STATS["policy"] = policy
 
-    disclosure = "summary"
-    lane = "cloud"
-    if path.startswith("local-only/"):
-        lane, disclosure = "local", "local_only"
-    elif path.startswith("local/"):
-        lane = "local"
-
-    if config["mode"] == "cloud":
-        lane = "cloud"
-    elif config["mode"] == "local":
-        lane, disclosure = "local", "summary"
-
-    upstream_path = path
-    for prefix in ("local-only/", "local/"):
-        if upstream_path.startswith(prefix):
-            upstream_path = upstream_path[len(prefix):]
-            break
+    lane = "local" if path.startswith("local/") else "cloud"
+    upstream_path = path[len("local/"):] if lane == "local" else path
 
     sub = await premium()
     reason = "path"
@@ -916,67 +1091,42 @@ async def route(path: str, request: Request):
         reason = "no-subscription"
         STATS["premium_blocked"] += 1
     elif config["mode"] == "cloud":
-        reason = "mode"
-    elif config["mode"] == "local":
+        lane = "cloud"
         reason = "mode"
 
     messages = body.get("messages") or []
-    pii = scan_pii(messages) if messages else {"files": {}, "total": 0}
+    log({"event": "route", "path": path, "lane": lane, "mode": config["mode"],
+         "policy": policy, "reason": reason, "sub": sub, "messages": len(messages)})
+
+    if lane == "local":
+        return await local(upstream_path, body, request, config)
+
+    # Cloud mode, or an account without the local lane: the cloud gets the
+    # request exactly as the harness sent it. So does a side call with no
+    # tools (dsh's session-title request): it cannot delegate, and an
+    # instruction appended to it ends up in the title.
+    if not sub or config["mode"] == "cloud" or not body.get("tools"):
+        return await cloud(upstream_path, body, request)
+
+    await ensure_tasks(body, policy)
+    record = pending_task(body)
+    shaped = apply_policy(body, policy)
+
+    pii = scan_pii(shaped.get("messages") or [])
     if pii["total"]:
         STATS["pii_files"] += len(pii["files"])
         STATS["pii_hits"] += pii["total"]
+        for file_path, counts in pii["files"].items():
+            log({"event": "pii_file", "file": file_path, "counts": counts})
+        shaped["messages"] = redact_messages(shaped["messages"])
 
-    tools = [t.get("function", {}).get("name") for t in (body.get("tools") or [])]
-    log({"event": "route", "path": path, "lane": lane, "mode": config["mode"],
-         "disclosure": disclosure, "reason": reason, "sub": sub,
-         "pii": pii["total"], "pii_files": len(pii["files"]), "tools": tools,
-         "messages": len(messages)})
-    if lane == "cloud" and sub and config["mode"] == "hybrid" and len(messages) >= 4:
-        if session_key(request, body) not in local_sessions:
-            log({"event": "hint",
-                 "message": "parent working alone: no subagent call yet, so nothing is local. "
-                            "Ask it to use the subagent tool, or set mode local."})
-            STATS["hints"] += 1
-
-    work = last_is_work(body)
-    work = last_is_work(body)
-    guard = (
-        sub
-        and config["mode"] == "hybrid"
-        and PII_TOOL in tools
-        and (bool(pii["total"]) or work)
-    )
-    for file_path, counts in pii["files"].items():
-        action = "summarise" if lane == "local" else ("delegated" if guard else "sent to cloud")
-        log({"event": "pii_file", "file": file_path, "counts": counts,
-             "lane": lane, "action": action})
-
-    if lane == "cloud" and sub and config["mode"] == "hybrid":
-        if inject_delegation(body, pii):
-            log({"event": "injected", "what": "delegation prompt"})
-        remaining, removed, forced, trigger = shape_hybrid(body, pii)
-        log({"event": "shaped", "tools": remaining, "removed": removed,
-             "forced_subagent": forced, "trigger": trigger})
-
-    if guard and lane == "cloud":
-        # PII: a turn of its own, so the file and the mode are stated rather
-        # than inferred, and the reply is checked against them.
-        if pii["total"]:
-            body["messages"] = [*messages, {
-                "role": "user",
-                "content": pii_instruction(pii, config["pii_mode"]),
-            }]
-            log({"event": "instructed", "files": list(pii["files"])[:8],
-                 "mode": config["pii_mode"]})
-
-    if lane == "cloud":
-        mode = config["pii_mode"] if pii["total"] else WORK_MODE
-        if pii["total"]:
-            # The transcript still carries the values it was scanned for.
-            body["messages"] = redact_messages(body["messages"])
-        return await cloud(upstream_path, body, request, pii, sub,
-                           guard=guard, mode=mode)
-    return await local(upstream_path, body, request, config, disclosure)
+    # Privacy checks every reply; cost only the reply to a prompt it delegated.
+    guard = policy == "privacy" or bool(record and record.get("summary"))
+    if record:
+        log({"event": "instructed", "task": record["id"], "policy": policy,
+             "summary": record["summary"], "private": record["private"]})
+    return await cloud(upstream_path, shaped, request, pii, guard=guard,
+                       policy=policy, record=record)
 
 
 def _with_model(payload: bytes) -> bytes:
@@ -1013,10 +1163,15 @@ def calls_from_json(payload: dict) -> dict[int, dict]:
     return calls
 
 
-def synthetic_json(body: dict, pii: dict, mode: str) -> JSONResponse:
+def synthetic_json(record: dict) -> JSONResponse:
     """`synthetic_call` for a client that asked for a single JSON answer."""
-    calls = {0: {"name": PII_TOOL, "arguments": ""}}
-    patch_call_args(calls, body, pii, mode)
+    calls = {0: {"name": SUBAGENT_TOOL, "arguments": ""}}
+    patch_call_args(calls, record)
+    return calls_json(calls)
+
+
+def calls_json(calls: dict[int, dict]) -> JSONResponse:
+    """Held calls as one JSON completion, after a rewrite."""
     message = {"role": "assistant", "content": None, "tool_calls": [
         {"id": f"call_pls_{index}", "type": "function", "function": call}
         for index, call in calls.items()
@@ -1030,9 +1185,39 @@ def synthetic_json(body: dict, pii: dict, mode: str) -> JSONResponse:
     })
 
 
+def guard_verdict(names: set[str], policy: str, record: dict | None) -> bool:
+    """Whether a cloud reply with these tool calls may reach the harness.
+
+    `record` is the task of a prompt no assistant turn has answered yet.
+    """
+    if policy == "privacy":
+        if not names <= {SUBAGENT_TOOL}:
+            return False
+        return bool(names) if record else True
+    if record and record.get("summary"):
+        return SUBAGENT_TOOL in names
+    return True
+
+
+def blocked_reply() -> dict:
+    """What the harness gets when the parent keeps reaching for a tool it may not use."""
+    return {
+        "id": "chatcmpl-pls-blocked",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": MODEL_ID,
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {
+            "role": "assistant",
+            "content": "[router] That action needs a local subagent under the privacy "
+                       "policy, so it was not run. Ask again and it will be delegated.",
+        }}],
+    }
+
+
 async def cloud(path: str, body: dict, request: Request,
-                pii: dict | None = None, sub: bool = True,
-                guard: bool = False, mode: str = PII_MODE, attempt: int = 0):
+                pii: dict | None = None, guard: bool = False,
+                policy: str = DEFAULT_POLICY, record: dict | None = None,
+                attempt: int = 0):
     config_cloud_model = read_config()["cloud_model"]
     creds = await cloud_credentials()
     console = creds.get("console_url", "")
@@ -1089,19 +1274,14 @@ async def cloud(path: str, body: dict, request: Request,
     async def settle(calls: dict[int, dict], raw: bytes | None):
         """Accept, patch, re-ask or synthesise, for either body shape."""
         names = {call["name"] for call in calls.values()}
-        # A PII turn accepts the subagent call alone. A work turn also accepts
-        # bash/edit/write, but never a file tool: dsh would run it up here.
-        if pii and pii.get("total"):
-            clean = names == {PII_TOOL}
-        else:
-            clean = bool(names) and not (names & PARENT_DENIED)
-        if clean:
-            if patch_call_args(calls, body, pii or {"files": {}}, mode):
+        if guard_verdict(names, policy, record):
+            if SUBAGENT_TOOL in names and patch_call_args(calls, record):
                 log({"event": "guard", "outcome": "patched", "attempt": attempt})
                 if raw is not None:
                     return calls_stream(calls)
-                return synthetic_json(body, pii or {"files": {}}, mode)
-            log({"event": "guard", "outcome": "delegated", "attempt": attempt})
+                return calls_json(calls)
+            log({"event": "guard", "outcome": "accepted", "attempt": attempt,
+                 "saw": sorted(names)})
             if raw is not None:
                 return Response(raw, media_type="text/event-stream")
             return None
@@ -1111,25 +1291,22 @@ async def cloud(path: str, body: dict, request: Request,
              "saw": sorted(names)})
         if attempt >= GUARD_RETRIES:
             STATS["guard_synth"] += 1
-            log({"event": "guard", "outcome": "synthesised", "saw": sorted(names)})
-            if raw is not None:
-                return synthetic_call(body, pii or {"files": {}}, mode)
-            return synthetic_json(body, pii or {"files": {}}, mode)
+            if record and record.get("summary"):
+                log({"event": "guard", "outcome": "synthesised", "task": record["id"]})
+                return synthetic_call(record) if raw is not None else synthetic_json(record)
+            log({"event": "guard", "outcome": "blocked", "saw": sorted(names)})
+            reply = blocked_reply()
+            return as_stream(reply) if raw is not None else JSONResponse(reply)
 
         saw = ", ".join(sorted(names)) or "no tool call"
-        if pii and pii.get("total"):
-            wrong = (f"Wrong: you answered with {saw}. Call the `{PII_TOOL}` tool "
-                     f"now, nothing else, and begin its prompt with "
-                     f"`disclosure: {mode}`.")
-        else:
-            wrong = (f"Wrong: you answered with {saw}. The file work belongs to "
-                     f"the `{PII_TOOL}` tool — call it now and begin its prompt "
-                     f"with `disclosure: {mode}`.")
+        task_line = f" and begin its prompt with `{TASK_MARKER} {record['id']}`" if record else ""
+        wrong = (f"{ROUTER_TAG} Wrong: you answered with {saw}. Call the "
+                 f"`{SUBAGENT_TOOL}` tool now, nothing else{task_line}.")
         nudged = {**body, "messages": [*body.get("messages", []), {
             "role": "user", "content": wrong,
         }]}
-        return await cloud(path, nudged, request, pii, sub,
-                           guard=True, mode=mode, attempt=attempt + 1)
+        return await cloud(path, nudged, request, pii, guard=True,
+                           policy=policy, record=record, attempt=attempt + 1)
 
     if not event_stream:
         payload = await response.aread()
@@ -1200,8 +1377,11 @@ async def cloud(path: str, body: dict, request: Request,
     return StreamingResponse(relay(), media_type="text/event-stream")
 
 
-async def local(path: str, body: dict, request: Request, config: dict, disclosure: str):
+async def local(path: str, body: dict, request: Request, config: dict):
     global waiting
+
+    summary, messages = resolve_child(list(body.get("messages") or []), config["policy"])
+    body = {**body, "messages": messages}
 
     overflow = False
     queued = False
@@ -1212,9 +1392,9 @@ async def local(path: str, body: dict, request: Request, config: dict, disclosur
             waiting += 1
             queued = True
             STATS["queued"] += 1
-    # A withheld answer must not be answered by the cloud, or the file reaches
-    # it after all; that request waits for the slot instead of overflowing.
-    if overflow and disclosure == "local_only":
+    # Under privacy a subagent never overflows to the cloud, or its task
+    # reaches it after all; it waits for the slot instead.
+    if overflow and (config["policy"] == "privacy" or summary == "local_only"):
         overflow = False
     if overflow:
         STATS["overflow"] += 1
@@ -1227,14 +1407,14 @@ async def local(path: str, body: dict, request: Request, config: dict, disclosur
             if queued:
                 waiting = max(0, waiting - 1)
                 queued = False
-            return await local_inner(path, body, request, config, disclosure)
+            return await local_inner(path, body, request, config, summary)
     finally:
         # Cancelled while still queued: nothing else gives the slot back.
         if queued:
             waiting = max(0, waiting - 1)
 
 
-async def local_inner(path: str, body: dict, request: Request, config: dict, disclosure: str):
+async def local_inner(path: str, body: dict, request: Request, config: dict, summary: str):
     key = session_key(request, body)
     local_sessions.add(key)
     # A key can serve several child runs; a fresh run starts with a shorter
@@ -1245,10 +1425,15 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, dis
     turns[key] = (count, depth)
     STATS["local_turns"] += 1
 
-    messages = list(body.get("messages") or [])
-    disclosure, messages = take_disclosure(messages, disclosure)
+    messages = [dict(m) for m in body.get("messages") or []]
     body = {**body, "messages": messages}
-    inject_child_rules(body, disclosure)
+    if config["policy"] == "privacy" and isinstance(body.get("tools"), list):
+        # `send_message` delivers text to the parent untouched, around the
+        # summary-type filter on the final answer; under privacy the final
+        # answer is the only way out.
+        body["tools"] = [t for t in body["tools"]
+                         if (t.get("function") or {}).get("name") not in CHILD_DENIED]
+    inject_child_rules(body, summary)
     client_stream = bool(body.get("stream"))
     body = {**body, "stream": False}
     capped = count >= config["max_turns"]
@@ -1288,17 +1473,13 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, dis
     usage = result.get("usage") or {}
     STATS["local_tokens"] += int(usage.get("total_tokens") or 0)
 
-    # Disclosure only applies to a final answer; a tool call must pass through
-    # intact or the child cannot continue.
+    # The summary type only applies to a final answer; a tool call must pass
+    # through intact or the child cannot continue.
     if not calls and message.get("content"):
-        if disclosure == "local_only":
+        if summary == "local_only":
             message["content"] = WITHHELD
             STATS["disclosure"]["local_only"] += 1
-        elif disclosure == "title":
-            first = message["content"].strip().splitlines()[0]
-            message["content"] = short_paths(redact(" ".join(first.split()[:12])))
-            STATS["disclosure"]["title"] += 1
-        elif disclosure == "summary":
+        else:
             # A short answer summarises into something vaguer than itself.
             if len(message["content"]) > 400:
                 message["content"] = await summarise(message["content"])
@@ -1307,12 +1488,12 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, dis
         choice["message"] = message
 
     log({"event": "local_done", "turns": count, "capped": capped,
-         "disclosure": disclosure, "prompt_tokens": usage.get("prompt_tokens"),
+         "summary": summary, "prompt_tokens": usage.get("prompt_tokens"),
          "completion_tokens": usage.get("completion_tokens"),
          "calls": len(calls)})
     STATS["requests"] += 1
     STATS["last"] = {
-        "lane": "local", "path": path, "disclosure": disclosure,
+        "lane": "local", "path": path, "summary": summary,
         "turns": count, "capped": capped,
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
@@ -1369,7 +1550,9 @@ def on_signal(signum, _frame):
 def main() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     if not CONFIG_PATH.exists():
-        CONFIG_PATH.write_text(json.dumps({"mode": DEFAULT_MODE, "max_turns": DEFAULT_MAX_TURNS}))
+        CONFIG_PATH.write_text(json.dumps({"mode": DEFAULT_MODE, "policy": DEFAULT_POLICY,
+                                           "max_turns": DEFAULT_MAX_TURNS}))
+    load_tasks()
     PID_PATH.write_text(str(os.getpid()))
     atexit.register(cleanup)
     signal.signal(signal.SIGTERM, on_signal)

@@ -106,7 +106,11 @@ grep -E "error: |warning: .*[Mm]etal|BUILD SUCCEEDED" "${xcode_log}" || true
 PRODUCTS="${ROOT}/swift/.build/xcode/Build/Products/Release"
 [[ -x "${PRODUCTS}/WallyMLX" ]] || { echo "the MLX build produced no binary" >&2; exit 1; }
 
-cp "${PRODUCTS}/WallyMLX" "${BUILD}/wally"
+# Copy to a new file and rename it over the old one. Overwriting in place keeps
+# the inode, and macOS then SIGKILLs the rebuilt binary (exit 137, even for
+# --version) because the kernel still holds the old code signature for it.
+cp "${PRODUCTS}/WallyMLX" "${BUILD}/wally.new"
+mv -f "${BUILD}/wally.new" "${BUILD}/wally"
 # Metal shader bundles must sit next to the executable. Copy every .bundle
 # xcodebuild laid down (mlx-swift_Cmlx.bundle, mlx-swift_Cmlx.bundle, …).
 shopt -s nullglob
