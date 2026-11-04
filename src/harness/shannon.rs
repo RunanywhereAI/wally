@@ -230,6 +230,9 @@ pub fn models_config(base_url: &str, models: &[CatalogModel]) -> Value {
             if model.context_window > 0 {
                 entry["contextWindow"] = json!(model.context_window);
             }
+            // Only a known cap: Shannon applies its own default when none is
+            // written, so a window-only model is not given a guessed limit.
+            // For a model with a cap this matches `output_limit`.
             if model.max_output > 0 {
                 entry["maxTokens"] = json!(model.max_output);
             }

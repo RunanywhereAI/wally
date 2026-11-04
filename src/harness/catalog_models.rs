@@ -35,6 +35,33 @@ pub struct CatalogModel {
     pub reasoning: Option<ReasoningSupport>,
 }
 
+/// The output limit a harness config declares for `model`, which the harness
+/// then sends as its `max_tokens`. The model list's `max_output` when it has
+/// one, with or without a context window (the list reports the two
+/// separately); `min(context_window, fallback)` when it gives a window but no
+/// output cap; None when it gives neither (a private id the catalogue lists
+/// without limits), so the config writes no limit and the server applies the
+/// model's documented default. OpenCode is the one caller that also needs a
+/// window: its `limit` pairs the output with a context size, so it writes no
+/// limit for a model reported without one.
+///
+/// `max_tokens` is meant as a hard total: it caps everything the model
+/// generates, thinking included, which is how OpenAI (`max_completion_tokens`),
+/// Anthropic (the thinking budget fits inside `max_tokens`) and OpenRouter
+/// define it. Once InferenceInfra#5737 ships, the API adds no reasoning
+/// allowance on top for any caller, so this limit is the whole budget for a
+/// turn's thinking and its answer. Making it large enough is the client's job:
+/// a reasoning model given 8,192 can spend all of it thinking and answer
+/// nothing (the 2026-09-22 OpenCode incident). The writers therefore declare
+/// the model's full `max_output`, which is never below min(16,384, max_output)
+/// and never above max_output.
+pub fn output_limit(model: &CatalogModel, fallback: i64) -> Option<i64> {
+    if model.max_output > 0 {
+        return Some(model.max_output);
+    }
+    (model.context_window > 0).then(|| model.context_window.min(fallback))
+}
+
 /// Moves the entry whose id is `primary` to the front, or inserts a bare one
 /// when the catalog did not carry it — the launched model is always selectable.
 /// What a model on `catalog` is sent for a requested `reasoning_effort`,
