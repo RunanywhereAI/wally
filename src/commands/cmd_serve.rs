@@ -241,6 +241,58 @@ fn is_decision_reference(reference: &str) -> bool {
 #[cfg(wally_has_server)]
 const MAX_SERVE_BODY_BYTES: usize = 1024 * 1024;
 
+// Absolute phase budgets: a trickling peer must not keep the serial server
+// occupied indefinitely. Nonblocking I/O also lets Ctrl-C interrupt a peer
+// without relying on platform-specific blocking socket timeout behavior.
+#[cfg(wally_has_server)]
+const SERVE_HEADER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(wally_has_server)]
+const SERVE_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(wally_has_server)]
+const SERVE_WRITE_TIMEOUT_FLOOR: std::time::Duration = std::time::Duration::from_secs(2);
+#[cfg(wally_has_server)]
+const SERVE_WRITE_TIMEOUT_CAP: std::time::Duration = std::time::Duration::from_secs(30);
+// Budget response transfer at 1 MiB/s, plus the fixed allowance above for
+// scheduling and headers. The cap bounds serial service even for huge bodies.
+#[cfg(wally_has_server)]
+const SERVE_WRITE_BYTES_PER_SECOND: usize = 1024 * 1024;
+#[cfg(wally_has_server)]
+const SERVE_IO_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+#[cfg(wally_has_server)]
+const SERVE_WRITE_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Remaining idle sleep, bounded by the phase deadline and shutdown polling.
+#[cfg(wally_has_server)]
+fn serve_io_wait(deadline: std::time::Instant) -> std::io::Result<std::time::Duration> {
+    if SERVE_STOP.load(Ordering::SeqCst) {
+        return Err(std::io::ErrorKind::ConnectionAborted.into());
+    }
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    if remaining.is_zero() {
+        return Err(std::io::ErrorKind::TimedOut.into());
+    }
+    Ok(remaining.min(SERVE_IO_POLL))
+}
+
+/// Read a nonblocking connection within one absolute phase deadline. Neither
+/// an idle wait nor a successful read renews the deadline.
+#[cfg(wally_has_server)]
+fn read_decisions(
+    stream: &mut std::net::TcpStream,
+    buf: &mut [u8],
+    deadline: std::time::Instant,
+) -> std::io::Result<usize> {
+    use std::io::{ErrorKind, Read};
+    loop {
+        let wait = serve_io_wait(deadline)?;
+        match stream.read(buf) {
+            Err(error) if error.kind() == ErrorKind::WouldBlock => std::thread::sleep(wait),
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
+}
+
 /// Split an HTTP/1 head into method, path (query stripped) and content
 /// length. Header names match case-insensitively; anything unreadable is a
 /// 400 with the reason.
@@ -272,15 +324,36 @@ fn parse_head(head: &[u8]) -> Result<(String, String, usize), String> {
     Ok((method, path, length))
 }
 
+/// Best-effort response on a nonblocking connection, with one size-dependent
+/// absolute write budget shared by the headers and body. Progress never
+/// renews it; responses that cannot finish within the capped budget close.
 #[cfg(wally_has_server)]
 fn write_response(stream: &mut std::net::TcpStream, status: u16, reason: &str, body: &str) {
-    use std::io::Write;
-    let _ = write!(
-        stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+    use std::io::{ErrorKind, Write};
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    let _ = stream.flush();
+    let transfer =
+        std::time::Duration::from_secs_f64(body.len() as f64 / SERVE_WRITE_BYTES_PER_SECOND as f64);
+    let deadline = std::time::Instant::now()
+        + (SERVE_WRITE_TIMEOUT_FLOOR + transfer).min(SERVE_WRITE_TIMEOUT_CAP);
+    for mut bytes in [head.as_bytes(), body.as_bytes()] {
+        while !bytes.is_empty() {
+            let Ok(wait) = serve_io_wait(deadline) else {
+                return;
+            };
+            // Keep each send small so a large response checks its deadline
+            // and the stop flag between chunks as well as idle waits.
+            match stream.write(&bytes[..bytes.len().min(SERVE_WRITE_CHUNK_BYTES)]) {
+                Ok(0) => return,
+                Ok(n) => bytes = &bytes[n..],
+                Err(error) if error.kind() == ErrorKind::WouldBlock => std::thread::sleep(wait),
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(_) => return,
+            }
+        }
+    }
 }
 
 #[cfg(wally_has_server)]
@@ -297,11 +370,11 @@ fn handle_decisions_connection(
     stream: &mut std::net::TcpStream,
     loaded: &crate::commands::cmd_decisions::LoadedDecisions,
 ) {
-    use std::io::Read;
+    let header_deadline = std::time::Instant::now() + SERVE_HEADER_TIMEOUT;
     let mut raw: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
     let head_end = loop {
-        match stream.read(&mut buf) {
+        match read_decisions(stream, &mut buf, header_deadline) {
             Ok(0) => return,
             Ok(n) => {
                 raw.extend_from_slice(&buf[..n]);
@@ -317,6 +390,15 @@ fn handle_decisions_connection(
                 if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
                     break pos + 4;
                 }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                write_response(
+                    stream,
+                    408,
+                    "Request Timeout",
+                    &json_error("request timed out"),
+                );
+                return;
             }
             Err(_) => return,
         }
@@ -348,10 +430,21 @@ fn handle_decisions_connection(
         return;
     }
     let mut body = raw[head_end..].to_vec();
+    let body_deadline = std::time::Instant::now() + SERVE_BODY_TIMEOUT;
     while body.len() < length {
-        match stream.read(&mut buf) {
+        match read_decisions(stream, &mut buf, body_deadline) {
             Ok(0) => break,
             Ok(n) => body.extend_from_slice(&buf[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                write_response(
+                    stream,
+                    408,
+                    "Request Timeout",
+                    &json_error("request timed out"),
+                );
+                return;
+            }
+            Err(_) if SERVE_STOP.load(Ordering::SeqCst) => return,
             Err(_) => break,
         }
     }
@@ -406,6 +499,9 @@ fn handle_decisions_connection(
     };
     if let Err(error) = crate::commands::cmd_decisions::validate(&request) {
         write_response(stream, 400, "Bad Request", &json_error(&error));
+        return;
+    }
+    if SERVE_STOP.load(Ordering::SeqCst) {
         return;
     }
     // The served model answers every request; a body naming another model is
@@ -474,7 +570,10 @@ fn run_serve_decisions(options: &GlobalOptions, reference: &str, host: &str, por
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
-                let _ = stream.set_nonblocking(false);
+                if let Err(error) = stream.set_nonblocking(true) {
+                    error_line(&format!("could not set connection non-blocking: {error}"));
+                    continue;
+                }
                 handle_decisions_connection(&mut stream, &loaded);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
