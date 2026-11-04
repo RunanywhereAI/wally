@@ -24,3 +24,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: AGENTS.md / CLAUDE.md and skill trees must match
         run: bash scripts/ci/check-agents-sync.sh
+      - name: Sync check and actor.sh behave as documented
+        run: python3 tests/test_agents_sync.py

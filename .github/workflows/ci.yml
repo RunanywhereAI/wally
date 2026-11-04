@@ -74,6 +74,8 @@ jobs:
         # cannot (dash parses `[[` as a command name; `pipefail` only fails
         # at run time) without depending on shellcheck knowing every case.
         run: bash scripts/test/test-install-cross-shell.sh
+      - name: actor.sh strips trailing slashes from dir env vars
+        run: bash scripts/test/test-actor-paths.sh
       - name: Console binding matches its pinned contract
         run: |
           set -euo pipefail
