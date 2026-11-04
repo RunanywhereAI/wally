@@ -1,8 +1,12 @@
 """OpenAI-compatible server over mlx-vlm, spawned and owned by pls.py.
 
 Text only. Tool calls are parsed from the Qwen XML form the chat template
-emits. The context cap is enforced by trimming the prompt cache, because
-`max_kv_size` is a no-op on models whose `make_cache()` takes no size.
+emits. KV reuse goes through mlx-vlm's automatic prefix cache (APC), which
+matches on token hashes across requests, so a new session that shares a
+harness's system prompt and tools skips their prefill. A raw `prompt_cache`
+is not reused by mlx-vlm and would re-prefill on top of the old KV. A prompt
+whose tokens plus the reply would pass `PLS_MAX_KV` is refused rather than
+truncated.
 
 Binds port 0 and prints `{"port": N}` on stdout once listening, so the router
 never has to guess a port.
@@ -16,13 +20,12 @@ import socket
 import sys
 import time
 import uuid
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import mlx.core as mx
 import mlx_vlm
-from mlx_vlm.models.cache import make_prompt_cache
+from mlx_vlm.apc import APCManager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
@@ -31,11 +34,11 @@ MODEL_PATH = os.environ["PLS_MODEL"]
 MODEL_ID = os.environ.get("PLS_MODEL_ID", "Hybrid-Wally-0.1")
 MAX_KV = int(os.environ.get("PLS_MAX_KV", "57344"))
 MAX_OUT = int(os.environ.get("PLS_MAX_OUT", "8192"))
-PROMPT_CACHE_MAX = int(os.environ.get("PLS_PROMPT_CACHE_MAX", "8"))
 
 app = FastAPI()
 model = None
 processor = None
+apc: APCManager | None = None
 
 # MLX streams are thread-local: load and generate on one dedicated thread, which
 # also serialises requests.
@@ -49,12 +52,10 @@ STATS: dict[str, Any] = {
     "completion_tokens": 0,
     "peak_context": 0,
     "max_kv": MAX_KV,
-    "trims": 0,
-    "cache_misses": 0,
+    "cached_tokens": 0,
+    "context_refusals": 0,
     "last": None,
 }
-
-PROMPT_CACHES: "OrderedDict[str, list]" = OrderedDict()
 
 TOOL_RE = re.compile(r"<tool_call>\s*<function=([^>\n]+)>(.*?)</function>\s*</tool_call>", re.S)
 PARAM_RE = re.compile(r"<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>", re.S)
@@ -64,52 +65,17 @@ def log(event: dict) -> None:
     print(json.dumps(event), file=sys.stderr, flush=True)
 
 
-def cache_key(request: Request) -> str:
-    for name in ("x-session-affinity", "x-session-id", "x-opencode-session-id"):
-        value = request.headers.get(name)
-        if value:
-            return value
-    return "default"
+def reply_budget(prompt_tokens: int, max_tokens: int, cap: int) -> int:
+    """Tokens the reply may use so prompt plus reply stays within `cap`.
 
-
-def trim_cache(cache, reserve: int = 0) -> None:
-    """Keep the live KV under the cap by trimming each cache from its end.
-
-    `trim()` removes the newest tokens, not the oldest, so the next prompt is
-    re-prefilled from what is left. `reserve` is the room the pending
-    completion still needs, so the cap is checked before generation rather
-    than after it overflows.
+    Zero means the prompt alone leaves no room and the request is refused.
     """
-    try:
-        used = max((c.size() for c in cache if hasattr(c, "size")), default=0)
-    except Exception:
-        return
-    if used + reserve <= MAX_KV:
-        return
-    keep = max(0, MAX_KV // 2 - reserve)
-    for c in cache:
-        trimmable = getattr(c, "is_trimmable", None)
-        if not hasattr(c, "trim") or (trimmable is not None and not trimmable()):
-            continue
-        try:
-            c.trim(c.size() - keep)
-        except Exception:
-            pass
-    STATS["trims"] += 1
+    return max(0, min(max_tokens, cap - prompt_tokens))
 
 
-def take_cache(key: str):
-    entry = PROMPT_CACHES.get(key)
-    if entry is not None:
-        PROMPT_CACHES.move_to_end(key)
-    return entry
-
-
-def put_cache(key: str, cache) -> None:
-    PROMPT_CACHES[key] = cache
-    PROMPT_CACHES.move_to_end(key)
-    while len(PROMPT_CACHES) > PROMPT_CACHE_MAX:
-        PROMPT_CACHES.popitem(last=False)
+def count_tokens(prompt: str) -> int:
+    tokenizer = getattr(processor, "tokenizer", processor)
+    return len(tokenizer.encode(prompt))
 
 
 def parse_tool_calls(text: str):
@@ -160,6 +126,7 @@ def record(req_id: str, usage: dict, ttft_ms: float, total_ms: float, finish: st
     STATS["requests"] += 1
     STATS["prompt_tokens"] += usage["prompt_tokens"]
     STATS["completion_tokens"] += usage["completion_tokens"]
+    STATS["cached_tokens"] += usage["cached_tokens"]
     STATS["peak_context"] = max(STATS["peak_context"], usage["context_used"])
     entry = {
         "event": "request",
@@ -187,7 +154,6 @@ def health():
 def stats():
     s = dict(STATS)
     s["context_headroom"] = MAX_KV - s["peak_context"]
-    s["prompt_caches"] = len(PROMPT_CACHES)
     return s
 
 
@@ -208,22 +174,21 @@ async def chat(request: Request):
         verbose=False,
     )
 
-    key = cache_key(request)
-    entry = take_cache(key)
-    # The reused cache is only valid when this prompt extends the one it was
-    # built for. mlx-vlm trims to the common prefix, so a rewritten turn would
-    # otherwise keep tokens that are no longer there.
-    if entry is not None and prompt.startswith(entry["prompt"]):
-        cache = entry["cache"]
-    else:
-        try:
-            cache = make_prompt_cache(model.language_model, max_kv_size=MAX_KV)
-        except TypeError:
-            cache = make_prompt_cache(model.language_model)
-        STATS["cache_misses"] += 1
-    put_cache(key, {"cache": cache, "prompt": prompt})
-    trim_cache(cache, reserve=max_tokens)
-    kwargs["prompt_cache"] = cache
+    prompt_tokens = count_tokens(prompt)
+    budget = reply_budget(prompt_tokens, max_tokens, MAX_KV)
+    if budget == 0:
+        STATS["context_refusals"] += 1
+        log({"event": "context_refused", "prompt_tokens": prompt_tokens, "max_kv": MAX_KV})
+        return JSONResponse(
+            {"error": {
+                "message": f"prompt is {prompt_tokens} tokens; this model's context is {MAX_KV}",
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+            }},
+            status_code=400,
+        )
+    kwargs["max_tokens"] = budget
+    kwargs["apc_manager"] = apc
 
     loop = asyncio.get_running_loop()
     cid = "chatcmpl-" + uuid.uuid4().hex[:24]
@@ -452,7 +417,7 @@ async def chat(request: Request):
 
 @app.on_event("startup")
 async def load():
-    global model, processor
+    global model, processor, apc
     loop = asyncio.get_running_loop()
 
     def _load():
@@ -460,6 +425,7 @@ async def load():
         return mlx_vlm.load(MODEL_PATH)
 
     model, processor = await loop.run_in_executor(POOL, _load)
+    apc = APCManager()
     log({"event": "loaded", "model": MODEL_ID, "max_kv": MAX_KV, "max_out": MAX_OUT})
 
 
