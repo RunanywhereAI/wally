@@ -6,8 +6,16 @@
 //! them. They are written to the profile directory on start; a hand edit there
 //! wins until the next launch overwrites it.
 
+// The router is macOS-only (its local lane is MLX), but the module still
+// builds everywhere so the command surface is the same on every platform.
+// Off Unix the entitlement socket is a stub, which leaves the decision
+// service and the pid probe unreferenced.
+#![cfg_attr(not(unix), allow(dead_code, unused_variables, unused_imports))]
+
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -30,6 +38,16 @@ const DECIDE_TEXT_MAX: usize = 32 * 1024;
 const DECIDE_BODY_MAX: usize = 256 * 1024;
 /// How long one decision may take, load included, before the router is told no.
 const DECIDE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Whether the router can run here. Its local lane is MLX and its entitlement
+/// socket is a Unix socket, so only macOS qualifies.
+pub fn supported() -> Result<(), String> {
+    if cfg!(target_os = "macos") {
+        Ok(())
+    } else {
+        Err("the hybrid router needs macOS: its local lane runs on MLX".to_string())
+    }
+}
 
 /// What the router optimises for on the hybrid lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -304,6 +322,7 @@ impl Drop for Router {
 /// A loopback entitlement server on a unix socket. The router asks it whether
 /// the signed-in account may run work locally; wally answers from the last
 /// console check so a turn never waits on the network.
+#[cfg(unix)]
 pub struct Entitlement {
     #[allow(dead_code)]
     premium: Arc<AtomicBool>,
@@ -313,6 +332,7 @@ pub struct Entitlement {
     refresh: Option<std::thread::JoinHandle<()>>,
 }
 
+#[cfg(unix)]
 impl Entitlement {
     fn start(decider: Option<ResolvedModelPaths>) -> Option<Self> {
         let decider = decider.and_then(Decider::start).map(Arc::new);
@@ -369,6 +389,7 @@ impl Entitlement {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Entitlement {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -383,6 +404,18 @@ impl Drop for Entitlement {
 }
 
 /// One request off the socket: its request line and body.
+/// Off Unix there is no entitlement socket: the router never starts there.
+#[cfg(not(unix))]
+pub struct Entitlement;
+
+#[cfg(not(unix))]
+impl Entitlement {
+    fn start(_decider: Option<ResolvedModelPaths>) -> Option<Self> {
+        None
+    }
+}
+
+#[cfg(unix)]
 fn read_request(stream: &mut UnixStream) -> Result<(String, Vec<u8>), String> {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
     let mut raw = Vec::new();
@@ -424,6 +457,7 @@ fn read_request(stream: &mut UnixStream) -> Result<(String, Vec<u8>), String> {
     Ok((request_line, body))
 }
 
+#[cfg(unix)]
 fn respond(stream: &mut UnixStream, status: &str, body: &serde_json::Value) {
     let body = body.to_string();
     let _ = write!(
@@ -435,6 +469,7 @@ fn respond(stream: &mut UnixStream, status: &str, body: &serde_json::Value) {
     );
 }
 
+#[cfg(unix)]
 fn answer(mut stream: UnixStream, premium: bool, decider: Option<Arc<Decider>>) {
     let (request_line, body) = match read_request(&mut stream) {
         Ok(request) => request,

@@ -1629,6 +1629,10 @@ pub fn launch_deep_seek_hybrid(
     args: &[String],
     options: &GlobalOptions,
 ) -> i32 {
+    if let Err(error) = super::pls::supported() {
+        out::error_line(&error);
+        return 2;
+    }
     let policy = match super::pls::parse_policy(policy) {
         Ok(policy) => policy,
         Err(error) => {

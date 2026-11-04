@@ -15,6 +15,10 @@ pub fn register_pls(app: &mut App) {
         "Directory of the local MLX model (defaults to $PLS_MODEL)",
     );
     cmd.callback(|parsed, _options| {
+        if let Err(error) = pls::supported() {
+            out::error_line(&error);
+            return 2;
+        }
         let model = parsed
             .get_str("--model")
             .or_else(|| std::env::var("PLS_MODEL").ok())
