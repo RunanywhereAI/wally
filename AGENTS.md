@@ -7,9 +7,24 @@
 
 ## Quick-Build
 
-`./actor.sh` runs a local build with the same commands CI runs. Commands run
-in order and stop at the first one that fails. Inside a command every step
-runs, and the summary lists each one that failed.
+`./actor.sh` runs a local build with the same commands CI runs. Every run
+starts with a preflight report. It shows the OS, CPU and memory, the package
+manager, the Xcode and SDK versions, and each tool the requested commands need,
+with its version and the install command for that OS. It also shows the state
+of the kit, the Swift SDK and the console endpoints. A missing required tool
+stops the run before anything changes. The script adapts to the host: on macOS
+without a full Xcode or `swift`, the MLX host turns off and the build produces
+`wally-cxx`. On Linux and Windows it uses that platform's kit tag and binary
+name. Commands run in order and stop at the first one that fails. Inside a
+command every step runs, and the summary lists each one that failed.
+
+It never deletes or moves a directory it didn't create. A kit you unpacked
+yourself, with no `.wally-kit-version` stamp, is used as is. A non-empty
+directory that isn't a kit is refused. A new kit downloads into a temporary
+sibling and replaces the old one only after it verifies. An SDK checkout you
+point `WALLY_SDK_SWIFT_PATH` at is compared with `sdk_ci_ref`, and if it
+differs you get a warning with the command to match CI. Only the default
+`.deps/runanywhere-sdks` gets fetched or checked out.
 
 ```bash
 cp .env.example .env          # fill in the two console endpoints first
@@ -19,14 +34,15 @@ cp .env.example .env          # fill in the two console endpoints first
 
 | Command | What it does |
 |---|---|
-| `deps` | Checks git, cmake (≥ `cmake_minimum`), ninja, the pinned rust toolchain, python3, `gh auth`, and on macOS xcrun and swift. Also checks both `WALLY_BAKED_CONSOLE_*` values are set in the env or `.env`. Lists optional lint tools: shellcheck, dash, ruby, bindgen. |
-| `kit` | Downloads the pinned kit through `fetch-kit.sh` to `$WALLY_KIT_DIR` (default `./kit`). Skips the download when the stamp matches `kit_version` and downloads again after a pin bump. |
-| `sdk` | macOS: checks out `runanywhere-sdks` at `sdk_ci_ref` into `.deps/runanywhere-sdks` for the MLX host. |
-| `setup` | `deps` + `kit` + `sdk`. |
+| `deps` | Prints the full preflight for every command and changes nothing. |
+| `kit` | Downloads the pinned kit through `fetch-kit.sh` to `$WALLY_KIT_DIR` (default `./kit`). Skips when the stamp matches `kit_version`, and downloads again after a pin bump. |
+| `sdk` | macOS with MLX: checks out `runanywhere-sdks` at `sdk_ci_ref` into `.deps/runanywhere-sdks`. A checkout you supply is only checked. |
+| `setup` | `kit` + `sdk`. |
 | `configure` | `cmake -B build -G Ninja` against the kit. On macOS it pins `SDKROOT` to Xcode's SDK, because a newer Command Line Tools SDK fails to link with `unknown architecture arm64e.x1`. |
 | `build` | Configures if needed, builds on all cores, prints `wally --version`. |
-| `test` | `ctest` (which runs `cargo test`) plus `test-update-download.py` against the binary. |
+| `test` | Serial `ctest` (which runs `cargo test`), as in CI, plus `test-update-download.py` against the binary. |
 | `lint` | `cargo fmt --check`, `cargo clippy -D warnings` (after a build), shell syntax, shellcheck, dash, `ruby -c` on the formula, and `check-agents-sync.sh`. |
+| `fix` | Runs every automatic fix: `cargo fmt`, `cargo clippy --fix` (after a build), `check-agents-sync.sh --fix`, the console and decisions binding generators, `gen-sys-bindings.sh` (macOS, bindgen 0.73.2, kit present) and shellcheck's diff fixes. Then it runs `lint` to show what's left to fix by hand. Version pins, the test ledger, retired ids and install tests need real changes and aren't touched. |
 | `check` | Hermetic CI checks: the console contract and binding, `versions.toml`, the generator guard, retired model ids, the C++ test ledger, release tooling, and the `install.sh` tests. |
 | `bindings` | macOS: `gen-sys-bindings.sh --check` with bindgen 0.73.2. |
 | `e2e` | `scripts/test/e2e.sh` on the built binary against the kit. |
@@ -35,9 +51,10 @@ cp .env.example .env          # fill in the two console endpoints first
 | `clean` | Deletes the build tree. |
 
 Knobs: `WALLY_KIT_DIR`, `WALLY_SDK_SWIFT_PATH`, `WALLY_BUILD_DIR`,
-`WALLY_BUILD_TYPE` (Release), `WALLY_JOBS`, `WALLY_APPLE_MLX_HOST=OFF` (builds
-`build/wally-cxx`, with no Swift tree needed), and `WALLY_CONSOLE_OPTIONAL=1`
-for builds without console endpoints, such as forks.
+`WALLY_BUILD_TYPE` (Release), `WALLY_JOBS`, `WALLY_APPLE_MLX_HOST=ON|OFF`
+(overrides the detected value; OFF builds `build/wally-cxx` with no Swift
+tree), `WALLY_CONSOLE_OPTIONAL=1` for builds without console endpoints such as
+forks, and `NO_COLOR`.
 
 This repository is the official `wally` product CLI. The application is a Rust
 crate (`Cargo.toml`); it consumes a **packaged C++ desktop kit** via CMake's

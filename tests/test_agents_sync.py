@@ -39,7 +39,7 @@ class AgentsSyncTests(unittest.TestCase):
     def sync(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["bash", "scripts/ci/check-agents-sync.sh", *args],
-            cwd=self.tmp, capture_output=True, text=True,
+            cwd=self.tmp, capture_output=True, text=True, check=False,
         )
 
     def write_claude(self, text: str) -> None:
@@ -71,14 +71,57 @@ class AgentsSyncTests(unittest.TestCase):
         self.assertEqual(claude.read_text(encoding="utf-8"), "@AGENTS.md\n")
 
 
+def actor(*args: str, **env: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(ROOT / "actor.sh"), *args],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+        env={**os.environ, "NO_COLOR": "1", **env},
+    )
+
+
 class ActorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
     def test_unknown_command_exits_2(self) -> None:
-        result = subprocess.run(
-            ["bash", str(ROOT / "actor.sh"), "no-such-command"],
-            cwd=ROOT, capture_output=True, text=True,
-        )
+        result = actor("no-such-command")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown command: no-such-command", result.stderr)
+
+    def test_kit_keeps_a_kit_it_did_not_download(self) -> None:
+        kit = self.tmp / "my-kit"
+        (kit / "share" / "runanywhere").mkdir(parents=True)
+        (kit / "share" / "runanywhere" / "SCHEMA_LOCK").write_text("lock\n", encoding="utf-8")
+        (kit / "IMPORTANT.txt").write_text("keep\n", encoding="utf-8")
+        result = actor("kit", WALLY_KIT_DIR=str(kit))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((kit / "IMPORTANT.txt").exists())
+
+    def test_kit_refuses_a_directory_that_is_not_a_kit(self) -> None:
+        (self.tmp / "IMPORTANT.txt").write_text("keep\n", encoding="utf-8")
+        result = actor("kit", WALLY_KIT_DIR=str(self.tmp))
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue((self.tmp / "IMPORTANT.txt").exists())
+
+    def test_sdk_does_not_move_a_user_checkout(self) -> None:
+        sdk = self.tmp / "runanywhere-sdks"
+        sdk.mkdir()
+        (sdk / "Package.swift").write_text("// swift\n", encoding="utf-8")
+        git = ["git", "-C", str(sdk), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run([*git, "init", "-q", "-b", "my-feature"], check=True)
+        subprocess.run([*git, "add", "-A"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "local work"], check=True)
+        before = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout
+
+        result = actor("sdk", WALLY_SDK_SWIFT_PATH=str(sdk), WALLY_APPLE_MLX_HOST="ON")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        after = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout
+        branch = subprocess.run([*git, "branch", "--show-current"], capture_output=True, text=True, check=True).stdout
+        self.assertEqual(before, after)
+        self.assertEqual(branch.strip(), "my-feature")
+        self.assertFalse((sdk / ".git" / "shallow").exists())
 
 
 if __name__ == "__main__":
