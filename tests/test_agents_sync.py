@@ -104,6 +104,25 @@ class ActorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertTrue((self.tmp / "IMPORTANT.txt").exists())
 
+    def test_clean_refuses_a_directory_that_is_not_a_build_tree(self) -> None:
+        (self.tmp / "IMPORTANT.txt").write_text("keep\n", encoding="utf-8")
+        result = actor("clean", WALLY_BUILD_DIR=str(self.tmp))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not a build tree", result.stderr)
+        self.assertTrue((self.tmp / "IMPORTANT.txt").exists())
+
+    def test_clean_removes_a_configured_build_tree(self) -> None:
+        build = self.tmp / "build"
+        build.mkdir()
+        (build / "CMakeCache.txt").write_text("cache\n", encoding="utf-8")
+        result = actor("clean", WALLY_BUILD_DIR=str(build))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(build.exists())
+
+    def test_test_does_not_require_a_kit(self) -> None:
+        result = actor("test", WALLY_KIT_DIR=str(self.tmp), WALLY_BUILD_DIR=str(self.tmp / "nobuild"))
+        self.assertIn("not configured", result.stderr)
+
     def test_sdk_does_not_move_a_user_checkout(self) -> None:
         sdk = self.tmp / "runanywhere-sdks"
         sdk.mkdir()

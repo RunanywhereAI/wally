@@ -110,7 +110,11 @@ detect_host() {
       OS_NAME="$( (. /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-Linux}") || echo Linux)"
       CORES="$(nproc)"
       MEM_GB="$(awk '/MemTotal/ { printf "%d", $2 / 1048576 }' /proc/meminfo 2>/dev/null || echo '?')"
-      case "${uname_m}" in aarch64|arm64) PLATFORM=linux-arm64 ;; *) PLATFORM=linux-x64 ;; esac
+      case "${uname_m}" in
+        aarch64|arm64) PLATFORM=linux-arm64 ;;
+        x86_64)        PLATFORM=linux-x64 ;;
+        *) die "unsupported Linux architecture: ${uname_m} (kits ship for x86_64 and aarch64 only)" 2 ;;
+      esac
       ;;
     MINGW*|MSYS*|CYGWIN*)
       OS_KIND=windows
@@ -251,7 +255,7 @@ expand_commands() {
   for c in "$@"; do
     case "${c}" in
       setup) out+=" kit sdk" ;;
-      ci)    out+=" check build test lint" ;;
+      ci)    out+=" check build test lint bindings" ;;
       all)   out+=" kit sdk check build test lint bindings" ;;
       deps)  out+=" kit sdk build test lint check bindings" ;;
       *)     out+=" ${c}" ;;
@@ -346,7 +350,7 @@ preflight() {
     opt="$(add_unique "${opt}" ${OPT})"
     case "${s}" in
       configure|build) needs_build=1; needs_kit=1; needs_sdk=1 ;;
-      kit|test|e2e|bindings) needs_kit=1 ;;
+      kit|e2e|bindings) needs_kit=1 ;;
       sdk) needs_sdk=1 ;;
     esac
   done
@@ -493,7 +497,7 @@ cmd_kit() {
   tmp="${KIT_DIR}.download.$$"
   rm -rf "${tmp}"
   # shellcheck disable=SC2064
-  trap "rm -rf '${tmp}'" EXIT
+  trap "rm -rf -- $(printf '%q' "${tmp}")" EXIT
   bash scripts/build/fetch-kit.sh "${PLATFORM}" "${tmp}"
   [ -f "${tmp}/include/runanywhere/proto/model_types.pb.h" ] || die "downloaded kit has no generated proto headers"
   [ -f "${tmp}/share/runanywhere/SCHEMA_LOCK" ] || die "downloaded kit has no share/runanywhere/SCHEMA_LOCK"
@@ -519,7 +523,11 @@ cmd_sdk() {
   case "${SDK_STATE}" in
     off)    log_ok "Swift SDK ${SDK_DETAIL}"; return 0 ;;
     pinned) log_ok "runanywhere-sdks ${SDK_DETAIL}"; return 0 ;;
-    notsdk) die "${SDK_DIR} is ${SDK_DETAIL}; set WALLY_SDK_SWIFT_PATH to a runanywhere-sdks clone" 2 ;;
+    notsdk)
+      if [ "${SDK_MANAGED}" = 1 ]; then
+        die "${SDK_DIR} is ${SDK_DETAIL}; remove it and rerun ./actor.sh sdk" 2
+      fi
+      die "${SDK_DIR} is ${SDK_DETAIL}; point WALLY_SDK_SWIFT_PATH at a runanywhere-sdks clone" 2 ;;
   esac
   ref="$(wally_pin sdk_ci_ref)"
   if [ "${SDK_MANAGED}" = 0 ]; then
@@ -531,13 +539,19 @@ cmd_sdk() {
     return 0
   fi
   log_step "check out runanywhere-sdks@${ref:0:12}"
+  local created=0
   if [ ! -d "${SDK_DIR}/.git" ]; then
+    created=1
     mkdir -p "${SDK_DIR}"
     git -C "${SDK_DIR}" init -q
     git -C "${SDK_DIR}" remote add origin "${SDK_REMOTE}"
   fi
-  git -C "${SDK_DIR}" fetch -q --depth 1 origin "${ref}"
-  git -C "${SDK_DIR}" checkout -q --detach FETCH_HEAD
+  if ! { git -C "${SDK_DIR}" fetch -q --depth 1 origin "${ref}" &&
+         git -C "${SDK_DIR}" checkout -q --detach FETCH_HEAD; }; then
+    # Only a tree this run created is removed; an earlier checkout is kept.
+    [ "${created}" = 0 ] || rm -rf -- "${SDK_DIR}"
+    die "could not check out runanywhere-sdks@${ref:0:12} into ${SDK_DIR}"
+  fi
   log_ok "runanywhere-sdks at ${ref:0:12} (${SDK_DIR#"${ROOT}"/})"
 }
 
@@ -551,6 +565,7 @@ cmd_configure() {
     if [ "${MLX_HOST}" = OFF ]; then
       args+=(-DWALLY_APPLE_MLX_HOST=OFF -DWALLY_APPLE_CXX_BINARY=ON)
     else
+      args+=(-DWALLY_APPLE_MLX_HOST=ON -DWALLY_APPLE_CXX_BINARY=OFF)
       export WALLY_SDK_SWIFT_PATH="${SDK_DIR}"
     fi
   fi
@@ -566,15 +581,18 @@ cmd_build() {
     cmd_sdk
     export WALLY_SDK_SWIFT_PATH="${SDK_DIR}"
   fi
-  [ -f "${BUILD_DIR}/build.ninja" ] || cmd_configure
+  cmd_configure
   log_step "build (${JOBS} jobs)"
   cmake --build "${BUILD_DIR}" -j "${JOBS}"
   log_ok "$("$(product_binary)" --version) at $(product_binary)"
 }
 
 cmd_clean() {
+  [ -e "${BUILD_DIR}" ] || { log_ok "nothing to clean at ${BUILD_DIR}"; return 0; }
+  # WALLY_BUILD_DIR can point anywhere; only delete a tree CMake configured.
+  [ -f "${BUILD_DIR}/CMakeCache.txt" ] || die "${BUILD_DIR} has no CMakeCache.txt; not removing a directory that is not a build tree" 2
   log_step "remove ${BUILD_DIR}"
-  rm -rf "${BUILD_DIR}"
+  rm -rf -- "${BUILD_DIR}"
 }
 
 # --- tests ---------------------------------------------------------------------
@@ -716,8 +734,8 @@ cmd_bindings() {
 
 cmd_deps()  { log_ok "every requirement above is met"; }
 cmd_setup() { cmd_kit; cmd_sdk; }
-cmd_ci()    { cmd_check; cmd_build; cmd_test; cmd_lint; }
-cmd_all()   { cmd_setup; cmd_ci; cmd_bindings; }
+cmd_ci()    { cmd_check; cmd_build; cmd_test; cmd_lint; cmd_bindings; }
+cmd_all()   { cmd_setup; cmd_ci; }
 
 usage() {
   cat <<EOF
@@ -748,8 +766,8 @@ Verify
   e2e        product e2e against the kit (scripts/test/e2e.sh)
 
 Groups
-  ci         check + build + test + lint
-  all        setup + ci + bindings
+  ci         check + build + test + lint + bindings
+  all        setup + ci
 
 Kit:   ${KIT_DIR}
 Build: ${BUILD_DIR}

@@ -39,16 +39,16 @@ cp .env.example .env          # fill in the two console endpoints first
 | `sdk` | macOS with MLX: checks out `runanywhere-sdks` at `sdk_ci_ref` into `.deps/runanywhere-sdks`. A checkout you supply is only checked. |
 | `setup` | `kit` + `sdk`. |
 | `configure` | `cmake -B build -G Ninja` against the kit. On macOS it pins `SDKROOT` to Xcode's SDK, because a newer Command Line Tools SDK fails to link with `unknown architecture arm64e.x1`. |
-| `build` | Configures if needed, builds on all cores, prints `wally --version`. |
+| `build` | Configures, builds on all cores, prints `wally --version`. |
 | `test` | Serial `ctest` (which runs `cargo test`), as in CI, plus `test-update-download.py` against the binary. |
 | `lint` | `cargo fmt --check`, `cargo clippy -D warnings` (after a build), shell syntax, shellcheck, dash, `ruby -c` on the formula, and `check-agents-sync.sh`. |
 | `fix` | Runs every automatic fix: `cargo fmt`, `cargo clippy --fix` (after a build), `check-agents-sync.sh --fix`, the console and decisions binding generators, `gen-sys-bindings.sh` (macOS, bindgen 0.73.2, kit present) and shellcheck's diff fixes. Then it runs `lint` to show what's left to fix by hand. Version pins, the test ledger, retired ids and install tests need real changes and aren't touched. |
 | `check` | Hermetic CI checks: the console contract and binding, `versions.toml`, the generator guard, retired model ids, the C++ test ledger, release tooling, and the `install.sh` tests. |
 | `bindings` | macOS: `gen-sys-bindings.sh --check` with bindgen 0.73.2. |
 | `e2e` | `scripts/test/e2e.sh` on the built binary against the kit. |
-| `ci` | `check` + `build` + `test` + `lint`. |
-| `all` | `setup` + `ci` + `bindings`. |
-| `clean` | Deletes the build tree. |
+| `ci` | `check` + `build` + `test` + `lint` + `bindings`. |
+| `all` | `setup` + `ci`. |
+| `clean` | Deletes the build tree, only if it has a `CMakeCache.txt`. |
 
 Knobs: `WALLY_KIT_DIR`, `WALLY_SDK_SWIFT_PATH`, `WALLY_BUILD_DIR`,
 `WALLY_BUILD_TYPE` (Release), `WALLY_JOBS`, `WALLY_APPLE_MLX_HOST=ON|OFF`
