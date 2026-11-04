@@ -334,12 +334,10 @@ fn write_response(stream: &mut std::net::TcpStream, status: u16, reason: &str, b
         "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
-    let transfer_seconds = body.len().div_ceil(SERVE_WRITE_BYTES_PER_SECOND);
-    let timeout = SERVE_WRITE_TIMEOUT_FLOOR
-        + std::time::Duration::from_secs(
-            transfer_seconds.min(SERVE_WRITE_TIMEOUT_CAP.as_secs() as usize) as u64,
-        );
-    let deadline = std::time::Instant::now() + timeout.min(SERVE_WRITE_TIMEOUT_CAP);
+    let transfer =
+        std::time::Duration::from_secs_f64(body.len() as f64 / SERVE_WRITE_BYTES_PER_SECOND as f64);
+    let deadline = std::time::Instant::now()
+        + (SERVE_WRITE_TIMEOUT_FLOOR + transfer).min(SERVE_WRITE_TIMEOUT_CAP);
     for mut bytes in [head.as_bytes(), body.as_bytes()] {
         while !bytes.is_empty() {
             let Ok(wait) = serve_io_wait(deadline) else {
