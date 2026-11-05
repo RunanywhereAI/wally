@@ -358,3 +358,49 @@ fn configure_value_builds_an_object_when_there_was_no_config() {
     assert!(value.is_object());
     assert_eq!(value["policy"], "privacy");
 }
+
+#[test]
+fn harness_value_names_the_profile_the_router_knows() {
+    let value = harness_value(json!({}), HybridHarness::Hermes, 0, 0);
+    assert_eq!(value["harness"], "hermes");
+}
+
+#[test]
+fn harness_value_records_known_cloud_limits_and_drops_unknown_ones() {
+    let value = harness_value(json!({}), HybridHarness::OpenClaw, 200_000, 0);
+    assert_eq!(value["cloud_limits"], json!({ "context_length": 200_000 }));
+}
+
+#[test]
+fn every_hybrid_harness_has_a_profile_in_the_router() {
+    let script = include_str!("../../pls/pls.py");
+    for harness in [
+        HybridHarness::DeepSeek,
+        HybridHarness::OpenCodeV1,
+        HybridHarness::OpenCodeV2,
+        HybridHarness::Hermes,
+        HybridHarness::OpenClaw,
+    ] {
+        assert!(
+            script.contains(&format!("\"{}\": Profile(", harness.as_str())),
+            "{} has no profile in pls.py",
+            harness.as_str()
+        );
+    }
+}
+
+#[test]
+fn opencode_below_two_gets_the_v1_profile_and_anything_else_v2() {
+    assert_eq!(
+        HybridHarness::for_open_code(Some(1)),
+        HybridHarness::OpenCodeV1
+    );
+    assert_eq!(
+        HybridHarness::for_open_code(Some(2)),
+        HybridHarness::OpenCodeV2
+    );
+    assert_eq!(
+        HybridHarness::for_open_code(None),
+        HybridHarness::OpenCodeV2
+    );
+}

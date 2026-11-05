@@ -8,7 +8,7 @@
 
 // The router is macOS-only (its local lane is MLX), but the module still
 // builds everywhere so the command surface is the same on every platform.
-// Off Unix the entitlement socket is a stub, which leaves the decision
+// Off Unix wally's socket is a stub, which leaves the decision
 // service and the pid probe unreferenced.
 #![cfg_attr(not(unix), allow(dead_code, unused_variables, unused_imports))]
 
@@ -51,7 +51,7 @@ fn yes_threshold(policy: Policy) -> f64 {
     }
 }
 
-/// Whether the router can run here. Its local lane is MLX and its entitlement
+/// Whether the router can run here. Its local lane is MLX and wally's
 /// socket is a Unix socket, so only macOS qualifies.
 pub fn supported() -> Result<(), String> {
     if cfg!(target_os = "macos") {
@@ -202,6 +202,60 @@ pub(crate) fn configure_value(
     value
 }
 
+/// The harness a hybrid launch serves. The router reads it from `config.json`
+/// to know the harness's spawn tool, child signal and prompt cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridHarness {
+    DeepSeek,
+    /// opencode 1.x, and OpenWork, whose engine is pinned to 1.x.
+    OpenCodeV1,
+    OpenCodeV2,
+    Hermes,
+    OpenClaw,
+}
+
+impl HybridHarness {
+    /// The profile id `pls.py` knows it by.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HybridHarness::DeepSeek => "deepseek",
+            HybridHarness::OpenCodeV1 => "opencode-v1",
+            HybridHarness::OpenCodeV2 => "opencode-v2",
+            HybridHarness::Hermes => "hermes",
+            HybridHarness::OpenClaw => "openclaw",
+        }
+    }
+
+    /// The opencode profile for an installed major version. An unknown
+    /// version is taken as 2, the version `npm i -g opencode-ai` installs.
+    pub fn for_open_code(major_version: Option<u64>) -> HybridHarness {
+        match major_version {
+            Some(major) if major < 2 => HybridHarness::OpenCodeV1,
+            _ => HybridHarness::OpenCodeV2,
+        }
+    }
+}
+
+/// `value` with the harness and the parent's limits a launch serves. A limit
+/// of 0 is unknown and is left out, so the router falls back to the local one.
+pub(crate) fn harness_value(
+    mut value: serde_json::Value,
+    harness: HybridHarness,
+    cloud_context: i64,
+    cloud_output: i64,
+) -> serde_json::Value {
+    value["harness"] = serde_json::json!(harness.as_str());
+    let mut limits = serde_json::json!({});
+    if cloud_context > 0 {
+        limits["context_length"] = serde_json::json!(cloud_context);
+    }
+    if cloud_output > 0 {
+        limits["max_completion_tokens"] = serde_json::json!(cloud_output);
+    }
+    value["cloud_limits"] = limits;
+    value
+}
+
 /// Resolve the decision model before the harness starts, so a missing one
 /// can be offered for download on the terminal instead of failing mid-session.
 pub fn resolve_decider(options: &crate::bootstrap::GlobalOptions) -> Option<ResolvedModelPaths> {
@@ -305,7 +359,7 @@ pub struct Router {
     /// recycled pid and `wally pls` can return this status.
     exit_code: Option<i32>,
     #[allow(dead_code)] // held for its Drop; the router reads it over the socket
-    entitlement: Option<Entitlement>,
+    socket: Option<WallySocket>,
 }
 
 impl Router {
@@ -367,102 +421,75 @@ impl Drop for Router {
     }
 }
 
-/// A loopback entitlement server on a unix socket. The router asks it whether
-/// the signed-in account may run work locally; wally answers from the last
-/// console check so a turn never waits on the network.
+/// Wally's side of the router, on a unix socket: `POST /decide` runs the
+/// decision model and `GET /token` hands out the cloud token. Nothing else
+/// is served.
 #[cfg(unix)]
-pub struct Entitlement {
-    #[allow(dead_code)]
-    premium: Arc<AtomicBool>,
+pub struct WallySocket {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
     accept: Option<std::thread::JoinHandle<()>>,
-    refresh: Option<std::thread::JoinHandle<()>>,
 }
 
 #[cfg(unix)]
-impl Entitlement {
+impl WallySocket {
     fn start(decider: Option<ResolvedModelPaths>) -> Option<Self> {
         let decider = decider.and_then(Decider::start).map(Arc::new);
-        let socket = config_dir().join("entitlement.sock");
+        let socket = socket_path();
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).ok()?;
         let _ = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600));
         listener.set_nonblocking(true).ok()?;
 
-        let premium = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
-
         let accept = {
-            let premium = Arc::clone(&premium);
             let stop = Arc::clone(&stop);
             let listener = listener.try_clone().ok()?;
             std::thread::spawn(move || {
                 while !stop.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let premium = premium.load(Ordering::SeqCst);
                             let decider = decider.clone();
                             // A decision can take seconds; it must not hold up
-                            // the entitlement answers the router polls for.
-                            std::thread::spawn(move || answer(stream, premium, decider));
+                            // a token request behind it.
+                            std::thread::spawn(move || answer(stream, decider));
                         }
                         Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
                     }
                 }
             })
         };
-        let refresh = {
-            let premium = Arc::clone(&premium);
-            let stop = Arc::clone(&stop);
-            std::thread::spawn(move || {
-                while !stop.load(Ordering::SeqCst) {
-                    premium.store(check_entitlement(), Ordering::SeqCst);
-                    for _ in 0..600 {
-                        if stop.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
-            })
-        };
-        Some(Entitlement {
-            premium,
+        Some(WallySocket {
             stop,
             socket,
             accept: Some(accept),
-            refresh: Some(refresh),
         })
     }
 }
 
 #[cfg(unix)]
-impl Drop for Entitlement {
+impl Drop for WallySocket {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = std::fs::remove_file(&self.socket);
         if let Some(handle) = self.accept.take() {
             let _ = handle.join();
         }
-        if let Some(handle) = self.refresh.take() {
-            let _ = handle.join();
-        }
     }
 }
 
-/// One request off the socket: its request line and body.
-/// Off Unix there is no entitlement socket: the router never starts there.
+/// Off Unix there is no socket: the router never starts there.
 #[cfg(not(unix))]
-pub struct Entitlement;
+pub struct WallySocket;
 
 #[cfg(not(unix))]
-impl Entitlement {
+impl WallySocket {
     fn start(_decider: Option<ResolvedModelPaths>) -> Option<Self> {
         None
     }
 }
 
+/// One request off the socket: its request line and body.
 #[cfg(unix)]
 fn read_request(stream: &mut UnixStream) -> Result<(String, Vec<u8>), String> {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
@@ -518,7 +545,7 @@ fn respond(stream: &mut UnixStream, status: &str, body: &serde_json::Value) {
 }
 
 #[cfg(unix)]
-fn answer(mut stream: UnixStream, premium: bool, decider: Option<Arc<Decider>>) {
+fn answer(mut stream: UnixStream, decider: Option<Arc<Decider>>) {
     let (request_line, body) = match read_request(&mut stream) {
         Ok(request) => request,
         Err(error) => {
@@ -545,8 +572,8 @@ fn answer(mut stream: UnixStream, premium: bool, decider: Option<Arc<Decider>>) 
     if !request_line.starts_with("POST /decide ") {
         respond(
             &mut stream,
-            "200 OK",
-            &serde_json::json!({ "sub": premium }),
+            "404 Not Found",
+            &serde_json::json!({ "error": "not found" }),
         );
         return;
     }
@@ -637,37 +664,13 @@ fn token_reply(force: bool) -> Result<serde_json::Value, String> {
     }))
 }
 
-/// Whether the signed-in account may run work on the local model.
-///
-/// A plan the console does not describe counts as premium only when it says
-/// so; anything else, including a console that cannot be reached twice, is
-/// false so the router falls back to the cloud. A refresh that rotates the
-/// token is written back before this returns.
-fn check_entitlement() -> bool {
-    let Ok(mut credentials) = account::load() else {
-        return false;
-    };
-    if credentials.console_url.is_empty() || !credentials.signed_in() {
-        return false;
-    }
-    if let Ok(identity) = account::who_am_i(&credentials.console_url, &credentials.access_token) {
-        return plan_is_premium(&identity.plan);
-    }
-    match refresh_and_store(&mut credentials) {
-        Ok(grant) => plan_is_premium(&grant.plan),
-        Err(_) => false,
-    }
-}
-
-fn plan_is_premium(plan: &str) -> bool {
-    matches!(
-        plan.to_ascii_lowercase().as_str(),
-        "pro" | "premium" | "paid" | "beta"
-    )
-}
-
 fn config_dir() -> PathBuf {
     PathBuf::from(account::profile_directory()).join("pls")
+}
+
+/// Where wally serves the router; handed over as `PLS_SOCKET`.
+fn socket_path() -> PathBuf {
+    config_dir().join("pls.sock")
 }
 
 fn pid_path() -> PathBuf {
@@ -848,21 +851,65 @@ fn process_is_router(pid: i32, recorded: &str) -> bool {
 
 /// Record the model paths in the config file, preserving the person's mode and
 /// cap. Called before `start`.
-pub(crate) fn configure(model_path: &str, cloud_model: &str, policy: Policy) {
+pub(crate) fn configure(
+    model_path: &str,
+    cloud_model: &str,
+    policy: Policy,
+    harness: HybridHarness,
+    cloud_limits: (i64, i64),
+) {
     let _ = std::fs::create_dir_all(config_dir());
     let path = config_file();
     let existing: serde_json::Value = std::fs::read_to_string(&path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_else(|| serde_json::json!({}));
-    let value = configure_value(existing, model_path, cloud_model, policy);
+    let value = harness_value(
+        configure_value(existing, model_path, cloud_model, policy),
+        harness,
+        cloud_limits.0,
+        cloud_limits.1,
+    );
     let _ = std::fs::write(&path, value.to_string());
 }
 
 /// Start the router for `model_path`, with `decider` answering `/decide`
-/// on the entitlement socket when it is given. Returns `None` after
+/// on wally's socket when it is given. Returns `None` after
 /// reporting why.
 pub fn start(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Router> {
+    start_with(model_path, decider, Stdio::inherit())
+}
+
+/// Where a router behind a harness writes its event log: the harness owns
+/// the terminal, and a full-screen TUI is drawn over by every line.
+pub fn log_file() -> PathBuf {
+    config_dir().join("pls.log")
+}
+
+/// `start`, with the router's and model server's stderr in `log_file()`
+/// instead of the terminal. For launches that hand the terminal to a harness.
+pub fn start_logged(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Router> {
+    let _ = std::fs::create_dir_all(config_dir());
+    let log = match std::fs::File::create(log_file()) {
+        Ok(log) => log,
+        Err(error) => {
+            out::error_line(&format!(
+                "could not open the router log {} ({error})",
+                log_file().display()
+            ));
+            return None;
+        }
+    };
+    let router = start_with(model_path, decider, Stdio::from(log))?;
+    out::status_line(&format!("router log: {}", log_file().display()));
+    Some(router)
+}
+
+fn start_with(
+    model_path: &str,
+    decider: Option<ResolvedModelPaths>,
+    stderr: Stdio,
+) -> Option<Router> {
     let script = materialise().or_else(|| {
         out::error_line("could not write the router scripts to the profile directory");
         None
@@ -887,16 +934,13 @@ pub fn start(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Ro
         .env("PLS_MODEL", model_path)
         .env("PLS_PARENT_PID", std::process::id().to_string())
         .env("PLS_TOKEN", &token)
-        .env(
-            "PLS_ENTITLEMENT_SOCKET",
-            config_dir().join("entitlement.sock"),
-        )
+        .env("PLS_SOCKET", socket_path())
         // The debug console is temporary; forwarded only when set.
         .env("PLS_DEBUG", std::env::var("PLS_DEBUG").unwrap_or_default())
         .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(stderr)
         .spawn()
         .ok()?;
 
@@ -959,7 +1003,7 @@ pub fn start(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Ro
         base_url,
         token,
         exit_code: None,
-        entitlement: Entitlement::start(decider),
+        socket: WallySocket::start(decider),
     })
 }
 
@@ -1060,17 +1104,106 @@ mod tests {
             base_url: String::new(),
             token: String::new(),
             exit_code: None,
-            entitlement: None,
+            socket: None,
         };
         assert_eq!(wait_exit(&mut router), 7);
     }
 
+    /// A socket started in a fresh profile, removed again on drop.
+    #[cfg(unix)]
+    struct SocketUnderTest {
+        dir: PathBuf,
+        server: Option<WallySocket>,
+    }
+
+    #[cfg(unix)]
+    impl SocketUnderTest {
+        fn start(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("wally-pls-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("pls")).unwrap();
+            std::env::set_var("WALLY_PROFILE_DIR", &dir);
+            let server = WallySocket::start(None).expect("the socket starts");
+            SocketUnderTest {
+                dir,
+                server: Some(server),
+            }
+        }
+
+        fn path(&self) -> PathBuf {
+            self.dir.join("pls").join("pls.sock")
+        }
+
+        /// The status line of the reply to one raw request.
+        fn status_of(&self, request: &str) -> String {
+            let mut stream = UnixStream::connect(self.path()).expect("connect to pls.sock");
+            stream.write_all(request.as_bytes()).unwrap();
+            let mut reply = String::new();
+            let _ = stream.read_to_string(&mut reply);
+            reply.lines().next().unwrap_or_default().to_string()
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for SocketUnderTest {
+        fn drop(&mut self) {
+            drop(self.server.take());
+            std::env::remove_var("WALLY_PROFILE_DIR");
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
-    fn a_plan_the_console_does_not_describe_is_not_premium() {
-        assert!(plan_is_premium("pro"));
-        assert!(plan_is_premium("Premium"));
-        assert!(plan_is_premium("beta"));
-        assert!(!plan_is_premium("free"));
-        assert!(!plan_is_premium(""));
+    fn the_socket_file_is_pls_sock_at_mode_0600() {
+        let _lock = crate::util::env_lock::lock();
+        let socket = SocketUnderTest::start("mode");
+        let mode = std::fs::metadata(socket.path())
+            .expect("pls.sock exists while the socket runs")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_socket_answers_post_decide() {
+        let _lock = crate::util::env_lock::lock();
+        let socket = SocketUnderTest::start("decide");
+        let body = r#"{"policy":"privacy","text":"hello"}"#;
+        let status = socket.status_of(&format!(
+            "POST /decide HTTP/1.1\r\nHost: local\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        // No decision model in a test, so the answer is 503, not a 404.
+        assert!(status.starts_with("HTTP/1.1 503"), "{status}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_socket_answers_get_token() {
+        let _lock = crate::util::env_lock::lock();
+        let socket = SocketUnderTest::start("token");
+        let status = socket.status_of("GET /token HTTP/1.1\r\nHost: local\r\n\r\n");
+        // Nobody is signed in to the test profile, so the answer is 503.
+        assert!(status.starts_with("HTTP/1.1 503"), "{status}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_socket_has_no_entitlement_answer() {
+        let _lock = crate::util::env_lock::lock();
+        let socket = SocketUnderTest::start("entitlement");
+        let status = socket.status_of("GET /entitlement HTTP/1.1\r\nHost: local\r\n\r\n");
+        assert!(status.starts_with("HTTP/1.1 404"), "{status}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_socket_answers_any_other_request_with_404() {
+        let _lock = crate::util::env_lock::lock();
+        let socket = SocketUnderTest::start("other");
+        let status = socket.status_of("POST /elsewhere HTTP/1.1\r\nHost: local\r\n\r\n");
+        assert!(status.starts_with("HTTP/1.1 404"), "{status}");
     }
 }

@@ -31,8 +31,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 
 MODEL_PATH = os.environ["PLS_MODEL"]
-MODEL_ID = os.environ.get("PLS_MODEL_ID", "Hybrid-Wally-0.1")
-MAX_KV = int(os.environ.get("PLS_MAX_KV", "57344"))
+MODEL_ID = os.environ.get("PLS_MODEL_ID", "Hybrid-Wally-0.1-local")
+# 64K: Hermes refuses a delegation model with a window under 64,000.
+MAX_KV = int(os.environ.get("PLS_MAX_KV", "65536"))
 MAX_OUT = int(os.environ.get("PLS_MAX_OUT", "8192"))
 # APC's defaults hold 2048 x 16 = 32k tokens and two checkpoints, taken every
 # 2048 tokens. Hybrid-attention models (the PPLX 35B) reuse only through
@@ -173,7 +174,9 @@ async def chat(request: Request):
     tools = body.get("tools")
     stream = bool(body.get("stream"))
     want_usage = bool((body.get("stream_options") or {}).get("include_usage"))
-    max_tokens = min(int(body.get("max_tokens") or MAX_OUT), MAX_OUT)
+    # opencode 2 sends `max_completion_tokens`; the rest send `max_tokens`.
+    asked = body.get("max_completion_tokens") or body.get("max_tokens")
+    max_tokens = min(int(asked or MAX_OUT), MAX_OUT)
     temperature = float(body.get("temperature", 0.7))
 
     prompt = build_prompt(messages, tools)

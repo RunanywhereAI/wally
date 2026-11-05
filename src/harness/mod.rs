@@ -14,6 +14,7 @@ pub mod deepsec;
 #[allow(clippy::module_inception)]
 pub mod harness;
 pub mod hosted;
+pub mod hybrid;
 pub mod image_gate;
 pub mod local_models;
 pub mod opencode;
@@ -27,6 +28,7 @@ pub use agents::*;
 pub use catalog_models::*;
 pub use declared_harness::*;
 pub use harness::*;
+pub use hybrid::*;
 pub use local_models::*;
 pub use opencode::*;
 pub use openwork::*;

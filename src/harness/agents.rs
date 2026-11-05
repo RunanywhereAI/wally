@@ -182,7 +182,7 @@ impl Drop for ScopedEnv {
 /// Written into the temp directory rather than the person's own config tree:
 /// `~/.openclaw/config.json` is theirs, and a run of wally is not a reason to
 /// rewrite it.
-struct TemporaryConfig {
+pub(super) struct TemporaryConfig {
     path: Option<PathBuf>,
 }
 
@@ -190,7 +190,7 @@ struct TemporaryConfig {
 /// first that is set), else /tmp — and nothing unless that names an existing
 /// directory. `std::env::temp_dir()` is not the same: it reads only TMPDIR and,
 /// on macOS, falls back to the per-user /var/folders/…/T instead of /tmp.
-fn temp_directory_path() -> Option<PathBuf> {
+pub(super) fn temp_directory_path() -> Option<PathBuf> {
     #[cfg(not(windows))]
     let directory = ["TMPDIR", "TMP", "TEMP", "TEMPDIR"]
         .iter()
@@ -292,11 +292,11 @@ fn clean_leftover_configs() {
 }
 
 impl TemporaryConfig {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         TemporaryConfig { path: None }
     }
 
-    fn write(&mut self, contents: &str, extension: &str) -> Result<(), String> {
+    pub(super) fn write(&mut self, contents: &str, extension: &str) -> Result<(), String> {
         let Some(directory) = temp_directory_path() else {
             return Err("no temp directory to write the agent config into".to_string());
         };
@@ -365,7 +365,7 @@ impl TemporaryConfig {
         Ok(())
     }
 
-    fn path(&self) -> String {
+    pub(super) fn path(&self) -> String {
         self.path
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned())
@@ -381,7 +381,7 @@ impl Drop for TemporaryConfig {
     }
 }
 
-const PROVIDER_ID: &str = "runanywhere";
+pub(super) const PROVIDER_ID: &str = "runanywhere";
 
 /// The environment variable the dsh and Prime Agent providers read the key
 /// from. Fixed rather than host-derived: both resolve the reference
@@ -395,7 +395,7 @@ const KEY_VARIABLE: &str = "RUNANYWHERE_API_KEY";
 /// Theirs wins whole: a tool started with their own subcommand is theirs to
 /// drive, and mixing our default into it would produce a command line
 /// neither of us wrote.
-fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
+pub(super) fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
     if !args.is_empty() || agent.default_args.is_empty() {
         return args.to_vec();
     }
@@ -418,7 +418,7 @@ fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
 /// matters more than it looks: OpenClaw otherwise derives it from the config
 /// file's own folder, so pointing `OPENCLAW_CONFIG_PATH` at a temp file
 /// would move their agents and sessions into the temp directory for the run.
-fn open_claw_state_directory() -> PathBuf {
+pub(super) fn open_claw_state_directory() -> PathBuf {
     // `var_os`, not `var`: `std::getenv` in C++ returns the raw bytes
     // regardless of encoding, and `std::filesystem::path` is encoding-agnostic
     // on POSIX, so a legacy-encoded HOME/OPENCLAW_* must still resolve here
@@ -448,7 +448,7 @@ fn open_claw_state_directory() -> PathBuf {
 /// Agents live under `<state>/agents/<id>/agent` unless their config entry
 /// (`agents.entries` or `agents.list`) names an `agentDir`, the same lookup as
 /// OpenClaw's `resolveAgentDir`.
-fn drop_stale_open_claw_provider(state: &Path, config: &str) {
+pub(super) fn drop_stale_open_claw_provider(state: &Path, config: &str) {
     let mut agent_dirs: Vec<PathBuf> = std::fs::read_dir(state.join("agents"))
         .map(|entries| {
             entries
@@ -564,13 +564,13 @@ fn expand_home(path: &str) -> PathBuf {
 /// context size `Resolve` starts it with, which is the honest number to
 /// declare.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ModelLimits {
-    context_window: i64,
-    max_output: i64,
-    input_per_mtok: i64,
-    output_per_mtok: i64,
-    image_input: bool,
-    text_only: bool,
+pub(crate) struct ModelLimits {
+    pub context_window: i64,
+    pub max_output: i64,
+    pub input_per_mtok: i64,
+    pub output_per_mtok: i64,
+    pub image_input: bool,
+    pub text_only: bool,
 }
 
 fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
@@ -623,7 +623,7 @@ fn console_limits(model: &str) -> ModelLimits {
 }
 
 /// Their current config document, or empty when they have none.
-fn read_open_claw_config() -> String {
+pub(super) fn read_open_claw_config() -> String {
     let path = match std::env::var_os("OPENCLAW_CONFIG_PATH") {
         Some(over) if !over.is_empty() => PathBuf::from(over),
         _ => {
@@ -635,6 +635,65 @@ fn read_open_claw_config() -> String {
         }
     };
     std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// The pid in a Hermes `gateway.pid` document when it names a gateway the
+/// TUI started for itself (`gateway run --idle-exit`). A gateway the person
+/// runs on their own (messaging, a service) has no `--idle-exit` and is None.
+pub(super) fn tui_gateway_pid_in(document: &str) -> Option<i32> {
+    let value: Value = serde_json::from_str(document).ok()?;
+    let started_by_tui = value
+        .get("argv")?
+        .as_array()?
+        .iter()
+        .any(|arg| arg.as_str() == Some("--idle-exit"));
+    let pid = i32::try_from(value.get("pid")?.as_i64()?).ok()?;
+    (started_by_tui && pid > 0).then_some(pid)
+}
+
+/// The live TUI gateway's pid, from `$HERMES_HOME/gateway.pid`.
+fn tui_gateway_pid() -> Option<i32> {
+    let home = hermes_config_path()?.parent()?.to_path_buf();
+    let pid = tui_gateway_pid_in(&std::fs::read_to_string(home.join("gateway.pid")).ok()?)?;
+    #[cfg(unix)]
+    {
+        // SAFETY: signal 0 only checks that the pid exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        alive.then_some(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        Some(pid)
+    }
+}
+
+/// Stops the gateway Hermes' TUI left running, if there is one. Returns
+/// false after saying so when it would not stop.
+///
+/// `--tui` talks to a detached gateway that outlives it and keeps the
+/// environment of the launch that started it. wally hands Hermes its endpoint
+/// in that environment, on a port that changes every launch, so a TUI that
+/// attaches to an earlier launch's gateway calls a server that is gone and
+/// never answers. Stopped before a launch so the TUI starts one with this
+/// launch's endpoint, and after, so nothing is left pointing at a dead port.
+pub(super) fn stop_tui_gateway(command: &str) -> bool {
+    let Some(pid) = tui_gateway_pid() else {
+        return true;
+    };
+    let stopped = std::process::Command::new(command)
+        .args(["gateway", "stop"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|exit| exit.success());
+    if !stopped {
+        out::error_line(&format!(
+            "could not stop the hermes gateway (pid {pid}) an earlier launch left running; \
+             run `hermes gateway stop`, then try again"
+        ));
+    }
+    stopped
 }
 
 /// Mirrors hermes_cli/runtime_provider._host_derived_api_key: strip the
@@ -1412,7 +1471,7 @@ pub fn prime_agent_argv(model: &str, child_args: &[String]) -> Vec<String> {
 /// single quote doubled. A temp path or model id has no business carrying a
 /// quote, but an unescaped one would break the whole patch document rather
 /// than fail loudly, so the boundary is closed here.
-fn yaml_single_quoted(value: &str) -> String {
+pub(super) fn yaml_single_quoted(value: &str) -> String {
     let mut escaped = String::from("'");
     for c in value.chars() {
         if c == '\'' {
@@ -1436,88 +1495,82 @@ pub fn build_deep_seek_patch(llm_config: &str, model: &str) -> String {
     )
 }
 
-/// The model id the router exposes. One id on both providers, so the picker
-/// shows one model and the lane is decided by the provider, not the id.
+/// The model id the parent uses. The router has one endpoint for the parent
+/// and every subagent and tells them apart from the request itself (a
+/// subagent prompt starts with a `pls-task:` line), not from the id.
 pub const HYBRID_MODEL_ID: &str = "Hybrid-Wally-0.1";
 
-/// The two-provider `llm-pi-ai` config. Both providers carry the same model;
-/// `wally` is the parent lane (cloud) and `wally-local` the child lane (local).
-/// The local lane's limits: the model server's KV cap and reply cap.
-const HYBRID_LOCAL_CONTEXT: i64 = 57344;
-const HYBRID_LOCAL_OUTPUT: i64 = 8192;
+/// The model id subagents use. Same endpoint; it exists only so dsh compacts
+/// a subagent at the local model's window instead of the cloud's.
+pub const HYBRID_LOCAL_MODEL_ID: &str = "Hybrid-Wally-0.1-local";
 
-/// `cloud` is what the console says the parent's cloud model can hold. The
-/// parent provider declares those limits and the subagent provider the local
-/// ones; sharing the local cap cut cloud replies off at 8192 tokens once the
-/// parent started writing whole files itself under the cost policy.
+/// The local lane's limits: the model server's KV cap and reply cap.
+pub(super) const HYBRID_LOCAL_CONTEXT: i64 = 65536;
+pub(super) const HYBRID_LOCAL_OUTPUT: i64 = 8192;
+
+/// The one-provider `llm-pi-ai` config for a hybrid launch. `cloud` is what
+/// the console says the parent's cloud model can hold: the parent's model
+/// entry declares those limits and the subagent's the local ones, because a
+/// shared local cap cut cloud replies off at 8192 tokens once the parent
+/// started writing whole files itself under the cost policy.
 fn build_hybrid_llm_config(
     base_url: &str,
     key_variable: &str,
     token: &str,
     cloud: &ModelLimits,
 ) -> String {
-    let model = |context: i64, output: i64| {
+    let model = |id: &str, context: i64, output: i64| {
         json!({
-            "id": HYBRID_MODEL_ID,
-            "name": HYBRID_MODEL_ID,
+            "id": id,
+            "name": id,
             "input": ["text"],
             "contextWindow": context,
             "maxTokens": output,
             "reasoningEfforts": false,
         })
     };
-    let local_model = model(HYBRID_LOCAL_CONTEXT, HYBRID_LOCAL_OUTPUT);
-    let cloud_model = model(
-        if cloud.context_window > 0 {
-            cloud.context_window
-        } else {
-            HYBRID_LOCAL_CONTEXT
-        },
-        if cloud.max_output > 0 {
-            cloud.max_output
-        } else {
-            HYBRID_LOCAL_OUTPUT
-        },
+    let subagent = model(
+        HYBRID_LOCAL_MODEL_ID,
+        HYBRID_LOCAL_CONTEXT,
+        HYBRID_LOCAL_OUTPUT,
     );
-    let provider = |name: &str, path: &str, model: &Value| {
-        json!({
-            "displayName": name,
-            "api": "openai-completions",
-            "baseURL": format!("{base_url}{path}"),
-            "apiKeyEnv": key_variable,
-            // The router port is loopback but shared, so every request carries
-            // the launch secret.
-            "headers": { "x-pls-token": token },
-            "models": [model.clone()],
-        })
-    };
+    let (context, output) = parent_limits(cloud);
+    let parent = model(HYBRID_MODEL_ID, context, output);
     dump(&json!({
         "providers": {
-            PROVIDER_ID: provider("Wally", "/v1", &cloud_model),
-            "wally-local": provider("Wally (local)", "/local/v1", &local_model),
+            PROVIDER_ID: {
+                "displayName": "Wally",
+                "api": "openai-completions",
+                "baseURL": format!("{base_url}/v1"),
+                "apiKeyEnv": key_variable,
+                // The router port is loopback but shared, so every request
+                // carries the launch secret.
+                "headers": { "x-pls-token": token },
+                "models": [parent, subagent],
+            }
         }
     }))
 }
 
-/// The patch for a hybrid launch: both providers, the parent on the cloud
-/// lane, and every subagent pinned to the local lane.
+/// The patch for a hybrid launch: one provider, the parent on its model id
+/// and every subagent on the local one.
 fn build_hybrid_patch(llm_config: &str) -> String {
     let mut patch = format!(
         "- id: llm-pi-ai\n  config: {llm_config}\n\
          - id: agent-default-model\n  config:\n    provider: {PROVIDER_ID}\n    model: {}\n\
-         - id: tool-subagent\n  disabled: false\n  config:\n    provider: spawn\n    agentOptions:\n      provider: wally-local\n      model: {}\n",
+         - id: tool-subagent\n  disabled: false\n  config:\n    provider: spawn\n    agentOptions:\n      provider: {PROVIDER_ID}\n      model: {}\n",
         yaml_single_quoted(HYBRID_MODEL_ID),
-        yaml_single_quoted(HYBRID_MODEL_ID),
+        yaml_single_quoted(HYBRID_LOCAL_MODEL_ID),
     );
     // The web profile mounts its own copy of the tool from the `standard`
     // agent preset, so the row above is inert there. The preset is a root
     // entry, and a patch replaces its whole config, so its plugin list is
-    // copied from the installed preset with the child route injected.
+    // copied from the installed preset with the subagent model injected.
     match hybrid_preset_patch() {
         Some(preset) => patch.push_str(&preset),
         None => out::error_line(
             "hybrid: could not read the installed dsh web preset; \
-             subagents in the web profile will not use the local lane",
+             subagents in the web profile will not use the local model",
         ),
     }
     patch
@@ -1567,8 +1620,8 @@ fn hybrid_preset_patch() -> Option<String> {
             let indent = stripped.len() - trimmed.len();
             let pad = " ".repeat(indent + 2);
             out.push_str(&format!(
-                "{pad}agentOptions:\n{pad}  provider: wally-local\n{pad}  model: {}\n",
-                yaml_single_quoted(HYBRID_MODEL_ID),
+                "{pad}agentOptions:\n{pad}  provider: {PROVIDER_ID}\n{pad}  model: {}\n",
+                yaml_single_quoted(HYBRID_LOCAL_MODEL_ID),
             ));
             injected = true;
         }
@@ -1620,6 +1673,120 @@ fn hybrid_model_directory(model: &str, options: &GlobalOptions) -> Option<String
     Some(found.dir.clone())
 }
 
+/// A started hybrid launch: the router, and what the harness config needs.
+pub(crate) struct HybridStart {
+    pub router: super::pls::Router,
+    /// The local model, as the person named it or as it was picked.
+    pub model: String,
+    pub policy: super::pls::Policy,
+    /// What the console says the parent's cloud model can hold.
+    pub cloud: ModelLimits,
+}
+
+impl HybridStart {
+    /// The parent's window and reply cap, the local ones where the console
+    /// gave none.
+    pub fn parent_limits(&self) -> (i64, i64) {
+        parent_limits(&self.cloud)
+    }
+
+    /// The line every hybrid launch prints before handing over the terminal.
+    pub fn announce(&self) {
+        out::status_line(&format!(
+            "hybrid ({} policy): parent on the cloud, subagents on {} through {}",
+            self.policy.as_str(),
+            self.model,
+            self.router.base_url
+        ));
+    }
+}
+
+fn parent_limits(cloud: &ModelLimits) -> (i64, i64) {
+    (
+        if cloud.context_window > 0 {
+            cloud.context_window
+        } else {
+            HYBRID_LOCAL_CONTEXT
+        },
+        if cloud.max_output > 0 {
+            cloud.max_output
+        } else {
+            HYBRID_LOCAL_OUTPUT
+        },
+    )
+}
+
+/// Everything a hybrid launch does before its harness config: check the
+/// platform and policy, pick the local model, read the cloud model's limits,
+/// write the router config for `harness`, and start the router. `Err` is the
+/// exit code, after the reason was printed.
+pub(crate) fn start_hybrid(
+    model: &str,
+    cloud_model: &str,
+    policy: &str,
+    harness: super::pls::HybridHarness,
+    options: &GlobalOptions,
+) -> Result<HybridStart, i32> {
+    if let Err(error) = super::pls::supported() {
+        out::error_line(&error);
+        return Err(2);
+    }
+    let policy = match super::pls::parse_policy(policy) {
+        Ok(policy) => policy,
+        Err(error) => {
+            out::error_line(&error);
+            return Err(2);
+        }
+    };
+    clean_leftover_configs();
+    // No -m: use the first downloaded MLX model certified for a harness, so
+    // `--hybrid` alone is enough.
+    let model = if model.is_empty() {
+        match default_hybrid_model(options) {
+            Some(id) => id,
+            None => {
+                out::error_line("--hybrid needs -m <local model> and none is downloaded");
+                return Err(2);
+            }
+        }
+    } else {
+        model.to_string()
+    };
+    let Some(directory) = hybrid_model_directory(&model, options) else {
+        out::error_line(&format!("{model} is not a downloaded MLX model"));
+        out::status_line("pull one first: wally models pull <model>");
+        return Err(1);
+    };
+    if cloud_model.is_empty() {
+        out::error_line("--hybrid needs a cloud model: pass --cloud-model <id> or set a default");
+        return Err(2);
+    }
+    let cloud = console_limits(cloud_model);
+    if cloud.max_output <= 0 {
+        out::status_line(&format!(
+            "hybrid: the console gave no output limit for {cloud_model}; \
+             the parent keeps {HYBRID_LOCAL_OUTPUT} tokens per reply"
+        ));
+    }
+    super::pls::configure(
+        &directory,
+        cloud_model,
+        policy,
+        harness,
+        (cloud.context_window, cloud.max_output),
+    );
+    let decider = super::pls::resolve_decider(options);
+    let Some(router) = super::pls::start_logged(&directory, decider) else {
+        return Err(1);
+    };
+    Ok(HybridStart {
+        router,
+        model,
+        policy,
+        cloud,
+    })
+}
+
 /// `wally deepseek --hybrid`: route the parent to the cloud and every
 /// subagent to the local model through the PLS router.
 pub fn launch_deep_seek_hybrid(
@@ -1629,59 +1796,20 @@ pub fn launch_deep_seek_hybrid(
     args: &[String],
     options: &GlobalOptions,
 ) -> i32 {
-    if let Err(error) = super::pls::supported() {
-        out::error_line(&error);
-        return 2;
-    }
-    let policy = match super::pls::parse_policy(policy) {
-        Ok(policy) => policy,
-        Err(error) => {
-            out::error_line(&error);
-            return 2;
-        }
+    let hybrid = match start_hybrid(
+        model,
+        cloud_model,
+        policy,
+        super::pls::HybridHarness::DeepSeek,
+        options,
+    ) {
+        Ok(hybrid) => hybrid,
+        Err(status) => return status,
     };
-    clean_leftover_configs();
-    // No -m: use the first downloaded MLX model certified for a harness, so
-    // `wally deepseek --hybrid` alone is enough.
-    let picked;
-    let model = if model.is_empty() {
-        match default_hybrid_model(options) {
-            Some(id) => {
-                picked = id;
-                picked.as_str()
-            }
-            None => {
-                out::error_line("--hybrid needs -m <local model> and none is downloaded");
-                return 2;
-            }
-        }
-    } else {
-        model
-    };
-    let Some(directory) = hybrid_model_directory(model, options) else {
-        out::error_line(&format!("{model} is not a downloaded MLX model"));
-        out::status_line("pull one first: wally models pull <model>");
-        return 1;
-    };
-    if cloud_model.is_empty() {
-        out::error_line("--hybrid needs a cloud model: pass --cloud-model <id> or set a default");
-        return 2;
-    }
-    super::pls::configure(&directory, cloud_model, policy);
-    let decider = super::pls::resolve_decider(options);
-    let Some(router) = super::pls::start(&directory, decider) else {
-        return 1;
-    };
-
-    let cloud_limits = console_limits(cloud_model);
-    if cloud_limits.max_output <= 0 {
-        out::status_line(&format!(
-            "hybrid: the console gave no output limit for {cloud_model}; \
-             the parent keeps {HYBRID_LOCAL_OUTPUT} tokens per reply"
-        ));
-    }
+    let router = &hybrid.router;
+    let cloud_limits = &hybrid.cloud;
     let llm_config =
-        build_hybrid_llm_config(&router.base_url, KEY_VARIABLE, &router.token, &cloud_limits);
+        build_hybrid_llm_config(&router.base_url, KEY_VARIABLE, &router.token, cloud_limits);
     let mut config = TemporaryConfig::new();
     if let Err(failure) = config.write(&build_hybrid_patch(&llm_config), ".yaml") {
         out::error_line(&failure);
@@ -1708,13 +1836,9 @@ pub fn launch_deep_seek_hybrid(
         deep_seek_web_args(&config.path(), args)
     };
     launch_args.extend(args.iter().cloned());
-    out::status_line(&format!(
-        "hybrid ({} policy): parent on the cloud, subagents on {model} through {}",
-        policy.as_str(),
-        router.base_url
-    ));
+    hybrid.announce();
     let status = launch("dsh", "", &launch_args, options);
-    drop(router);
+    drop(hybrid);
     status
 }
 
@@ -1798,7 +1922,13 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                 "{} will talk to {model} through {}",
                 agent.id, endpoint.base_url
             ));
-            launch(agent.id, "", &hermes_argv(model, &child_args), options)
+            if !stop_tui_gateway(agent.command) {
+                release(&endpoint);
+                return 1;
+            }
+            let status = launch(agent.id, "", &hermes_argv(model, &child_args), options);
+            stop_tui_gateway(agent.command);
+            status
         }
         Handoff::ConfigFile => {
             let catalog = catalog_models_for(&endpoint, model);
@@ -2598,45 +2728,77 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_hybrid_parent_gets_the_cloud_models_limits_and_the_subagent_the_local_ones() {
-        let cloud = ModelLimits {
-            context_window: 1_000_000,
-            max_output: 65_536,
-            ..ModelLimits::default()
-        };
-        let config = build_hybrid_llm_config("http://127.0.0.1:1234", "K", "tok", &cloud);
-        let parsed: Value = serde_json::from_str(&config).unwrap();
-        let parent = &parsed["providers"][PROVIDER_ID]["models"][0];
-        let local = &parsed["providers"]["wally-local"]["models"][0];
-        assert_eq!(parent["maxTokens"], json!(65_536));
-        assert_eq!(parent["contextWindow"], json!(1_000_000));
-        assert_eq!(local["maxTokens"], json!(HYBRID_LOCAL_OUTPUT));
-        assert_eq!(local["contextWindow"], json!(HYBRID_LOCAL_CONTEXT));
+    fn hybrid_config_with(cloud: &ModelLimits) -> Value {
+        let config =
+            build_hybrid_llm_config("http://127.0.0.1:1234", "WALLY_PLS_KEY", "tok", cloud);
+        serde_json::from_str(&config).unwrap()
+    }
+
+    fn hybrid_model<'a>(parsed: &'a Value, id: &str) -> &'a Value {
+        parsed["providers"][PROVIDER_ID]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["id"] == json!(id))
+            .unwrap_or_else(|| panic!("no model entry for {id}"))
     }
 
     #[test]
-    fn hybrid_patch_registers_both_lanes_and_pins_subagents_local() {
+    fn the_hybrid_config_has_one_provider_on_v1() {
+        let parsed = hybrid_config_with(&ModelLimits::default());
+        let providers = parsed["providers"].as_object().unwrap();
+        assert_eq!(
+            providers.keys().collect::<Vec<_>>(),
+            vec![&PROVIDER_ID.to_string()]
+        );
+        assert_eq!(
+            parsed["providers"][PROVIDER_ID]["baseURL"],
+            json!("http://127.0.0.1:1234/v1")
+        );
+    }
+
+    #[test]
+    fn the_hybrid_provider_lists_the_parent_and_subagent_model_ids() {
+        let parsed = hybrid_config_with(&ModelLimits::default());
+        let ids: Vec<&Value> = parsed["providers"][PROVIDER_ID]["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|model| &model["id"])
+            .collect();
+        assert_eq!(
+            ids,
+            vec![&json!(HYBRID_MODEL_ID), &json!(HYBRID_LOCAL_MODEL_ID)]
+        );
+    }
+
+    #[test]
+    fn the_hybrid_model_ids_are_the_published_names() {
+        assert_eq!(HYBRID_MODEL_ID, "Hybrid-Wally-0.1");
+        assert_eq!(HYBRID_LOCAL_MODEL_ID, "Hybrid-Wally-0.1-local");
+    }
+
+    #[test]
+    fn the_hybrid_patch_has_no_local_provider_or_local_path() {
         let config = build_hybrid_llm_config(
             "http://127.0.0.1:1234",
             "WALLY_PLS_KEY",
             "tok",
             &ModelLimits::default(),
         );
-        let parsed: Value = serde_json::from_str(&config).unwrap();
-        assert_eq!(
-            parsed["providers"][PROVIDER_ID]["baseURL"],
-            json!("http://127.0.0.1:1234/v1")
-        );
-        assert_eq!(
-            parsed["providers"]["wally-local"]["baseURL"],
-            json!("http://127.0.0.1:1234/local/v1")
-        );
-        assert_eq!(
-            parsed["providers"]["wally-local"]["models"][0]["id"],
-            json!(HYBRID_MODEL_ID)
-        );
+        let patch = build_hybrid_patch(&config);
+        assert!(!patch.contains("wally-local"));
+        assert!(!patch.contains("/local/v1"));
+    }
 
+    #[test]
+    fn the_hybrid_patch_keeps_the_subagent_row_live_and_spawned() {
+        let config = build_hybrid_llm_config(
+            "http://127.0.0.1:1234",
+            "WALLY_PLS_KEY",
+            "tok",
+            &ModelLimits::default(),
+        );
         let patch = build_hybrid_patch(&config);
         // The row's own provider must survive the overlay, or dsh rejects the
         // whole config with "$.provider missing required value".
@@ -2644,8 +2806,64 @@ mod tests {
         // The web profile disables this row; without the override the parent
         // has no subagent tool and nothing ever reaches the local lane.
         assert!(patch.contains("disabled: false"));
-        assert!(patch.contains("provider: wally-local"));
-        assert!(patch.contains(&format!("model: '{HYBRID_MODEL_ID}'")));
+    }
+
+    #[test]
+    fn the_hybrid_parent_row_names_the_parent_model_id() {
+        let patch = build_hybrid_patch(&build_hybrid_llm_config(
+            "http://127.0.0.1:1234",
+            "K",
+            "tok",
+            &ModelLimits::default(),
+        ));
+        let row = patch
+            .split("- id: ")
+            .find(|row| row.starts_with("agent-default-model"))
+            .unwrap();
+        assert!(row.contains(&format!("provider: {PROVIDER_ID}")));
+        assert!(row.contains(&format!("model: '{HYBRID_MODEL_ID}'")));
+    }
+
+    #[test]
+    fn the_hybrid_subagent_row_names_the_local_model_id() {
+        let patch = build_hybrid_patch(&build_hybrid_llm_config(
+            "http://127.0.0.1:1234",
+            "K",
+            "tok",
+            &ModelLimits::default(),
+        ));
+        let row = patch
+            .split("- id: ")
+            .find(|row| row.starts_with("tool-subagent"))
+            .unwrap();
+        assert!(row.contains(&format!("provider: {PROVIDER_ID}")));
+        assert!(row.contains(&format!("model: '{HYBRID_LOCAL_MODEL_ID}'")));
+    }
+
+    #[test]
+    fn the_hybrid_subagent_model_carries_the_local_limits() {
+        let cloud = ModelLimits {
+            context_window: 1_000_000,
+            max_output: 65_536,
+            ..ModelLimits::default()
+        };
+        let parsed = hybrid_config_with(&cloud);
+        let local = hybrid_model(&parsed, HYBRID_LOCAL_MODEL_ID);
+        assert_eq!(local["contextWindow"], json!(65_536));
+        assert_eq!(local["maxTokens"], json!(8_192));
+    }
+
+    #[test]
+    fn the_hybrid_parent_model_carries_the_cloud_limits() {
+        let cloud = ModelLimits {
+            context_window: 1_000_000,
+            max_output: 65_536,
+            ..ModelLimits::default()
+        };
+        let parsed = hybrid_config_with(&cloud);
+        let parent = hybrid_model(&parsed, HYBRID_MODEL_ID);
+        assert_eq!(parent["contextWindow"], json!(1_000_000));
+        assert_eq!(parent["maxTokens"], json!(65_536));
     }
 
     #[test]
@@ -2763,6 +2981,16 @@ mod tests {
             "low"
         );
         assert!(defaults.get("runanywhere/mimo-v2.6-pro").is_none());
+    }
+
+    #[test]
+    fn only_a_gateway_the_tui_started_is_one_wally_stops() {
+        let tui =
+            r#"{"pid": 25601, "argv": ["main.py", "gateway", "run", "--quiet", "--idle-exit"]}"#;
+        assert_eq!(tui_gateway_pid_in(tui), Some(25601));
+        let own = r#"{"pid": 25601, "argv": ["main.py", "gateway", "run"]}"#;
+        assert_eq!(tui_gateway_pid_in(own), None);
+        assert_eq!(tui_gateway_pid_in("not json"), None);
     }
 
     #[test]

@@ -71,6 +71,12 @@ for that option row and example only; nothing else about them changed.
 images go at full size; each time the same two cases were re-captured for that
 option row only; nothing else changed.
 
+`--hybrid`, `--cloud-model` and `--policy` moved from `wally deepseek` alone
+to opencode, OpenWork, Hermes and OpenClaw too, and `--hybrid`'s help line was
+reworded. The help cases for those five commands (`help__<cmd>`,
+`help__help__<cmd>`, `alt_help__help__opencode`) were re-captured for those
+option rows only; nothing else about them changed.
+
 Re-capture from a binary (only when behaviour changes on purpose):
 
     python3 scripts/test/golden-capture.py --binary build/wally --out tests/golden --cases tests/golden/cases.json

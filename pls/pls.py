@@ -1,16 +1,21 @@
 """PLS — Proxy LocalHost:Server.
 
-A loopback router that exposes one model id and two lanes:
+A loopback router with one endpoint, `/v1/chat/completions`, for the main
+chat and every subagent. Each request is classified from its own body:
 
-    /v1/...            cloud parent
-    /local/v1/...      local subagent; its answer is summarised or withheld
+    subagent   first prompt starts `pls-task: tN`  -> local model server
+    side       no tools (a session title)          -> cloud, private text masked
+    main       everything else                     -> policy flow, then cloud
 
-Under a policy (`privacy` or `cost`) a local decision model, served by wally
-over the entitlement socket, reads each new user prompt and decides what the
-cloud parent is told to do: delegate to a local subagent, and with which
-summary type, or do it itself. Mode and policy come from a JSON file re-read
-on every request. The local model server is spawned lazily and killed
-on exit, including on SIGTERM and when the parent disappears.
+Only PLS writes the `pls-task:` line: it stamps every `subagent` call the
+parent makes. Under a policy (`privacy` or `cost`) a local decision model,
+served by wally over its unix socket, reads each new main-chat prompt and
+decides what the cloud parent is told to do: delegate to a local subagent,
+and with which summary type, or do it itself. Subagent requests are never
+decided, and a subagent cannot launch another one. Mode and policy come from
+a JSON file re-read on every request. The local model server is spawned
+lazily and killed on exit, including on SIGTERM and when the parent
+disappears.
 
 Binds port 0 and prints `{"port": N}` on stdout once listening.
 """
@@ -18,6 +23,8 @@ Binds port 0 and prints `{"port": N}` on stdout once listening.
 import asyncio
 import atexit
 import collections
+import contextvars
+import dataclasses
 import hashlib
 import json
 import os
@@ -37,6 +44,9 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 import uvicorn
 
 MODEL_ID = "Hybrid-Wally-0.1"
+# The harness names subagents with this id so it compacts their context at the
+# local model's window. Routing never reads it: the `pls-task:` marker decides.
+LOCAL_MODEL_ID = "Hybrid-Wally-0.1-local"
 DEFAULT_MODE = "hybrid"
 MODES = ("hybrid", "cloud")
 DEFAULT_POLICY = "privacy"
@@ -59,40 +69,202 @@ WRAP_UP = (
     "You have reached the turn limit. Wrap up now: synthesize the best result "
     "available and answer in text only."
 )
-# The cloud parent's job under each policy, appended to its system prompt once.
-POLICY_PROMPTS = {
-    "privacy": (
-        "\n\nYou are the orchestrator in a privacy-first pair. Your only jobs are "
-        "to talk with the user, launch the `subagent` tool, and relay what it "
-        "returns. The subagent is the worker: it plans builds and explores files, "
-        "folders and the system on the user's device. You never read, write or "
-        "run anything yourself, and you have no other tool. When an instruction "
-        "carries a `pls-task:` line, copy that line exactly as the first line of "
-        "the subagent prompt."
+# --------------------------------------------------------------------------
+# harness profiles: what the parent's spawn tool looks like, per harness
+# --------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class Profile:
+    """One harness's subagent surface, as PLS needs to read and write it.
+
+    `prompt_path` is where the child's first user message comes from inside
+    the spawn call's arguments: `("prompt",)`, Hermes' `("tasks", "*",
+    "goal")` (one child per task), OpenClaw's `("task",)`. `field` is the
+    same in words, for the instructions the cloud parent reads.
+    """
+    id: str
+    spawn_tool: str
+    prompt_path: tuple[str, ...]
+    field: str
+    # Filled when the parent's call leaves them empty; the harness rejects a
+    # call without them.
+    required: tuple[tuple[str, str], ...]
+    # Tools a local child loses: anything that launches another child or
+    # talks to the parent around the summary filter.
+    child_denied: frozenset[str]
+    # Tools the parent keeps under privacy: the spawn tool and whatever it
+    # needs to collect what children return.
+    parent_tools: frozenset[str]
+    # Text the harness puts in front of the child's prompt. Tolerated before
+    # the marker; `strip_prefix` also removes it from what the child sees.
+    child_prefix: re.Pattern | None = None
+    strip_prefix: bool = False
+    # Text the harness appends to the child's prompt (dsh's report-back note).
+    child_note: re.Pattern | None = None
+    # `user` messages the harness writes itself, not the person.
+    injected: tuple[str, ...] = ("<system-reminder>",)
+    # A child's output handed to the parent as a `user` message.
+    agent_report: re.Pattern | None = None
+    # Spawn arguments the parent may not set: a `model` sends the child
+    # wherever it names, including the cloud.
+    forbidden_args: tuple[str, ...] = ()
+    # Spawn calls with one of these `action` values do not start a child.
+    non_spawn_actions: tuple[str, ...] = ()
+
+
+OPENCLAW_CONTEXT = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"
+
+PROFILES = {
+    "deepseek": Profile(
+        id="deepseek",
+        spawn_tool="subagent",
+        prompt_path=("prompt",),
+        field="prompt",
+        required=(("description", "Run the task on this device"),),
+        child_denied=frozenset({"subagent", "subagent_fork", "send_message"}),
+        parent_tools=frozenset({"subagent"}),
+        # dsh appends this to every child's prompt with no separator, so a
+        # prompt that is only the marker arrives as `pls-task: …-t1Your
+        # parent agent id is …`. It asks for `send_message`, which a local
+        # child does not have.
+        child_note=re.compile(
+            r"\s*Your parent agent id is \"[^\"]*\"\. Before you finish, send your result.*\Z",
+            re.DOTALL),
+        injected=("<system-reminder>", "Current runtime context."),
+        agent_report=re.compile(
+            r"^\s*(Agent [0-9a-f-]{36} sent a message:|Background subagent [0-9a-f-]{36} )"),
     ),
-    "cost": (
-        "\n\nYou are the planner in a cost-saving pair. Talk with the user and "
-        "plan with them. Hand coding, execution and debugging to the `subagent` "
-        "tool, which runs on the user's device. Do a task yourself only when the "
-        "router says it is small. When an instruction carries a `pls-task:` line, "
-        "copy that line exactly as the first line of the subagent prompt."
+    # opencode 2.x: `subagent`, with the agent named, and a one-line preface
+    # on every child prompt.
+    "opencode-v2": Profile(
+        id="opencode-v2",
+        spawn_tool="subagent",
+        prompt_path=("prompt",),
+        field="prompt",
+        required=(("agent", "general"), ("description", "Run the task on this device")),
+        child_denied=frozenset({"subagent", "task"}),
+        parent_tools=frozenset({"subagent"}),
+        child_prefix=re.compile(r"\s*You are a subagent spawned by another session\.[ \t]*\n?"),
+        strip_prefix=True,
+    ),
+    # opencode 1.x, and OpenWork, which pins its engine to 1.x.
+    "opencode-v1": Profile(
+        id="opencode-v1",
+        spawn_tool="task",
+        prompt_path=("prompt",),
+        field="prompt",
+        required=(("subagent_type", "general"), ("description", "Run the task on this device")),
+        child_denied=frozenset({"subagent", "task"}),
+        parent_tools=frozenset({"task"}),
+    ),
+    # Hermes runs one child per entry of `tasks`; `action: list|steer|stop`
+    # manages running ones and starts nothing.
+    "hermes": Profile(
+        id="hermes",
+        spawn_tool="delegate_task",
+        prompt_path=("tasks", "*", "goal"),
+        field="goal (each task's `goal`)",
+        required=(),
+        child_denied=frozenset({"delegate_task", "send_message"}),
+        parent_tools=frozenset({"delegate_task"}),
+        non_spawn_actions=("list", "steer", "stop"),
+    ),
+    # OpenClaw wraps the child's task in its own context block, and reports a
+    # child's result back the same way.
+    "openclaw": Profile(
+        id="openclaw",
+        spawn_tool="sessions_spawn",
+        prompt_path=("task",),
+        field="task",
+        required=(),
+        child_denied=frozenset({"sessions_spawn", "subagents"}),
+        parent_tools=frozenset({"sessions_spawn", "sessions_yield", "subagents",
+                                "sessions_list", "sessions_history", "agents_wait"}),
+        child_prefix=re.compile(
+            re.escape(OPENCLAW_CONTEXT) + r".*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\s*",
+            re.DOTALL),
+        agent_report=re.compile(r"^\s*" + re.escape(OPENCLAW_CONTEXT)),
+        forbidden_args=("model",),
     ),
 }
+PROFILE_ALIASES = {"opencode": "opencode-v2", "openwork": "opencode-v1"}
+DEFAULT_PROFILE = "deepseek"
+# The profile of the request being served; `route` sets it from config.json.
+PROFILE: contextvars.ContextVar[Profile] = contextvars.ContextVar(
+    "pls_profile", default=PROFILES[DEFAULT_PROFILE])
+
+
+def profile() -> Profile:
+    return PROFILE.get()
+
+
+def profile_named(name: Any) -> Profile:
+    name = PROFILE_ALIASES.get(name, name)
+    return PROFILES.get(name) if isinstance(name, str) and name in PROFILES else PROFILES[DEFAULT_PROFILE]
+
+
+def policy_prompt(policy: str) -> str:
+    """The cloud parent's job under `policy`, appended to its system prompt once."""
+    tool, field = profile().spawn_tool, profile().field
+    if policy == "privacy":
+        return (
+            "\n\nYou are the orchestrator in a privacy-first pair. Your only jobs are "
+            f"to talk with the user, launch the `{tool}` tool, and relay what it "
+            "returns. The subagent is the worker: it plans builds and explores files, "
+            "folders and the system on the user's device. You never read, write or "
+            "run anything yourself, and you have no other tool. When an instruction "
+            "carries a `pls-task:` line, copy that line exactly as the first line of "
+            f"the subagent's {field}."
+        )
+    return (
+        "\n\nYou are the planner in a cost-saving pair. Talk with the user and "
+        f"plan with them. Hand coding, execution and debugging to the `{tool}` "
+        "tool, which runs on the user's device. Do a task yourself only when the "
+        "router says it is small. When an instruction carries a `pls-task:` line, "
+        f"copy that line exactly as the first line of the subagent's {field}."
+    )
+
 
 # Where a delegated task names itself on the subagent prompt. The router, not
 # the cloud model, owns what the id means, so the cloud cannot loosen it.
 TASK_MARKER = "pls-task:"
-TASK_RE = re.compile(r"^\s*pls-task:\s*(t\d+)\b[ \t]*\n?")
+# `<session>-tN`: numbered from t1 in each session, prefixed so a child, which
+# carries no session of its own, still names exactly one task. Used with
+# `.match`, so it is anchored wherever the search starts.
+TASK_RE = re.compile(r"\s*pls-task:\s*((?:[0-9a-f]{6}-)?t\d+)(?!\d)[ \t]*\n?")
+
+
+def marker_in(text: str) -> re.Match | None:
+    """The `pls-task:` line at the start of `text`, after the profile's prefix."""
+    prefix = profile().child_prefix
+    start = 0
+    if prefix is not None and (found := prefix.match(text)):
+        start = found.end()
+    return TASK_RE.match(text, start)
+
+
+def find_marker(messages: list) -> tuple[int, re.Match] | None:
+    """The message that starts with a `pls-task:` line, if the first prompt
+    or a harness message before it does. OpenClaw wraps a child's task in a
+    context block that would otherwise read as harness text."""
+    index = first_prompt(messages)
+    last = index if index is not None else len(messages) - 1
+    for position, message in enumerate(messages[: last + 1]):
+        if message.get("role") != "user":
+            continue
+        found = marker_in(message_text(message))
+        if found:
+            return position, found
+    return None
+
+
 ROUTER_TAG = "[router]"
 
 # The guard is router-owned: the router says what to call and checks the
 # answer. A rejected reply is dropped and asked again; after GUARD_RETRIES the
 # router emits the subagent call itself.
 GUARD_RETRIES = 2
-SUBAGENT_TOOL = "subagent"
-# Tools a local subagent loses under privacy: each sends text to the parent
-# without passing through the summary-type filter.
-CHILD_DENIED = {"send_message"}
 
 # Told to the local subagent, so it knows who sees its answer. The router
 # enforces the same rule on the answer afterwards.
@@ -107,6 +279,11 @@ CHILD_RULES = {
         "the task ran. Finish the task completely here."
     ),
 }
+# Every child gets this line too, whatever its summary type.
+CHILD_NO_SPAWN_RULE = (
+    " You are a subagent running on this device. You cannot launch subagents "
+    "or message other agents; do the whole task yourself."
+)
 
 SUMMARY_PROMPT = (
     "Summarise the following result in at most 120 words. Keep file paths, "
@@ -120,7 +297,7 @@ SUMMARISE_FAILED = (
     "not returned]"
 )
 
-ENTITLEMENT_SOCKET = os.environ.get("PLS_ENTITLEMENT_SOCKET", "")
+PLS_SOCKET = os.environ.get("PLS_SOCKET", "")
 # Per-launch secret. The port is loopback but shared, so without it any local
 # process could spend the account's cloud quota through this bearer token.
 TOKEN = os.environ.get("PLS_TOKEN", "")
@@ -128,7 +305,6 @@ TOKEN = os.environ.get("PLS_TOKEN", "")
 DEBUG = os.environ.get("PLS_DEBUG") == "1"
 EVENTS: "collections.deque[dict]" = collections.deque(maxlen=1000)
 SUBSCRIBERS: "set[asyncio.Queue]" = set()
-premium_cache = {"value": False, "at": 0.0}
 privacy_gap_noted = False
 
 PROFILE_DIR = Path(
@@ -169,7 +345,6 @@ STATS: dict[str, Any] = {
     "disclosure": {"summary": 0, "local_only": 0},
     "pii_files": 0,
     "pii_hits": 0,
-    "premium_blocked": 0,
     "decisions": 0,
     "decision_failures": 0,
     "guard_retries": 0,
@@ -229,12 +404,6 @@ def redact_messages(messages: list) -> list:
     return out
 
 
-# Harness context sent as `user` messages after the person's own prompt. dsh
-# and Claude Code wrap theirs in <system-reminder>; dsh also adds a runtime
-# snapshot. These are not what the person asked, so routing skips them.
-INJECTED_PREFIXES = ("<system-reminder>", "Current runtime context.")
-
-
 def message_text(message: dict) -> str:
     content = message.get("content")
     if isinstance(content, list):
@@ -243,14 +412,12 @@ def message_text(message: dict) -> str:
 
 
 def is_injected(message: dict) -> bool:
-    return message.get("role") == "user" and message_text(message).lstrip().startswith(INJECTED_PREFIXES)
+    """Harness context sent as a `user` message (dsh's <system-reminder> and
+    runtime snapshot). Not what the person asked, so routing skips it."""
+    return (message.get("role") == "user"
+            and message_text(message).lstrip().startswith(profile().injected))
 
 
-# dsh hands a subagent's output to the parent as a `user` message. These are
-# not the person speaking, so they are never decided or instructed.
-AGENT_MESSAGE_RE = re.compile(
-    r"^\s*(Agent [0-9a-f-]{36} sent a message:|Background subagent [0-9a-f-]{36} )"
-)
 AGENT_MESSAGE_MASK = (
     "[router] A subagent sent a message here. Under the privacy policy it stays "
     "on this device."
@@ -258,7 +425,11 @@ AGENT_MESSAGE_MASK = (
 
 
 def is_agent_message(message: dict) -> bool:
-    return message.get("role") == "user" and bool(AGENT_MESSAGE_RE.match(message_text(message)))
+    """A child's output handed to the parent as a `user` message. Not the
+    person speaking, so it is never decided or instructed."""
+    report = profile().agent_report
+    return (report is not None and message.get("role") == "user"
+            and bool(report.match(message_text(message))))
 
 
 def is_router_turn(message: dict) -> bool:
@@ -291,11 +462,63 @@ def last_turn(body: dict) -> dict | None:
 
 TASKS: dict[str, dict] = {}
 TASK_TEXT: dict[str, str] = {}
-task_counter = {"next": 1}
+# Next task number per session.
+SESSION_NEXT: dict[str, int] = {}
+# The session of the main-chat request being served, for tasks the router
+# creates while relaying the reply (`ad_hoc_record`).
+CURRENT_SESSION: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "pls_session", default="000000")
 
 
 def prompt_key(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def session_of(messages: list) -> str:
+    """A session is named by its first prompt, which never changes."""
+    index = first_prompt(messages)
+    text = message_text(messages[index]) if index is not None else ""
+    return prompt_key(text)[:6]
+
+
+def next_task_id(session: str) -> str:
+    number = SESSION_NEXT.get(session, 1)
+    SESSION_NEXT[session] = number + 1
+    return f"{session}-t{number}"
+
+
+def prompt_turns(messages: list) -> list[list[int]]:
+    """Indices of the person's prompts, grouped by turn.
+
+    Prompts with no assistant reply between them are one turn and one task,
+    so the parent is never handed two task lines at once.
+    """
+    turns: list[list[int]] = []
+    current: list[int] = []
+    for index, message in enumerate(messages):
+        if message.get("role") == "assistant":
+            if current:
+                turns.append(current)
+                current = []
+        elif is_prompt(message):
+            current.append(index)
+    if current:
+        turns.append(current)
+    return turns
+
+
+def turn_text(messages: list, turn: list[int]) -> str:
+    return "\n\n".join(message_text(messages[i]) for i in turn)
+
+
+def turn_record(messages: list, turn: list[int], session: str) -> dict | None:
+    return TASKS.get(f"{session}:{prompt_key(turn_text(messages, turn))}")
+
+
+def is_pending(messages: list, turn: list[int]) -> bool:
+    """Whether `turn` is the newest message no assistant has answered."""
+    last = last_turn({"messages": messages})
+    return last is not None and last is messages[turn[-1]]
 
 
 def persisted(record: dict) -> bool:
@@ -316,9 +539,9 @@ def load_tasks() -> None:
     for key, record in data.items():
         if isinstance(record, dict) and isinstance(record.get("id"), str) and persisted(record):
             TASKS[key] = record
-            number = record["id"][1:]
-            if number.isdigit():
-                task_counter["next"] = max(task_counter["next"], int(number) + 1)
+            session, _, number = record["id"].rpartition("-t")
+            if session and number.isdigit():
+                SESSION_NEXT[session] = max(SESSION_NEXT.get(session, 1), int(number) + 1)
 
 
 def save_tasks() -> None:
@@ -332,7 +555,7 @@ def save_tasks() -> None:
         log({"event": "tasks_save_failed", "error": str(error)})
 
 
-def new_record(policy: str, verdict: dict | None) -> dict:
+def new_record(policy: str, verdict: dict | None, session: str) -> dict:
     """The record a decision produces. A failed decision fails safe."""
     decided = verdict is not None
     yes = bool(verdict and verdict.get("answer") == "yes")
@@ -344,19 +567,17 @@ def new_record(policy: str, verdict: dict | None) -> dict:
         private = False
         big = yes if decided else False
         summary = "summary" if big else None
-    record = {"id": f"t{task_counter['next']}", "policy": policy, "private": private,
-              "big": big, "summary": summary, "decided": decided}
-    task_counter["next"] += 1
-    return record
+    return {"id": next_task_id(session), "policy": policy, "private": private,
+            "big": big, "summary": summary, "decided": decided}
 
 
 async def decide(policy: str, text: str) -> dict | None:
     """Ask wally's decision model about one prompt. None on any failure."""
-    if not ENTITLEMENT_SOCKET:
+    if not PLS_SOCKET:
         return None
     payload = json.dumps({"policy": policy, "text": text}).encode()
     try:
-        reader, writer = await asyncio.open_unix_connection(ENTITLEMENT_SOCKET)
+        reader, writer = await asyncio.open_unix_connection(PLS_SOCKET)
         writer.write(
             b"POST /decide HTTP/1.1\r\nHost: local\r\ncontent-type: application/json\r\n"
             + f"content-length: {len(payload)}\r\n\r\n".encode() + payload
@@ -387,11 +608,11 @@ async def ensure_tasks(body: dict, policy: str) -> list[dict]:
     Returns the records created or re-decided by this call.
     """
     fresh = []
-    for message in body.get("messages") or []:
-        if not is_prompt(message):
-            continue
-        text = message_text(message)
-        key = prompt_key(text)
+    messages = body.get("messages") or []
+    session = session_of(messages)
+    for turn in prompt_turns(messages):
+        text = turn_text(messages, turn)
+        key = f"{session}:{prompt_key(text)}"
         existing = TASKS.get(key)
         if existing and existing.get("policy") == policy and existing.get("decided"):
             TASK_TEXT.setdefault(existing["id"], text)
@@ -400,7 +621,7 @@ async def ensure_tasks(body: dict, policy: str) -> list[dict]:
         STATS["decisions"] += 1
         if verdict is None:
             STATS["decision_failures"] += 1
-        record = new_record(policy, verdict)
+        record = new_record(policy, verdict, session)
         if existing and existing.get("policy") == policy:
             # A retry keeps the id the cloud may already have been told.
             record["id"] = existing["id"]
@@ -419,7 +640,7 @@ async def ensure_tasks(body: dict, policy: str) -> list[dict]:
 def placeholder(record: dict) -> str:
     return (
         "[The user's request is private and stays on this device.] Launch the "
-        f"`{SUBAGENT_TOOL}` tool now. Its prompt must be exactly:\n"
+        f"`{profile().spawn_tool}` tool now. Its {profile().field} must be exactly:\n"
         f"{TASK_MARKER} {record['id']}"
     )
 
@@ -428,8 +649,8 @@ def instruction(record: dict) -> str:
     if record.get("summary") is None:
         return f"{ROUTER_TAG} This task is small: do it yourself, no subagent."
     return (
-        f"{ROUTER_TAG} Launch the `{SUBAGENT_TOOL}` tool for this task. Begin its "
-        f"prompt with the line `{TASK_MARKER} {record['id']}`, then state the task."
+        f"{ROUTER_TAG} Launch the `{profile().spawn_tool}` tool for this task. Begin its "
+        f"{profile().field} with the line `{TASK_MARKER} {record['id']}`, then state the task."
     )
 
 
@@ -449,18 +670,32 @@ def apply_policy(body: dict, policy: str) -> dict:
     Every prompt with a record is rewritten the same way on every request, so
     a private prompt stays masked on later turns and the cloud prefix is stable.
     """
-    messages = []
-    for message in body.get("messages") or []:
-        if policy == "privacy" and is_agent_message(message):
-            # A subagent's `send_message` skips the summary-type filter on its
-            # final answer, so under privacy what it says never reaches the cloud.
-            messages.append({**message, "content": AGENT_MESSAGE_MASK})
+    original = body.get("messages") or []
+    messages = [
+        # A subagent's `send_message` skips the summary-type filter on its
+        # final answer, so under privacy what it says never reaches the cloud.
+        {**m, "content": AGENT_MESSAGE_MASK}
+        if policy == "privacy" and is_agent_message(m) else m
+        for m in original
+    ]
+    session = session_of(original)
+    for turn in prompt_turns(original):
+        record = turn_record(original, turn, session)
+        if record is None:
             continue
-        record = TASKS.get(prompt_key(message_text(message))) if is_prompt(message) else None
-        messages.append(rewrite_prompt(message, record) if record else message)
+        pending = is_pending(original, turn)
+        if record["private"] and record["policy"] == "privacy":
+            # Every private message is masked; only the unanswered turn
+            # carries a task line, so the parent never sees two at once.
+            for index in turn:
+                messages[index] = {**original[index], "content": PRIVATE_SIDE_MASK}
+            if pending:
+                messages[turn[-1]] = rewrite_prompt(original[turn[-1]], record)
+        elif pending:
+            messages[turn[-1]] = rewrite_prompt(original[turn[-1]], record)
     shaped = {**body, "messages": messages}
 
-    prompt = POLICY_PROMPTS[policy]
+    prompt = policy_prompt(policy)
     for index, message in enumerate(messages):
         if message.get("role") != "system":
             continue
@@ -474,7 +709,7 @@ def apply_policy(body: dict, policy: str) -> dict:
 
     if policy == "privacy" and isinstance(body.get("tools"), list):
         shaped["tools"] = [t for t in body["tools"]
-                           if (t.get("function") or {}).get("name") == SUBAGENT_TOOL]
+                           if (t.get("function") or {}).get("name") in profile().parent_tools]
     return shaped
 
 
@@ -484,13 +719,14 @@ def mask_private_prompts(body: dict) -> dict:
     A side call has no tools, so the delegate instruction would be echoed back
     (dsh's session title is one of these). The raw prompt still must not leave.
     """
-    messages = []
-    for message in body.get("messages") or []:
-        record = TASKS.get(prompt_key(message_text(message))) if is_prompt(message) else None
+    original = body.get("messages") or []
+    messages = list(original)
+    session = session_of(original)
+    for turn in prompt_turns(original):
+        record = turn_record(original, turn, session)
         if record and record.get("private"):
-            messages.append({**message, "content": PRIVATE_SIDE_MASK})
-        else:
-            messages.append(message)
+            for index in turn:
+                messages[index] = {**original[index], "content": PRIVATE_SIDE_MASK}
     return {**body, "messages": messages}
 
 
@@ -501,8 +737,8 @@ def note_privacy_gap() -> None:
         return
     privacy_gap_noted = True
     print(
-        "privacy: the local lane is unavailable, so a private prompt is masked "
-        "and is not sent as written",
+        "privacy: the local model cannot run, so subagent work is withheld "
+        "rather than sent to the cloud",
         file=sys.stderr,
         flush=True,
     )
@@ -510,10 +746,92 @@ def note_privacy_gap() -> None:
 
 def pending_task(body: dict) -> dict | None:
     """The record of a prompt no assistant turn has answered yet, if any."""
-    last = last_turn(body)
-    if not last or not is_prompt(last):
+    messages = body.get("messages") or []
+    turns = prompt_turns(messages)
+    if not turns or not is_pending(messages, turns[-1]):
         return None
-    return TASKS.get(prompt_key(message_text(last)))
+    return turn_record(messages, turns[-1], session_of(messages))
+
+
+def first_prompt(messages: list) -> int | None:
+    """Index of the first message the person wrote, if any."""
+    for index, message in enumerate(messages):
+        if is_prompt(message):
+            return index
+    return None
+
+
+def classify(body: dict, headers: Any = None) -> str:
+    """`subagent`, `side` or `main`, from the request alone.
+
+    A request is a subagent when any of these hold:
+    - it asks for the local model id (dsh, Hermes and OpenClaw name it on
+      every child request, from their own config);
+    - it carries `x-parent-session-id` (opencode sends it on child requests
+      only, whatever model the child asked for);
+    - its first prompt starts with a `pls-task:` line. Only the router writes
+      one, so this holds whether or not its id is still known.
+    """
+    if (body.get("model") == LOCAL_MODEL_ID
+            or (headers is not None and headers.get("x-parent-session-id"))
+            or find_marker(body.get("messages") or [])):
+        return "subagent"
+    if not body.get("tools"):
+        return "side"
+    return "main"
+
+
+def unmark(text: str) -> str:
+    """`text` without its `pls-task:` line, and without the harness prefix
+    when the profile drops it."""
+    found = marker_in(text)
+    if found is None:
+        return text.strip()
+    head = "" if profile().strip_prefix else text[: found.start()]
+    return (head + text[found.end():]).strip()
+
+
+def strip_marker(messages: list) -> list:
+    """The messages with the `pls-task:` line taken out of the message that has it.
+
+    For a subagent body that goes to the cloud: the marker means nothing there.
+    """
+    marked = find_marker(messages)
+    if marked is None:
+        return messages
+    index = marked[0]
+    message = messages[index]
+    content = message.get("content")
+    updated = list(messages)
+    if isinstance(content, str):
+        updated[index] = {**message, "content": unmark(content)}
+    elif isinstance(content, list):
+        parts = list(content)
+        for position, part in enumerate(parts):
+            if (isinstance(part, dict) and isinstance(part.get("text"), str)
+                    and marker_in(part["text"])):
+                parts[position] = {**part, "text": unmark(part["text"])}
+                break
+        updated[index] = {**message, "content": parts}
+    return updated
+
+
+def ad_hoc_record(policy: str) -> dict:
+    """A task for a `subagent` call the parent made with no pending task.
+
+    Its text is already in the parent's own call, so it is never private;
+    under privacy the answer still stays on the device.
+    """
+    record = {"id": next_task_id(CURRENT_SESSION.get()), "policy": policy,
+              "private": False, "big": True,
+              "summary": "local_only" if policy == "privacy" else "summary",
+              "decided": True, "ad_hoc": True}
+    TASKS[f"ad-hoc:{record['id']}"] = record
+    if persisted(record):
+        save_tasks()
+    log({"event": "ad_hoc_task", "task": record["id"], "policy": policy,
+         "summary": record["summary"]})
+    return record
 
 
 # --------------------------------------------------------------------------
@@ -528,39 +846,68 @@ def resolve_child(messages: list, policy: str) -> tuple[str, list]:
     without a known id fails safe: `local_only` under privacy.
     """
     fallback = "local_only" if policy == "privacy" else "summary"
-    for index, message in enumerate(messages):
-        if not is_prompt(message):
-            continue
-        content = message.get("content")
-        if not isinstance(content, str):
-            return fallback, messages
-        found = TASK_RE.match(content)
-        if not found:
-            return fallback, messages
-        task_id = found.group(1)
-        record = next((r for r in TASKS.values() if r.get("id") == task_id), None)
-        if record is None or record.get("summary") is None:
-            log({"event": "child_unknown_task", "task": task_id})
-            return fallback, messages
-        rest = content[found.end():].strip()
-        if record["private"] and task_id in TASK_TEXT:
-            rest = TASK_TEXT[task_id] + (f"\n\n{rest}" if rest else "")
-        updated = list(messages)
-        updated[index] = {**message, "content": rest}
-        return record["summary"], updated
-    return fallback, messages
+    messages = drop_parent_note(messages)
+    marked = find_marker(messages)
+    if marked is None:
+        log({"event": "child_without_marker"})
+        return fallback, messages
+    index, found = marked
+    task_id = found.group(1)
+    record = next((r for r in TASKS.values() if r.get("id") == task_id), None)
+    if record is None or record.get("summary") is None:
+        log({"event": "child_unknown_task", "task": task_id})
+        return fallback, strip_marker(messages)
+    text = message_text(messages[index])
+    rest = text[found.end():].strip()
+    # A private task's text never went to the cloud; a parent that sent only
+    # the marker gets its task back too, so no child starts blind.
+    if task_id in TASK_TEXT and (record["private"] or not rest):
+        rest = TASK_TEXT[task_id] + (f"\n\n{rest}" if rest else "")
+    # OpenClaw's context block stays: its runtime reads it. opencode 2's
+    # one-line preface goes.
+    head = "" if profile().strip_prefix else text[: found.start()]
+    updated = list(messages)
+    updated[index] = {**messages[index], "content": head + rest}
+    return record["summary"], updated
+
+
+def drop_parent_note(messages: list) -> list:
+    """The messages with the harness's report-back note (dsh's) cut off the
+    first prompt."""
+    note = profile().child_note
+    index = first_prompt(messages)
+    if note is None or index is None or not isinstance(messages[index].get("content"), str):
+        return messages
+    content = messages[index]["content"]
+    cut = note.sub("", content)
+    if cut == content:
+        return messages
+    updated = list(messages)
+    updated[index] = {**messages[index], "content": cut}
+    return updated
 
 
 def inject_child_rules(body: dict, summary: str) -> None:
-    rule = CHILD_RULES.get(summary)
-    if not rule:
-        return
-    for message in body.get("messages") or []:
+    """Append the child's rules to its system prompt, each at most once.
+
+    A child with no system message gets one, so the no-subagents line always
+    reaches it.
+    """
+    rules = [r for r in (CHILD_RULES.get(summary), CHILD_NO_SPAWN_RULE) if r]
+    messages = body.setdefault("messages", [])
+    for message in messages:
         if message.get("role") != "system":
             continue
-        if isinstance(message.get("content"), str) and rule not in message["content"]:
-            message["content"] += rule
+        content = message.get("content")
+        if isinstance(content, list):
+            texts = [p.get("text") for p in content if isinstance(p, dict)]
+            message["content"] = [*content, *({"type": "text", "text": r}
+                                              for r in rules if r not in texts)]
+        else:
+            text = str(content or "")
+            message["content"] = text + "".join(r for r in rules if r not in text)
         return
+    messages.insert(0, {"role": "system", "content": "".join(rules).lstrip()})
 
 
 def parse_calls(buffered: bytes) -> dict[int, dict]:
@@ -600,36 +947,104 @@ def subagent_prompt(record: dict) -> str:
     return f"{marker}\n\n{text}" if text else marker
 
 
+def call_arguments(call: dict) -> dict:
+    """A call's arguments as an object; anything else reads as empty."""
+    try:
+        arguments = json.loads(call.get("arguments") or "{}")
+    except ValueError:
+        return {}
+    return arguments if isinstance(arguments, dict) else {}
+
+
+def prompt_slots(arguments: dict, create: bool) -> list[tuple[dict, str]]:
+    """Where each child's first prompt lives in a spawn call's arguments, as
+    (object, key) pairs. `create` adds the containers a bare call lacks."""
+    *path, key = profile().prompt_path
+    holders: list = [arguments]
+    for position, step in enumerate(path):
+        list_next = position + 1 < len(path) and path[position + 1] == "*"
+        found: list = []
+        for holder in holders:
+            if step == "*":
+                if isinstance(holder, list):
+                    if create and not any(isinstance(item, dict) for item in holder):
+                        holder.append({})
+                    found.extend(item for item in holder if isinstance(item, dict))
+                continue
+            value = holder.get(step)
+            if create and not isinstance(value, list if list_next else dict):
+                value = holder[step] = [] if list_next else {}
+            if isinstance(value, (dict, list)):
+                found.append(value)
+        holders = found
+    return [(holder, key) for holder in holders if isinstance(holder, dict)]
+
+
+def is_spawn(call: dict) -> bool:
+    """Whether `call` starts a child (Hermes' `delegate_task` also lists,
+    steers and stops running ones)."""
+    if call.get("name") != profile().spawn_tool:
+        return False
+    return call_arguments(call).get("action") not in profile().non_spawn_actions
+
+
 def patch_call_args(calls: dict[int, dict], record: dict | None) -> bool:
-    """Make every subagent call carry a prompt that names its task.
+    """Make every spawn call carry a prompt that names its task.
 
     A pinned `tool_choice` makes the gateway strip arguments, so a call can
-    arrive as `subagent {}`; dsh rejects that. A call without the task line
-    gets it, so the subagent side knows its summary type.
+    arrive as `subagent {}`; the harness rejects that, so the fields it
+    requires are filled. A call without the task line gets it, so the
+    subagent side knows its summary type. Arguments the parent may not set
+    (OpenClaw's `model`, which would send the child to the cloud) are removed.
     """
     changed = False
     for call in calls.values():
-        if call.get("name") != SUBAGENT_TOOL:
+        if not is_spawn(call):
             continue
-        try:
-            arguments = json.loads(call.get("arguments") or "{}")
-        except ValueError:
-            arguments = {}
-        if not isinstance(arguments, dict):
-            arguments = {}
-        prompt = str(arguments.get("prompt") or "")
+        arguments = call_arguments(call)
+        for name in profile().forbidden_args:
+            if name in arguments:
+                del arguments[name]
+                changed = True
         if record is not None:
-            if not prompt:
-                arguments["prompt"] = subagent_prompt(record)
+            for holder, key in prompt_slots(arguments, create=True):
+                prompt = str(holder.get(key) or "")
+                if not prompt:
+                    holder[key] = subagent_prompt(record)
+                    changed = True
+                elif not TASK_RE.match(prompt):
+                    holder[key] = f"{TASK_MARKER} {record['id']}\n\n{prompt}"
+                    changed = True
+        for name, value in profile().required:
+            if not arguments.get(name):
+                arguments[name] = value
                 changed = True
-            elif not TASK_RE.match(prompt):
-                arguments["prompt"] = f"{TASK_MARKER} {record['id']}\n\n{prompt}"
-                changed = True
-        if not arguments.get("description"):
-            arguments["description"] = "Run the task on this device"
-            changed = True
         call["arguments"] = json.dumps(arguments)
     return changed
+
+
+def call_prompts(call: dict) -> list[str]:
+    """Each child prompt in a spawn call; one empty prompt when it has none."""
+    slots = prompt_slots(call_arguments(call), create=False)
+    return [str(holder.get(key) or "") for holder, key in slots] or [""]
+
+
+def stamp_subagent_calls(calls: dict[int, dict], record: dict | None, policy: str) -> bool:
+    """Make every spawn call in a parent reply carry a `pls-task:` line.
+
+    With one endpoint the marker is the only thing that tells a child request
+    from main chat. An unmarked call takes the pending task when it has one
+    that delegates, otherwise a fresh `ad_hoc_record`. Returns whether any
+    call changed.
+    """
+    spawn_calls = [c for c in calls.values() if is_spawn(c)]
+    if not spawn_calls:
+        return False
+    task = record if record and record.get("summary") else None
+    if task is None and any(not TASK_RE.match(prompt)
+                            for c in spawn_calls for prompt in call_prompts(c)):
+        task = ad_hoc_record(policy)
+    return patch_call_args(calls, task)
 
 
 def call_events(calls: dict[int, dict]) -> list[str]:
@@ -701,7 +1116,7 @@ def synthetic_call(record: dict) -> Response:
     dsh executes whatever tool call the stream carries, so this is the only
     hard guarantee that a private task never runs on the cloud.
     """
-    calls = {0: {"name": SUBAGENT_TOOL, "arguments": ""}}
+    calls = {0: {"name": profile().spawn_tool, "arguments": ""}}
     patch_call_args(calls, record)
     return calls_stream(calls)
 
@@ -746,31 +1161,6 @@ def scan_pii(messages: list) -> dict:
     return {"files": files, "total": sum(sum(c.values()) for c in files.values())}
 
 
-async def premium() -> bool:
-    """Ask wally whether this account may run work locally.
-
-    No socket means a hand-run router, which is not gated.
-    """
-    if not ENTITLEMENT_SOCKET:
-        return True
-    now = time.monotonic()
-    if now - premium_cache["at"] < 5:
-        return premium_cache["value"]
-    value = premium_cache["value"]
-    try:
-        reader, writer = await asyncio.open_unix_connection(ENTITLEMENT_SOCKET)
-        writer.write(b"GET /entitlement HTTP/1.1\r\nHost: local\r\n\r\n")
-        await writer.drain()
-        raw = await asyncio.wait_for(reader.read(512), 2)
-        writer.close()
-        body = raw.split(b"\r\n\r\n", 1)[-1]
-        value = bool(json.loads(body).get("sub"))
-    except Exception:
-        pass
-    premium_cache.update(value=value, at=now)
-    return value
-
-
 def log(event: dict) -> None:
     print(json.dumps(event), file=sys.stderr, flush=True)
     if DEBUG:
@@ -811,7 +1201,28 @@ def read_config() -> dict:
         "max_turns": max(1, max_turns),
         "model_path": os.environ.get("PLS_MODEL") or data.get("model_path") or "",
         "cloud_model": data.get("cloud_model") or os.environ.get("PLS_CLOUD_MODEL", ""),
+        "harness": profile_named(data.get("harness")).id,
+        "cloud_limits": model_limits(data.get("cloud_limits")),
     }
+
+
+# The local lane's window and reply cap: the model server's own defaults.
+LOCAL_LIMITS = {
+    "context_length": int(os.environ.get("PLS_MAX_KV", "65536")),
+    "max_completion_tokens": int(os.environ.get("PLS_MAX_OUT", "8192")),
+}
+
+
+def model_limits(value: Any) -> dict:
+    """`{context_length, max_completion_tokens}` from config, positive ints
+    only; the local limits stand in for any that is missing."""
+    limits = dict(LOCAL_LIMITS)
+    if isinstance(value, dict):
+        for key in limits:
+            number = value.get(key)
+            if isinstance(number, int) and not isinstance(number, bool) and number > 0:
+                limits[key] = number
+    return limits
 
 
 def read_credentials() -> dict:
@@ -865,11 +1276,11 @@ async def refresh_credentials(creds: dict) -> dict:
 
 
 async def ask_wally(path: str) -> dict | None:
-    """One JSON object from the entitlement socket. None when wally is absent."""
-    if not ENTITLEMENT_SOCKET:
+    """One JSON object from wally's socket. None when wally is absent."""
+    if not PLS_SOCKET:
         return None
     try:
-        reader, writer = await asyncio.open_unix_connection(ENTITLEMENT_SOCKET)
+        reader, writer = await asyncio.open_unix_connection(PLS_SOCKET)
         writer.write(f"GET {path} HTTP/1.1\r\nHost: local\r\n\r\n".encode())
         await writer.drain()
         raw = await asyncio.wait_for(reader.read(8192), 2)
@@ -889,15 +1300,15 @@ async def ask_wally(path: str) -> dict | None:
 async def cloud_credentials() -> dict:
     """The cloud token. Wally owns refresh when the socket is up.
 
-    A router beside wally must not rotate the refresh token itself: the
-    entitlement check does that and writes the profile. Doing both signs the
+    A router beside wally must not rotate the refresh token itself: wally's
+    `/token` does that and writes the profile. Doing both signs the
     account out when the console rotates the token.
     """
     fresh = await ask_wally("/token")
     if fresh and fresh.get("access_token") and fresh.get("console_url"):
         return {"access_token": fresh["access_token"], "console_url": fresh["console_url"]}
     creds = read_credentials()
-    if ENTITLEMENT_SOCKET:
+    if PLS_SOCKET:
         return creds
     expires_at = int(creds.get("expires_at") or 0)
     if expires_at and expires_at <= time.time() + 60:
@@ -937,7 +1348,7 @@ async def ensure_model_server() -> int:
             raise RuntimeError("no model path: set model_path in config.json or PLS_MODEL")
         env = dict(os.environ)
         env["PLS_MODEL"] = model_path
-        env["PLS_MODEL_ID"] = MODEL_ID
+        env["PLS_MODEL_ID"] = LOCAL_MODEL_ID
         proc = subprocess.Popen(
             [sys.executable, str(SERVER_SCRIPT)],
             stdout=subprocess.PIPE,
@@ -1096,7 +1507,6 @@ button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6
 <header>
 <h1>PLS router</h1>
 <span class="pill">mode <b id="mode">?</b></span>
-<span class="pill">sub <b id="sub">?</b></span>
 <span class="pill">local <b id="local">0</b></span>
 <span class="pill">cloud <b id="cloud">0</b></span>
 <span class="pill">pii files <b id="pii">0</b></span>
@@ -1119,9 +1529,8 @@ function add(e){
  document.getElementById('cloud').textContent=n.cloud;
  document.getElementById('pii').textContent=n.pii;
  if(e.mode)document.getElementById('mode').textContent=e.mode;
- if(e.sub!==undefined)document.getElementById('sub').textContent=e.sub;
  const detail={...e};delete detail.ts;delete detail.event;delete detail.lane;delete detail.path;delete detail.file;
- const cls=e.event==='pii_file'?'file':e.reason==='no-subscription'?'blocked':e.event==='hint'?'warn':lane;
+ const cls=e.event==='pii_file'?'file':e.event==='child_spawn_blocked'||e.event==='local_unavailable'?'blocked':e.event==='hint'?'warn':lane;
  const text=e.counts?'<span class=pii>'+esc(JSON.stringify(e.counts))+'</span> <span class=dim>'+esc(e.action)+'</span>':esc(e.message||JSON.stringify(detail));
  tr.innerHTML=`<td class=dim>${esc(t)}</td><td>${esc(e.event)}</td><td class=${esc(cls)}>${esc(lane)}</td>`+
    `<td class=${esc(cls)}>${esc(e.path||e.file||'')}</td>`+
@@ -1134,7 +1543,6 @@ function add(e){
 }
 fetch('/debug/state').then(r=>r.json()).then(s=>{
  document.getElementById('mode').textContent=s.mode;
- document.getElementById('sub').textContent=s.sub;
  for(const e of s.events.reverse())add(e);
  const es=new EventSource('/debug/events');
  es.onmessage=m=>{if(!paused)add(JSON.parse(m.data))};
@@ -1158,8 +1566,7 @@ def debug_page():
 def debug_state(request: Request):
     if rejected := token_rejected(request):
         return rejected
-    return {"mode": read_config()["mode"], "sub": premium_cache["value"],
-            "events": list(EVENTS)}
+    return {"mode": read_config()["mode"], "events": list(EVENTS)}
 
 
 @app.get("/debug/export")
@@ -1210,11 +1617,21 @@ def withheld_completion(stream: bool) -> Response:
 
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 async def route(path: str, request: Request):
-    if path in ("v1/models", "local/v1/models"):
-        return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "wally"}]}
+    if path == "v1/models":
+        # Limits ride along: Hermes reads a custom endpoint's window from
+        # here and otherwise assumes 256K for both ids.
+        limits = {MODEL_ID: read_config()["cloud_limits"], LOCAL_MODEL_ID: LOCAL_LIMITS}
+        return {"object": "list", "data": [
+            {"id": model_id, "object": "model", "owned_by": "wally", **limits[model_id]}
+            for model_id in (MODEL_ID, LOCAL_MODEL_ID)
+        ]}
 
     if rejected := token_rejected(request):
         return rejected
+
+    # One API: `/local/v1` and anything else outside `/v1` no longer exist.
+    if not path.startswith("v1/"):
+        return JSONResponse({"error": {"message": f"no route /{path}"}}, status_code=404)
 
     body: dict = {}
     if request.method == "POST":
@@ -1229,53 +1646,36 @@ async def route(path: str, request: Request):
     policy = config["policy"]
     STATS["mode"] = config["mode"]
     STATS["policy"] = policy
+    PROFILE.set(PROFILES[config["harness"]])
 
-    lane = "local" if path.startswith("local/") else "cloud"
-    upstream_path = path[len("local/"):] if lane == "local" else path
-
-    sub = await premium()
-    reason = "path"
-    if not sub:
-        lane = "cloud"
-        reason = "no-subscription"
-        STATS["premium_blocked"] += 1
-    elif config["mode"] == "cloud":
-        lane = "cloud"
-        reason = "mode"
-
+    kind = classify(body, request.headers)
+    hybrid = config["mode"] == "hybrid"
+    lane = "local" if hybrid and kind == "subagent" else "cloud"
     messages = body.get("messages") or []
-    log({"event": "route", "path": path, "lane": lane, "mode": config["mode"],
-         "policy": policy, "reason": reason, "sub": sub, "messages": len(messages)})
+    log({"event": "route", "path": path, "kind": kind, "lane": lane,
+         "mode": config["mode"], "policy": policy, "messages": len(messages)})
 
-    # An explicit cloud mode forwards the harness body. Privacy still applies
-    # on the hybrid lane, including when there is no local model to run it.
-    if config["mode"] == "cloud":
-        return await cloud(upstream_path, body, request)
+    # An explicit cloud mode forwards the harness body. The marker only means
+    # something to this router, so it does not travel.
+    if not hybrid:
+        if kind == "subagent":
+            body = {**body, "messages": strip_marker(messages)}
+        return await cloud(path, body, request)
 
-    # A local-lane call we cannot run. Under privacy its prompt stays here.
-    if path.startswith("local/") and not sub:
+    # A subagent is never decided: its task was settled on the parent's turn.
+    if kind == "subagent":
+        return await local(path, body, request, config)
+
+    # A side call is masked rather than instructed, so a session title does
+    # not echo the delegate line. Cost forwards it as the harness sent it.
+    if kind == "side":
         if policy == "privacy":
-            note_privacy_gap()
-            return withheld_completion(bool(body.get("stream")))
-        return await cloud(upstream_path, body, request)
+            await ensure_tasks(body, policy)
+            return await cloud(path, mask_private_prompts(body), request)
+        return await cloud(path, body, request)
 
-    if lane == "local":
-        return await local(upstream_path, body, request, config)
-
-    # Privacy shapes a tool-less side call and an unentitled account. A side
-    # call is masked rather than instructed, so a session title does not
-    # echo the delegate line. Cost forwards both as the harness sent them.
-    side_call = not body.get("tools")
-    if policy == "privacy" and (not sub or side_call):
-        if not sub:
-            note_privacy_gap()
-        await ensure_tasks(body, policy)
-        if side_call:
-            return await cloud(upstream_path, mask_private_prompts(body), request)
-    elif not sub or side_call:
-        return await cloud(upstream_path, body, request)
-    else:
-        await ensure_tasks(body, policy)
+    CURRENT_SESSION.set(session_of(messages))
+    await ensure_tasks(body, policy)
     record = pending_task(body)
     shaped = apply_policy(body, policy)
 
@@ -1292,8 +1692,8 @@ async def route(path: str, request: Request):
     if record:
         log({"event": "instructed", "task": record["id"], "policy": policy,
              "summary": record["summary"], "private": record["private"]})
-    return await cloud(upstream_path, shaped, request, pii, guard=guard,
-                       policy=policy, record=record)
+    return await cloud(path, shaped, request, pii, guard=guard,
+                       policy=policy, record=record, parent=True)
 
 
 def _with_model(payload: bytes) -> bytes:
@@ -1330,9 +1730,17 @@ def calls_from_json(payload: dict) -> dict[int, dict]:
     return calls
 
 
+def write_calls_json(payload: dict, calls: dict[int, dict]) -> None:
+    """Put rewritten arguments back into a buffered completion, text intact."""
+    for choice in payload.get("choices") or []:
+        for index, call in enumerate((choice.get("message") or {}).get("tool_calls") or []):
+            if index in calls and isinstance(call.get("function"), dict):
+                call["function"]["arguments"] = calls[index]["arguments"]
+
+
 def synthetic_json(record: dict) -> JSONResponse:
     """`synthetic_call` for a client that asked for a single JSON answer."""
-    calls = {0: {"name": SUBAGENT_TOOL, "arguments": ""}}
+    calls = {0: {"name": profile().spawn_tool, "arguments": ""}}
     patch_call_args(calls, record)
     return calls_json(calls)
 
@@ -1358,11 +1766,12 @@ def guard_verdict(names: set[str], policy: str, record: dict | None) -> bool:
     `record` is the task of a prompt no assistant turn has answered yet.
     """
     if policy == "privacy":
-        if not names <= {SUBAGENT_TOOL}:
+        if not names <= profile().parent_tools:
             return False
-        return bool(names) if record else True
+        # The result tools alone do not start the pending task.
+        return profile().spawn_tool in names if record else True
     if record and record.get("summary"):
-        return SUBAGENT_TOOL in names
+        return profile().spawn_tool in names
     return True
 
 
@@ -1384,7 +1793,13 @@ def blocked_reply() -> dict:
 async def cloud(path: str, body: dict, request: Request,
                 pii: dict | None = None, guard: bool = False,
                 policy: str = DEFAULT_POLICY, record: dict | None = None,
-                attempt: int = 0):
+                attempt: int = 0, parent: bool = False):
+    """Send `body` to the cloud and relay its reply.
+
+    `guard` judges the reply's tool calls; `parent` marks a main-chat reply,
+    whose `subagent` calls are stamped with a `pls-task:` line whether or not
+    it is guarded.
+    """
     config_cloud_model = read_config()["cloud_model"]
     creds = await cloud_credentials()
     console = creds.get("console_url", "")
@@ -1423,7 +1838,7 @@ async def cloud(path: str, body: dict, request: Request,
         response = await send(creds["access_token"])
         if response.status_code == 401:
             await response.aclose()
-            if ENTITLEMENT_SOCKET:
+            if PLS_SOCKET:
                 fresh = await ask_wally("/token?refresh=1")
                 if fresh and fresh.get("access_token"):
                     creds = {
@@ -1458,7 +1873,7 @@ async def cloud(path: str, body: dict, request: Request,
         """Accept, patch, re-ask or synthesise, for either body shape."""
         names = {call["name"] for call in calls.values()}
         if guard_verdict(names, policy, record):
-            if SUBAGENT_TOOL in names and patch_call_args(calls, record):
+            if profile().spawn_tool in names and stamp_subagent_calls(calls, record, policy):
                 log({"event": "guard", "outcome": "patched", "attempt": attempt})
                 if raw is not None:
                     return calls_stream(calls)
@@ -1484,12 +1899,13 @@ async def cloud(path: str, body: dict, request: Request,
         saw = ", ".join(sorted(names)) or "no tool call"
         task_line = f" and begin its prompt with `{TASK_MARKER} {record['id']}`" if record else ""
         wrong = (f"{ROUTER_TAG} Wrong: you answered with {saw}. Call the "
-                 f"`{SUBAGENT_TOOL}` tool now, nothing else{task_line}.")
+                 f"`{profile().spawn_tool}` tool now, nothing else{task_line}.")
         nudged = {**body, "messages": [*body.get("messages", []), {
             "role": "user", "content": wrong,
         }]}
         return await cloud(path, nudged, request, pii, guard=True,
-                           policy=policy, record=record, attempt=attempt + 1)
+                           policy=policy, record=record, attempt=attempt + 1,
+                           parent=parent)
 
     if not event_stream:
         payload = await response.aread()
@@ -1518,6 +1934,12 @@ async def cloud(path: str, body: dict, request: Request,
             STATS["cloud_tokens"] += int(usage.get("total_tokens") or 0)
         except Exception:
             pass
+        if parent and isinstance(parsed, dict):
+            calls = calls_from_json(parsed)
+            if stamp_subagent_calls(calls, record, policy):
+                write_calls_json(parsed, calls)
+                log({"event": "stamped", "attempt": attempt})
+                payload = json.dumps(parsed).encode()
         payload = _with_model(payload)
         return Response(payload, status_code=response.status_code,
                         media_type="application/json")
@@ -1537,6 +1959,9 @@ async def cloud(path: str, body: dict, request: Request,
         rejected ones are dropped. A rejected reply that showed no text yet is
         asked again; one that already showed text ends with the router's own
         subagent call, or a note when there is no task to delegate.
+
+        Unguarded (a cost parent reply with no delegated task) every call is
+        accepted, and only `subagent` arguments are rewritten to carry a mark.
         """
         pending = b""
         held: list[bytes] = []
@@ -1571,17 +1996,19 @@ async def cloud(path: str, body: dict, request: Request,
         raw = b"".join(held)
         calls = parse_calls(raw)
         names = {call["name"] for call in calls.values()}
-        if guard_verdict(names, policy, record):
-            if SUBAGENT_TOOL in names and patch_call_args(calls, record):
-                log({"event": "guard", "outcome": "patched", "attempt": attempt})
+        if not guard or guard_verdict(names, policy, record):
+            if profile().spawn_tool in names and stamp_subagent_calls(calls, record, policy):
+                log({"event": "guard" if guard else "stamped", "outcome": "patched",
+                     "attempt": attempt})
                 if not streamed:
                     yield sse(chunk("chatcmpl-pls-patch", int(time.time()),
                                     {"role": "assistant"})).encode()
                 for event in call_events(calls):
                     yield event.encode()
                 return
-            log({"event": "guard", "outcome": "accepted", "attempt": attempt,
-                 "saw": sorted(names)})
+            if guard:
+                log({"event": "guard", "outcome": "accepted", "attempt": attempt,
+                     "saw": sorted(names)})
             yield raw
             return
 
@@ -1593,12 +2020,13 @@ async def cloud(path: str, body: dict, request: Request,
             task_line = (f" and begin its prompt with `{TASK_MARKER} {record['id']}`"
                          if record else "")
             wrong = (f"{ROUTER_TAG} Wrong: you answered with {saw}. Call the "
-                     f"`{SUBAGENT_TOOL}` tool now, nothing else{task_line}.")
+                     f"`{profile().spawn_tool}` tool now, nothing else{task_line}.")
             nudged = {**body, "messages": [*body.get("messages", []), {
                 "role": "user", "content": wrong,
             }]}
             retry = await cloud(path, nudged, request, pii, guard=True,
-                                policy=policy, record=record, attempt=attempt + 1)
+                                policy=policy, record=record, attempt=attempt + 1,
+                                parent=parent)
             async for part in body_parts(retry):
                 yield part
             return
@@ -1609,7 +2037,7 @@ async def cloud(path: str, body: dict, request: Request,
                             {"role": "assistant"})).encode()
         if record and record.get("summary"):
             log({"event": "guard", "outcome": "synthesised", "task": record["id"]})
-            synthetic = {0: {"name": SUBAGENT_TOOL, "arguments": ""}}
+            synthetic = {0: {"name": profile().spawn_tool, "arguments": ""}}
             patch_call_args(synthetic, record)
             for event in call_events(synthetic):
                 yield event.encode()
@@ -1619,7 +2047,7 @@ async def cloud(path: str, body: dict, request: Request,
         for event in text_events(("\n\n" if streamed else "") + note):
             yield event.encode()
 
-    if guard:
+    if guard or parent:
         return StreamingResponse(guarded_stream(), media_type="text/event-stream")
 
     async def relay():
@@ -1651,6 +2079,19 @@ async def cloud(path: str, body: dict, request: Request,
 async def local(path: str, body: dict, request: Request, config: dict):
     global waiting
 
+    # Checked before the private text is restored, so a cost fallback to the
+    # cloud carries only what the parent already wrote.
+    try:
+        await ensure_model_server()
+    except (OSError, RuntimeError, ValueError, KeyError) as error:
+        log({"event": "local_unavailable", "policy": config["policy"],
+             "error": str(error) or type(error).__name__})
+        if config["policy"] == "privacy":
+            note_privacy_gap()
+            return withheld_completion(bool(body.get("stream")))
+        return await cloud(path, {**body, "messages": strip_marker(body.get("messages") or [])},
+                           request)
+
     summary, messages = resolve_child(list(body.get("messages") or []), config["policy"])
     body = {**body, "messages": messages}
 
@@ -1669,7 +2110,8 @@ async def local(path: str, body: dict, request: Request, config: dict):
         overflow = False
     if overflow:
         STATS["overflow"] += 1
-        response = await cloud(path, body, request)
+        response = await cloud(path, {**body, "messages": strip_marker(body["messages"])},
+                               request)
         response.headers["x-pls-overflow"] = "1"
         return response
 
@@ -1698,12 +2140,10 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, sum
 
     messages = [dict(m) for m in body.get("messages") or []]
     body = {**body, "messages": messages}
-    if config["policy"] == "privacy" and isinstance(body.get("tools"), list):
-        # `send_message` delivers text to the parent untouched, around the
-        # summary-type filter on the final answer; under privacy the final
-        # answer is the only way out.
+    if isinstance(body.get("tools"), list):
+        # Removing the tools is the enforcement; the prompt line only explains.
         body["tools"] = [t for t in body["tools"]
-                         if (t.get("function") or {}).get("name") not in CHILD_DENIED]
+                         if (t.get("function") or {}).get("name") not in profile().child_denied]
     inject_child_rules(body, summary)
     client_stream = bool(body.get("stream"))
     body = {**body, "stream": False}
@@ -1741,6 +2181,19 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, sum
     choice = (result.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     calls = message.get("tool_calls") or []
+    # The tools are gone, but a model can still write such a call in text.
+    blocked = [c for c in calls if (c.get("function") or {}).get("name") in profile().child_denied]
+    if blocked:
+        calls = [c for c in calls if c not in blocked]
+        log({"event": "child_spawn_blocked",
+             "saw": sorted({(c.get("function") or {}).get("name") for c in blocked})})
+        if calls:
+            message["tool_calls"] = calls
+        else:
+            message.pop("tool_calls", None)
+            message["content"] = message.get("content") or ""
+            choice["finish_reason"] = "stop"
+        choice["message"] = message
     usage = result.get("usage") or {}
     STATS["local_tokens"] += int(usage.get("total_tokens") or 0)
 

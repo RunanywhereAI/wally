@@ -6,6 +6,60 @@ use crate::commands::resolve_default_model;
 use crate::harness;
 use crate::io::output as out;
 
+/// The agents rows with a hybrid launcher.
+const HYBRID_AGENTS: [&str; 3] = ["deepseek", "hermes", "openclaw"];
+
+/// `--hybrid`, `--cloud-model` and `--policy`, the same on every harness that
+/// has a hybrid launcher.
+pub(crate) fn add_hybrid_flags(command: &mut App) {
+    command.add_flag(
+        "--hybrid",
+        "Run the main agent on a cloud model and its subagents on a local model",
+    );
+    command.add_option(
+        "--cloud-model",
+        ValueType::Text,
+        "The cloud model the main agent uses with --hybrid (default: your default model)",
+    );
+    command.add_option(
+        "--policy",
+        ValueType::Text,
+        "What --hybrid optimises for: privacy (default) or cost",
+    );
+}
+
+/// The hybrid launch a parsed command asks for: `Ok(Some((local, cloud,
+/// policy)))` with `--hybrid`, `Ok(None)` without it, `Err(2)` when
+/// `--cloud-model` or `--policy` came without `--hybrid` or the cloud model
+/// is a decision model.
+pub(crate) fn hybrid_request(
+    p: &crate::cli::Parsed,
+    no_color: bool,
+) -> Result<Option<(String, String, String)>, i32> {
+    if !p.flag("--hybrid") {
+        for flag in ["--cloud-model", "--policy"] {
+            if p.get_str(flag).is_some_and(|value| !value.is_empty()) {
+                out::error_line(&format!("{flag} only applies with --hybrid"));
+                return Err(2);
+            }
+        }
+        return Ok(None);
+    }
+    // `-m` names the *local* model here, so an absent one must not be filled
+    // with the cloud default.
+    let local = p.get_str("--model").unwrap_or_default();
+    let cloud = p
+        .get_str("--cloud-model")
+        .unwrap_or_else(|| resolve_default_model("", no_color));
+    if harness::refuse_decisions_model(Some(cloud.as_str())) {
+        return Err(2);
+    }
+    let policy = p
+        .get_str("--policy")
+        .unwrap_or_else(|| "privacy".to_string());
+    Ok(Some((local, cloud, policy)))
+}
+
 pub fn register_harness(app: &mut App) {
     // `wally opencode <model>` rather than a flag on `run`: it hands the terminal
     // to another program, which is a different thing to do than talk to a model.
@@ -40,6 +94,7 @@ pub fn register_harness(app: &mut App) {
         "--cloud",
         "Use your account's hosted endpoint (never a local model)",
     );
+    add_hybrid_flags(opencode);
     opencode
         .add_option("args", ValueType::Text, "Passed through to opencode")
         .multi();
@@ -52,6 +107,23 @@ pub fn register_harness(app: &mut App) {
         // tool should see only that it is missing and how to install it.
         if !harness::ensure_installed("opencode") {
             return 127;
+        }
+        match hybrid_request(p, g.no_color) {
+            Err(status) => return status,
+            Ok(Some((local, cloud, policy))) => {
+                if p.flag("--cloud") {
+                    out::error_line("--cloud and --hybrid cannot be used together");
+                    return 2;
+                }
+                return harness::launch_open_code_hybrid(
+                    &local,
+                    &cloud,
+                    &policy,
+                    &p.get_strs("args"),
+                    g,
+                );
+            }
+            Ok(None) => {}
         }
         let effective =
             resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color);
@@ -200,21 +272,8 @@ pub fn register_harness(app: &mut App) {
             ValueType::Text,
             "A model on this machine, or a hosted one from your account",
         );
-        if agent.id == "deepseek" {
-            command.add_flag(
-                "--hybrid",
-                "Route the parent to the cloud and subagents to a local model",
-            );
-            command.add_option(
-                "--cloud-model",
-                ValueType::Text,
-                "The cloud model the parent lane uses (defaults to your default model)",
-            );
-            command.add_option(
-                "--policy",
-                ValueType::Text,
-                "What --hybrid optimises for: privacy (default) or cost",
-            );
+        if HYBRID_AGENTS.contains(&agent.id) {
+            add_hybrid_flags(command);
         }
         command
             .add_option("args", ValueType::Text, "Passed through to the tool")
@@ -229,33 +288,24 @@ pub fn register_harness(app: &mut App) {
             if !harness::ensure_installed(agent.command) {
                 return 127;
             }
-            if agent.id == "deepseek" && p.flag("--hybrid") {
-                // `-m` names the *local* model here, so an absent one must not
-                // be filled with the cloud default.
-                let local = p.get_str("--model").unwrap_or_default();
-                let cloud = p
-                    .get_str("--cloud-model")
-                    .unwrap_or_else(|| resolve_default_model("", g.no_color));
-                if harness::refuse_decisions_model(Some(cloud.as_str())) {
-                    return 2;
-                }
-                let policy = p
-                    .get_str("--policy")
-                    .unwrap_or_else(|| "privacy".to_string());
-                return harness::launch_deep_seek_hybrid(
-                    &local,
-                    &cloud,
-                    &policy,
-                    &p.get_strs("args"),
-                    g,
-                );
-            }
-            if agent.id == "deepseek" {
-                for flag in ["--cloud-model", "--policy"] {
-                    if p.get_str(flag).is_some_and(|value| !value.is_empty()) {
-                        out::error_line(&format!("{flag} only applies with --hybrid"));
-                        return 2;
+            if HYBRID_AGENTS.contains(&agent.id) {
+                match hybrid_request(p, g.no_color) {
+                    Err(status) => return status,
+                    Ok(Some((local, cloud, policy))) => {
+                        let args = p.get_strs("args");
+                        return match agent.id {
+                            "hermes" => harness::launch_hermes_hybrid(
+                                &agent, &local, &cloud, &policy, &args, g,
+                            ),
+                            "openclaw" => harness::launch_open_claw_hybrid(
+                                &agent, &local, &cloud, &policy, &args, g,
+                            ),
+                            _ => {
+                                harness::launch_deep_seek_hybrid(&local, &cloud, &policy, &args, g)
+                            }
+                        };
                     }
+                    Ok(None) => {}
                 }
             }
             let model =

@@ -32,6 +32,9 @@ REAL_CLOUD_CREDENTIALS = pls.cloud_credentials
 FIXTURE = Path(__file__).parent / "fixtures" / "dsh_first_turn.json"
 PRIVATE_TEXT = "refactor the billing module in src/billing.rs, key sk-live-123"
 SEED_IDS = itertools.count(9001)
+LOCAL_MODEL_ID = "Hybrid-Wally-0.1-local"
+NO_SUBAGENTS_LINE = ("You are a subagent running on this device. You cannot launch "
+                     "subagents or message other agents; do the whole task yourself.")
 
 
 class FakeResponse:
@@ -90,8 +93,11 @@ def dsh_first_turn(prompt=None):
 DSH_PROMPT = dsh_first_turn()["messages"][1]["content"]
 
 
-def key_of(text):
-    return pls.prompt_key(text)
+def key_of(text, session=None):
+    """The task key of a one-prompt turn. A body whose first prompt is `text`
+    is its own session unless `session` names the first prompt."""
+    first = pls.prompt_key(session if session is not None else text)[:6]
+    return f"{first}:{pls.prompt_key(text)}"
 
 
 class RouterTest(unittest.TestCase):
@@ -107,8 +113,9 @@ class RouterTest(unittest.TestCase):
         pls.TASKS_PATH = self.dir / "tasks.json"
         pls.TASKS.clear()
         pls.TASK_TEXT.clear()
+        pls.SESSION_NEXT.clear()
         pls.turns.clear()
-        pls.ENTITLEMENT_SOCKET = ""
+        pls.PLS_SOCKET = ""
         pls.TOKEN = ""
         pls.privacy_gap_noted = False
         pls.waiting = 0
@@ -185,15 +192,39 @@ class RouterTest(unittest.TestCase):
                 {"role": "user", "content": marker + ("\n" + extra if extra else "")}]
 
     def post_child(self, record, extra=""):
-        return self.post("/local/v1/chat/completions",
+        return self.post("/v1/chat/completions",
                          {"model": "x", "messages": self.child_messages(record, extra)})
+
+    def dsh_child(self, record, extra=""):
+        """A dsh subagent's first request: the dsh shape, the prompt a task marker."""
+        body = dsh_first_turn(f"pls-task: {record['id']}" + ("\n" + extra if extra else ""))
+        body["tools"] = tool_defs("bash", "read", "subagent", "subagent_fork", "send_message")
+        body["stream"] = False
+        return body
+
+    def post_dsh_child(self, record, extra=""):
+        return self.post("/v1/chat/completions", self.dsh_child(record, extra))
+
+    def capture_log(self):
+        events = []
+        original = pls.log
+        pls.log = events.append
+        self.addCleanup(setattr, pls, "log", original)
+        return events
+
+    def model_server_down(self):
+        async def cannot_start():
+            raise RuntimeError("the model server did not start")
+
+        pls.ensure_model_server = cannot_start
 
     def answer(self, response):
         return response.json()["choices"][0]["message"]["content"]
 
-    def socket(self, sub):
-        """A real unix socket answering like wally, so the parser is exercised."""
-        path = str(self.dir / "entitlement.sock")
+    def socket(self):
+        """A real unix socket answering like wally: POST /decide and GET /token,
+        404 for anything else. Returns (path, request lines seen)."""
+        path = str(self.dir / "pls.sock")
         try:
             os.unlink(path)
         except FileNotFoundError:
@@ -201,6 +232,7 @@ class RouterTest(unittest.TestCase):
         server = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
         server.bind(path)
         server.listen(4)
+        seen = []
 
         def serve():
             while True:
@@ -208,13 +240,32 @@ class RouterTest(unittest.TestCase):
                     conn, _ = server.accept()
                 except OSError:
                     return
-                conn.recv(256)
-                body = json.dumps({"sub": sub}).encode()
-                conn.sendall(b"HTTP/1.1 200 OK\r\ncontent-length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                head, _, rest = data.partition(b"\r\n\r\n")
+                length = re.search(rb"(?i)content-length:\s*(\d+)", head)
+                while length and len(rest) < int(length.group(1)):
+                    rest += conn.recv(4096)
+                line = head.split(b"\r\n")[0].decode()
+                seen.append(line)
+                if line.startswith("POST /decide "):
+                    status, payload = "200 OK", {"answer": "yes", "p_yes": 0.9, "model": "m", "ms": 1}
+                elif line.startswith("GET /token"):
+                    status, payload = "200 OK", {"access_token": "access-from-wally",
+                                                 "console_url": "http://cloud"}
+                else:
+                    status, payload = "404 Not Found", {"error": "not found"}
+                body = json.dumps(payload).encode()
+                conn.sendall(f"HTTP/1.1 {status}\r\ncontent-length: {len(body)}\r\n"
+                             "connection: close\r\n\r\n".encode() + body)
                 conn.close()
 
         threading.Thread(target=serve, daemon=True).start()
-        return path
+        return path, seen
 
     def decide_socket(self, status=200, payload=None, raw=None):
         """A unix socket answering POST /decide; returns (path, requests seen)."""
@@ -384,16 +435,41 @@ class RouterTest(unittest.TestCase):
                     {"role": "user", "content": f"pls-task: {record['id']}\ngo"}]
         self.assertEqual(pls.resolve_child(messages, "privacy")[0], "summary")
 
-    def test_resolve_child_ignores_a_marker_in_a_later_user_message(self):
+    def test_resolve_child_ignores_a_marker_after_the_first_reply(self):
         record = self.seed("a prompt")
         messages = [{"role": "user", "content": "go"},
+                    {"role": "assistant", "content": "ok"},
                     {"role": "user", "content": f"pls-task: {record['id']}"}]
         self.assertEqual(pls.resolve_child(messages, "privacy")[0], "local_only")
 
-    def test_the_child_rules_are_summary_and_local_only(self):
-        self.assertEqual(set(pls.CHILD_RULES), {"summary", "local_only"})
+    def test_a_request_for_the_local_model_id_is_a_subagent(self):
+        body = {**dsh_first_turn(), "model": pls.LOCAL_MODEL_ID}
+        self.assertEqual(pls.classify(body), "subagent")
 
-    # -- modes, subscription, config --------------------------------------
+    def test_a_marker_with_dsh_note_glued_on_is_found(self):
+        record = self.seed("list the files", private=True, summary="local_only")
+        note = ('Your parent agent id is "session-9a015f3f". Before you finish, send your '
+                'result to that agent with send_message({ agent_id: "session-9a015f3f" }).')
+        messages = [{"role": "user", "content": f"pls-task: {record['id']}{note}"}]
+        summary, updated = pls.resolve_child(messages, "privacy")
+        self.assertEqual(summary, "local_only")
+        self.assertEqual(updated[0]["content"], "list the files")
+
+    def test_dsh_note_is_cut_from_a_child_prompt(self):
+        record = self.seed("count rows", private=False)
+        note = ('Your parent agent id is "s-1". Before you finish, send your result '
+                'to that agent with send_message.')
+        messages = [{"role": "user", "content": f"pls-task: {record['id']}\ncount rows.{note}"}]
+        _, updated = pls.resolve_child(messages, "privacy")
+        self.assertEqual(updated[0]["content"], "count rows.")
+
+    def test_a_longer_id_does_not_match_a_shorter_one(self):
+        self.assertEqual(pls.TASK_RE.match("pls-task: abc123-t12x").group(1), "abc123-t12")
+
+    def test_the_child_rules_cover_summary_and_local_only(self):
+        self.assertLessEqual({"summary", "local_only"}, set(pls.CHILD_RULES))
+
+    # -- modes and config --------------------------------------
 
     def test_cloud_mode_forces_the_cloud_lane(self):
         self.configure(mode="cloud")
@@ -413,78 +489,257 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(sent, [body])
         self.assertEqual(self.decided, [])
 
-    def test_cost_without_a_subscription_is_forwarded_untouched(self):
-        self.configure(policy="cost")
-        pls.ENTITLEMENT_SOCKET = self.socket(False)
-        pls.premium_cache.update(value=False, at=0.0)
-        sent = []
-        pls.http.send = _fake_send_sse(sent, None)
-        body = {"stream": True, "tools": tool_defs("bash", "read", "subagent"),
-                "messages": [{"role": "system", "content": "s"},
-                             {"role": "user", "content": "fix the build"}]}
-        self.cloud_post(body)
-        self.assertEqual(sent, [body])
+    def test_models_lists_the_parent_and_subagent_ids(self):
+        data = self.client.get("/v1/models").json()["data"]
+        self.assertEqual([m["id"] for m in data], [pls.MODEL_ID, LOCAL_MODEL_ID])
+
+    def test_the_parent_model_id_is_hybrid_wally(self):
+        self.assertEqual(pls.MODEL_ID, "Hybrid-Wally-0.1")
+
+    # -- one endpoint: classifying a request -------------------------------
+
+    def test_a_body_whose_first_prompt_starts_with_a_task_marker_is_a_subagent(self):
+        self.assertEqual(pls.classify(dsh_first_turn("pls-task: t1\nlist the files")), "subagent")
+
+    def test_a_marker_with_an_id_the_router_does_not_know_is_still_a_subagent(self):
+        self.assertEqual(pls.classify(dsh_first_turn("pls-task: t424242\ngo")), "subagent")
+
+    def test_the_dsh_first_turn_is_main_chat(self):
+        self.assertEqual(pls.classify(dsh_first_turn()), "main")
+
+    def test_a_body_with_no_tools_is_a_side_call(self):
+        self.assertEqual(pls.classify({"model": "x", "messages": [
+            {"role": "system", "content": "Create a concise title"},
+            {"role": "user", "content": "Generate the session title"},
+        ]}), "side")
+
+    def test_a_marker_that_is_not_at_the_start_of_the_prompt_is_main_chat(self):
+        self.assertEqual(pls.classify(dsh_first_turn("see pls-task: t1")), "main")
+
+    def test_a_marker_in_a_later_user_message_is_not_a_subagent(self):
+        body = self.later(dsh_first_turn())
+        body["messages"].append({"role": "user", "content": "pls-task: t1"})
+        self.assertEqual(pls.classify(body), "main")
+
+    # -- one endpoint: a subagent goes local --------------------------------
+
+    def test_a_subagent_request_is_never_decided(self):
+        self.post_dsh_child(self.seed("a prompt"))
         self.assertEqual(self.decided, [])
 
-    def test_privacy_masks_a_private_prompt_when_there_is_no_subscription(self):
-        pls.ENTITLEMENT_SOCKET = self.socket(False)
-        pls.premium_cache.update(value=False, at=0.0)
-        self.say("yes")
-        sent = []
-        pls.http.send = _fake_send_sse(sent, "subagent")
-        marker = "billing-module-prompt-marker"
-        body = {"stream": True, "tools": tool_defs("bash", "read", "subagent"),
-                "messages": [{"role": "system", "content": "s"},
-                             {"role": "user", "content": marker}]}
-        self.cloud_post(body)
-        self.assertNotIn(marker, json.dumps(sent))
+    def test_a_subagent_request_is_never_decided_under_cost(self):
+        self.configure(policy="cost")
+        self.post_dsh_child(self.seed("a prompt", policy="cost"))
+        self.assertEqual(self.decided, [])
 
-    def test_a_missing_local_lane_prints_one_privacy_line(self):
-        pls.ENTITLEMENT_SOCKET = self.socket(False)
-        pls.premium_cache.update(value=False, at=0.0)
-        self.say("yes")
-        pls.http.send = _fake_send_sse([], "subagent")
-        body = {"messages": [{"role": "user", "content": "secret prompt"}],
-                "tools": tool_defs("subagent")}
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            self.cloud_post(body)
-            self.cloud_post(body)
-        lines = [line for line in err.getvalue().splitlines() if line.startswith("privacy:")]
-        self.assertEqual(lines, [
-            "privacy: the local lane is unavailable, so a private prompt is masked "
-            "and is not sent as written",
-        ])
-
-    def test_privacy_keeps_a_child_off_the_cloud_without_a_subscription(self):
-        pls.ENTITLEMENT_SOCKET = self.socket(False)
-        pls.premium_cache.update(value=False, at=0.0)
+    def test_a_subagent_request_reaches_the_local_model_server_not_the_cloud(self):
         sent = []
         pls.http.send = _fake_send_sse(sent, None)
-        response = self.post_child(self.seed("a prompt"))
+        response = self.post_dsh_child(self.seed("a prompt"))
+        self.assertEqual(self.answer(response), "local answer")
+        self.assertEqual(len(self.local_bodies), 1)
         self.assertEqual(sent, [])
-        self.assertEqual(self.local_bodies, [])
-        self.assertIn("withheld", self.answer(response))
 
-    def test_cost_without_a_subscription_uses_the_cloud_for_a_child(self):
+    def test_an_unknown_task_id_under_privacy_is_local_only_and_stays_local(self):
+        sent = []
+        pls.http.send = _fake_send_sse(sent, None)
+        response = self.post_dsh_child({"id": "t424242"})
+        self.assertEqual(sent, [])
+        self.assertEqual(self.answer(response), pls.WITHHELD)
+        system = self.local_bodies[-1]["messages"][0]["content"]
+        self.assertIn(pls.CHILD_RULES["local_only"], system)
+
+    def test_the_local_v1_path_is_gone(self):
+        record = self.seed("a prompt")
+        response = self.post("/local/v1/chat/completions",
+                             {"model": "x", "messages": self.child_messages(record)})
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.local_bodies, [])
+
+    # -- one endpoint: stamping the parent's subagent calls -----------------
+
+    def test_a_cost_parent_reply_calling_subagent_without_a_marker_gets_one(self):
         self.configure(policy="cost")
-        pls.ENTITLEMENT_SOCKET = self.socket(False)
-        pls.premium_cache.update(value=False, at=0.0)
-        pls.http.send = _fake_send(completion("cloud answer"))
-        response = self.post_child(self.seed("a prompt", policy="cost"))
-        self.assertEqual(self.answer(response), "cloud answer")
+        args = json.dumps({"description": "Read the file", "prompt": "read it"})
+        _, response = self.sent_to_cloud(self.later(dsh_first_turn()), ("subagent", args))
+        prompt = json.loads(pls.parse_calls(response.content)[0]["arguments"])["prompt"]
+        self.assertRegex(prompt, r"^pls-task: (?:[0-9a-f]{6}-)?t\d+\b")
+        self.assertIn("read it", prompt)
+
+    def test_a_cost_parent_json_reply_calling_subagent_without_a_marker_gets_one(self):
+        self.configure(policy="cost")
+        call = tool_call("subagent", json.dumps({"description": "d", "prompt": "read it"}))
+        pls.http.send = _fake_send_json([], completion(None, [call]))
+        body = {**self.later(dsh_first_turn()), "stream": False}
+        message = self.cloud_post(body).json()["choices"][0]["message"]
+        prompt = json.loads(message["tool_calls"][0]["function"]["arguments"])["prompt"]
+        self.assertRegex(prompt, r"^pls-task: (?:[0-9a-f]{6}-)?t\d+\b")
+
+    def test_an_ad_hoc_cost_task_resolves_on_the_child_side_as_summary(self):
+        self.configure(policy="cost")
+        args = json.dumps({"description": "d", "prompt": "read it"})
+        _, response = self.sent_to_cloud(self.later(dsh_first_turn()), ("subagent", args))
+        prompt = json.loads(pls.parse_calls(response.content)[0]["arguments"])["prompt"]
+        task_id = re.match(r"pls-task: ((?:[0-9a-f]{6}-)?t\d+)", prompt).group(1)
+        record = next(r for r in pls.TASKS.values() if r.get("id") == task_id)
+        self.assertEqual(record["summary"], "summary")
+        kind, _ = pls.resolve_child([{"role": "user", "content": prompt}], "cost")
+        self.assertEqual(kind, "summary")
+
+    def test_an_ad_hoc_privacy_task_is_local_only_and_not_private(self):
+        record = pls.ad_hoc_record("privacy")
+        self.assertEqual((record["summary"], record["private"]), ("local_only", False))
+
+    def test_an_ad_hoc_cost_task_is_summary(self):
+        self.assertEqual(pls.ad_hoc_record("cost")["summary"], "summary")
+
+    def test_an_ad_hoc_task_is_found_by_resolve_child(self):
+        record = pls.ad_hoc_record("privacy")
+        messages = [{"role": "user", "content": f"pls-task: {record['id']}\ngo"}]
+        kind, resolved = pls.resolve_child(messages, "privacy")
+        self.assertEqual((kind, resolved[0]["content"]), ("local_only", "go"))
+
+    # -- one endpoint: a subagent cannot launch a subagent ------------------
+
+    def test_a_child_is_denied_send_message_subagent_and_subagent_fork(self):
+        self.assertEqual(pls.PROFILES["deepseek"].child_denied,
+                         {"send_message", "subagent", "subagent_fork"})
+
+    def test_a_child_request_loses_its_spawning_tools_under_both_policies(self):
+        for policy in ("privacy", "cost"):
+            with self.subTest(policy=policy):
+                self.configure(policy=policy)
+                self.local_bodies.clear()
+                self.post_dsh_child(self.seed("a prompt", policy=policy))
+                self.assertEqual(tool_names(self.local_bodies[-1]), ["bash", "read"])
+
+    def test_the_no_subagents_line_is_in_the_child_system_prompt_once(self):
+        self.post_dsh_child(self.seed("a prompt"))
+        system = self.local_bodies[-1]["messages"][0]["content"]
+        self.assertEqual(system.count(NO_SUBAGENTS_LINE), 1)
+
+    def test_a_local_only_child_gets_the_no_subagents_line_too(self):
+        self.post_dsh_child(self.seed(PRIVATE_TEXT, private=True, summary="local_only"))
+        system = self.local_bodies[-1]["messages"][0]["content"]
+        self.assertEqual(system.count(NO_SUBAGENTS_LINE), 1)
+
+    def test_the_no_subagents_line_is_not_added_twice(self):
+        record = self.seed("a prompt")
+        body = self.dsh_child(record)
+        body["messages"][0]["content"] += " " + NO_SUBAGENTS_LINE
+        self.post("/v1/chat/completions", body)
+        system = self.local_bodies[-1]["messages"][0]["content"]
+        self.assertEqual(system.count(NO_SUBAGENTS_LINE), 1)
+
+    def spawning_local_reply(self):
+        call = tool_call("subagent", json.dumps({"prompt": "go deeper"}))
+        pls.http.post = _fake_return(completion("partial text", [call]))
+
+    def test_a_local_reply_with_a_subagent_call_is_cut_back_to_its_text(self):
+        self.spawning_local_reply()
+        response = self.post_child(self.seed("a prompt"))
+        message = response.json()["choices"][0]["message"]
+        self.assertFalse(message.get("tool_calls"))
+        self.assertEqual(message["content"], "partial text")
+
+    def test_a_blocked_child_spawn_ends_the_turn(self):
+        self.spawning_local_reply()
+        choice = self.post_child(self.seed("a prompt")).json()["choices"][0]
+        self.assertEqual(choice["finish_reason"], "stop")
+
+    def test_a_blocked_child_spawn_is_logged(self):
+        events = self.capture_log()
+        self.spawning_local_reply()
+        self.post_child(self.seed("a prompt"))
+        self.assertIn("child_spawn_blocked", [e.get("event") for e in events])
+
+    # -- one endpoint: cloud mode and a local model that cannot run ---------
+
+    def test_cloud_mode_sends_a_subagent_to_the_cloud_without_its_marker(self):
+        self.configure(mode="cloud")
+        sent = []
+        pls.http.send = _fake_send_json(sent, completion("cloud answer"))
+        self.post_child(self.seed("a prompt"), "list the files")
         self.assertEqual(self.local_bodies, [])
+        self.assertNotIn("pls-task:", json.dumps(sent))
+        users = [m for m in sent[0]["messages"] if m["role"] == "user"]
+        self.assertEqual(users[0]["content"], "list the files")
 
-    def test_subscription_allows_the_local_lane(self):
-        # Seeded false, so a broken socket read falls back to the cloud and
-        # fails this test rather than passing on the cached value.
-        pls.ENTITLEMENT_SOCKET = self.socket(True)
-        pls.premium_cache.update(value=False, at=0.0)
-        self.assertEqual(self.answer(self.post_child(self.seed("a prompt"))), "local answer")
+    def test_cloud_mode_does_not_restore_a_private_childs_text(self):
+        self.configure(mode="cloud")
+        sent = []
+        pls.http.send = _fake_send_json(sent, completion("cloud answer"))
+        self.post_child(self.seed(PRIVATE_TEXT, private=True, summary="local_only"))
+        self.assertNotIn("billing", json.dumps(sent))
 
-    def test_models_lists_only_the_hybrid_id(self):
-        data = self.client.get("/v1/models").json()["data"]
-        self.assertEqual([m["id"] for m in data], [pls.MODEL_ID])
+    def test_privacy_withholds_a_subagent_when_the_local_model_cannot_start(self):
+        self.model_server_down()
+        sent = []
+        pls.http.send = _fake_send_sse(sent, None)
+        response = self.post_dsh_child(self.seed("a prompt"))
+        self.assertEqual(self.answer(response), pls.WITHHELD)
+        self.assertEqual(sent, [])
+
+    def test_cost_sends_a_subagent_to_the_cloud_without_its_marker_when_the_local_model_cannot_start(self):
+        self.configure(policy="cost")
+        self.model_server_down()
+        sent = []
+        pls.http.send = _fake_send_json(sent, completion("cloud answer"))
+        response = self.post_child(self.seed("a prompt", policy="cost"), "list the files")
+        self.assertEqual(self.answer(response), "cloud answer")
+        self.assertNotIn("pls-task:", json.dumps(sent))
+
+    def test_a_local_model_that_cannot_start_is_logged(self):
+        events = self.capture_log()
+        self.model_server_down()
+        self.post_child(self.seed("a prompt"))
+        self.assertIn("local_unavailable", [e.get("event") for e in events])
+
+    def test_a_local_model_that_cannot_start_prints_one_privacy_line(self):
+        self.model_server_down()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.post_child(self.seed("a prompt"))
+            self.post_child(self.seed("another prompt"))
+        lines = [line for line in err.getvalue().splitlines() if line.startswith("privacy:")]
+        self.assertEqual(len(lines), 1)
+
+    # -- no subscription gate -----------------------------------------------
+
+    def test_the_subscription_state_is_gone(self):
+        for name in ("premium", "premium_cache", "ENTITLEMENT_SOCKET"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(pls, name))
+        self.assertNotIn("premium_blocked", pls.STATS)
+
+    def test_debug_state_carries_no_subscription_field(self):
+        self.assertNotIn("sub", self.client.get("/debug/state").json())
+
+    def through_the_socket(self):
+        """Main chat and a subagent with the real decide and token clients."""
+        pls.PLS_SOCKET, seen = self.socket()
+        pls.decide = REAL_DECIDE
+        pls.cloud_credentials = REAL_CLOUD_CREDENTIALS
+        sent = []
+        pls.http.send = _fake_send_sse(sent, "subagent")
+        self.cloud_post(dsh_first_turn())
+        child = self.post_dsh_child(self.seed("a prompt"))
+        return seen, sent, child
+
+    def test_the_router_never_asks_the_socket_for_an_entitlement(self):
+        seen, _, _ = self.through_the_socket()
+        self.assertFalse([line for line in seen if "entitlement" in line])
+
+    def test_decide_and_the_token_fetch_use_pls_socket(self):
+        seen, _, _ = self.through_the_socket()
+        self.assertTrue(any(line.startswith("POST /decide ") for line in seen))
+        self.assertTrue(any(line.startswith("GET /token") for line in seen))
+
+    def test_the_router_routes_hybrid_with_no_subscription_state(self):
+        _, sent, child = self.through_the_socket()
+        self.assertEqual(sent[0]["messages"][1]["content"],
+                         pls.placeholder(self.record(DSH_PROMPT)))
+        self.assertEqual(self.answer(child), "local answer")
 
     def test_a_missing_config_means_hybrid_and_privacy(self):
         self.config.write_text("not json")
@@ -509,7 +764,8 @@ class RouterTest(unittest.TestCase):
 
     def test_read_config_returns_exactly_the_known_keys(self):
         self.assertEqual(set(pls.read_config()),
-                         {"mode", "policy", "max_turns", "model_path", "cloud_model"})
+                         {"mode", "policy", "max_turns", "model_path", "cloud_model",
+                          "harness", "cloud_limits"})
 
     def test_removed_features_are_gone(self):
         for name in ("WORK_RE", "last_is_work", "shape_hybrid", "FORCE_DELEGATION",
@@ -522,7 +778,7 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(pls.TASK_MARKER, "pls-task:")
 
     def test_there_is_one_system_prompt_per_policy(self):
-        self.assertEqual(set(pls.POLICY_PROMPTS), {"privacy", "cost"})
+        self.assertNotEqual(pls.policy_prompt("privacy"), pls.policy_prompt("cost"))
 
     # -- finding the real prompt (real dsh data) ---------------------------
 
@@ -628,14 +884,6 @@ class RouterTest(unittest.TestCase):
         sent, _ = self.sent_to_cloud(body, None)
         self.assertEqual(sent[0]["messages"][-1]["content"], pls.AGENT_MESSAGE_MASK)
 
-    def test_a_subagent_loses_send_message_under_privacy(self):
-        record = self.seed("summarise the notes")
-        body = {"model": "x", "messages": self.child_messages(record),
-                "tools": tool_defs("read", "send_message")}
-        self.post("/local/v1/chat/completions", body)
-        names = [t["function"]["name"] for t in self.local_bodies[0]["tools"]]
-        self.assertEqual(names, ["read"])
-
     # -- streaming through the guard ----------------------------------------
 
     def stream_reply(self, text, tool=None):
@@ -706,8 +954,8 @@ class RouterTest(unittest.TestCase):
                              {"role": "assistant", "content": "ok"},
                              {"role": "user", "content": "two"}]}
         asyncio.run(pls.ensure_tasks(body, "privacy"))
-        self.assertEqual({pls.TASK_TEXT[self.record(t)["id"]] for t in ("one", "two")},
-                         {"one", "two"})
+        ids = [pls.TASKS[key_of(t, "one")]["id"] for t in ("one", "two")]
+        self.assertEqual({pls.TASK_TEXT[i] for i in ids}, {"one", "two"})
 
     def test_ensure_tasks_does_not_decide_a_decided_prompt_again(self):
         body = {"messages": [{"role": "user", "content": "one"}]}
@@ -715,12 +963,43 @@ class RouterTest(unittest.TestCase):
         asyncio.run(pls.ensure_tasks(body, "privacy"))
         self.assertEqual(len(self.decided), 1)
 
-    def test_task_ids_count_up_from_t(self):
+    def test_task_ids_count_up_from_t1_within_a_session(self):
+        body = {"messages": [{"role": "user", "content": "one"},
+                             {"role": "assistant", "content": "ok"},
+                             {"role": "user", "content": "two"}]}
+        asyncio.run(pls.ensure_tasks(body, "privacy"))
+        session = pls.prompt_key("one")[:6]
+        self.assertEqual([pls.TASKS[key_of(t, "one")]["id"] for t in ("one", "two")],
+                         [f"{session}-t1", f"{session}-t2"])
+
+    def test_a_new_session_numbers_its_tasks_from_t1_again(self):
+        asyncio.run(pls.ensure_tasks({"messages": [{"role": "user", "content": "one"}]}, "privacy"))
+        asyncio.run(pls.ensure_tasks({"messages": [{"role": "user", "content": "other"}]}, "privacy"))
+        self.assertTrue(self.record("other")["id"].endswith("-t1"))
+
+    def test_prompts_with_no_reply_between_them_are_one_task(self):
         body = {"messages": [{"role": "user", "content": "one"},
                              {"role": "user", "content": "two"}]}
         asyncio.run(pls.ensure_tasks(body, "privacy"))
-        first, second = (int(self.record(t)["id"][1:]) for t in ("one", "two"))
-        self.assertEqual(second, first + 1)
+        self.assertEqual(len(self.decided), 1)
+        self.assertIn(key_of("one\n\ntwo", "one"), pls.TASKS)
+
+    def test_the_parent_sees_one_task_line_however_many_turns_it_has(self):
+        body = {"messages": [{"role": "user", "content": "one"},
+                             {"role": "assistant", "content": "ok"},
+                             {"role": "user", "content": "two"},
+                             {"role": "assistant", "content": "ok"},
+                             {"role": "user", "content": "three"}]}
+        asyncio.run(pls.ensure_tasks(body, "privacy"))
+        shaped = pls.apply_policy(body, "privacy")
+        self.assertEqual(json.dumps(shaped["messages"]).count("pls-task:"), 1)
+        self.assertIn("pls-task:", json.dumps(shaped["messages"][-1]))
+
+    def test_a_child_sent_only_the_marker_gets_its_task_text(self):
+        record = self.seed("list the files", private=False)
+        _, messages = pls.resolve_child(
+            [{"role": "user", "content": f"pls-task: {record['id']}"}], "privacy")
+        self.assertEqual(messages[0]["content"], "list the files")
 
     def test_a_yes_under_privacy_makes_a_private_local_only_record(self):
         self.say("yes")
@@ -775,8 +1054,8 @@ class RouterTest(unittest.TestCase):
         self.sent_to_cloud(body, "subagent")
         self.say("no")  # a re-decision would unmask it
         sent, _ = self.sent_to_cloud(self.later(body), None)
-        record = self.record(PRIVATE_TEXT)
-        self.assertEqual(sent[0]["messages"][1]["content"], pls.placeholder(record))
+        # Answered now, so it is masked without a second task line.
+        self.assertEqual(sent[0]["messages"][1]["content"], pls.PRIVATE_SIDE_MASK)
         self.assertNotIn("billing", json.dumps(sent))
 
     def test_a_private_prompt_is_masked_after_the_cloud_asked_again(self):
@@ -836,19 +1115,19 @@ class RouterTest(unittest.TestCase):
 
     def test_the_privacy_prompt_is_added_to_the_system_message(self):
         sent, _ = self.sent_to_cloud(dsh_first_turn(), "subagent")
-        self.assertIn(pls.POLICY_PROMPTS["privacy"], sent[0]["messages"][0]["content"])
+        self.assertIn(pls.policy_prompt("privacy"), sent[0]["messages"][0]["content"])
 
     def test_the_cost_prompt_is_added_to_the_system_message(self):
         self.configure(policy="cost")
         sent, _ = self.sent_to_cloud(dsh_first_turn(), "bash")
-        self.assertIn(pls.POLICY_PROMPTS["cost"], sent[0]["messages"][0]["content"])
+        self.assertIn(pls.policy_prompt("cost"), sent[0]["messages"][0]["content"])
 
     def test_the_policy_prompt_is_added_once(self):
         self.seed(DSH_PROMPT)
         once = self.applied(dsh_first_turn())
         twice = self.applied(once)
         system = twice["messages"][0]["content"]
-        self.assertEqual(system.count(pls.POLICY_PROMPTS["privacy"]), 1)
+        self.assertEqual(system.count(pls.policy_prompt("privacy")), 1)
 
     def test_apply_policy_masks_a_private_prompt_from_its_record(self):
         record = self.seed(PRIVATE_TEXT, private=True, summary="local_only")
@@ -1193,7 +1472,7 @@ class RouterTest(unittest.TestCase):
             transport = httpx.ASGITransport(app=pls.app)
             async with httpx.AsyncClient(transport=transport, base_url="http://router") as client:
                 task = asyncio.create_task(client.post(
-                    "/local/v1/chat/completions", json=body, headers={"x-session-id": "s"}))
+                    "/v1/chat/completions", json=body, headers={"x-session-id": "s"}))
                 await asyncio.sleep(0.05)
                 finished = task.done()
                 pls.local_sem.release()
@@ -1227,7 +1506,7 @@ class RouterTest(unittest.TestCase):
             transport = httpx.ASGITransport(app=pls.app)
             async with httpx.AsyncClient(transport=transport, base_url="http://router") as client:
                 task = asyncio.create_task(client.post(
-                    "/local/v1/chat/completions",
+                    "/v1/chat/completions",
                     json={"model": "x", "messages": self.child_messages(record)},
                     headers={"x-session-id": "s"},
                 ))
@@ -1276,7 +1555,7 @@ class RouterTest(unittest.TestCase):
 
         asyncio.wait_for = wrapped
         try:
-            pls.ENTITLEMENT_SOCKET, _ = self.decide_socket(
+            pls.PLS_SOCKET, _ = self.decide_socket(
                 payload={"answer": "yes", "p_yes": 0.9, "model": "m", "ms": 1})
             result = asyncio.run(REAL_DECIDE("privacy", "slow"))
         finally:
@@ -1302,7 +1581,7 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(self.creds.stat().st_mode), 0o600)
 
     def test_cloud_credentials_take_the_socket_token_and_leave_the_file(self):
-        pls.ENTITLEMENT_SOCKET = self.token_socket()
+        pls.PLS_SOCKET = self.token_socket()
         before = self.creds.read_text()
         creds = asyncio.run(REAL_CLOUD_CREDENTIALS())
         self.assertEqual(creds["access_token"], "access-from-wally")
@@ -1335,13 +1614,13 @@ class RouterTest(unittest.TestCase):
         return path
 
     def test_decide_returns_the_answer_and_probability_from_the_socket(self):
-        pls.ENTITLEMENT_SOCKET, _ = self.decide_socket(
+        pls.PLS_SOCKET, _ = self.decide_socket(
             payload={"answer": "yes", "p_yes": 0.9, "model": "clef-flash-9b", "ms": 3})
         result = asyncio.run(REAL_DECIDE("privacy", "some text"))
         self.assertEqual((result["answer"], result["p_yes"]), ("yes", 0.9))
 
     def test_decide_posts_the_policy_and_text_to_the_decide_path(self):
-        pls.ENTITLEMENT_SOCKET, seen = self.decide_socket(
+        pls.PLS_SOCKET, seen = self.decide_socket(
             payload={"answer": "no", "p_yes": 0.1, "model": "m", "ms": 1})
         asyncio.run(REAL_DECIDE("cost", "some text"))
         line, body = seen[0]
@@ -1349,23 +1628,23 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(json.loads(body), {"policy": "cost", "text": "some text"})
 
     def test_decide_is_none_when_the_service_is_unavailable(self):
-        pls.ENTITLEMENT_SOCKET, _ = self.decide_socket(status=503, payload={"error": "no decider"})
+        pls.PLS_SOCKET, _ = self.decide_socket(status=503, payload={"error": "no decider"})
         self.assertIsNone(asyncio.run(REAL_DECIDE("privacy", "some text")))
 
     def test_decide_is_none_for_a_reply_that_is_not_json(self):
-        pls.ENTITLEMENT_SOCKET, _ = self.decide_socket(raw=b"not json")
+        pls.PLS_SOCKET, _ = self.decide_socket(raw=b"not json")
         self.assertIsNone(asyncio.run(REAL_DECIDE("privacy", "some text")))
 
     def test_decide_is_none_for_an_answer_that_is_neither_yes_nor_no(self):
-        pls.ENTITLEMENT_SOCKET, _ = self.decide_socket(payload={"answer": "maybe", "p_yes": 0.5})
+        pls.PLS_SOCKET, _ = self.decide_socket(payload={"answer": "maybe", "p_yes": 0.5})
         self.assertIsNone(asyncio.run(REAL_DECIDE("privacy", "some text")))
 
     def test_decide_is_none_when_no_socket_is_configured(self):
-        pls.ENTITLEMENT_SOCKET = ""
+        pls.PLS_SOCKET = ""
         self.assertIsNone(asyncio.run(REAL_DECIDE("privacy", "some text")))
 
     def test_decide_is_none_when_the_socket_is_not_there(self):
-        pls.ENTITLEMENT_SOCKET = str(self.dir / "gone.sock")
+        pls.PLS_SOCKET = str(self.dir / "gone.sock")
         self.assertIsNone(asyncio.run(REAL_DECIDE("privacy", "some text")))
 
 
@@ -1440,6 +1719,205 @@ def _fake_send(payload):
         return FakeResponse(payload)
 
     return send
+
+
+class ProfileTest(unittest.TestCase):
+    """Each harness profile's spawn tool, child signal and prompt cleanup."""
+
+    # RouterTest's fixture and helpers, without re-running its tests.
+    configure = RouterTest.configure
+    seed = RouterTest.seed
+    post = RouterTest.post
+    child_messages = RouterTest.child_messages
+
+    def setUp(self):
+        RouterTest.setUp(self)
+        self.addCleanup(pls.PROFILE.reset, pls.PROFILE.set(pls.PROFILES["deepseek"]))
+
+    def use(self, harness, policy="privacy"):
+        """Select `harness` for direct calls and for requests through the route."""
+        pls.PROFILE.set(pls.PROFILES[harness])
+        self.config.write_text(json.dumps({"mode": "hybrid", "policy": policy,
+                                           "max_turns": 20, "harness": harness}))
+
+    def stamped(self, name, arguments):
+        """A parent call to `name` after the router stamped it with a fresh task."""
+        record = self.seed("a prompt", summary="summary")
+        calls = {0: {"name": name, "arguments": json.dumps(arguments)}}
+        pls.stamp_subagent_calls(calls, record, "cost")
+        return record, json.loads(calls[0]["arguments"])
+
+    # -- the spawn call -----------------------------------------------------
+
+    def test_each_profile_stamps_its_own_spawn_field(self):
+        cases = {
+            "deepseek": ("subagent", {"prompt": "go"}, lambda a: a["prompt"]),
+            "opencode-v2": ("subagent", {"prompt": "go"}, lambda a: a["prompt"]),
+            "opencode-v1": ("task", {"prompt": "go"}, lambda a: a["prompt"]),
+            "hermes": ("delegate_task", {"tasks": [{"goal": "go"}]}, lambda a: a["tasks"][0]["goal"]),
+            "openclaw": ("sessions_spawn", {"task": "go"}, lambda a: a["task"]),
+        }
+        for harness, (tool, arguments, field) in cases.items():
+            with self.subTest(harness=harness):
+                self.use(harness)
+                record, patched = self.stamped(tool, arguments)
+                self.assertEqual(field(patched), f"pls-task: {record['id']}\n\ngo")
+
+    def test_every_hermes_task_in_one_call_is_stamped(self):
+        self.use("hermes")
+        record, patched = self.stamped("delegate_task", {"tasks": [{"goal": "a"}, {"goal": "b"}]})
+        self.assertEqual([t["goal"] for t in patched["tasks"]],
+                         [f"pls-task: {record['id']}\n\na", f"pls-task: {record['id']}\n\nb"])
+
+    def test_a_hermes_list_action_is_not_a_spawn_and_is_left_alone(self):
+        self.use("hermes")
+        calls = {0: {"name": "delegate_task", "arguments": '{"action": "list"}'}}
+        self.assertFalse(pls.stamp_subagent_calls(calls, self.seed("p"), "cost"))
+        self.assertEqual(calls[0]["arguments"], '{"action": "list"}')
+
+    def test_another_profiles_spawn_tool_is_not_stamped(self):
+        self.use("hermes")
+        calls = {0: {"name": "subagent", "arguments": '{"prompt": "go"}'}}
+        self.assertFalse(pls.stamp_subagent_calls(calls, self.seed("p"), "cost"))
+
+    def test_the_synthesised_call_carries_each_harness_required_fields(self):
+        expected = {
+            "deepseek": ("subagent", {"description": "Run the task on this device"}),
+            "opencode-v2": ("subagent", {"agent": "general", "description": "Run the task on this device"}),
+            "opencode-v1": ("task", {"subagent_type": "general", "description": "Run the task on this device"}),
+            "hermes": ("delegate_task", {}),
+            "openclaw": ("sessions_spawn", {}),
+        }
+        for harness, (tool, fields) in expected.items():
+            with self.subTest(harness=harness):
+                self.use(harness)
+                record = self.seed("a prompt")
+                body = json.loads(pls.synthetic_json(record).body)
+                call = body["choices"][0]["message"]["tool_calls"][0]["function"]
+                arguments = json.loads(call["arguments"])
+                self.assertEqual(call["name"], tool)
+                for name, value in fields.items():
+                    self.assertEqual(arguments[name], value)
+                prompts = pls.call_prompts({"name": tool, "arguments": call["arguments"]})
+                self.assertEqual(prompts, [f"pls-task: {record['id']}\n\na prompt"])
+
+    def test_an_openclaw_spawn_cannot_name_a_model(self):
+        self.use("openclaw")
+        _, patched = self.stamped("sessions_spawn", {"task": "go", "model": "cloud/big"})
+        self.assertNotIn("model", patched)
+
+    def test_an_already_marked_openclaw_spawn_still_loses_its_model(self):
+        self.use("openclaw")
+        calls = {0: {"name": "sessions_spawn",
+                     "arguments": json.dumps({"task": "pls-task: t1\ngo", "model": "x"})}}
+        self.assertTrue(pls.stamp_subagent_calls(calls, None, "cost"))
+        self.assertNotIn("model", json.loads(calls[0]["arguments"]))
+
+    # -- the guard and the parent's tools --------------------------------------
+
+    def test_privacy_lets_each_parent_call_only_its_spawn_tool_for_a_pending_task(self):
+        for harness in pls.PROFILES:
+            with self.subTest(harness=harness):
+                self.use(harness)
+                record = self.seed("p")
+                spawn = pls.PROFILES[harness].spawn_tool
+                self.assertTrue(pls.guard_verdict({spawn}, "privacy", record))
+                self.assertFalse(pls.guard_verdict({"bash"}, "privacy", record))
+
+    def test_openclaw_privacy_keeps_the_tools_that_collect_results(self):
+        self.use("openclaw")
+        body = {"messages": [{"role": "system", "content": "s"}],
+                "tools": tool_defs("exec", "sessions_spawn", "subagents", "sessions_history")}
+        self.assertEqual(tool_names(pls.apply_policy(body, "privacy")),
+                         ["sessions_spawn", "subagents", "sessions_history"])
+        self.assertTrue(pls.guard_verdict({"subagents"}, "privacy", None))
+
+    def test_the_policy_prompt_names_the_profiles_tool_and_field(self):
+        self.use("hermes")
+        self.assertIn("`delegate_task`", pls.policy_prompt("privacy"))
+        self.assertIn("goal", pls.policy_prompt("cost"))
+        self.assertIn("`delegate_task`", pls.instruction(self.seed("p", summary="summary")))
+
+    # -- the child side ----------------------------------------------------------
+
+    def test_a_parent_session_header_makes_a_request_a_subagent(self):
+        body = {"model": "Hybrid-Wally-0.1", "tools": tool_defs("bash"),
+                "messages": [{"role": "user", "content": "hi"}]}
+        self.assertEqual(pls.classify(body, {"x-parent-session-id": "ses_1"}), "subagent")
+        self.assertEqual(pls.classify(body, {"x-session-id": "ses_1"}), "main")
+        self.assertEqual(pls.classify(body), "main")
+
+    def test_a_parent_session_header_routes_the_request_to_the_local_model(self):
+        self.use("opencode-v2")
+        body = {"model": "Hybrid-Wally-0.1", "stream": False, "tools": tool_defs("bash"),
+                "messages": [{"role": "user", "content": "look around"}]}
+        self.post("/v1/chat/completions", body, {"x-parent-session-id": "ses_1"})
+        self.assertEqual(len(self.local_bodies), 1)
+
+    def test_the_opencode_v2_preface_is_removed_before_the_marker_is_read(self):
+        self.use("opencode-v2")
+        record = self.seed("the real task")
+        messages = [{"role": "user", "content":
+                     f"You are a subagent spawned by another session.\npls-task: {record['id']}\nmore"}]
+        self.assertEqual(pls.find_marker(messages)[1].group(1), record["id"])
+        _, resolved = pls.resolve_child(messages, "cost")
+        self.assertEqual(resolved[0]["content"], "more")
+
+    def test_the_openclaw_context_block_is_kept_and_the_marker_still_found(self):
+        self.use("openclaw")
+        record = self.seed("the real task")
+        envelope = (f"{pls.OPENCLAW_CONTEXT}\n[Subagent Context] depth 1/1\n"
+                    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n")
+        messages = [{"role": "user", "content": f"{envelope}pls-task: {record['id']}\ngo"}]
+        _, resolved = pls.resolve_child(messages, "cost")
+        self.assertTrue(resolved[0]["content"].startswith(pls.OPENCLAW_CONTEXT))
+        self.assertTrue(resolved[0]["content"].endswith("go"))
+        self.assertNotIn("pls-task:", resolved[0]["content"])
+
+    def test_each_profiles_child_loses_its_spawning_tools(self):
+        for harness, profile in pls.PROFILES.items():
+            with self.subTest(harness=harness):
+                self.use(harness)
+                self.local_bodies.clear()
+                body = {"model": "Hybrid-Wally-0.1-local", "stream": False,
+                        "tools": tool_defs("bash", *sorted(profile.child_denied)),
+                        "messages": self.child_messages(self.seed("p"))}
+                self.post("/v1/chat/completions", body)
+                self.assertEqual(tool_names(self.local_bodies[-1]), ["bash"])
+
+    def test_dsh_injected_text_is_a_prompt_to_other_profiles(self):
+        message = {"role": "user", "content": "Current runtime context. cwd=/x"}
+        self.assertTrue(pls.is_injected(message))
+        self.use("hermes")
+        self.assertFalse(pls.is_injected(message))
+
+    def test_an_openclaw_result_announcement_is_not_the_persons_prompt(self):
+        self.use("openclaw")
+        message = {"role": "user", "content": f"{pls.OPENCLAW_CONTEXT}\nresult"}
+        self.assertTrue(pls.is_agent_message(message))
+        self.assertFalse(pls.is_prompt(message))
+
+    # -- config and models ------------------------------------------------------
+
+    def test_an_unknown_harness_falls_back_to_dsh_and_aliases_resolve(self):
+        self.config.write_text(json.dumps({"harness": "nope"}))
+        self.assertEqual(pls.read_config()["harness"], "deepseek")
+        self.config.write_text(json.dumps({"harness": "openwork"}))
+        self.assertEqual(pls.read_config()["harness"], "opencode-v1")
+
+    def test_models_carry_context_and_output_limits(self):
+        self.config.write_text(json.dumps({"cloud_limits": {
+            "context_length": 200000, "max_completion_tokens": 32000}}))
+        rows = {row["id"]: row for row in self.client.get("/v1/models").json()["data"]}
+        self.assertEqual(rows["Hybrid-Wally-0.1"]["context_length"], 200000)
+        self.assertEqual(rows["Hybrid-Wally-0.1"]["max_completion_tokens"], 32000)
+        self.assertEqual(rows["Hybrid-Wally-0.1-local"], {
+            "id": "Hybrid-Wally-0.1-local", "object": "model", "owned_by": "wally",
+            **pls.LOCAL_LIMITS})
+
+    def test_a_bad_cloud_limit_falls_back_to_the_local_one(self):
+        self.config.write_text(json.dumps({"cloud_limits": {"context_length": "big"}}))
+        self.assertEqual(pls.read_config()["cloud_limits"], pls.LOCAL_LIMITS)
 
 
 if __name__ == "__main__":
