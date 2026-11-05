@@ -225,39 +225,57 @@ fn text_is_cut_on_a_char_boundary_not_inside_a_character() {
 
 #[test]
 fn a_decide_reply_below_one_half_answers_no() {
-    let reply = decide_reply(&route_response(0.3), 5);
+    let reply = decide_reply(Policy::Cost, &route_response(0.3), 5);
     assert_eq!(reply["answer"], "no");
     assert_eq!(reply["p_yes"].as_f64(), Some(0.3));
 }
 
 #[test]
 fn a_decide_reply_above_one_half_answers_yes() {
-    let reply = decide_reply(&route_response(0.7), 5);
+    let reply = decide_reply(Policy::Cost, &route_response(0.7), 5);
     assert_eq!(reply["answer"], "yes");
     assert_eq!(reply["p_yes"].as_f64(), Some(0.7));
 }
 
 #[test]
 fn a_decide_reply_at_exactly_one_half_answers_yes() {
-    let reply = decide_reply(&route_response(0.5), 5);
+    let reply = decide_reply(Policy::Cost, &route_response(0.5), 5);
     assert_eq!(reply["answer"], "yes");
 }
 
 #[test]
+fn privacy_treats_a_weak_yes_as_private() {
+    let reply = decide_reply(Policy::Privacy, &route_response(0.4), 5);
+    assert_eq!(reply["answer"], "yes");
+}
+
+#[test]
+fn cost_at_the_same_weak_yes_answers_no() {
+    let reply = decide_reply(Policy::Cost, &route_response(0.4), 5);
+    assert_eq!(reply["answer"], "no");
+}
+
+#[test]
+fn privacy_answers_no_only_below_its_threshold() {
+    let reply = decide_reply(Policy::Privacy, &route_response(0.29), 5);
+    assert_eq!(reply["answer"], "no");
+}
+
+#[test]
 fn a_decide_reply_carries_the_model_name() {
-    let reply = decide_reply(&route_response(0.9), 5);
+    let reply = decide_reply(Policy::Cost, &route_response(0.9), 5);
     assert_eq!(reply["model"], "clef-flash-9b");
 }
 
 #[test]
 fn a_decide_reply_carries_the_elapsed_milliseconds() {
-    let reply = decide_reply(&route_response(0.9), 123);
+    let reply = decide_reply(Policy::Cost, &route_response(0.9), 123);
     assert_eq!(reply["ms"].as_u64(), Some(123));
 }
 
 #[test]
 fn a_successful_decide_reply_has_no_error_key() {
-    let reply = decide_reply(&route_response(0.9), 5);
+    let reply = decide_reply(Policy::Cost, &route_response(0.9), 5);
     assert!(reply.get("error").is_none());
 }
 
@@ -267,7 +285,7 @@ fn a_decide_reply_reads_p_yes_from_the_route_answer_only() {
         ("other", vec![("yes", 0.1), ("no", 0.9)]),
         ("route", vec![("yes", 0.8), ("no", 0.2)]),
     ]);
-    let reply = decide_reply(&response, 5);
+    let reply = decide_reply(Policy::Cost, &response, 5);
     assert_eq!(reply["answer"], "yes");
     assert_eq!(reply["p_yes"].as_f64(), Some(0.8));
 }
@@ -275,21 +293,21 @@ fn a_decide_reply_reads_p_yes_from_the_route_answer_only() {
 #[test]
 fn a_decide_reply_without_a_route_answer_is_an_error() {
     let response = response_with(vec![("other", vec![("yes", 0.9), ("no", 0.1)])]);
-    let reply = decide_reply(&response, 5);
+    let reply = decide_reply(Policy::Cost, &response, 5);
     assert!(reply.get("error").is_some());
     assert!(reply.get("answer").is_none());
 }
 
 #[test]
 fn a_decide_reply_with_no_answers_is_an_error() {
-    let reply = decide_reply(&contract::DecisionsResponse::default(), 5);
+    let reply = decide_reply(Policy::Cost, &contract::DecisionsResponse::default(), 5);
     assert!(reply.get("error").is_some());
 }
 
 #[test]
 fn a_decide_reply_whose_route_answer_has_no_yes_label_is_an_error() {
     let response = response_with(vec![("route", vec![("no", 1.0)])]);
-    let reply = decide_reply(&response, 5);
+    let reply = decide_reply(Policy::Cost, &response, 5);
     assert!(reply.get("error").is_some());
 }
 

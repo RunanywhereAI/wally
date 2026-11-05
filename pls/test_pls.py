@@ -5,7 +5,9 @@ module boundary, so these run in a second.
 """
 
 import asyncio
+import contextlib
 import hashlib
+import io
 import itertools
 import json
 import os
@@ -26,6 +28,7 @@ from fastapi.testclient import TestClient
 import pls
 
 REAL_DECIDE = pls.decide
+REAL_CLOUD_CREDENTIALS = pls.cloud_credentials
 FIXTURE = Path(__file__).parent / "fixtures" / "dsh_first_turn.json"
 PRIVATE_TEXT = "refactor the billing module in src/billing.rs, key sk-live-123"
 SEED_IDS = itertools.count(9001)
@@ -106,6 +109,8 @@ class RouterTest(unittest.TestCase):
         pls.TASK_TEXT.clear()
         pls.turns.clear()
         pls.ENTITLEMENT_SOCKET = ""
+        pls.TOKEN = ""
+        pls.privacy_gap_noted = False
         pls.waiting = 0
         pls.local_sem = asyncio.Semaphore(1)
 
@@ -408,7 +413,8 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(sent, [body])
         self.assertEqual(self.decided, [])
 
-    def test_a_request_without_a_subscription_is_forwarded_untouched(self):
+    def test_cost_without_a_subscription_is_forwarded_untouched(self):
+        self.configure(policy="cost")
         pls.ENTITLEMENT_SOCKET = self.socket(False)
         pls.premium_cache.update(value=False, at=0.0)
         sent = []
@@ -420,11 +426,52 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(sent, [body])
         self.assertEqual(self.decided, [])
 
-    def test_no_subscription_forces_the_cloud_lane(self):
+    def test_privacy_masks_a_private_prompt_when_there_is_no_subscription(self):
+        pls.ENTITLEMENT_SOCKET = self.socket(False)
+        pls.premium_cache.update(value=False, at=0.0)
+        self.say("yes")
+        sent = []
+        pls.http.send = _fake_send_sse(sent, "subagent")
+        marker = "billing-module-prompt-marker"
+        body = {"stream": True, "tools": tool_defs("bash", "read", "subagent"),
+                "messages": [{"role": "system", "content": "s"},
+                             {"role": "user", "content": marker}]}
+        self.cloud_post(body)
+        self.assertNotIn(marker, json.dumps(sent))
+
+    def test_a_missing_local_lane_prints_one_privacy_line(self):
+        pls.ENTITLEMENT_SOCKET = self.socket(False)
+        pls.premium_cache.update(value=False, at=0.0)
+        self.say("yes")
+        pls.http.send = _fake_send_sse([], "subagent")
+        body = {"messages": [{"role": "user", "content": "secret prompt"}],
+                "tools": tool_defs("subagent")}
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.cloud_post(body)
+            self.cloud_post(body)
+        lines = [line for line in err.getvalue().splitlines() if line.startswith("privacy:")]
+        self.assertEqual(lines, [
+            "privacy: the local lane is unavailable, so a private prompt is masked "
+            "and is not sent as written",
+        ])
+
+    def test_privacy_keeps_a_child_off_the_cloud_without_a_subscription(self):
+        pls.ENTITLEMENT_SOCKET = self.socket(False)
+        pls.premium_cache.update(value=False, at=0.0)
+        sent = []
+        pls.http.send = _fake_send_sse(sent, None)
+        response = self.post_child(self.seed("a prompt"))
+        self.assertEqual(sent, [])
+        self.assertEqual(self.local_bodies, [])
+        self.assertIn("withheld", self.answer(response))
+
+    def test_cost_without_a_subscription_uses_the_cloud_for_a_child(self):
+        self.configure(policy="cost")
         pls.ENTITLEMENT_SOCKET = self.socket(False)
         pls.premium_cache.update(value=False, at=0.0)
         pls.http.send = _fake_send(completion("cloud answer"))
-        response = self.post_child(self.seed("a prompt"))
+        response = self.post_child(self.seed("a prompt", policy="cost"))
         self.assertEqual(self.answer(response), "cloud answer")
         self.assertEqual(self.local_bodies, [])
 
@@ -504,13 +551,37 @@ class RouterTest(unittest.TestCase):
         self.cloud_post(dsh_first_turn())
         self.assertEqual(self.decided, [("cost", DSH_PROMPT)])
 
-    def test_a_side_call_without_tools_is_not_decided(self):
+    def test_a_side_call_without_tools_is_not_decided_under_cost(self):
+        self.configure(policy="cost")
         # dsh's session-title request: two messages, no tools.
         self.cloud_post({"model": "x", "messages": [
             {"role": "system", "content": "Create a concise title for an AI coding-assistant session."},
             {"role": "user", "content": "Generate the session title from this JSON array of human messages"},
         ]})
         self.assertEqual(self.decided, [])
+
+    def test_a_private_tool_less_prompt_does_not_reach_the_cloud(self):
+        self.say("yes")
+        marker = "session-title-from-the-first-prompt"
+        sent = []
+        pls.http.send = _fake_send_sse(sent, None)
+        self.cloud_post({"model": "x", "messages": [
+            {"role": "system", "content": "Create a concise title"},
+            {"role": "user", "content": marker},
+        ]})
+        blob = json.dumps(sent)
+        self.assertNotIn(marker, blob)
+        self.assertIn(pls.PRIVATE_SIDE_MASK, blob)
+        self.assertNotIn("pls-task:", blob)
+
+    def test_a_tool_less_prompt_is_masked_when_the_decision_fails(self):
+        self.verdict = None
+        marker = "the user's first prompt"
+        sent = []
+        pls.http.send = _fake_send_sse(sent, None)
+        self.cloud_post({"messages": [{"role": "user", "content": marker}]})
+        self.assertNotIn(marker, json.dumps(sent))
+        self.assertIn(pls.PRIVATE_SIDE_MASK, json.dumps(sent))
 
     def test_the_same_prompt_on_a_later_request_is_not_decided_again(self):
         self.cloud_post(dsh_first_turn())
@@ -1064,6 +1135,31 @@ class RouterTest(unittest.TestCase):
 
     # -- launch token ------------------------------------------------------
 
+    def test_stats_and_debug_require_the_launch_token(self):
+        pls.TOKEN = "s3cret"
+        try:
+            for path in ("/stats", "/debug/state", "/debug/export"):
+                with self.subTest(path=path):
+                    self.assertEqual(self.client.get(path).status_code, 401)
+            self.assertEqual(self.client.post("/stats/reset").status_code, 401)
+            self.assertEqual(asyncio.run(self._events_status()), 401)
+        finally:
+            pls.TOKEN = ""
+
+    async def _events_status(self):
+        transport = httpx.ASGITransport(app=pls.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://router") as client:
+            response = await client.get("/debug/events")
+            return response.status_code
+
+    def test_stats_accepts_the_launch_token(self):
+        pls.TOKEN = "s3cret"
+        try:
+            response = self.client.get("/stats", headers={"x-pls-token": "s3cret"})
+            self.assertEqual(response.status_code, 200)
+        finally:
+            pls.TOKEN = ""
+
     def test_a_request_without_the_launch_token_is_refused(self):
         pls.TOKEN = "s3cret"
         try:
@@ -1122,6 +1218,43 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(sent, [])
         self.assertEqual(response.status_code, 200)
 
+    def test_cancelling_a_queued_request_drops_waiting(self):
+        record = self.seed("a prompt")
+
+        async def scenario():
+            await pls.local_sem.acquire()
+            pls.waiting = 0
+            transport = httpx.ASGITransport(app=pls.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://router") as client:
+                task = asyncio.create_task(client.post(
+                    "/local/v1/chat/completions",
+                    json={"model": "x", "messages": self.child_messages(record)},
+                    headers={"x-session-id": "s"},
+                ))
+                for _ in range(50):
+                    if pls.waiting == 1:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(pls.waiting, 1)
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                await asyncio.sleep(0.05)
+            pls.local_sem.release()
+            return pls.waiting
+
+        self.assertEqual(asyncio.run(scenario()), 0)
+
+    def test_a_local_only_child_does_not_overflow_under_cost(self):
+        self.configure(policy="cost")
+        sent = []
+        pls.http.send = _fake_send_sse(sent, None)
+        record = self.seed("secret file body", policy="cost", summary="local_only")
+        finished, response = self.full_queue_child_request(record)
+        self.assertFalse(finished)
+        self.assertEqual(sent, [])
+        self.assertEqual(response.status_code, 200)
+
     def test_cost_overflows_a_child_to_the_cloud_when_the_queue_is_full(self):
         self.configure(policy="cost")
         pls.http.send = _fake_send(completion("cloud answer"))
@@ -1132,6 +1265,74 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(self.local_bodies, [])
 
     # -- the decision client ----------------------------------------------
+
+    def test_decide_waits_as_long_as_the_server_allows(self):
+        seen = {}
+        real = asyncio.wait_for
+
+        async def wrapped(awaitable, timeout):
+            seen["timeout"] = timeout
+            return await real(awaitable, timeout)
+
+        asyncio.wait_for = wrapped
+        try:
+            pls.ENTITLEMENT_SOCKET, _ = self.decide_socket(
+                payload={"answer": "yes", "p_yes": 0.9, "model": "m", "ms": 1})
+            result = asyncio.run(REAL_DECIDE("privacy", "slow"))
+        finally:
+            asyncio.wait_for = real
+        self.assertEqual(result["answer"], "yes")
+        self.assertGreaterEqual(seen["timeout"], 120)
+
+    def test_credentials_are_opened_at_mode_0600(self):
+        modes = []
+        real_open = os.open
+
+        def wrapped(path, flags, mode=0o777, *args, **kwargs):
+            if str(path).endswith(".json.tmp"):
+                modes.append(mode & 0o777)
+            return real_open(path, flags, mode, *args, **kwargs)
+
+        os.open = wrapped
+        try:
+            pls.write_credentials({"access_token": "a", "refresh_token": "b"})
+        finally:
+            os.open = real_open
+        self.assertEqual(modes, [0o600])
+        self.assertEqual(stat.S_IMODE(self.creds.stat().st_mode), 0o600)
+
+    def test_cloud_credentials_take_the_socket_token_and_leave_the_file(self):
+        pls.ENTITLEMENT_SOCKET = self.token_socket()
+        before = self.creds.read_text()
+        creds = asyncio.run(REAL_CLOUD_CREDENTIALS())
+        self.assertEqual(creds["access_token"], "access-from-wally")
+        self.assertEqual(self.creds.read_text(), before)
+
+    def token_socket(self, access="access-from-wally", console="http://cloud"):
+        path = str(self.dir / "token.sock")
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        server = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
+        server.bind(path)
+        server.listen(1)
+
+        def serve():
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            conn.recv(512)
+            body = json.dumps({"access_token": access, "console_url": console}).encode()
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\ncontent-length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+            )
+            conn.close()
+            server.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        return path
 
     def test_decide_returns_the_answer_and_probability_from_the_socket(self):
         pls.ENTITLEMENT_SOCKET, _ = self.decide_socket(

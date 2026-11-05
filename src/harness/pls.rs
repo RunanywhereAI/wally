@@ -38,6 +38,18 @@ const DECIDE_TEXT_MAX: usize = 32 * 1024;
 const DECIDE_BODY_MAX: usize = 256 * 1024;
 /// How long one decision may take, load included, before the router is told no.
 const DECIDE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+/// Lowest `p_yes` that answers yes. Privacy asks whether the prompt is
+/// private; a yes keeps it on device, so calling it not-private takes a
+/// clearer no than a coin flip. Cost stays at an even split.
+const PRIVACY_YES_THRESHOLD: f64 = 0.3;
+const COST_YES_THRESHOLD: f64 = 0.5;
+
+fn yes_threshold(policy: Policy) -> f64 {
+    match policy {
+        Policy::Privacy => PRIVACY_YES_THRESHOLD,
+        Policy::Cost => COST_YES_THRESHOLD,
+    }
+}
 
 /// Whether the router can run here. Its local lane is MLX and its entitlement
 /// socket is a Unix socket, so only macOS qualifies.
@@ -150,7 +162,11 @@ pub(crate) fn parse_decide_body(bytes: &[u8]) -> Result<DecideBody, String> {
 
 /// The `/decide` reply for a scored request. `error` is set when the model
 /// gave no yes probability for the `route` question.
-pub(crate) fn decide_reply(response: &contract::DecisionsResponse, ms: u128) -> serde_json::Value {
+pub(crate) fn decide_reply(
+    policy: Policy,
+    response: &contract::DecisionsResponse,
+    ms: u128,
+) -> serde_json::Value {
     let p_yes = response
         .answers
         .0
@@ -159,7 +175,7 @@ pub(crate) fn decide_reply(response: &contract::DecisionsResponse, ms: u128) -> 
         .copied();
     match p_yes {
         Some(p_yes) => serde_json::json!({
-            "answer": if p_yes >= 0.5 { "yes" } else { "no" },
+            "answer": if p_yes >= yes_threshold(policy) { "yes" } else { "no" },
             "p_yes": p_yes,
             "model": response.model,
             "ms": ms as u64,
@@ -243,14 +259,16 @@ impl Decider {
                     let Some(component) = loaded.as_ref() else {
                         continue;
                     };
-                    let request = build_decide_request(job.body.policy, &job.body.text);
+                    let policy = job.body.policy;
+                    let request = build_decide_request(policy, &job.body.text);
                     let started = std::time::Instant::now();
                     let scored = {
                         let _hush = crate::util::hush::HushedStdout::mute();
                         crate::commands::cmd_decisions::score_loaded(component, &request)
                     };
-                    let reply = scored
-                        .map(|response| decide_reply(&response, started.elapsed().as_millis()));
+                    let reply = scored.map(|response| {
+                        decide_reply(policy, &response, started.elapsed().as_millis())
+                    });
                     let _ = job.reply.send(reply);
                 }
             })
@@ -283,6 +301,9 @@ pub struct Router {
     /// Per-launch secret; the providers send it as `x-pls-token` so another
     /// local process cannot spend the account's cloud quota.
     pub token: String,
+    /// Set once `running` reaps the child, so a later drop does not signal a
+    /// recycled pid and `wally pls` can return this status.
+    exit_code: Option<i32>,
     #[allow(dead_code)] // held for its Drop; the router reads it over the socket
     entitlement: Option<Entitlement>,
 }
@@ -290,8 +311,35 @@ pub struct Router {
 impl Router {
     /// Whether the router process is still alive.
     pub fn running(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        match self.child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                self.exit_code = Some(status.code().unwrap_or(1));
+                false
+            }
+            Err(_) => {
+                self.exit_code = Some(1);
+                false
+            }
+        }
     }
+
+    /// The child's exit status. `0` while it is still running.
+    pub fn exit_code(&mut self) -> i32 {
+        if self.running() {
+            0
+        } else {
+            self.exit_code.unwrap_or(1)
+        }
+    }
+}
+
+/// Block until the router exits and return its status.
+pub fn wait_exit(router: &mut Router) -> i32 {
+    while router.running() {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    router.exit_code()
 }
 
 impl Drop for Router {
@@ -482,6 +530,18 @@ fn answer(mut stream: UnixStream, premium: bool, decider: Option<Arc<Decider>>) 
             return;
         }
     };
+    if request_line.starts_with("GET /token") {
+        let force = request_line.contains("refresh=1");
+        match token_reply(force) {
+            Ok(body) => respond(&mut stream, "200 OK", &body),
+            Err(error) => respond(
+                &mut stream,
+                "503 Service Unavailable",
+                &serde_json::json!({ "error": error }),
+            ),
+        }
+        return;
+    }
     if !request_line.starts_with("POST /decide ") {
         respond(
             &mut stream,
@@ -520,11 +580,69 @@ fn answer(mut stream: UnixStream, premium: bool, decider: Option<Arc<Decider>>) 
     }
 }
 
+/// Write a refresh grant back to the profile. An empty rotated refresh token
+/// keeps the previous one; a non-empty one replaces it. The access token is
+/// always the grant's.
+fn apply_grant(
+    credentials: &mut account::Credentials,
+    grant: &account::Grant,
+) -> Result<(), String> {
+    if grant.access_token.is_empty() {
+        return Err("refresh returned no access token".to_string());
+    }
+    credentials.access_token = grant.access_token.clone();
+    if !grant.refresh_token.is_empty() {
+        credentials.refresh_token = grant.refresh_token.clone();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    credentials.expires_at = now
+        + if grant.expires_in > 0 {
+            grant.expires_in
+        } else {
+            3600
+        };
+    account::save(credentials)
+}
+
+fn refresh_and_store(credentials: &mut account::Credentials) -> Result<account::Grant, String> {
+    if credentials.refresh_token.is_empty() {
+        return Err("the cloud session cannot be refreshed".to_string());
+    }
+    let grant = account::refresh(&credentials.console_url, &credentials.refresh_token)?;
+    apply_grant(credentials, &grant)?;
+    Ok(grant)
+}
+
+/// The access token the router should send to the cloud. `force` refreshes
+/// even when the stored token has not expired, which is how a 401 is recovered
+/// without the router rotating the token itself.
+fn token_reply(force: bool) -> Result<serde_json::Value, String> {
+    let mut credentials = account::load()?;
+    if credentials.console_url.is_empty() || !credentials.signed_in() {
+        return Err("not signed in".to_string());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if force || credentials.access_token_expired(now, 60) {
+        refresh_and_store(&mut credentials)?;
+    }
+    Ok(serde_json::json!({
+        "access_token": credentials.access_token,
+        "console_url": credentials.console_url,
+    }))
+}
+
 /// Whether the signed-in account may run work on the local model.
 ///
 /// A plan the console does not describe counts as premium only when it says
 /// so; anything else, including a console that cannot be reached twice, is
-/// false so the router falls back to the cloud.
+/// false so the router falls back to the cloud. A refresh that rotates the
+/// token is written back before this returns.
 fn check_entitlement() -> bool {
     let Ok(mut credentials) = account::load() else {
         return false;
@@ -535,18 +653,10 @@ fn check_entitlement() -> bool {
     if let Ok(identity) = account::who_am_i(&credentials.console_url, &credentials.access_token) {
         return plan_is_premium(&identity.plan);
     }
-    if credentials.refresh_token.is_empty() {
-        return false;
+    match refresh_and_store(&mut credentials) {
+        Ok(grant) => plan_is_premium(&grant.plan),
+        Err(_) => false,
     }
-    let Ok(grant) = account::refresh(&credentials.console_url, &credentials.refresh_token) else {
-        return false;
-    };
-    credentials.access_token = grant.access_token;
-    if grant.refresh_token.is_empty() {
-        return false;
-    }
-    credentials.refresh_token = grant.refresh_token;
-    plan_is_premium(&grant.plan)
 }
 
 fn plan_is_premium(plan: &str) -> bool {
@@ -637,7 +747,12 @@ fn ensure_venv(script: &Path) -> Option<PathBuf> {
         return Some(python);
     }
 
-    let uv = uv_path()?;
+    let Some(uv) = uv_path() else {
+        out::error_line(
+            "uv is not on PATH; install it to prepare the hybrid router's Python runtime",
+        );
+        return None;
+    };
     std::fs::create_dir_all(config_dir()).ok()?;
     let mut bar = crate::progress::progress_bar::Indeterminate::new(true);
     bar.set("preparing local runtime");
@@ -659,6 +774,7 @@ fn ensure_venv(script: &Path) -> Option<PathBuf> {
     let synced = Command::new(&uv)
         .arg("pip")
         .arg("sync")
+        .arg("--require-hashes")
         .arg("--quiet")
         .arg(&lock)
         .arg("--python")
@@ -755,7 +871,13 @@ pub fn start(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Ro
 
     sweep_stale();
     std::fs::create_dir_all(config_dir()).ok()?;
-    let token = launch_token();
+    let token = match launch_token() {
+        Ok(token) => token,
+        Err(error) => {
+            out::error_line(&error);
+            return None;
+        }
+    };
 
     let mut bar = crate::progress::progress_bar::Indeterminate::new(true);
     bar.set("starting router");
@@ -836,27 +958,25 @@ pub fn start(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Ro
         child,
         base_url,
         token,
+        exit_code: None,
         entitlement: Entitlement::start(decider),
     })
 }
 
-/// A fresh 128-bit hex secret for this launch.
-fn launch_token() -> String {
+/// A fresh 128-bit hex secret, or an error when the CSPRNG cannot fill it.
+/// A predictable fallback would let another local process forge the header.
+fn launch_token() -> Result<String, String> {
     let mut bytes = [0u8; 16];
     // The OS CSPRNG on every platform; `/dev/urandom` does not exist on Windows.
     let filled = getrandom::fill(&mut bytes).is_ok();
+    token_or_refuse(filled, bytes)
+}
+
+fn token_or_refuse(filled: bool, bytes: [u8; 16]) -> Result<String, String> {
     if !filled {
-        let seed = format!(
-            "{}{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        );
-        return format!("{:x}", fnv1a(seed.as_bytes()));
+        return Err("could not generate a launch token".to_string());
     }
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 #[cfg(test)]
@@ -869,10 +989,80 @@ mod tests {
 
     #[test]
     fn a_launch_token_is_128_bits_of_hex() {
-        let first = launch_token();
+        let first = launch_token().expect("the test host has a CSPRNG");
         assert_eq!(first.len(), 32);
         assert!(first.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(first, launch_token());
+        assert_ne!(first, launch_token().expect("the test host has a CSPRNG"));
+    }
+
+    #[test]
+    fn a_failed_entropy_read_is_not_a_token() {
+        let error =
+            token_or_refuse(false, [7; 16]).expect_err("a failed fill must not invent a token");
+        assert!(error.contains("launch token"));
+    }
+
+    #[test]
+    fn a_rotated_refresh_token_is_written_to_the_profile() {
+        let _lock = crate::util::env_lock::lock();
+        let dir = std::env::temp_dir().join(format!("wally-pls-cred-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("WALLY_PROFILE_DIR", &dir);
+        struct ClearProfile;
+        impl Drop for ClearProfile {
+            fn drop(&mut self) {
+                std::env::remove_var("WALLY_PROFILE_DIR");
+            }
+        }
+        let _clear = ClearProfile;
+        let mut credentials = account::Credentials {
+            console_url: "https://console.example".to_string(),
+            email: "a@example.com".to_string(),
+            access_token: "old-access".to_string(),
+            refresh_token: "old-refresh".to_string(),
+            expires_at: 1,
+        };
+        account::save(&credentials).unwrap();
+        let grant = account::Grant {
+            access_token: "new-access".to_string(),
+            refresh_token: "new-refresh".to_string(),
+            email: String::new(),
+            plan: "pro".to_string(),
+            expires_in: 3600,
+        };
+        apply_grant(&mut credentials, &grant).unwrap();
+        let loaded = account::load().unwrap();
+        assert_eq!(loaded.access_token, "new-access");
+        assert_eq!(loaded.refresh_token, "new-refresh");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_router_that_exits_nonzero_reports_that_status() {
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "exit 7"]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", "exit 7"]);
+            command
+        };
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn exit probe");
+        let mut router = Router {
+            child,
+            base_url: String::new(),
+            token: String::new(),
+            exit_code: None,
+            entitlement: None,
+        };
+        assert_eq!(wait_exit(&mut router), 7);
     }
 
     #[test]

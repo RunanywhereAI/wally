@@ -44,6 +44,12 @@ POLICIES = ("privacy", "cost")
 DEFAULT_MAX_TURNS = 20
 QUEUE_MAX = 8
 SUMMARY_MAX_TOKENS = 512
+# Same budget as DECIDE_TIMEOUT in src/harness/pls.rs, model load included.
+# The first prompt of a session usually pays for that load.
+DECIDE_TIMEOUT_S = 120
+# A tool-less side call (dsh's session title) cannot delegate. A private
+# prompt is replaced with this so the title request does not carry it.
+PRIVATE_SIDE_MASK = "[private: kept on this device]"
 
 WITHHELD = (
     "[content withheld: this subagent ran under local-only disclosure — its "
@@ -123,6 +129,7 @@ DEBUG = os.environ.get("PLS_DEBUG") == "1"
 EVENTS: "collections.deque[dict]" = collections.deque(maxlen=1000)
 SUBSCRIBERS: "set[asyncio.Queue]" = set()
 premium_cache = {"value": False, "at": 0.0}
+privacy_gap_noted = False
 
 PROFILE_DIR = Path(
     os.environ.get("WALLY_PROFILE_DIR")
@@ -355,7 +362,7 @@ async def decide(policy: str, text: str) -> dict | None:
             + f"content-length: {len(payload)}\r\n\r\n".encode() + payload
         )
         await writer.drain()
-        raw = await asyncio.wait_for(reader.read(), 5)
+        raw = await asyncio.wait_for(reader.read(), DECIDE_TIMEOUT_S)
         writer.close()
     except (OSError, TimeoutError) as error:
         log({"event": "decide_failed", "error": str(error) or type(error).__name__})
@@ -469,6 +476,36 @@ def apply_policy(body: dict, policy: str) -> dict:
         shaped["tools"] = [t for t in body["tools"]
                            if (t.get("function") or {}).get("name") == SUBAGENT_TOOL]
     return shaped
+
+
+def mask_private_prompts(body: dict) -> dict:
+    """Replace private prompts and add nothing else.
+
+    A side call has no tools, so the delegate instruction would be echoed back
+    (dsh's session title is one of these). The raw prompt still must not leave.
+    """
+    messages = []
+    for message in body.get("messages") or []:
+        record = TASKS.get(prompt_key(message_text(message))) if is_prompt(message) else None
+        if record and record.get("private"):
+            messages.append({**message, "content": PRIVATE_SIDE_MASK})
+        else:
+            messages.append(message)
+    return {**body, "messages": messages}
+
+
+def note_privacy_gap() -> None:
+    """One terminal line when privacy cannot keep the turn on device."""
+    global privacy_gap_noted
+    if privacy_gap_noted:
+        return
+    privacy_gap_noted = True
+    print(
+        "privacy: the local lane is unavailable, so a private prompt is masked "
+        "and is not sent as written",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def pending_task(body: dict) -> dict | None:
@@ -785,11 +822,14 @@ def read_credentials() -> dict:
 
 
 def write_credentials(creds: dict) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    """Create the credential file at mode 0600. chmod after write leaves a window."""
+    CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CREDENTIALS_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(creds))
-    os.chmod(tmp, 0o600)
-    tmp.replace(CREDENTIALS_PATH)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump(creds, handle)
+        handle.write("\n")
+    os.replace(tmp, CREDENTIALS_PATH)
 
 
 async def refresh_credentials(creds: dict) -> dict:
@@ -824,8 +864,41 @@ async def refresh_credentials(creds: dict) -> dict:
     return creds
 
 
+async def ask_wally(path: str) -> dict | None:
+    """One JSON object from the entitlement socket. None when wally is absent."""
+    if not ENTITLEMENT_SOCKET:
+        return None
+    try:
+        reader, writer = await asyncio.open_unix_connection(ENTITLEMENT_SOCKET)
+        writer.write(f"GET {path} HTTP/1.1\r\nHost: local\r\n\r\n".encode())
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(8192), 2)
+        writer.close()
+    except (OSError, TimeoutError):
+        return None
+    head, _, body = raw.partition(b"\r\n\r\n")
+    if not head.startswith(b"HTTP/1.1 200"):
+        return None
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 async def cloud_credentials() -> dict:
+    """The cloud token. Wally owns refresh when the socket is up.
+
+    A router beside wally must not rotate the refresh token itself: the
+    entitlement check does that and writes the profile. Doing both signs the
+    account out when the console rotates the token.
+    """
+    fresh = await ask_wally("/token")
+    if fresh and fresh.get("access_token") and fresh.get("console_url"):
+        return {"access_token": fresh["access_token"], "console_url": fresh["console_url"]}
     creds = read_credentials()
+    if ENTITLEMENT_SOCKET:
+        return creds
     expires_at = int(creds.get("expires_at") or 0)
     if expires_at and expires_at <= time.time() + 60:
         creds = await refresh_credentials(creds)
@@ -971,8 +1044,18 @@ def health():
     return {"ok": True, "mode": read_config()["mode"]}
 
 
+def token_rejected(request: Request):
+    if TOKEN and not secrets.compare_digest(request.headers.get("x-pls-token", ""), TOKEN):
+        return JSONResponse(
+            {"error": {"message": "missing or wrong x-pls-token"}}, status_code=401
+        )
+    return None
+
+
 @app.get("/stats")
-def stats():
+def stats(request: Request):
+    if rejected := token_rejected(request):
+        return rejected
     data = dict(STATS)
     data["mode"] = read_config()["mode"]
     data["waiting"] = waiting
@@ -981,7 +1064,9 @@ def stats():
 
 
 @app.post("/stats/reset")
-def stats_reset():
+def stats_reset(request: Request):
+    if rejected := token_rejected(request):
+        return rejected
     for key in ("requests", "errors", "queued", "overflow", "local_turns",
                 "cloud_tokens", "local_tokens", "cap_hits", "guard_retries",
                 "guard_synth", "decisions", "decision_failures"):
@@ -1070,13 +1155,17 @@ def debug_page():
 
 
 @app.get("/debug/state")
-def debug_state():
+def debug_state(request: Request):
+    if rejected := token_rejected(request):
+        return rejected
     return {"mode": read_config()["mode"], "sub": premium_cache["value"],
             "events": list(EVENTS)}
 
 
 @app.get("/debug/export")
-def debug_export():
+def debug_export(request: Request):
+    if rejected := token_rejected(request):
+        return rejected
     body = "\n".join(json.dumps(event) for event in EVENTS)
     return Response(
         body + "\n",
@@ -1086,7 +1175,9 @@ def debug_export():
 
 
 @app.get("/debug/events")
-async def debug_events():
+async def debug_events(request: Request):
+    if rejected := token_rejected(request):
+        return rejected
     queue: asyncio.Queue = asyncio.Queue()
     SUBSCRIBERS.add(queue)
 
@@ -1100,15 +1191,30 @@ async def debug_events():
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+def withheld_completion(stream: bool) -> Response:
+    """A local answer that never left the device, for a lane we cannot run."""
+    result = {
+        "id": "chatcmpl-pls-withheld",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": MODEL_ID,
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {
+            "role": "assistant",
+            "content": WITHHELD,
+        }}],
+    }
+    if stream:
+        return as_stream(result)
+    return JSONResponse(result)
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 async def route(path: str, request: Request):
     if path in ("v1/models", "local/v1/models"):
         return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "wally"}]}
 
-    if TOKEN and not secrets.compare_digest(request.headers.get("x-pls-token", ""), TOKEN):
-        return JSONResponse(
-            {"error": {"message": "missing or wrong x-pls-token"}}, status_code=401
-        )
+    if rejected := token_rejected(request):
+        return rejected
 
     body: dict = {}
     if request.method == "POST":
@@ -1141,17 +1247,35 @@ async def route(path: str, request: Request):
     log({"event": "route", "path": path, "lane": lane, "mode": config["mode"],
          "policy": policy, "reason": reason, "sub": sub, "messages": len(messages)})
 
+    # An explicit cloud mode forwards the harness body. Privacy still applies
+    # on the hybrid lane, including when there is no local model to run it.
+    if config["mode"] == "cloud":
+        return await cloud(upstream_path, body, request)
+
+    # A local-lane call we cannot run. Under privacy its prompt stays here.
+    if path.startswith("local/") and not sub:
+        if policy == "privacy":
+            note_privacy_gap()
+            return withheld_completion(bool(body.get("stream")))
+        return await cloud(upstream_path, body, request)
+
     if lane == "local":
         return await local(upstream_path, body, request, config)
 
-    # Cloud mode, or an account without the local lane: the cloud gets the
-    # request exactly as the harness sent it. So does a side call with no
-    # tools (dsh's session-title request): it cannot delegate, and an
-    # instruction appended to it ends up in the title.
-    if not sub or config["mode"] == "cloud" or not body.get("tools"):
+    # Privacy shapes a tool-less side call and an unentitled account. A side
+    # call is masked rather than instructed, so a session title does not
+    # echo the delegate line. Cost forwards both as the harness sent them.
+    side_call = not body.get("tools")
+    if policy == "privacy" and (not sub or side_call):
+        if not sub:
+            note_privacy_gap()
+        await ensure_tasks(body, policy)
+        if side_call:
+            return await cloud(upstream_path, mask_private_prompts(body), request)
+    elif not sub or side_call:
         return await cloud(upstream_path, body, request)
-
-    await ensure_tasks(body, policy)
+    else:
+        await ensure_tasks(body, policy)
     record = pending_task(body)
     shaped = apply_policy(body, policy)
 
@@ -1299,7 +1423,15 @@ async def cloud(path: str, body: dict, request: Request,
         response = await send(creds["access_token"])
         if response.status_code == 401:
             await response.aclose()
-            creds = await refresh_credentials(creds)
+            if ENTITLEMENT_SOCKET:
+                fresh = await ask_wally("/token?refresh=1")
+                if fresh and fresh.get("access_token"):
+                    creds = {
+                        "access_token": fresh["access_token"],
+                        "console_url": fresh.get("console_url") or creds.get("console_url", ""),
+                    }
+            else:
+                creds = await refresh_credentials(creds)
             response = await send(creds["access_token"])
     except Exception as error:
         STATS["errors"] += 1

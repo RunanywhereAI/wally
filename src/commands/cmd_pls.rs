@@ -42,13 +42,8 @@ pub fn register_pls(app: &mut App) {
             pls::config_file().display()
         ));
         out::status_line("press ctrl-c to stop");
-        // The router owns its own lifetime; park until it exits.
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            if !router.running() {
-                break;
-            }
-        }
-        0
+        // The router owns its own lifetime; park until it exits and surface
+        // its status so a crash is not reported as a clean stop.
+        pls::wait_exit(&mut router)
     });
 }
