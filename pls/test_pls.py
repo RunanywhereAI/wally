@@ -565,6 +565,60 @@ class RouterTest(unittest.TestCase):
         names = [t["function"]["name"] for t in self.local_bodies[0]["tools"]]
         self.assertEqual(names, ["read"])
 
+    # -- streaming through the guard ----------------------------------------
+
+    def stream_reply(self, text, tool=None):
+        """One streamed cloud reply: a text delta, then optionally a tool call."""
+        events = [{"choices": [{"index": 0, "delta": {"role": "assistant", "content": text}}]}]
+        if tool:
+            events.append({"choices": [{"index": 0, "delta": {"tool_calls": [
+                {"index": 0, "function": {"name": tool, "arguments": "{}"}}]}}]})
+        events.append({"choices": [{"index": 0, "delta": {},
+                                    "finish_reason": "tool_calls" if tool else "stop"}]})
+        body = "".join(f"data: {json.dumps(e)}\n\n" for e in events) + "data: [DONE]\n\n"
+        sent = []
+
+        async def send(request, stream=False):
+            sent.append(json.loads(request.content))
+            return FakeStream(body.encode())
+
+        pls.http.send = send
+        return sent
+
+    def test_guarded_text_reaches_the_harness(self):
+        sent = self.stream_reply("Here is the plan.")
+        response = self.cloud_post({**self.later(dsh_first_turn()), "stream": True})
+        self.assertIn("Here is the plan.", response.text)
+        self.assertEqual(len(sent), 1)
+
+    def test_a_blocked_call_after_streamed_text_is_dropped_not_asked_again(self):
+        sent = self.stream_reply("Let me look.", tool="bash")
+        response = self.cloud_post({**self.later(dsh_first_turn()), "stream": True})
+        self.assertIn("Let me look.", response.text)
+        self.assertNotIn('"bash"', response.text)
+        self.assertEqual(len(sent), 1)
+
+    def test_a_blocked_call_after_text_on_a_new_prompt_becomes_the_subagent_call(self):
+        self.say("yes")
+        self.stream_reply("On it.", tool="bash")
+        response = self.cloud_post({**dsh_first_turn(PRIVATE_TEXT), "stream": True})
+        record = self.record(PRIVATE_TEXT)
+        self.assertIn('"subagent"', response.text)
+        self.assertIn(f"pls-task: {record['id']}", response.text)
+
+    def test_the_cloud_call_logs_its_timing(self):
+        events = []
+        original = pls.log
+        pls.log = events.append
+        try:
+            self.stream_reply("done")
+            self.cloud_post({**self.later(dsh_first_turn()), "stream": True})
+        finally:
+            pls.log = original
+        done = [e for e in events if e.get("event") == "cloud_done"]
+        self.assertTrue(done and "total_ms" in done[0] and "first_byte_ms" in done[0])
+        self.assertIn("headers_ms", next(e for e in events if e.get("event") == "cloud"))
+
     def test_a_second_user_prompt_is_decided_as_well(self):
         body = self.later(dsh_first_turn())
         body["messages"].append({"role": "user", "content": "now run the tests"})

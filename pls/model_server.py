@@ -34,6 +34,15 @@ MODEL_PATH = os.environ["PLS_MODEL"]
 MODEL_ID = os.environ.get("PLS_MODEL_ID", "Hybrid-Wally-0.1")
 MAX_KV = int(os.environ.get("PLS_MAX_KV", "57344"))
 MAX_OUT = int(os.environ.get("PLS_MAX_OUT", "8192"))
+# APC's defaults hold 2048 x 16 = 32k tokens and two checkpoints, taken every
+# 2048 tokens. Hybrid-attention models (the PPLX 35B) reuse only through
+# checkpoints, and one 12k subagent context alone takes six of them, so a
+# second subagent evicted the first and every turn re-prefilled past the
+# shared system prompt. Fewer, wider checkpoints and a higher cap keep several
+# live contexts.
+APC_BLOCKS = int(os.environ.get("PLS_APC_BLOCKS", "8192"))
+APC_CHECKPOINTS = int(os.environ.get("PLS_APC_CHECKPOINTS", "32"))
+APC_CHECKPOINT_INTERVAL = int(os.environ.get("PLS_APC_CHECKPOINT_INTERVAL", "4096"))
 
 app = FastAPI()
 model = None
@@ -425,7 +434,12 @@ async def load():
         return mlx_vlm.load(MODEL_PATH)
 
     model, processor = await loop.run_in_executor(POOL, _load)
-    apc = APCManager()
+    apc = APCManager(num_blocks=APC_BLOCKS, overrides={
+        "checkpoint_entries": APC_CHECKPOINTS,
+        "checkpoint_interval_tokens": APC_CHECKPOINT_INTERVAL,
+    })
+    log({"event": "apc", "blocks": APC_BLOCKS, "tokens": APC_BLOCKS * apc.block_size,
+         "checkpoints": APC_CHECKPOINTS, "checkpoint_interval": APC_CHECKPOINT_INTERVAL})
     log({"event": "loaded", "model": MODEL_ID, "max_kv": MAX_KV, "max_out": MAX_OUT})
 
 

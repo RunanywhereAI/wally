@@ -62,6 +62,24 @@ class PrefixCacheTest(unittest.TestCase):
                                  json={"messages": follow_up, "max_tokens": 4}).json()
         self.assertGreater(second["usage"]["cached_tokens"], 2000)
 
+    def test_a_context_stays_cached_while_two_others_run(self):
+        # Three 12k-token subagent contexts: past APC's default two checkpoints
+        # and 32k-token pool, which made the first one re-prefill.
+        def context(name):
+            return [{"role": "system", "content": f"Agent {name}. " + f"{name} rule. " * 4000},
+                    {"role": "user", "content": "Say ok."}]
+
+        with TestClient(model_server.app) as client:
+            replies = {}
+            for name in ("alpha", "beta", "gamma"):
+                replies[name] = client.post("/v1/chat/completions", json={
+                    "messages": context(name), "max_tokens": 4}).json()
+            follow_up = [*context("alpha"), replies["alpha"]["choices"][0]["message"],
+                         {"role": "user", "content": "Say ok again."}]
+            again = client.post("/v1/chat/completions",
+                                json={"messages": follow_up, "max_tokens": 4}).json()
+        self.assertGreaterEqual(again["usage"]["cached_tokens"], 8192)
+
 
 if __name__ == "__main__":
     unittest.main()

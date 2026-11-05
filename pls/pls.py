@@ -595,24 +595,67 @@ def patch_call_args(calls: dict[int, dict], record: dict | None) -> bool:
     return changed
 
 
-def calls_stream(calls: dict[int, dict]) -> Response:
-    """Re-emit held calls as one SSE body, after a rewrite."""
+def call_events(calls: dict[int, dict]) -> list[str]:
+    """SSE events that carry `calls` and close the message, without a role chunk."""
     created = int(time.time())
     cid = "chatcmpl-pls-patch"
+    events = [sse(chunk(cid, created, {"tool_calls": [{
+        "index": index,
+        "id": f"call_pls_{index}",
+        "type": "function",
+        "function": {"name": call["name"], "arguments": call["arguments"]},
+    }]})) for index, call in calls.items()]
+    events.append(sse(chunk(cid, created, {}, "tool_calls")))
+    events.append("data: [DONE]\n\n")
+    return events
+
+
+def text_events(text: str) -> list[str]:
+    """SSE events that carry a text reply and close the message."""
+    created = int(time.time())
+    cid = "chatcmpl-pls-note"
+    return [sse(chunk(cid, created, {"content": text})),
+            sse(chunk(cid, created, {}, "stop")),
+            "data: [DONE]\n\n"]
+
+
+def calls_stream(calls: dict[int, dict]) -> Response:
+    """Re-emit held calls as one SSE body, after a rewrite."""
+    role = sse(chunk("chatcmpl-pls-patch", int(time.time()), {"role": "assistant"}))
 
     async def stream():
-        yield sse(chunk(cid, created, {"role": "assistant"}))
-        for index, call in calls.items():
-            yield sse(chunk(cid, created, {"tool_calls": [{
-                "index": index,
-                "id": f"call_pls_{index}",
-                "type": "function",
-                "function": {"name": call["name"], "arguments": call["arguments"]},
-            }]}))
-        yield sse(chunk(cid, created, {}, "tool_calls"))
-        yield "data: [DONE]\n\n"
+        yield role
+        for event in call_events(calls):
+            yield event
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+def carries_text(event: bytes) -> bool:
+    """Whether one SSE event adds visible text (or reasoning) and no tool call."""
+    raw = event.strip()
+    if not raw.startswith(b"data: ") or raw == b"data: [DONE]":
+        return False
+    try:
+        payload = json.loads(raw[len(b"data: "):])
+    except ValueError:
+        return False
+    for choice in payload.get("choices") or []:
+        delta = choice.get("delta") or {}
+        if delta.get("tool_calls"):
+            return False
+        if delta.get("content") or delta.get("reasoning_content"):
+            return True
+    return False
+
+
+async def body_parts(response: Response):
+    """The bytes of a response this router built, streamed or not."""
+    if isinstance(response, StreamingResponse):
+        async for part in response.body_iterator:
+            yield part.encode() if isinstance(part, str) else part
+    else:
+        yield response.body
 
 
 def synthetic_call(record: dict) -> Response:
@@ -1247,6 +1290,11 @@ async def cloud(path: str, body: dict, request: Request,
             stream=stream,
         )
 
+    started = time.monotonic()
+
+    def elapsed() -> float:
+        return round((time.monotonic() - started) * 1000, 1)
+
     try:
         response = await send(creds["access_token"])
         if response.status_code == 401:
@@ -1261,9 +1309,12 @@ async def cloud(path: str, body: dict, request: Request,
 
     STATS["requests"] += 1
     STATS["last"] = {"lane": "cloud", "path": path, "status": response.status_code}
+    # headers_ms is the provider's time to start answering: everything the
+    # model does before its first token, plus the network.
     log({"event": "cloud", "path": path, "status": response.status_code,
          "stream": stream, "content_type": response.headers.get("content-type"),
-         "keys": sorted(body)})
+         "keys": sorted(body), "headers_ms": elapsed(), "attempt": attempt,
+         "guard": guard})
 
     # An error, or a gateway that answered with JSON despite `stream`, is not
     # an event stream. Relaying it as one makes dsh report a transport error
@@ -1311,6 +1362,7 @@ async def cloud(path: str, body: dict, request: Request,
     if not event_stream:
         payload = await response.aread()
         await response.aclose()
+        log({"event": "cloud_done", "path": path, "total_ms": elapsed(), "attempt": attempt})
         if response.status_code == 401:
             payload = _unauthorized(payload)
             return Response(payload, status_code=401, media_type="application/json")
@@ -1338,43 +1390,130 @@ async def cloud(path: str, body: dict, request: Request,
         return Response(payload, status_code=response.status_code,
                         media_type="application/json")
 
-    buffered = b""
+    def renamed(piece: bytes) -> bytes:
+        if not config_cloud_model:
+            return piece
+        return piece.replace(f'"model":"{config_cloud_model}"'.encode(),
+                             f'"model":"{MODEL_ID}"'.encode())
+
+    async def guarded_stream():
+        """Stream text as it arrives; hold tool calls until the guard decides.
+
+        Text cannot run anything, so it goes straight to the harness. From the
+        first tool-call delta on, every event is held, and the guard judges the
+        calls once the reply ends: accepted calls are released (or rewritten),
+        rejected ones are dropped. A rejected reply that showed no text yet is
+        asked again; one that already showed text ends with the router's own
+        subagent call, or a note when there is no task to delegate.
+        """
+        pending = b""
+        held: list[bytes] = []
+        holding = False
+        streamed = False
+        first_ms = None
+        try:
+            async for piece in response.aiter_bytes():
+                if first_ms is None:
+                    first_ms = elapsed()
+                pending += renamed(piece)
+                while b"\n\n" in pending:
+                    event, pending = pending.split(b"\n\n", 1)
+                    event += b"\n\n"
+                    if not holding and b'"tool_calls"' in event:
+                        holding = True
+                    if holding or not carries_text(event):
+                        held.append(event)
+                        continue
+                    for earlier in held:
+                        yield earlier
+                    held.clear()
+                    yield event
+                    streamed = True
+            if pending:
+                held.append(pending)
+        finally:
+            await response.aclose()
+            log({"event": "cloud_done", "path": path, "first_byte_ms": first_ms,
+                 "total_ms": elapsed(), "attempt": attempt, "streamed_text": streamed})
+
+        raw = b"".join(held)
+        calls = parse_calls(raw)
+        names = {call["name"] for call in calls.values()}
+        if guard_verdict(names, policy, record):
+            if SUBAGENT_TOOL in names and patch_call_args(calls, record):
+                log({"event": "guard", "outcome": "patched", "attempt": attempt})
+                if not streamed:
+                    yield sse(chunk("chatcmpl-pls-patch", int(time.time()),
+                                    {"role": "assistant"})).encode()
+                for event in call_events(calls):
+                    yield event.encode()
+                return
+            log({"event": "guard", "outcome": "accepted", "attempt": attempt,
+                 "saw": sorted(names)})
+            yield raw
+            return
+
+        STATS["guard_retries"] += 1
+        log({"event": "guard", "outcome": "rejected", "attempt": attempt,
+             "saw": sorted(names), "streamed_text": streamed})
+        if not streamed and attempt < GUARD_RETRIES:
+            saw = ", ".join(sorted(names)) or "no tool call"
+            task_line = (f" and begin its prompt with `{TASK_MARKER} {record['id']}`"
+                         if record else "")
+            wrong = (f"{ROUTER_TAG} Wrong: you answered with {saw}. Call the "
+                     f"`{SUBAGENT_TOOL}` tool now, nothing else{task_line}.")
+            nudged = {**body, "messages": [*body.get("messages", []), {
+                "role": "user", "content": wrong,
+            }]}
+            retry = await cloud(path, nudged, request, pii, guard=True,
+                                policy=policy, record=record, attempt=attempt + 1)
+            async for part in body_parts(retry):
+                yield part
+            return
+
+        STATS["guard_synth"] += 1
+        if not streamed:
+            yield sse(chunk("chatcmpl-pls-patch", int(time.time()),
+                            {"role": "assistant"})).encode()
+        if record and record.get("summary"):
+            log({"event": "guard", "outcome": "synthesised", "task": record["id"]})
+            synthetic = {0: {"name": SUBAGENT_TOOL, "arguments": ""}}
+            patch_call_args(synthetic, record)
+            for event in call_events(synthetic):
+                yield event.encode()
+            return
+        log({"event": "guard", "outcome": "blocked", "saw": sorted(names)})
+        note = blocked_reply()["choices"][0]["message"]["content"]
+        for event in text_events(("\n\n" if streamed else "") + note):
+            yield event.encode()
+
     if guard:
-        async for piece in response.aiter_bytes():
-            buffered += piece
-        await response.aclose()
-        if config_cloud_model:
-            buffered = buffered.replace(
-                f'"model":"{config_cloud_model}"'.encode(), f'"model":"{MODEL_ID}"'.encode()
-            )
-        settled = await settle(parse_calls(buffered), buffered)
-        return settled if settled is not None else Response(
-            buffered, media_type="text/event-stream"
-        )
+        return StreamingResponse(guarded_stream(), media_type="text/event-stream")
 
     async def relay():
         # Raw bytes, not lines: a provider may split one `data:` event across
         # several lines, and re-framing per line would cut it in half and lose
         # the finish chunk.
         seen_finish = False
+        first_ms = None
         try:
             # aiter_bytes, not aiter_raw: raw yields still-compressed bytes when
             # the gateway gzips, and we do not forward its content-encoding.
             async for piece in response.aiter_bytes():
+                if first_ms is None:
+                    first_ms = elapsed()
                 if b"finish_reason" in piece and b"finish_reason\":null" not in piece:
                     seen_finish = True
-                if config_cloud_model:
-                    piece = piece.replace(
-                        f'"model":"{config_cloud_model}"'.encode(),
-                        f'"model":"{MODEL_ID}"'.encode(),
-                    )
-                yield piece
+                yield renamed(piece)
             if not seen_finish:
                 log({"event": "cloud_no_finish", "path": path})
         finally:
             await response.aclose()
+            log({"event": "cloud_done", "path": path, "first_byte_ms": first_ms,
+                 "total_ms": elapsed(), "attempt": attempt})
 
     return StreamingResponse(relay(), media_type="text/event-stream")
+
 
 
 async def local(path: str, body: dict, request: Request, config: dict):
