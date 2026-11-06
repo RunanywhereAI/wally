@@ -356,7 +356,7 @@ pub struct Router {
     /// local process cannot spend the account's cloud quota.
     pub token: String,
     /// Set once `running` reaps the child, so a later drop does not signal a
-    /// recycled pid and `wally pls` can return this status.
+    /// recycled pid. `exit_code` reads it after the child has been reaped.
     exit_code: Option<i32>,
     #[allow(dead_code)] // held for its Drop; the router reads it over the socket
     socket: Option<WallySocket>,

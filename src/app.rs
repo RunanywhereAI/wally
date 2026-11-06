@@ -77,7 +77,6 @@ pub fn configure_app(app: &mut App) {
     crate::commands::register_chatgpt(app);
     crate::commands::register_openwork(app);
     crate::commands::register_harness(app); // coding agents
-    crate::commands::register_pls(app); // hybrid router, development entry
     crate::commands::register_default_models(app);
 
     crate::commands::register_account(app); // account login/logout/whoami/usage

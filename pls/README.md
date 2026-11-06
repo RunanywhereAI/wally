@@ -77,8 +77,6 @@ If the decision model is unavailable, `privacy` treats every prompt as
 private and `cost` lets the cloud do everything. Records live in
 `tasks.json` (mode `0600`, no prompt text), so a resumed session stays masked.
 
-`wally pls -m <model-directory>` runs the router alone, for development.
-
 ## Subagents
 
 A subagent runs on the local model and cannot launch another: it loses its
@@ -96,7 +94,7 @@ wally serves the router over a unix socket at `~/.config/wally/pls/pls.sock`
 
 ## Debug console (temporary)
 
-Set `PLS_DEBUG=1` and run `wally pls`. Open `<router url>/debug` and watch every
+Set `PLS_DEBUG=1` on a hybrid launch. Open `<router url>/debug` and watch every
 request, its lane, its reason and every file's PII counts live. `/debug/state`
 holds the backlog, `/debug/events` is the stream. Remove once the MVP ships.
 
