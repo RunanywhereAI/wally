@@ -225,7 +225,11 @@ fn root_flags_before_passthrough(argv: &[String]) -> Vec<&str> {
 /// `--context-window` take a following value; the rest are booleans. The `=`
 /// forms carry their value inline.
 fn consumes_following_value(token: &str) -> bool {
-    token == "-m" || token == "--model" || token == "--context-window"
+    token == "-m"
+        || token == "--model"
+        || token == "--context-window"
+        || token == "--cloud-model"
+        || token == "--policy"
 }
 
 fn is_wally_flag(token: &str) -> bool {
@@ -238,6 +242,11 @@ fn is_wally_flag(token: &str) -> bool {
         || token == "--serve"
         || token == "--restore"
         || token == "--cloud"
+        || token == "--hybrid"
+        || token == "--cloud-model"
+        || token.starts_with("--cloud-model=")
+        || token == "--policy"
+        || token.starts_with("--policy=")
         || token == "-h"
         || token == "--help"
 }
@@ -493,6 +502,69 @@ mod tests {
 
     fn argv(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn hybrid_flags_stay_on_wally_side_of_the_passthrough_split() {
+        // `--hybrid` and `--cloud-model` are wally's own; without them in the
+        // wally-flag list a `--` is inserted before them and dsh rejects them.
+        let split = split_passthrough_argv(&argv(&[
+            "wally",
+            "deepseek",
+            "--hybrid",
+            "-m",
+            "qwen3-4b",
+            "--cloud-model",
+            "glm-5.3-flash",
+            "do",
+            "the",
+            "thing",
+        ]));
+        assert_eq!(
+            split,
+            argv(&[
+                "wally",
+                "deepseek",
+                "--hybrid",
+                "-m",
+                "qwen3-4b",
+                "--cloud-model",
+                "glm-5.3-flash",
+                "--",
+                "do",
+                "the",
+                "thing",
+            ])
+        );
+    }
+
+    #[test]
+    fn the_policy_flag_stays_on_wally_side_of_the_passthrough_split() {
+        let split = split_passthrough_argv(&argv(&[
+            "wally",
+            "deepseek",
+            "--hybrid",
+            "--policy",
+            "cost",
+            "-m",
+            "/models/pplx",
+            "--cloud-model",
+            "deepseek-v4.1-flash",
+        ]));
+        assert_eq!(
+            split,
+            argv(&[
+                "wally",
+                "deepseek",
+                "--hybrid",
+                "--policy",
+                "cost",
+                "-m",
+                "/models/pplx",
+                "--cloud-model",
+                "deepseek-v4.1-flash",
+            ])
+        );
     }
 
     #[test]

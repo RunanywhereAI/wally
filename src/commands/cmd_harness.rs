@@ -6,6 +6,57 @@ use crate::commands::resolve_default_model;
 use crate::harness;
 use crate::io::output as out;
 
+/// `--hybrid`, `--cloud-model` and `--policy`, the same on every harness that
+/// has a hybrid launcher.
+pub(crate) fn add_hybrid_flags(command: &mut App) {
+    command.add_flag(
+        "--hybrid",
+        "Run the main agent on a cloud model and its subagents on a local model",
+    );
+    command.add_option(
+        "--cloud-model",
+        ValueType::Text,
+        "The cloud model the main agent uses with --hybrid (default: your default model)",
+    );
+    command.add_option(
+        "--policy",
+        ValueType::Text,
+        "What --hybrid optimises for: privacy (default) or cost",
+    );
+}
+
+/// The hybrid launch a parsed command asks for: `Ok(Some((local, cloud,
+/// policy)))` with `--hybrid`, `Ok(None)` without it, `Err(2)` when
+/// `--cloud-model` or `--policy` came without `--hybrid` or the cloud model
+/// is a decision model.
+pub(crate) fn hybrid_request(
+    p: &crate::cli::Parsed,
+    no_color: bool,
+) -> Result<Option<(String, String, String)>, i32> {
+    if !p.flag("--hybrid") {
+        for flag in ["--cloud-model", "--policy"] {
+            if p.get_str(flag).is_some_and(|value| !value.is_empty()) {
+                out::error_line(&format!("{flag} only applies with --hybrid"));
+                return Err(2);
+            }
+        }
+        return Ok(None);
+    }
+    // `-m` names the *local* model here, so an absent one must not be filled
+    // with the cloud default.
+    let local = p.get_str("--model").unwrap_or_default();
+    let cloud = p
+        .get_str("--cloud-model")
+        .unwrap_or_else(|| resolve_default_model("", no_color));
+    if harness::refuse_decisions_model(Some(cloud.as_str())) {
+        return Err(2);
+    }
+    let policy = p
+        .get_str("--policy")
+        .unwrap_or_else(|| "privacy".to_string());
+    Ok(Some((local, cloud, policy)))
+}
+
 pub fn register_harness(app: &mut App) {
     // `wally opencode <model>` rather than a flag on `run`: it hands the terminal
     // to another program, which is a different thing to do than talk to a model.
@@ -200,6 +251,9 @@ pub fn register_harness(app: &mut App) {
             ValueType::Text,
             "A model on this machine, or a hosted one from your account",
         );
+        if harness::HYBRID_COMMANDS.contains(&agent.id) {
+            add_hybrid_flags(command);
+        }
         command
             .add_option("args", ValueType::Text, "Passed through to the tool")
             .multi();
@@ -213,12 +267,25 @@ pub fn register_harness(app: &mut App) {
             if !harness::ensure_installed(agent.command) {
                 return 127;
             }
-            harness::launch_agent(
-                &agent,
-                &resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color),
-                &p.get_strs("args"),
-                g,
-            )
+            if harness::HYBRID_COMMANDS.contains(&agent.id) {
+                match hybrid_request(p, g.no_color) {
+                    Err(status) => return status,
+                    Ok(Some((local, cloud, policy))) => {
+                        return harness::launch_hybrid(
+                            &agent,
+                            &local,
+                            &cloud,
+                            &policy,
+                            &p.get_strs("args"),
+                            g,
+                        );
+                    }
+                    Ok(None) => {}
+                }
+            }
+            let model =
+                resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color);
+            harness::launch_agent(&agent, &model, &p.get_strs("args"), g)
         });
     }
 }
