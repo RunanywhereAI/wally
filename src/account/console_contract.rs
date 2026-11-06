@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "fd2c17d9504d2259c61c4bfa9b476bdc31a94467ce8c6392d1cf96e21ad98280";
+    "75cdbe852e8df76d9792b7bf0544fd75a8a8b055774846331a2f816bd04445d1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AccountKind {
@@ -262,6 +262,7 @@ impl CliUsageWindowLabel {
 pub enum ErrorCode {
     #[default]
     KBadRequest,
+    KContextLengthExceeded,
     KNotFound,
     KPayloadTooLarge,
     KUnprocessable,
@@ -296,6 +297,7 @@ impl ErrorCode {
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrorCode::KBadRequest => "bad_request",
+            ErrorCode::KContextLengthExceeded => "context_length_exceeded",
             ErrorCode::KNotFound => "not_found",
             ErrorCode::KPayloadTooLarge => "payload_too_large",
             ErrorCode::KUnprocessable => "unprocessable",
@@ -330,6 +332,7 @@ impl ErrorCode {
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
             "bad_request" => Ok(ErrorCode::KBadRequest),
+            "context_length_exceeded" => Ok(ErrorCode::KContextLengthExceeded),
             "not_found" => Ok(ErrorCode::KNotFound),
             "payload_too_large" => Ok(ErrorCode::KPayloadTooLarge),
             "unprocessable" => Ok(ErrorCode::KUnprocessable),

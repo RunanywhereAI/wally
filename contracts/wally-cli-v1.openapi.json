@@ -795,6 +795,7 @@
       "ErrorCode": {
         "enum": [
           "bad_request",
+          "context_length_exceeded",
           "not_found",
           "payload_too_large",
           "unprocessable",
@@ -2514,8 +2515,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "feat/teams",
-    "commit": "810be26b7297195d03f6c48ce1844757aef8210d",
+    "branch": "development",
+    "commit": "5a4af2cec8a0aa7414ecaf7d1051025ca8a370fc",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

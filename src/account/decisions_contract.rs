@@ -11,12 +11,13 @@ use std::collections::BTreeMap;
 
 /// SHA-256 of contracts/wally-decisions-public-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "2201716c3f8f1ac4e5e70046a33939a631aacd503fa7a7a7539236197af4eb97";
+    "30362a607e5552e1815f4a4424d6d84bf9c783c67b31aa9d8b4463959411ff75";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ErrorCode {
     #[default]
     KBadRequest,
+    KContextLengthExceeded,
     KNotFound,
     KPayloadTooLarge,
     KUnprocessable,
@@ -51,6 +52,7 @@ impl ErrorCode {
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrorCode::KBadRequest => "bad_request",
+            ErrorCode::KContextLengthExceeded => "context_length_exceeded",
             ErrorCode::KNotFound => "not_found",
             ErrorCode::KPayloadTooLarge => "payload_too_large",
             ErrorCode::KUnprocessable => "unprocessable",
@@ -85,6 +87,7 @@ impl ErrorCode {
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
             "bad_request" => Ok(ErrorCode::KBadRequest),
+            "context_length_exceeded" => Ok(ErrorCode::KContextLengthExceeded),
             "not_found" => Ok(ErrorCode::KNotFound),
             "payload_too_large" => Ok(ErrorCode::KPayloadTooLarge),
             "unprocessable" => Ok(ErrorCode::KUnprocessable),

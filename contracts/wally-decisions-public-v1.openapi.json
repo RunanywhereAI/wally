@@ -45,7 +45,7 @@
             }
           }
         },
-        "description": "Entitlement or GPU admission capacity limit",
+        "description": "A per-key or per-account limit (capacity and overload, on every route, are 503 with Retry-After)",
         "headers": {
           "Access-Control-Expose-Headers": {
             "description": "Response headers a browser client may read",
@@ -354,6 +354,7 @@
       "ErrorCode": {
         "enum": [
           "bad_request",
+          "context_length_exceeded",
           "not_found",
           "payload_too_large",
           "unprocessable",
@@ -1325,7 +1326,7 @@
     "source_schemas": {
       "error": {
         "path": "public/error.schema.json",
-        "sha256": "039c2486e4656d05d7478918111cb2b9bbc21cdfc46953b4680629849c6d4d15"
+        "sha256": "a4baccaee41d59861925d3205d84092cda90f050561ea4832b82cd38514b07b2"
       },
       "request": {
         "path": "public/decisions_request.schema.json",
