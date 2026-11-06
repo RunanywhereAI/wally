@@ -824,6 +824,7 @@ jinja2==3.1.6 \
     # via
     #   -c requirements.lock
     #   mlx-audio
+    #   mlx-lm
     #   mlx-vlm
     #   transformers
 llguidance==1.9.1 \
@@ -1117,6 +1118,7 @@ mlx==0.32.4 \
     # via
     #   -c requirements.lock
     #   mlx-audio
+    #   mlx-lm
     #   mlx-vlm
 mlx-audio==0.6.3 \
     --hash=sha256:2cfaef542f29c0eb0f58bb3823eafbb9acf9df9b01a7f45a9bbf3b4b5d44dab9 \
@@ -1124,6 +1126,10 @@ mlx-audio==0.6.3 \
     # via
     #   -c requirements.lock
     #   mlx-vlm
+mlx-lm==0.32.2 \
+    --hash=sha256:1af8a92f6a141c3e2bf5b0369ac4464203a8e2189c47b9e40d3e921e5b3a1fe9 \
+    --hash=sha256:5c0991248cfff5872503d74f466d2532dd8cb7fb3670cb9be7a06d7305dadc04
+    # via -r requirements.in
 mlx-metal==0.32.4 ; sys_platform == 'darwin' \
     --hash=sha256:514df92d41a286895d2564b4b18f4da45096bd7a4a0c47e1042f345ad5a7f936 \
     --hash=sha256:8019b2db622599267d66cc168b2f0dbf5af929790a6c3b3913e00eabc42a7947 \
@@ -1384,6 +1390,7 @@ numpy==2.5.4 \
     #   -c requirements.lock
     #   datasets
     #   mlx-audio
+    #   mlx-lm
     #   mlx-vlm
     #   opencv-python
     #   pandas
@@ -1708,6 +1715,16 @@ propcache==0.5.4 \
     #   -c requirements.lock
     #   aiohttp
     #   yarl
+protobuf==7.36.2 \
+    --hash=sha256:497d0463ff3316681da6c0b9e8d06cb465d61abce00b613ab42226175644d1bb \
+    --hash=sha256:89f23aa53c24553a2416fd4fd1ec06f74fa42b14b546d8883128813f775bbfd2 \
+    --hash=sha256:912c1221170e16c08d1f086762f563dd61ff83c18b5fa6652952dfaded66f728 \
+    --hash=sha256:a300819d441e078a5608c0d3c709796bb548136058fda017ae51d425b44fd353 \
+    --hash=sha256:bdb3a345d48db958e6ce1f18e508beb0cc981d64f24088427549c866cd039f1e \
+    --hash=sha256:cbc70b17ee27e28894c7fee8bb04be1abead49e936bc70eb60052531eee2079e \
+    --hash=sha256:e11e1f0180583a2af89db6a2ecd9e8dc40aa6d2988ca175bfd0e6d12ea72d74e \
+    --hash=sha256:f4fee11ec330d238b34a05c9b675f693c20415d1c5bd7d5320cc2f8a798eb9cf
+    # via mlx-lm
 pyarrow==26.0.0 \
     --hash=sha256:01c863a18bd9c8412453dd0d92de6d0ee7b2b3d6fb079d9734a4b2a3c8bd4453 \
     --hash=sha256:0cccd36e00ea3afeb52ded61f2721ce71f604853d70c45365c58324eb773d6ae \
@@ -2015,6 +2032,7 @@ pyyaml==6.0.3 \
     #   -c requirements.lock
     #   datasets
     #   huggingface-hub
+    #   mlx-lm
     #   transformers
 regex==2026.9.29 \
     --hash=sha256:01000ddf0e3ffef97f2413ceb514f6313040106b6d18a03ee00a4fe35c1eb1db \
@@ -2309,6 +2327,7 @@ sentencepiece==0.2.2 \
     # via
     #   -c requirements.lock
     #   mlx-audio
+    #   mlx-lm
     #   mlx-vlm
 shellingham==1.5.4 \
     --hash=sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686 \
@@ -2383,6 +2402,7 @@ transformers==5.22.1 \
     # via
     #   -c requirements.lock
     #   mlx-audio
+    #   mlx-lm
     #   mlx-vlm
 truststore==0.10.5 ; sys_platform != 'emscripten' \
     --hash=sha256:30d36967ccaded5cbb38d602c433f53600036c79d502f4533a49b60a03bbefcd \

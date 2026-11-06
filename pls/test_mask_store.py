@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -172,6 +173,15 @@ class MaskStoreTest(unittest.TestCase):
         directory = self.dir / "masks"
         store_for("deepseek", directory)
         self.assertEqual(os.stat(directory).st_mode & 0o777, 0o700)
+
+    def test_rows_older_than_a_week_are_dropped(self):
+        self.store.mask("s1", MAYA, [span(MAYA, MAYA)])
+        stale = int(time.time()) - mask_store.RETENTION_S - 1
+        with self.store._lock:
+            self.store._db.execute("UPDATE masks SET created_at = ?", (stale,))
+            self.store._db.commit()
+        reopened = MaskStore(self.store.path)
+        self.assertEqual(count(reopened), 0)
 
 
 class SafetyLineTest(unittest.TestCase):
@@ -369,7 +379,8 @@ class RouterMaskTest(unittest.TestCase):
     def test_cost_does_not_mask(self):
         self.verdict = {"answer": "yes", "p_yes": 0.9}
         cloud = self.main(policy="cost")
-        self.assertIn(MAYA, self.user_text(cloud))
+        self.assertNotIn(MAYA, self.user_text(cloud))
+        self.assertIn("[email]", self.user_text(cloud))
         self.assertNotIn(
             {"role": "system", "content": pls.MASK_SAFETY}, cloud["messages"])
 

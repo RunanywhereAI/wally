@@ -63,7 +63,7 @@ decides what the cloud parent is told, appended to that same user message:
 
 | Policy | Decision says | The cloud sees | Subagent answer |
 |---|---|---|---|
-| `privacy` (default) | private | the prompt with personal values replaced by tokens, plus `pls-task: tN` | the answer, with those values replaced; withheld only if masking fails |
+| `privacy` (default) | private | the prompt with personal values replaced by tokens, plus `pls-task: tN` | withheld (`local_only`) |
 | `privacy` | not private | that same masked prompt, plus "launch a subagent, `pls-task: tN`" | summarised |
 | `cost` | large task | the prompt plus "launch a subagent, `pls-task: tN`" | summarised |
 | `cost` | small task | the prompt plus "do it yourself" | no subagent |
@@ -109,7 +109,7 @@ a token `⟦pii:N⟧`. The map is one SQLite file per harness under
 machine. The subagent and a summary on the way back use the same session.
 A summary is span-masked first; if that fails the parent gets the
 summary-failure sentence, not the answer. A private subagent answer is
-span-masked the same way, and withheld only when that mask fails.
+withheld. The mask file drops rows older than 7 days when it opens.
 
 The regex still runs after the span mask, and it is the only pass under
 `cost`. It replaces emails, phone numbers, API keys, IPv4 addresses and

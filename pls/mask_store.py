@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 MASK_SAFETY = (
@@ -18,6 +19,8 @@ MASK_SAFETY = (
 )
 TOKEN_RE = re.compile(r"⟦pii:(\d+)⟧")
 _HARNESS_RE = re.compile(r"[a-z0-9_]+")
+# Raw values are personal data. Drop them a week after they were stored.
+RETENTION_S = 7 * 24 * 60 * 60
 
 
 class MaskError(ValueError):
@@ -51,9 +54,22 @@ class MaskStore:
                 session_id TEXT NOT NULL,
                 token TEXT NOT NULL,
                 value TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (session_id, token)
             )
             """
+        )
+        columns = {row[1] for row in self._db.execute("PRAGMA table_info(masks)")}
+        if "created_at" not in columns:
+            self._db.execute(
+                "ALTER TABLE masks ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"
+            )
+        now = int(time.time())
+        self._db.execute(
+            "UPDATE masks SET created_at = ? WHERE created_at = 0", (now,)
+        )
+        self._db.execute(
+            "DELETE FROM masks WHERE created_at < ?", (now - RETENTION_S,)
         )
         self._db.commit()
 
@@ -136,8 +152,8 @@ class MaskStore:
                 highest = max(highest, int(match.group(1)))
         token = f"⟦pii:{highest + 1}⟧"
         self._db.execute(
-            "INSERT INTO masks (session_id, token, value) VALUES (?, ?, ?)",
-            (session_id, token, value),
+            "INSERT INTO masks (session_id, token, value, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, token, value, int(time.time())),
         )
         return token
 

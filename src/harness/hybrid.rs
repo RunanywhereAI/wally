@@ -460,7 +460,8 @@ pub(crate) fn start_hybrid(
         (cloud.context_window, cloud.max_output),
     );
     let decider = super::pls::resolve_decider(options);
-    let Some(router) = super::pls::start_logged(&directory, decider) else {
+    let pii = hybrid_model_directory("mlx-pplx-pii-masking", options);
+    let Some(router) = super::pls::start_logged(&directory, decider, pii.as_deref()) else {
         return Err(1);
     };
     Ok(HybridStart {

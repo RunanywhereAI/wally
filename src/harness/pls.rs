@@ -348,6 +348,10 @@ const SCRIPT: &str = include_str!("../../pls/pls.py");
 const MODEL_SERVER: &str = include_str!("../../pls/model_server.py");
 const MASK_STORE: &str = include_str!("../../pls/mask_store.py");
 const PII_MODEL: &str = include_str!("../../pls/pii_model.py");
+const PII_BACKBONE: &str = include_str!("../../pls/pii_backbone.py");
+const PII_LABELS: &str = include_str!("../../pls/pii_labels.py");
+const PII_VITERBI: &str = include_str!("../../pls/pii_viterbi.py");
+const PII_WEIGHTS: &str = include_str!("../../pls/pii_weights.py");
 const LOCK: &str = include_str!("../../pls/requirements.lock");
 
 /// A running router. Dropping it stops the process.
@@ -693,7 +697,9 @@ fn materialise() -> Option<PathBuf> {
     let wanted = format!(
         "{:x}",
         fnv1a(
-            format!("{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{MASK_STORE}\u{0}{PII_MODEL}\u{0}{LOCK}")
+            format!(
+                "{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{MASK_STORE}\u{0}{PII_MODEL}\u{0}{PII_BACKBONE}\u{0}{PII_LABELS}\u{0}{PII_VITERBI}\u{0}{PII_WEIGHTS}\u{0}{LOCK}"
+            )
                 .as_bytes(),
         )
     );
@@ -707,6 +713,10 @@ fn materialise() -> Option<PathBuf> {
         ("model_server.py", MODEL_SERVER),
         ("mask_store.py", MASK_STORE),
         ("pii_model.py", PII_MODEL),
+        ("pii_backbone.py", PII_BACKBONE),
+        ("pii_labels.py", PII_LABELS),
+        ("pii_viterbi.py", PII_VITERBI),
+        ("pii_weights.py", PII_WEIGHTS),
         ("requirements.lock", LOCK),
     ] {
         std::fs::write(dir.join(name), body).ok()?;
@@ -883,8 +893,12 @@ pub(crate) fn configure(
 /// Start the router for `model_path`, with `decider` answering `/decide`
 /// on wally's socket when it is given. Returns `None` after
 /// reporting why.
-pub fn start(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Router> {
-    start_with(model_path, decider, Stdio::inherit())
+pub fn start(
+    model_path: &str,
+    decider: Option<ResolvedModelPaths>,
+    pii_model: Option<&str>,
+) -> Option<Router> {
+    start_with(model_path, decider, pii_model, Stdio::inherit())
 }
 
 /// Where a router behind a harness writes its event log: the harness owns
@@ -895,7 +909,11 @@ pub fn log_file() -> PathBuf {
 
 /// `start`, with the router's and model server's stderr in `log_file()`
 /// instead of the terminal. For launches that hand the terminal to a harness.
-pub fn start_logged(model_path: &str, decider: Option<ResolvedModelPaths>) -> Option<Router> {
+pub fn start_logged(
+    model_path: &str,
+    decider: Option<ResolvedModelPaths>,
+    pii_model: Option<&str>,
+) -> Option<Router> {
     let _ = std::fs::create_dir_all(config_dir());
     let log = match std::fs::File::create(log_file()) {
         Ok(log) => log,
@@ -907,7 +925,7 @@ pub fn start_logged(model_path: &str, decider: Option<ResolvedModelPaths>) -> Op
             return None;
         }
     };
-    let router = start_with(model_path, decider, Stdio::from(log))?;
+    let router = start_with(model_path, decider, pii_model, Stdio::from(log))?;
     out::status_line(&format!("router log: {}", log_file().display()));
     Some(router)
 }
@@ -915,6 +933,7 @@ pub fn start_logged(model_path: &str, decider: Option<ResolvedModelPaths>) -> Op
 fn start_with(
     model_path: &str,
     decider: Option<ResolvedModelPaths>,
+    pii_model: Option<&str>,
     stderr: Stdio,
 ) -> Option<Router> {
     let script = materialise().or_else(|| {
@@ -936,7 +955,8 @@ fn start_with(
     let mut bar = crate::progress::progress_bar::Indeterminate::new(true);
     bar.set("starting router");
 
-    let mut child = Command::new(&python)
+    let mut command = Command::new(&python);
+    command
         .arg(&script)
         .env("PLS_MODEL", model_path)
         .env("PLS_PARENT_PID", std::process::id().to_string())
@@ -947,9 +967,11 @@ fn start_with(
         .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(stderr)
-        .spawn()
-        .ok()?;
+        .stderr(stderr);
+    if let Some(dir) = pii_model.filter(|dir| !dir.is_empty()) {
+        command.env("PLS_PII_MODEL", dir);
+    }
+    let mut child = command.spawn().ok()?;
 
     let stdout = child.stdout.take()?;
     // The read must not block the timeout, so the lines arrive over a channel

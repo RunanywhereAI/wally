@@ -278,9 +278,8 @@ CHILD_RULES = {
         "names and numbers in it, and do not paste file contents or raw values."
     ),
     "local_only": (
-        " Personal values in your final answer are replaced with tokens before "
-        "the main agent sees them. Report the result in full, including file "
-        "paths and numbers."
+        " Nothing you return leaves this device: the main agent only learns that "
+        "the task ran. Finish the task completely here."
     ),
 }
 # Every child gets this line too, whatever its summary type.
@@ -721,6 +720,18 @@ def mask_session_id(request, messages) -> str:
     return session_of(messages)
 
 
+_masking_off_logged = False
+
+
+def note_masking_off(reason: str) -> None:
+    """One log line when a privacy turn cannot be span-masked."""
+    global _masking_off_logged
+    if _masking_off_logged:
+        return
+    _masking_off_logged = True
+    log({"event": "masking_off", "error": reason})
+
+
 async def mask_cloud_text(text: str, session_id: str) -> str | None:
     """Masked text, or None on classify failure or MaskError.
 
@@ -730,17 +741,21 @@ async def mask_cloud_text(text: str, session_id: str) -> str | None:
     """
     try:
         spans = await classify_pii(text)
-    except Exception:
+    except Exception as error:
+        note_masking_off(str(error) or type(error).__name__)
         return None
     if not isinstance(spans, list):
+        note_masking_off("classifier returned no span list")
         return None
     spans = [span for span in spans if not _span_is_path(text, span)]
     store = open_mask_store()
     if store is None:
+        note_masking_off("mask store unavailable")
         return None
     try:
         return store.mask(session_id, text, spans)
-    except Exception:
+    except Exception as error:
+        note_masking_off(str(error) or type(error).__name__)
         return None
 
 
@@ -2391,12 +2406,8 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, sum
     # The summary type only applies to a final answer; a tool call must pass
     # through intact or the child cannot continue.
     if not calls and message.get("content"):
-        if summary == "local_only" and config["policy"] != "privacy":
+        if summary == "local_only":
             message["content"] = WITHHELD
-            STATS["disclosure"]["local_only"] += 1
-        elif summary == "local_only":
-            masked = await mask_summary(message["content"], ACTIVE_MASK_SESSION.get())
-            message["content"] = WITHHELD if masked == SUMMARISE_FAILED else short_paths(redact(masked))
             STATS["disclosure"]["local_only"] += 1
         else:
             # A short answer summarises into something vaguer than itself.

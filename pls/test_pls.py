@@ -324,9 +324,9 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.answer(response), "local answer")
 
-    def test_a_private_task_returns_the_answer_with_values_masked(self):
+    def test_a_private_task_withholds_the_answer(self):
         record = self.seed(PRIVATE_TEXT, private=True, summary="local_only")
-        self.assertEqual(self.answer(self.post_child(record)), "local answer")
+        self.assertEqual(self.answer(self.post_child(record)), pls.WITHHELD)
 
     def test_tool_calls_pass_through_a_withheld_task(self):
         calls = [tool_call("f")]
@@ -403,9 +403,9 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(next(m for m in sent if m["role"] == "user")["content"], "list the files")
         self.assertNotIn("pls-task:", json.dumps(sent))
 
-    def test_a_child_with_an_unknown_id_returns_its_answer_under_privacy(self):
+    def test_a_child_with_an_unknown_id_is_withheld_under_privacy(self):
         record = {"id": "t424242"}
-        self.assertEqual(self.answer(self.post_child(record)), "local answer")
+        self.assertEqual(self.answer(self.post_child(record)), pls.WITHHELD)
 
     def test_a_child_with_an_unknown_id_is_summarised_under_cost(self):
         self.configure(policy="cost")
@@ -556,7 +556,7 @@ class RouterTest(unittest.TestCase):
         pls.http.send = _fake_send_sse(sent, None)
         response = self.post_dsh_child({"id": "t424242"})
         self.assertEqual(sent, [])
-        self.assertEqual(self.answer(response), "local answer")
+        self.assertEqual(self.answer(response), pls.WITHHELD)
         system = self.local_bodies[-1]["messages"][0]["content"]
         self.assertIn(pls.CHILD_RULES["local_only"], system)
 
