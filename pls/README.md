@@ -30,7 +30,7 @@ model server is spawned by the router and killed with it.
 wally <harness> --hybrid [--policy privacy|cost] -m <local-model> --cloud-model <cloud-model>
 ```
 
-`<harness>` is `deepseek`, `opencode`, `openwork`, `hermes` or `openclaw`.
+`<harness>` is `deepseek` or `hermes`.
 Each launch is temporary: the harness gets its config for one run (an
 environment variable, a temp file or a temp directory) and none of the
 person's own harness files change. Every request must carry the launch's
@@ -45,21 +45,15 @@ the text the harness adds around a child's prompt.
 | Profile | Spawn tool and task field | Child loses | Prompt cleanup | Launch |
 |---|---|---|---|---|
 | `deepseek` | `subagent.prompt` | `subagent`, `subagent_fork`, `send_message` | dsh's "Your parent agent id…" note | `--patch` overlay |
-| `opencode-v2` | `subagent.prompt` (+ `agent: general`) | `subagent`, `task` | "You are a subagent spawned by another session." line | `OPENCODE_CONFIG_CONTENT`, `--standalone` |
-| `opencode-v1` (also OpenWork) | `task.prompt` (+ `subagent_type: general`) | `subagent`, `task` | none | `OPENCODE_CONFIG_CONTENT` |
 | `hermes` | `delegate_task.tasks[].goal` | `delegate_task`, `send_message` | none | `HERMES_MANAGED_DIR` temp overlay |
-| `openclaw` | `sessions_spawn.task` | `sessions_spawn`, `subagents` | none; its context block is kept | temp `openclaw.json` |
 
-The synthesised call fills the fields each harness requires. An OpenClaw spawn
-that names a `model` has it removed, so the parent cannot send a child to the
-cloud. Hermes `delegate_task` with `action: list|steer|stop` starts nothing and
-is left alone. Under privacy the parent keeps its spawn tool and the tools that
-collect results (OpenClaw's `subagents`, `sessions_*`, `agents_wait`).
+The synthesised call fills the fields each harness requires. Hermes
+`delegate_task` with `action: list|steer|stop` starts nothing and is left
+alone. Under privacy the parent keeps its spawn tool.
 
 Harness-written `user` messages are skipped when routing: dsh's
-`<system-reminder>` and runtime snapshot and its "Agent … sent a message"
-reports, and OpenClaw's internal context blocks. The Hermes and OpenClaw
-patterns come from source, not yet from a loopback capture.
+`<system-reminder>`, its runtime snapshot, and its "Agent … sent a message"
+reports. The Hermes patterns come from source, not yet from a loopback capture.
 
 ## Policies
 

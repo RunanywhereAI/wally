@@ -11,12 +11,6 @@ Options:
                               account
       --cloud                 Use your account's hosted endpoint (never a local
                               model)
-      --hybrid                Run the main agent on a cloud model and its
-                              subagents on a local model
-      --cloud-model TEXT      The cloud model the main agent uses with --hybrid
-                              (default: your default model)
-      --policy TEXT           What --hybrid optimises for: privacy (default) or
-                              cost
 
 Examples:
   # Download the certified local model once

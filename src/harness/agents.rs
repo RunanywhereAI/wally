@@ -1684,12 +1684,6 @@ pub(crate) struct HybridStart {
 }
 
 impl HybridStart {
-    /// The parent's window and reply cap, the local ones where the console
-    /// gave none.
-    pub fn parent_limits(&self) -> (i64, i64) {
-        parent_limits(&self.cloud)
-    }
-
     /// The line every hybrid launch prints before handing over the terminal.
     pub fn announce(&self) {
         out::status_line(&format!(

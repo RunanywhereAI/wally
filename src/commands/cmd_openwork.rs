@@ -36,23 +36,15 @@ pub fn register_openwork(app: &mut App) {
         ValueType::Text,
         "A model on this machine, or a hosted one from your account",
     );
-    crate::commands::cmd_harness::add_hybrid_flags(command);
     command.callback(|p, g| {
         if harness::refuse_decisions_model(p.get_str("--model").as_deref()) {
             return 2;
         }
-        let hybrid = match crate::commands::cmd_harness::hybrid_request(p, g.no_color) {
-            Ok(hybrid) => hybrid,
-            Err(status) => return status,
-        };
         // Before resolving a model: a person without the app should see only
         // that it is missing and how to get it.
         let Some(app) = installed_app() else {
             return 127;
         };
-        if let Some((local, cloud, policy)) = hybrid {
-            return run_hybrid(&app, &local, &cloud, &policy, g);
-        }
         run(
             &app,
             &resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color),
@@ -194,30 +186,6 @@ fn ready_profile() -> Option<Profile> {
         return None;
     }
     Some(profile)
-}
-
-/// `wally openwork --hybrid`: the app's engine talks to the PLS router, which
-/// keeps the main chat on the cloud and every subagent on `local`.
-fn run_hybrid(
-    app: &OpenWorkApp,
-    local: &str,
-    cloud: &str,
-    policy: &str,
-    options: &GlobalOptions,
-) -> i32 {
-    let Some(profile) = ready_profile() else {
-        return 1;
-    };
-    let (hybrid, config) = match harness::start_openwork_hybrid(local, cloud, policy, options) {
-        Ok(started) => started,
-        Err(status) => return status,
-    };
-    let mut environment = profile.environment();
-    environment.push((CONFIG_VARIABLE.to_string(), config));
-    hybrid.announce();
-    let status = open(app, &profile, &environment);
-    drop(hybrid);
-    status
 }
 
 /// Starts the app on `profile` with `environment` and reports a failed exit.

@@ -7,7 +7,7 @@ use crate::harness;
 use crate::io::output as out;
 
 /// The agents rows with a hybrid launcher.
-const HYBRID_AGENTS: [&str; 3] = ["deepseek", "hermes", "openclaw"];
+const HYBRID_AGENTS: [&str; 2] = ["deepseek", "hermes"];
 
 /// `--hybrid`, `--cloud-model` and `--policy`, the same on every harness that
 /// has a hybrid launcher.
@@ -94,7 +94,6 @@ pub fn register_harness(app: &mut App) {
         "--cloud",
         "Use your account's hosted endpoint (never a local model)",
     );
-    add_hybrid_flags(opencode);
     opencode
         .add_option("args", ValueType::Text, "Passed through to opencode")
         .multi();
@@ -107,23 +106,6 @@ pub fn register_harness(app: &mut App) {
         // tool should see only that it is missing and how to install it.
         if !harness::ensure_installed("opencode") {
             return 127;
-        }
-        match hybrid_request(p, g.no_color) {
-            Err(status) => return status,
-            Ok(Some((local, cloud, policy))) => {
-                if p.flag("--cloud") {
-                    out::error_line("--cloud and --hybrid cannot be used together");
-                    return 2;
-                }
-                return harness::launch_open_code_hybrid(
-                    &local,
-                    &cloud,
-                    &policy,
-                    &p.get_strs("args"),
-                    g,
-                );
-            }
-            Ok(None) => {}
         }
         let effective =
             resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color);
@@ -295,9 +277,6 @@ pub fn register_harness(app: &mut App) {
                         let args = p.get_strs("args");
                         return match agent.id {
                             "hermes" => harness::launch_hermes_hybrid(
-                                &agent, &local, &cloud, &policy, &args, g,
-                            ),
-                            "openclaw" => harness::launch_open_claw_hybrid(
                                 &agent, &local, &cloud, &policy, &args, g,
                             ),
                             _ => {
