@@ -43,6 +43,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import uvicorn
 
+import pii_model
+from mask_store import MASK_SAFETY, TOKEN_RE, MaskStore, store_for
+
 MODEL_ID = "Hybrid-Wally-0.1"
 # The harness names subagents with this id so it compacts their context at the
 # local model's window. Routing never reads it: the `pls-task:` marker decides.
@@ -275,8 +278,9 @@ CHILD_RULES = {
         "names and numbers in it, and do not paste file contents or raw values."
     ),
     "local_only": (
-        " Nothing you return leaves this device: the main agent only learns that "
-        "the task ran. Finish the task completely here."
+        " Personal values in your final answer are replaced with tokens before "
+        "the main agent sees them. Report the result in full, including file "
+        "paths and numbers."
     ),
 }
 # Every child gets this line too, whatever its summary type.
@@ -357,7 +361,10 @@ STATS: dict[str, Any] = {
 
 PII_PATTERNS = {
     "email": re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b"),
-    "phone": re.compile(r"\+?\d[\d ().-]{7,}\d"),
+    "phone": re.compile(
+        r"(?<![\w/])(?:\+\d{1,3}[\s.-]\d{2,4}[\s.-]\d{3,8}"
+        r"|\(\d{3}\)[\s.-]*\d{3}[\s.-]\d{4}|\b\d{3}[\s.-]\d{3}[\s.-]\d{4}\b)"
+    ),
     "key": re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,})\b"),
     "ipv4": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     "iban": re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{12,30}\b"),
@@ -462,6 +469,13 @@ def last_turn(body: dict) -> dict | None:
 
 TASKS: dict[str, dict] = {}
 TASK_TEXT: dict[str, str] = {}
+# One mask file per harness. A test sets an entry; the router does not replace it.
+mask_stores: dict[str, MaskStore] = {}
+classify_pii = pii_model.classify
+# The mask session of the child request being served. The child's own
+# x-session-id is not a store key.
+ACTIVE_MASK_SESSION: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "pls_mask_session", default="")
 # Next task number per session.
 SESSION_NEXT: dict[str, int] = {}
 # The session of the main-chat request being served, for tasks the router
@@ -529,19 +543,32 @@ def persisted(record: dict) -> bool:
 
 
 def load_tasks() -> None:
-    """Restore privacy records (never text) so a resumed session stays masked."""
+    """Restore privacy records so a resumed session stays masked.
+
+    The file holds ``masked`` and ``mask_session``, not the raw prompt. A
+    missing in-memory prompt is rebuilt by demasking that pair.
+    """
     try:
         data = json.loads(TASKS_PATH.read_text())
     except (OSError, ValueError):
         return
     if not isinstance(data, dict):
         return
+    store = None
     for key, record in data.items():
         if isinstance(record, dict) and isinstance(record.get("id"), str) and persisted(record):
             TASKS[key] = record
             session, _, number = record["id"].rpartition("-t")
             if session and number.isdigit():
                 SESSION_NEXT[session] = max(SESSION_NEXT.get(session, 1), int(number) + 1)
+            masked = record.get("masked")
+            mask_session = record.get("mask_session")
+            if (record["id"] not in TASK_TEXT and isinstance(masked, str)
+                    and isinstance(mask_session, str)):
+                if store is None:
+                    store = open_mask_store(read_config()["harness"])
+                if store is not None:
+                    TASK_TEXT[record["id"]] = store.demask(mask_session, masked)
 
 
 def save_tasks() -> None:
@@ -602,10 +629,12 @@ async def decide(policy: str, text: str) -> dict | None:
     return verdict
 
 
-async def ensure_tasks(body: dict, policy: str) -> list[dict]:
+async def ensure_tasks(body: dict, policy: str, request: Request | None = None) -> list[dict]:
     """Decide every prompt in the request that has no settled record yet.
 
-    Returns the records created or re-decided by this call.
+    Returns the records created or re-decided by this call. Under privacy the
+    decision sees the raw prompt, then the prompt is span-masked once, and
+    that result is what ``save_tasks`` writes.
     """
     fresh = []
     messages = body.get("messages") or []
@@ -625,6 +654,9 @@ async def ensure_tasks(body: dict, policy: str) -> list[dict]:
         if existing and existing.get("policy") == policy:
             # A retry keeps the id the cloud may already have been told.
             record["id"] = existing["id"]
+        if policy == "privacy":
+            record["mask_session"] = mask_session_id(request, messages)
+            record["masked"] = await mask_cloud_text(text, record["mask_session"])
         TASKS[key] = record
         TASK_TEXT[record["id"]] = text
         fresh.append(record)
@@ -655,13 +687,140 @@ def instruction(record: dict) -> str:
 
 
 def rewrite_prompt(message: dict, record: dict) -> dict:
-    if record["policy"] == "privacy" and record["private"]:
-        return {**message, "content": placeholder(record)}
+    if record["policy"] == "privacy":
+        return {**message, "content": privacy_cloud_text(record, True)}
     extra = "\n\n" + instruction(record)
     content = message.get("content")
     if isinstance(content, list):
         return {**message, "content": [*content, {"type": "text", "text": extra}]}
     return {**message, "content": str(content or "") + extra}
+
+
+def open_mask_store(harness: str | None = None) -> MaskStore | None:
+    """The harness's store. A key a test already set is left in place."""
+    harness = profile().id if harness is None else harness
+    existing = mask_stores.get(harness)
+    if existing is not None:
+        return existing
+    try:
+        created = store_for(harness)
+    except ValueError:
+        return None
+    return mask_stores.setdefault(harness, created)
+
+
+def mask_session_id(request, messages) -> str:
+    """x-session-id when that header is non-empty, else session_of(messages).
+
+    No other header is read.
+    """
+    if request is not None:
+        value = request.headers.get("x-session-id")
+        if value:
+            return value
+    return session_of(messages)
+
+
+async def mask_cloud_text(text: str, session_id: str) -> str | None:
+    """Masked text, or None on classify failure or MaskError.
+
+    Uses pls.mask_stores[profile().id]. Tests set that entry to a
+    MaskStore on a temp file. There is no pls.MASK_STORE. Another
+    harness is another dict entry and another file.
+    """
+    try:
+        spans = await classify_pii(text)
+    except Exception:
+        return None
+    if not isinstance(spans, list):
+        return None
+    spans = [span for span in spans if not _span_is_path(text, span)]
+    store = open_mask_store()
+    if store is None:
+        return None
+    try:
+        return store.mask(session_id, text, spans)
+    except Exception:
+        return None
+
+
+def _span_is_path(text: str, span: dict) -> bool:
+    """A workspace path is not personal data. Masking it hides the file from the parent."""
+    if not isinstance(span, dict):
+        return False
+    start, end = span.get("start"), span.get("end")
+    if isinstance(start, bool) or isinstance(end, bool):
+        return False
+    if not isinstance(start, int) or not isinstance(end, int):
+        return False
+    if start < 0 or end > len(text) or start >= end:
+        return False
+    piece = text[start:end].strip().strip("`\"'")
+    return piece.startswith(("/", "~/", "./", "../"))
+
+
+def demask_local_text(text: str, session_id: str) -> str:
+    """demask against pls.mask_stores[profile().id].
+
+    Drops a system message whose content is exactly MASK_SAFETY.
+    Does not edit other system messages.
+    """
+    if text == MASK_SAFETY:
+        return text
+    store = open_mask_store()
+    if store is None:
+        return text
+    return store.demask(session_id, text)
+
+
+def attach_mask_safety(messages: list) -> None:
+    """Insert {"role": "system", "content": MASK_SAFETY} at index 0
+    when no message has that exact content. A second call inserts nothing.
+    """
+    if any(message.get("content") == MASK_SAFETY for message in messages):
+        return
+    messages.insert(0, {"role": "system", "content": MASK_SAFETY})
+
+
+async def mask_summary(text: str, session_id: str) -> str:
+    """Span-mask text onto session_id.
+
+    None from mask_cloud_text returns pls.SUMMARISE_FAILED.
+    """
+    masked = await mask_cloud_text(text, session_id)
+    if masked is None:
+        return SUMMARISE_FAILED
+    return masked
+
+
+def privacy_cloud_text(record: dict, instruct: bool) -> str:
+    """What a privacy prompt shows the cloud. A failed mask withholds it."""
+    masked = record.get("masked")
+    if not isinstance(masked, str):
+        return placeholder(record)
+    if instruct:
+        return masked + "\n\n" + instruction(record)
+    return masked
+
+
+def _has_mask_token(messages: list) -> bool:
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str) and TOKEN_RE.search(content):
+            return True
+        if isinstance(content, list):
+            for part in content:
+                if (isinstance(part, dict) and isinstance(part.get("text"), str)
+                        and TOKEN_RE.search(part["text"])):
+                    return True
+    return False
+
+
+def _drop_mask_safety(messages: list) -> list:
+    return [
+        message for message in messages
+        if not (message.get("role") == "system" and message.get("content") == MASK_SAFETY)
+    ]
 
 
 def apply_policy(body: dict, policy: str) -> dict:
@@ -684,13 +843,14 @@ def apply_policy(body: dict, policy: str) -> dict:
         if record is None:
             continue
         pending = is_pending(original, turn)
-        if record["private"] and record["policy"] == "privacy":
-            # Every private message is masked; only the unanswered turn
-            # carries a task line, so the parent never sees two at once.
+        if record.get("policy") == "privacy":
+            # Every privacy prompt is span-masked. Only the unanswered turn
+            # carries the instruction, so the parent never sees two at once.
             for index in turn:
-                messages[index] = {**original[index], "content": PRIVATE_SIDE_MASK}
-            if pending:
-                messages[turn[-1]] = rewrite_prompt(original[turn[-1]], record)
+                messages[index] = {
+                    **original[index],
+                    "content": privacy_cloud_text(record, pending and index == turn[-1]),
+                }
         elif pending:
             messages[turn[-1]] = rewrite_prompt(original[turn[-1]], record)
     shaped = {**body, "messages": messages}
@@ -707,6 +867,9 @@ def apply_policy(body: dict, policy: str) -> dict:
             messages[index] = {**message, "content": str(content or "") + prompt}
         break
 
+    if policy == "privacy" and _has_mask_token(messages):
+        attach_mask_safety(messages)
+
     if policy == "privacy" and isinstance(body.get("tools"), list):
         shaped["tools"] = [t for t in body["tools"]
                            if (t.get("function") or {}).get("name") in profile().parent_tools]
@@ -714,19 +877,25 @@ def apply_policy(body: dict, policy: str) -> dict:
 
 
 def mask_private_prompts(body: dict) -> dict:
-    """Replace private prompts and add nothing else.
+    """Replace privacy prompts and add nothing else.
 
-    A side call has no tools, so the delegate instruction would be echoed back
-    (dsh's session title is one of these). The raw prompt still must not leave.
+    A side call has no tools. The span-masked text is what leaves; a failed
+    mask sends the placeholder, not the raw prompt and not PRIVATE_SIDE_MASK.
     """
     original = body.get("messages") or []
     messages = list(original)
     session = session_of(original)
     for turn in prompt_turns(original):
         record = turn_record(original, turn, session)
-        if record and record.get("private"):
+        if record and record.get("policy") == "privacy":
+            pending = is_pending(original, turn)
             for index in turn:
-                messages[index] = {**original[index], "content": PRIVATE_SIDE_MASK}
+                messages[index] = {
+                    **original[index],
+                    "content": privacy_cloud_text(record, pending and index == turn[-1]),
+                }
+    if _has_mask_token(messages):
+        attach_mask_safety(messages)
     return {**body, "messages": messages}
 
 
@@ -846,7 +1015,8 @@ def resolve_child(messages: list, policy: str) -> tuple[str, list]:
     without a known id fails safe: `local_only` under privacy.
     """
     fallback = "local_only" if policy == "privacy" else "summary"
-    messages = drop_parent_note(messages)
+    ACTIVE_MASK_SESSION.set("")
+    messages = _drop_mask_safety(drop_parent_note(messages))
     marked = find_marker(messages)
     if marked is None:
         log({"event": "child_without_marker"})
@@ -857,6 +1027,10 @@ def resolve_child(messages: list, policy: str) -> tuple[str, list]:
     if record is None or record.get("summary") is None:
         log({"event": "child_unknown_task", "task": task_id})
         return fallback, strip_marker(messages)
+    mask_session = record.get("mask_session") if isinstance(record.get("mask_session"), str) else ""
+    ACTIVE_MASK_SESSION.set(mask_session)
+    if (task_id not in TASK_TEXT and isinstance(record.get("masked"), str) and mask_session):
+        TASK_TEXT[task_id] = demask_local_text(record["masked"], mask_session)
     text = message_text(messages[index])
     rest = text[found.end():].strip()
     # A private task's text never went to the cloud; a parent that sent only
@@ -866,8 +1040,11 @@ def resolve_child(messages: list, policy: str) -> tuple[str, list]:
     # OpenClaw's context block stays: its runtime reads it. opencode 2's
     # one-line preface goes.
     head = "" if profile().strip_prefix else text[: found.start()]
+    content = head + rest
+    if mask_session and messages[index].get("role") != "system":
+        content = demask_local_text(content, mask_session)
     updated = list(messages)
-    updated[index] = {**messages[index], "content": head + rest}
+    updated[index] = {**messages[index], "content": content}
     return record["summary"], updated
 
 
@@ -988,6 +1165,16 @@ def is_spawn(call: dict) -> bool:
     return call_arguments(call).get("action") not in profile().non_spawn_actions
 
 
+def known_task(task_id: str) -> dict | None:
+    return next((record for record in TASKS.values() if record.get("id") == task_id), None)
+
+
+def prompt_needs_task(prompt: str) -> bool:
+    """A spawn prompt whose `pls-task` id was not issued by this router."""
+    found = marker_in(prompt)
+    return found is None or known_task(found.group(1)) is None
+
+
 def patch_call_args(calls: dict[int, dict], record: dict | None) -> bool:
     """Make every spawn call carry a prompt that names its task.
 
@@ -1009,10 +1196,14 @@ def patch_call_args(calls: dict[int, dict], record: dict | None) -> bool:
         if record is not None:
             for holder, key in prompt_slots(arguments, create=True):
                 prompt = str(holder.get(key) or "")
+                found = marker_in(prompt)
+                if found is not None and known_task(found.group(1)) is None:
+                    prompt = (prompt[: found.start()] + prompt[found.end():]).lstrip()
+                    found = None
                 if not prompt:
                     holder[key] = subagent_prompt(record)
                     changed = True
-                elif not TASK_RE.match(prompt):
+                elif found is None:
                     holder[key] = f"{TASK_MARKER} {record['id']}\n\n{prompt}"
                     changed = True
         for name, value in profile().required:
@@ -1041,7 +1232,7 @@ def stamp_subagent_calls(calls: dict[int, dict], record: dict | None, policy: st
     if not spawn_calls:
         return False
     task = record if record and record.get("summary") else None
-    if task is None and any(not TASK_RE.match(prompt)
+    if task is None and any(prompt_needs_task(prompt)
                             for c in spawn_calls for prompt in call_prompts(c)):
         task = ad_hoc_record(policy)
     return patch_call_args(calls, task)
@@ -1670,12 +1861,12 @@ async def route(path: str, request: Request):
     # not echo the delegate line. Cost forwards it as the harness sent it.
     if kind == "side":
         if policy == "privacy":
-            await ensure_tasks(body, policy)
+            await ensure_tasks(body, policy, request)
             return await cloud(path, mask_private_prompts(body), request)
         return await cloud(path, body, request)
 
     CURRENT_SESSION.set(session_of(messages))
-    await ensure_tasks(body, policy)
+    await ensure_tasks(body, policy, request)
     record = pending_task(body)
     shaped = apply_policy(body, policy)
 
@@ -2200,13 +2391,20 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, sum
     # The summary type only applies to a final answer; a tool call must pass
     # through intact or the child cannot continue.
     if not calls and message.get("content"):
-        if summary == "local_only":
+        if summary == "local_only" and config["policy"] != "privacy":
             message["content"] = WITHHELD
+            STATS["disclosure"]["local_only"] += 1
+        elif summary == "local_only":
+            masked = await mask_summary(message["content"], ACTIVE_MASK_SESSION.get())
+            message["content"] = WITHHELD if masked == SUMMARISE_FAILED else short_paths(redact(masked))
             STATS["disclosure"]["local_only"] += 1
         else:
             # A short answer summarises into something vaguer than itself.
             if len(message["content"]) > 400:
                 message["content"] = await summarise(message["content"])
+            if config["policy"] == "privacy":
+                message["content"] = await mask_summary(
+                    message["content"], ACTIVE_MASK_SESSION.get())
             message["content"] = short_paths(redact(message["content"]))
             STATS["disclosure"]["summary"] += 1
         choice["message"] = message

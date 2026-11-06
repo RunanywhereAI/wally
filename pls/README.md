@@ -10,7 +10,7 @@ the request:
 | Kind | Rule | `hybrid` | `cloud` |
 |---|---|---|---|
 | subagent | model is `Hybrid-Wally-0.1-local`, or header `x-parent-session-id` (opencode), or first prompt starts `pls-task:` | local model, never decided | cloud, marker stripped |
-| side | no `tools` (session title) | cloud; privacy masks private prompts | cloud as sent |
+| side | no `tools` (session title) | cloud; privacy span-masks the prompt | cloud as sent |
 | main | everything else | decision, rewrite, PII redact, guard, cloud | cloud as sent |
 
 Only the router writes `pls-task:`. Ids look like `a1b2c3-t1`: the prefix
@@ -63,19 +63,21 @@ decides what the cloud parent is told, appended to that same user message:
 
 | Policy | Decision says | The cloud sees | Subagent answer |
 |---|---|---|---|
-| `privacy` (default) | private | a placeholder and `pls-task: tN`, never the prompt | withheld (`local_only`) |
-| `privacy` | not private | the prompt plus "launch a subagent, `pls-task: tN`" | summarised |
+| `privacy` (default) | private | the prompt with personal values replaced by tokens, plus `pls-task: tN` | the answer, with those values replaced; withheld only if masking fails |
+| `privacy` | not private | that same masked prompt, plus "launch a subagent, `pls-task: tN`" | summarised |
 | `cost` | large task | the prompt plus "launch a subagent, `pls-task: tN`" | summarised |
 | `cost` | small task | the prompt plus "do it yourself" | no subagent |
 
 Under `privacy` the parent is offered only its spawn tool, and any other
 tool call in its reply is dropped and asked again; after two tries the router
 emits the subagent call itself. The `pls-task:` id is how the subagent side
-finds its summary type and, for a private prompt, the real text.
+finds its summary type and, for a private prompt, the real text. If the masker
+fails, the cloud gets the whole-prompt placeholder and not the raw prompt.
 
 If the decision model is unavailable, `privacy` treats every prompt as
 private and `cost` lets the cloud do everything. Records live in
-`tasks.json` (mode `0600`, no prompt text), so a resumed session stays masked.
+`tasks.json` (mode `0600`): the masked prompt and its session, not a second
+copy of the raw prompt. A resumed session demasks from that pair.
 
 ## Subagents
 
@@ -100,11 +102,20 @@ holds the backlog, `/debug/events` is the stream. Remove once the MVP ships.
 
 ## PII
 
-Every request is scanned for emails, phone numbers, API keys, IPv4 addresses and
-IBANs. Counts are attributed to the file path the text mentions and travel to
-the cloud in `x-pls-pii`, plus `/stats`. So paths and counts leave the machine,
-never the values: the cloud-bound messages are redacted to `[email]`, `[phone]`,
-`[key]`, `[iban]` and `[ipv4]` before they are sent.
+Under `privacy`, every cloud-bound prompt is span-masked by the local model
+`perplexity-ai/pplx-pii-masking-MLX` before it leaves. A personal value becomes
+a token `⟦pii:N⟧`. The map is one SQLite file per harness under
+`masks/<harness>.sqlite` (file `0600`, directory `0700`) and stays on this
+machine. The subagent and a summary on the way back use the same session.
+A summary is span-masked first; if that fails the parent gets the
+summary-failure sentence, not the answer. A private subagent answer is
+span-masked the same way, and withheld only when that mask fails.
+
+The regex still runs after the span mask, and it is the only pass under
+`cost`. It replaces emails, phone numbers, API keys, IPv4 addresses and
+IBANs with `[email]`, `[phone]`, `[key]`, `[iban]` and `[ipv4]`. Counts,
+attributed to the file path the text mentions, travel in `x-pls-pii` and
+`/stats`. The values do not.
 
 ## Mode
 
@@ -130,7 +141,8 @@ Missing or unparseable falls back to `hybrid`, `privacy` and 20 turns.
 ```
 ~/.config/wally/pls/pls.py          override, wins over the copy beside the binary
 ~/.config/wally/pls/config.json     mode, policy and turn cap
-~/.config/wally/pls/tasks.json      task records, no prompt text (0600)
+~/.config/wally/pls/tasks.json      privacy records: masked prompt and mask session (0600)
+~/.config/wally/pls/masks/          one <harness>.sqlite per harness (0700)
 ~/.config/wally/pls/venv/           built once from requirements.lock
 ~/.config/wally/pls/pls.pid         swept on the next start
 ```

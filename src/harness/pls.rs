@@ -346,6 +346,8 @@ const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60
 
 const SCRIPT: &str = include_str!("../../pls/pls.py");
 const MODEL_SERVER: &str = include_str!("../../pls/model_server.py");
+const MASK_STORE: &str = include_str!("../../pls/mask_store.py");
+const PII_MODEL: &str = include_str!("../../pls/pii_model.py");
 const LOCK: &str = include_str!("../../pls/requirements.lock");
 
 /// A running router. Dropping it stops the process.
@@ -690,7 +692,10 @@ fn materialise() -> Option<PathBuf> {
     std::fs::create_dir_all(&dir).ok()?;
     let wanted = format!(
         "{:x}",
-        fnv1a(format!("{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{LOCK}").as_bytes())
+        fnv1a(
+            format!("{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{MASK_STORE}\u{0}{PII_MODEL}\u{0}{LOCK}")
+                .as_bytes(),
+        )
     );
     let marker = dir.join("assets.sha");
     let script = dir.join("pls.py");
@@ -700,6 +705,8 @@ fn materialise() -> Option<PathBuf> {
     for (name, body) in [
         ("pls.py", SCRIPT),
         ("model_server.py", MODEL_SERVER),
+        ("mask_store.py", MASK_STORE),
+        ("pii_model.py", PII_MODEL),
         ("requirements.lock", LOCK),
     ] {
         std::fs::write(dir.join(name), body).ok()?;

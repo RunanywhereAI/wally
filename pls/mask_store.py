@@ -1,0 +1,160 @@
+"""Per-harness map from mask tokens back to the values that produced them.
+
+One SQLite file per harness. The file never leaves this machine. A token is
+``⟦pii:N⟧``; the span category is kept on the span and is not part of the token.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sqlite3
+import threading
+from pathlib import Path
+
+MASK_SAFETY = (
+    "Tokens like ⟦pii:1⟧ are personal data kept on this device; "
+    "copy them unchanged and they are restored before the subagent runs."
+)
+TOKEN_RE = re.compile(r"⟦pii:(\d+)⟧")
+_HARNESS_RE = re.compile(r"[a-z0-9_]+")
+
+
+class MaskError(ValueError):
+    """The span batch cannot be applied. The router withholds the text."""
+
+
+def _profile_root() -> Path:
+    base = (
+        os.environ.get("WALLY_PROFILE_DIR")
+        or os.environ.get("RCLI_PROFILE_DIR")
+        or str(Path.home() / ".config" / "wally")
+    )
+    return Path(base) / "pls" / "masks"
+
+
+def _offset(span: dict, name: str) -> int:
+    value = span.get(name) if isinstance(span, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise MaskError(f"{name} is not an int")
+    return value
+
+
+class MaskStore:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        self._db = sqlite3.connect(self.path, check_same_thread=False)
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS masks (
+                session_id TEXT NOT NULL,
+                token TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (session_id, token)
+            )
+            """
+        )
+        self._db.commit()
+
+    def mask(self, session_id: str, text: str, spans: list[dict]) -> str:
+        """Replace spans with tokens. Does not add MASK_SAFETY.
+
+        Each span is {"start": int, "end": int, "category": str}.
+        Offsets are Python characters. category is stored and not
+        otherwise interpreted. An empty span list returns text unchanged.
+        """
+        if not spans:
+            return text
+        ranges = self._ranges(text, spans)
+        with self._lock:
+            try:
+                self._db.execute("BEGIN IMMEDIATE")
+                tokens = [self._token_for(session_id, text[start:end]) for start, end in ranges]
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
+        out = text
+        for (start, end), token in sorted(
+            zip(ranges, tokens), key=lambda item: item[0][0], reverse=True
+        ):
+            out = out[:start] + token + out[end:]
+        return out
+
+    def demask(self, session_id: str, text: str) -> str:
+        """Replace tokens known in this session. Unknown tokens stay.
+
+        A value is not scanned for tokens after it is put back.
+        """
+        found = list(TOKEN_RE.finditer(text))
+        if not found:
+            return text
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT token, value FROM masks WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        known = {token: value for token, value in rows}
+        out = text
+        for match in reversed(found):
+            value = known.get(match.group(0))
+            if value is None:
+                continue
+            out = out[: match.start()] + value + out[match.end() :]
+        return out
+
+    def _ranges(self, text: str, spans: list[dict]) -> list[tuple[int, int]]:
+        ranges: list[tuple[int, int]] = []
+        for span in spans:
+            start = _offset(span, "start")
+            end = _offset(span, "end")
+            if start < 0 or end > len(text) or start >= end:
+                raise MaskError("span is outside the text")
+            ranges.append((start, end))
+        last = 0
+        for start, end in sorted(ranges):
+            if start < last:
+                raise MaskError("spans overlap")
+            last = end
+        return ranges
+
+    def _token_for(self, session_id: str, value: str) -> str:
+        row = self._db.execute(
+            "SELECT token FROM masks WHERE session_id = ? AND value = ?",
+            (session_id, value),
+        ).fetchone()
+        if row is not None:
+            return row[0]
+        highest = 0
+        for (token,) in self._db.execute(
+            "SELECT token FROM masks WHERE session_id = ?",
+            (session_id,),
+        ):
+            match = TOKEN_RE.fullmatch(token)
+            if match:
+                highest = max(highest, int(match.group(1)))
+        token = f"⟦pii:{highest + 1}⟧"
+        self._db.execute(
+            "INSERT INTO masks (session_id, token, value) VALUES (?, ?, ?)",
+            (session_id, token, value),
+        )
+        return token
+
+
+def store_for(harness: str, root: Path | None = None) -> MaskStore:
+    """Open <root>/<harness>.sqlite, creating the directory.
+
+    root defaults to ~/.config/wally/pls/masks, honoring WALLY_PROFILE_DIR
+    the same way pls.PROFILE_DIR does. Tests pass an explicit root.
+    """
+    if not isinstance(harness, str) or _HARNESS_RE.fullmatch(harness) is None:
+        raise ValueError(f"bad harness id: {harness!r}")
+    directory = Path(root) if root is not None else _profile_root()
+    directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    path = directory / f"{harness}.sqlite"
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    os.close(fd)
+    os.chmod(path, 0o600)
+    return MaskStore(path)

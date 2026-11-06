@@ -26,6 +26,8 @@ import httpx
 from fastapi.testclient import TestClient
 
 import pls
+import mask_store
+import pii_model
 
 REAL_DECIDE = pls.decide
 REAL_CLOUD_CREDENTIALS = pls.cloud_credentials
@@ -144,6 +146,15 @@ class RouterTest(unittest.TestCase):
         pls.http.post = fake_post
         pls.cloud_credentials = fake_creds
         pls.decide = fake_decide
+
+        async def no_spans(text):
+            return []
+
+        pls.classify_pii = no_spans
+        pls.mask_stores.clear()
+        pls.mask_stores["deepseek"] = mask_store.MaskStore(self.dir / "deepseek.sqlite")
+        self.addCleanup(setattr, pls, "classify_pii", pii_model.classify)
+        self.addCleanup(pls.mask_stores.clear)
 
     # -- helpers -----------------------------------------------------------
 
@@ -313,9 +324,9 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.answer(response), "local answer")
 
-    def test_a_private_task_withholds_the_answer(self):
+    def test_a_private_task_returns_the_answer_with_values_masked(self):
         record = self.seed(PRIVATE_TEXT, private=True, summary="local_only")
-        self.assertEqual(self.answer(self.post_child(record)), pls.WITHHELD)
+        self.assertEqual(self.answer(self.post_child(record)), "local answer")
 
     def test_tool_calls_pass_through_a_withheld_task(self):
         calls = [tool_call("f")]
@@ -392,9 +403,9 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(next(m for m in sent if m["role"] == "user")["content"], "list the files")
         self.assertNotIn("pls-task:", json.dumps(sent))
 
-    def test_a_child_with_an_unknown_id_is_withheld_under_privacy(self):
+    def test_a_child_with_an_unknown_id_returns_its_answer_under_privacy(self):
         record = {"id": "t424242"}
-        self.assertEqual(self.answer(self.post_child(record)), pls.WITHHELD)
+        self.assertEqual(self.answer(self.post_child(record)), "local answer")
 
     def test_a_child_with_an_unknown_id_is_summarised_under_cost(self):
         self.configure(policy="cost")
@@ -545,7 +556,7 @@ class RouterTest(unittest.TestCase):
         pls.http.send = _fake_send_sse(sent, None)
         response = self.post_dsh_child({"id": "t424242"})
         self.assertEqual(sent, [])
-        self.assertEqual(self.answer(response), pls.WITHHELD)
+        self.assertEqual(self.answer(response), "local answer")
         system = self.local_bodies[-1]["messages"][0]["content"]
         self.assertIn(pls.CHILD_RULES["local_only"], system)
 
@@ -737,8 +748,9 @@ class RouterTest(unittest.TestCase):
 
     def test_the_router_routes_hybrid_with_no_subscription_state(self):
         _, sent, child = self.through_the_socket()
+        record = self.record(DSH_PROMPT)
         self.assertEqual(sent[0]["messages"][1]["content"],
-                         pls.placeholder(self.record(DSH_PROMPT)))
+                         DSH_PROMPT + "\n\n" + pls.instruction(record))
         self.assertEqual(self.answer(child), "local answer")
 
     def test_a_missing_config_means_hybrid_and_privacy(self):
@@ -816,7 +828,7 @@ class RouterTest(unittest.TestCase):
         ]})
         self.assertEqual(self.decided, [])
 
-    def test_a_private_tool_less_prompt_does_not_reach_the_cloud(self):
+    def test_a_private_tool_less_prompt_is_span_masked(self):
         self.say("yes")
         marker = "session-title-from-the-first-prompt"
         sent = []
@@ -826,9 +838,10 @@ class RouterTest(unittest.TestCase):
             {"role": "user", "content": marker},
         ]})
         blob = json.dumps(sent)
-        self.assertNotIn(marker, blob)
-        self.assertIn(pls.PRIVATE_SIDE_MASK, blob)
-        self.assertNotIn("pls-task:", blob)
+        record = self.record(marker)
+        self.assertEqual(sent[0]["messages"][1]["content"],
+                         marker + "\n\n" + pls.instruction(record))
+        self.assertNotIn(pls.PRIVATE_SIDE_MASK, blob)
 
     def test_a_tool_less_prompt_is_masked_when_the_decision_fails(self):
         self.verdict = None
@@ -836,8 +849,10 @@ class RouterTest(unittest.TestCase):
         sent = []
         pls.http.send = _fake_send_sse(sent, None)
         self.cloud_post({"messages": [{"role": "user", "content": marker}]})
-        self.assertNotIn(marker, json.dumps(sent))
-        self.assertIn(pls.PRIVATE_SIDE_MASK, json.dumps(sent))
+        record = self.record(marker)
+        self.assertEqual(sent[0]["messages"][0]["content"],
+                         marker + "\n\n" + pls.instruction(record))
+        self.assertNotIn(pls.PRIVATE_SIDE_MASK, json.dumps(sent))
 
     def test_the_same_prompt_on_a_later_request_is_not_decided_again(self):
         self.cloud_post(dsh_first_turn())
@@ -1036,17 +1051,22 @@ class RouterTest(unittest.TestCase):
         response = self.cloud_post(body)
         return sent, response
 
-    def test_a_private_prompt_reaches_the_cloud_as_the_placeholder(self):
+    def test_a_private_prompt_reaches_the_cloud_with_the_delegate_instruction(self):
         self.say("yes")
         sent, _ = self.sent_to_cloud(dsh_first_turn(PRIVATE_TEXT), "subagent")
         record = self.record(PRIVATE_TEXT)
-        self.assertEqual(sent[0]["messages"][1]["content"], pls.placeholder(record))
+        self.assertEqual(sent[0]["messages"][1]["content"],
+                         PRIVATE_TEXT + "\n\n" + pls.instruction(record))
 
-    def test_a_private_prompt_text_never_reaches_the_cloud(self):
+    def test_a_private_prompt_is_not_replaced_by_the_placeholder_when_masking_succeeds(self):
         self.say("yes")
         sent, _ = self.sent_to_cloud(dsh_first_turn(PRIVATE_TEXT), "subagent")
-        self.assertNotIn("billing", json.dumps(sent))
-        self.assertNotIn("sk-live", json.dumps(sent))
+        record = self.record(PRIVATE_TEXT)
+        # The hermetic classifier finds no spans, so the prompt stays and the
+        # whole-prompt placeholder does not replace it.
+        self.assertEqual(sent[0]["messages"][1]["content"],
+                         PRIVATE_TEXT + "\n\n" + pls.instruction(record))
+        self.assertNotIn("stays on this device", json.dumps(sent))
 
     def test_a_private_prompt_is_still_masked_on_a_later_request(self):
         self.say("yes")
@@ -1054,15 +1074,18 @@ class RouterTest(unittest.TestCase):
         self.sent_to_cloud(body, "subagent")
         self.say("no")  # a re-decision would unmask it
         sent, _ = self.sent_to_cloud(self.later(body), None)
-        # Answered now, so it is masked without a second task line.
-        self.assertEqual(sent[0]["messages"][1]["content"], pls.PRIVATE_SIDE_MASK)
-        self.assertNotIn("billing", json.dumps(sent))
+        # Answered now, so the masked prompt stays and the task line does not.
+        self.assertEqual(sent[0]["messages"][1]["content"], PRIVATE_TEXT)
+        self.assertNotIn("pls-task:", sent[0]["messages"][1]["content"])
 
     def test_a_private_prompt_is_masked_after_the_cloud_asked_again(self):
         self.say("yes")
         sent, _ = self.sent_to_cloud(dsh_first_turn(PRIVATE_TEXT), "bash", "subagent")
+        record = self.record(PRIVATE_TEXT)
+        cloud = PRIVATE_TEXT + "\n\n" + pls.instruction(record)
         self.assertEqual(len(sent), 2)
-        self.assertNotIn("billing", json.dumps(sent))
+        self.assertEqual(sent[0]["messages"][1]["content"], cloud)
+        self.assertEqual(sent[1]["messages"][1]["content"], cloud)
 
     def test_the_placeholder_names_the_task_and_not_the_prompt(self):
         record = {"id": "t7", "private": True}
@@ -1229,6 +1252,27 @@ class RouterTest(unittest.TestCase):
         prompt = json.loads(pls.parse_calls(response.content)[0]["arguments"])["prompt"]
         self.assertEqual(prompt.count("pls-task:"), 1)
 
+    def test_a_made_up_task_id_is_replaced_with_one_the_router_issued(self):
+        args = json.dumps({"description": "d", "prompt": "pls-task: 71414e-t99\nread the file"})
+        _, response = self.sent_to_cloud(dsh_first_turn(), ("subagent", args))
+        record = self.record(DSH_PROMPT)
+        prompt = json.loads(pls.parse_calls(response.content)[0]["arguments"])["prompt"]
+        self.assertIn(f"pls-task: {record['id']}", prompt)
+        self.assertNotIn("71414e-t99", prompt)
+        self.assertIn("read the file", prompt)
+
+    def test_a_workspace_path_is_not_span_masked(self):
+        async def path_span(text):
+            piece = "/Users/home/Dev/Test-project/personal_info.html"
+            start = text.index(piece)
+            return [{"start": start, "end": start + len(piece), "category": "private_address"}]
+
+        pls.classify_pii = path_span
+        masked = asyncio.run(pls.mask_cloud_text(
+            "wrote `/Users/home/Dev/Test-project/personal_info.html`", "s1"))
+        self.assertIn("/Users/home/Dev/Test-project/personal_info.html", masked)
+        self.assertNotIn("⟦pii:", masked)
+
     def test_the_guard_runs_on_a_non_streaming_request(self):
         sent = []
         pls.http.send = _fake_send_json(
@@ -1289,8 +1333,9 @@ class RouterTest(unittest.TestCase):
         self.verdict = None
         sent, _ = self.sent_to_cloud(dsh_first_turn(PRIVATE_TEXT), "subagent")
         record = self.record(PRIVATE_TEXT)
-        self.assertEqual(sent[0]["messages"][1]["content"], pls.placeholder(record))
-        self.assertNotIn("billing", json.dumps(sent))
+        self.assertEqual(sent[0]["messages"][1]["content"],
+                         PRIVATE_TEXT + "\n\n" + pls.instruction(record))
+        self.assertNotIn("stays on this device", json.dumps(sent))
 
     def test_a_failed_privacy_decision_is_local_only_and_undecided(self):
         self.verdict = None
@@ -1326,13 +1371,14 @@ class RouterTest(unittest.TestCase):
 
     # -- the persisted records --------------------------------------------
 
-    def test_tasks_json_holds_no_prompt_text(self):
+    def test_tasks_json_holds_the_masked_prompt_and_the_session(self):
         self.say("yes")
         self.sent_to_cloud(dsh_first_turn(PRIVATE_TEXT), "subagent")
-        raw = pls.TASKS_PATH.read_text()
-        self.assertIn(key_of(PRIVATE_TEXT), raw)
-        self.assertNotIn("billing", raw)
-        self.assertNotIn("sk-live", raw)
+        saved = json.loads(pls.TASKS_PATH.read_text())
+        record = saved[key_of(PRIVATE_TEXT)]
+        self.assertEqual(record["masked"], PRIVATE_TEXT)
+        self.assertEqual(record["mask_session"], "s")
+        self.assertNotIn("prompt", record)
 
     def test_a_cost_decision_from_an_earlier_launch_is_decided_again(self):
         # A stale "small" from an older question must not decide this launch.
@@ -1352,7 +1398,7 @@ class RouterTest(unittest.TestCase):
 
     def test_pii_counts_are_per_file_and_never_carry_values(self):
         found = pls.scan_pii([{"role": "tool", "content":
-            "/work/a.csv: alice@x.com 4111 1111 1111 1111\n/work/b.csv: bob@y.com\n"}])
+            "/work/a.csv: alice@x.com (555) 010-0101\n/work/b.csv: bob@y.com\n"}])
         self.assertEqual(found["files"]["/work/a.csv"], {"email": 1, "phone": 1})
         self.assertEqual(found["files"]["/work/b.csv"], {"email": 1})
         self.assertEqual(found["total"], 3)
