@@ -1,8 +1,12 @@
 """Bidirectional Qwen3 backbone in MLX.
 
-Vendored VERBATIM from github.com/ppl-ai/pplx-pii-masking, branch
+Vendored from github.com/ppl-ai/pplx-pii-masking, branch
 chuan-wang-perplexity/pii-model-quantization (PR #2), mlx_pii/backbone.py.
 mlx-only; no torch.
+
+Local deviation: the pad mask uses the dtype's minimum finite value instead
+of a fixed -1e9. In float16 that constant overflows to -inf, and 0 * -inf
+is NaN for every valid token.
 """
 from __future__ import annotations
 
@@ -47,7 +51,8 @@ class BiQwen3(nn.Module):
 
         mask = None
         if attention_mask is not None:
-            # Additive, bidirectional, padding-aware: 0 for valid keys, -inf for pad.
+            # Additive, bidirectional, padding-aware: 0 for valid keys, the
+            # dtype minimum for pad.
             # Shape [B, 1, 1, L] broadcasts over heads and query positions.
             keep = attention_mask.astype(h.dtype)[:, None, None, :]
             mask = (1.0 - keep) * mx.finfo(h.dtype).min

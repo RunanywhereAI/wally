@@ -114,6 +114,8 @@ class MaskStoreTest(unittest.TestCase):
         masked = self.store.remask("s1", "seen Nov 9 evening")
         self.assertEqual(masked, "seen ⟦pii:2⟧")
         self.assertNotIn("Nov 9", masked)
+        self.store.mask("s1", "Ann", [span("Ann", "Ann", "name")])
+        self.assertEqual(self.store.remask("s1", "Annotations"), "Annotations")
 
     def test_the_same_value_reuses_the_token(self):
         self.store.mask("s1", PROMPT, [span(PROMPT, MAYA)])

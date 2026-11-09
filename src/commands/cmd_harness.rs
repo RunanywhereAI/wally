@@ -21,7 +21,7 @@ pub(crate) fn add_hybrid_flags(command: &mut App) {
     command.add_option(
         "--policy",
         ValueType::Text,
-        "What --hybrid optimises for: privacy (default), cost or delegate",
+        "What --hybrid optimises for: privacy (default) or cost",
     );
 }
 

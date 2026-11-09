@@ -156,9 +156,21 @@ class MaskStore:
         pairs.sort(key=lambda row: len(row[1]), reverse=True)
         if not pairs:
             return text
-        pattern = re.compile("|".join(re.escape(value) for _, value in pairs))
+        held: list[str] = []
+
+        def hold(match: re.Match) -> str:
+            held.append(match.group(0))
+            return f"\x00{len(held) - 1}\x00"
+
+        protected = TOKEN_RE.sub(hold, text)
+        pattern = re.compile(
+            r"(?<!\w)(?:" + "|".join(re.escape(value) for _, value in pairs) + r")(?!\w)"
+        )
         lookup = {value: token for token, value in pairs}
-        return pattern.sub(lambda match: lookup[match.group(0)], text)
+        out = pattern.sub(lambda match: lookup[match.group(0)], protected)
+        for index, token in enumerate(held):
+            out = out.replace(f"\x00{index}\x00", token)
+        return out
 
     def _ranges(self, text: str, spans: list[dict]) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
