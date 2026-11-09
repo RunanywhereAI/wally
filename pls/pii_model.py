@@ -57,7 +57,7 @@ def _load():
 
 def _merge_spans(spans: list) -> list:
     merged = []
-    for span in sorted(spans, key=lambda item: (item[2], item[0], item[1])):
+    for span in sorted(spans, key=lambda item: (item[0], item[1], item[2])):
         if merged:
             last = merged[-1]
             if span[0] < last[1]:

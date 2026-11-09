@@ -243,6 +243,11 @@ fn consumes_following_value(token: &str) -> bool {
 }
 
 fn is_wally_flag(command: &str, token: &str) -> bool {
+    // OpenCode's hosted-endpoint switch is wally's flag. The other hybrid
+    // flags belong only to deepseek and hermes.
+    if token == "--cloud" && command == "opencode" {
+        return true;
+    }
     if is_hybrid_launch_flag(token) {
         return command == "deepseek" || command == "hermes";
     }

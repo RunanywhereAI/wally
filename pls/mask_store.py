@@ -99,6 +99,7 @@ class MaskStore:
         map only keeps the value. An empty span list returns text unchanged.
         """
         if not spans:
+            self._reserve_literals(session_id, text)
             return text
         ranges = self._ranges(text, spans)
         with self._lock:
@@ -172,6 +173,34 @@ class MaskStore:
             out = out.replace(f"\x00{index}\x00", token)
         return out
 
+    def _reserve_literals(self, session_id: str, text: str) -> None:
+        with self._lock:
+            try:
+                self._db.execute("BEGIN IMMEDIATE")
+                self._reserve_literals_locked(session_id, text)
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
+
+    def _reserve_literals_locked(self, session_id: str, text: str) -> None:
+        numbers = [int(match.group(1)) for match in TOKEN_RE.finditer(text)]
+        if not numbers:
+            return
+        seq = self._db.execute(
+            "SELECT highest FROM token_seq WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        highest = max(seq[0] if seq else 0, max(numbers))
+        self._db.execute(
+            """
+            INSERT INTO token_seq (session_id, highest) VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                highest = MAX(token_seq.highest, excluded.highest)
+            """,
+            (session_id, highest),
+        )
+
     def _ranges(self, text: str, spans: list[dict]) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
         for span in spans:
@@ -206,6 +235,7 @@ class MaskStore:
         while number in occupied:
             number += 1
         token = f"⟦pii:{number}⟧"
+        top = max([number, *occupied])
         self._db.execute(
             "INSERT INTO masks (session_id, token, value, created_at) VALUES (?, ?, ?, ?)",
             (session_id, token, value, int(time.time())),
@@ -213,9 +243,10 @@ class MaskStore:
         self._db.execute(
             """
             INSERT INTO token_seq (session_id, highest) VALUES (?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET highest = excluded.highest
+            ON CONFLICT(session_id) DO UPDATE SET
+                highest = MAX(token_seq.highest, excluded.highest)
             """,
-            (session_id, number),
+            (session_id, top),
         )
         return token
 

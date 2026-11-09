@@ -325,14 +325,16 @@ async def chat(request: Request):
                 done = object()
 
                 def offer(item) -> None:
+                    pending = asyncio.run_coroutine_threadsafe(queue.put(item), loop)
                     while not stop.is_set():
                         try:
-                            asyncio.run_coroutine_threadsafe(queue.put(item), loop).result(timeout=0.5)
+                            pending.result(timeout=0.5)
                             return
                         except TimeoutError:
                             continue
                         except Exception:
                             return
+                    pending.cancel()
 
                 def pump():
                     try:
