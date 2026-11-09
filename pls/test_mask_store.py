@@ -392,18 +392,16 @@ class RouterMaskTest(unittest.TestCase):
         self.assertNotIn(
             {"role": "system", "content": pls.MASK_SAFETY}, cloud["messages"])
 
-    def test_a_privacy_no_verdict_still_gets_the_delegate_line(self):
-        # The plan's worked example says "do it yourself". A privacy "no" is
-        # still a summary record, so the parent is told to launch the spawn
-        # tool. The guard would reject anything else.
+    def test_a_privacy_no_drops_the_delegate_line(self):
+        # The same "no" answers the delegate call, so the cloud sees the
+        # masked prompt and is not told to launch a subagent.
         self.verdict = {"answer": "no", "p_yes": 0.1}
         cloud = self.main()
         text = self.user_text(cloud)
-        self.assertIn("⟦pii:1⟧", text)
+        self.assertEqual(text, "email ⟦pii:1⟧ please")
         self.assertNotIn(MAYA, text)
-        self.assertIn("Launch the `subagent` tool", text)
-        self.assertIn("pls-task:", text)
-        self.assertNotIn("do it yourself", text)
+        self.assertNotIn("Launch the `subagent` tool", text)
+        self.assertNotIn("pls-task:", text)
 
     def test_a_privacy_side_call_is_masked(self):
         cloud = self.main(tools=None)
