@@ -157,20 +157,41 @@ class MaskStore:
         pairs.sort(key=lambda row: len(row[1]), reverse=True)
         if not pairs:
             return text
-        held: list[str] = []
-
-        def hold(match: re.Match) -> str:
-            held.append(match.group(0))
-            return f"\x00{len(held) - 1}\x00"
-
-        protected = TOKEN_RE.sub(hold, text)
+        lookup = {value: token for token, value in pairs}
         pattern = re.compile(
             r"(?<!\w)(?:" + "|".join(re.escape(value) for _, value in pairs) + r")(?!\w)"
         )
-        lookup = {value: token for token, value in pairs}
-        out = pattern.sub(lambda match: lookup[match.group(0)], protected)
+        value_spans = [(match.start(), match.end(), lookup[match.group(0)])
+                       for match in pattern.finditer(text)]
+        covered = [(start, end) for start, end, _ in value_spans]
+        marker = "\ue000"
+        while marker in text:
+            marker += "\ue001"
+        edits: list[tuple[int, int, str | None]] = [
+            (start, end, token) for start, end, token in value_spans
+        ]
+        for match in TOKEN_RE.finditer(text):
+            if any(match.start() >= start and match.end() <= end for start, end in covered):
+                continue
+            edits.append((match.start(), match.end(), None))
+        edits.sort()
+        pieces: list[str] = []
+        held: list[str] = []
+        cursor = 0
+        for start, end, replacement in edits:
+            if start < cursor:
+                continue
+            pieces.append(text[cursor:start])
+            if replacement is None:
+                held.append(text[start:end])
+                pieces.append(f"{marker}{len(held) - 1}{marker}")
+            else:
+                pieces.append(replacement)
+            cursor = end
+        pieces.append(text[cursor:])
+        out = "".join(pieces)
         for index, token in enumerate(held):
-            out = out.replace(f"\x00{index}\x00", token)
+            out = out.replace(f"{marker}{index}{marker}", token, 1)
         return out
 
     def _reserve_literals(self, session_id: str, text: str) -> None:
