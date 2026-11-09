@@ -140,6 +140,8 @@ class RouterTest(unittest.TestCase):
 
         async def fake_decide(policy, text):
             self.decided.append((policy, text))
+            if policy == "delegate":
+                return {"answer": "yes", "p_yes": 0.9}
             return self.verdict
 
         pls.ensure_model_server = fake_server
@@ -324,9 +326,9 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.answer(response), "local answer")
 
-    def test_a_private_task_withholds_the_answer(self):
+    def test_a_private_task_returns_the_masked_answer(self):
         record = self.seed(PRIVATE_TEXT, private=True, summary="local_only")
-        self.assertEqual(self.answer(self.post_child(record)), pls.WITHHELD)
+        self.assertEqual(self.answer(self.post_child(record)), "local answer")
 
     def test_tool_calls_pass_through_a_withheld_task(self):
         calls = [tool_call("f")]
@@ -354,18 +356,21 @@ class RouterTest(unittest.TestCase):
             return FakeResponse(completion("x" * 500))
 
         pls.http.post = long_then_short
-        self.assertEqual(self.answer(self.post_child(self.seed("a prompt"))), "short summary")
+        self.configure(policy="cost")
+        self.assertEqual(self.answer(self.post_child(self.seed("a prompt", policy="cost"))), "short summary")
 
     def test_summary_redacts_the_values_it_keeps(self):
         blurb = "Row 1 Maya Thornton maya@x.com (555) 010-0101 1988-04-12 " + "pad " * 90
         pls.http.post = _fake_return(completion(blurb))
-        content = self.answer(self.post_child(self.seed("a prompt")))
+        self.configure(policy="cost")
+        content = self.answer(self.post_child(self.seed("a prompt", policy="cost")))
         self.assertNotIn("maya@x.com", content)
         self.assertIn("[email]", content)
 
     def test_home_is_shortened_in_a_summary(self):
         pls.http.post = _fake_return(completion(str(Path.home()) + "/w/a.csv ok"))
-        self.assertIn("~/w/a.csv", self.answer(self.post_child(self.seed("a prompt"))))
+        self.configure(policy="cost")
+        self.assertIn("~/w/a.csv", self.answer(self.post_child(self.seed("a prompt", policy="cost"))))
 
     def test_a_summary_that_fails_says_so_instead_of_leaking_the_result(self):
         async def summary_fails(url, json=None, headers=None):
@@ -374,7 +379,10 @@ class RouterTest(unittest.TestCase):
             return FakeResponse(completion("x" * 500))
 
         pls.http.post = summary_fails
-        self.assertEqual(self.answer(self.post_child(self.seed("a prompt"))), pls.SUMMARISE_FAILED)
+        self.configure(policy="cost")
+        self.assertEqual(
+            self.answer(self.post_child(self.seed("a prompt", policy="cost"))),
+            pls.SUMMARISE_FAILED)
 
     # -- the child's task: marker, real text, summary type -----------------
 
@@ -384,7 +392,7 @@ class RouterTest(unittest.TestCase):
         users = [m for m in self.local_bodies[-1]["messages"] if m["role"] == "user"]
         self.assertEqual(users[0]["content"], PRIVATE_TEXT)
 
-    def test_a_private_child_is_told_nothing_leaves_the_device(self):
+    def test_a_private_child_is_told_to_report_in_detail(self):
         record = self.seed(PRIVATE_TEXT, private=True, summary="local_only")
         self.post_child(record)
         system = self.local_bodies[-1]["messages"][0]["content"]
@@ -403,9 +411,9 @@ class RouterTest(unittest.TestCase):
         self.assertEqual(next(m for m in sent if m["role"] == "user")["content"], "list the files")
         self.assertNotIn("pls-task:", json.dumps(sent))
 
-    def test_a_child_with_an_unknown_id_is_withheld_under_privacy(self):
+    def test_a_child_with_an_unknown_id_is_masked_under_privacy(self):
         record = {"id": "t424242"}
-        self.assertEqual(self.answer(self.post_child(record)), pls.WITHHELD)
+        self.assertEqual(self.answer(self.post_child(record)), "local answer")
 
     def test_a_child_with_an_unknown_id_is_summarised_under_cost(self):
         self.configure(policy="cost")
@@ -556,7 +564,7 @@ class RouterTest(unittest.TestCase):
         pls.http.send = _fake_send_sse(sent, None)
         response = self.post_dsh_child({"id": "t424242"})
         self.assertEqual(sent, [])
-        self.assertEqual(self.answer(response), pls.WITHHELD)
+        self.assertEqual(self.answer(response), "local answer")
         system = self.local_bodies[-1]["messages"][0]["content"]
         self.assertIn(pls.CHILD_RULES["local_only"], system)
 
@@ -658,6 +666,46 @@ class RouterTest(unittest.TestCase):
         choice = self.post_child(self.seed("a prompt")).json()["choices"][0]
         self.assertEqual(choice["finish_reason"], "stop")
 
+    def test_a_streaming_subagent_forwards_each_token_on_its_own(self):
+        chunks = [
+            {"choices": [{"index": 0, "delta": {"content": "hel"}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {"content": "lo"}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+        lines = [f"data: {json.dumps(chunk)}" for chunk in chunks] + ["data: [DONE]"]
+
+        def fake_stream(_method, _url, json=None, headers=None):
+            self.local_bodies.append(json)
+            return LineStream(lines)
+
+        pls.http.stream = fake_stream
+        body = self.dsh_child(self.seed("a prompt"))
+        body["stream"] = True
+        response = self.post("/v1/chat/completions", body)
+        self.assertTrue(self.local_bodies[-1]["stream"])
+        forwarded = [
+            json.loads(line[5:])["choices"][0]["delta"].get("content", "")
+            for line in response.text.splitlines()
+            if line.startswith("data: {")
+        ]
+        self.assertEqual(forwarded, ["hel", "lo", ""])
+
+    def test_a_streaming_subagent_drops_a_spawn_and_stops(self):
+        call = {"index": 0, "id": "c", "type": "function",
+                "function": {"name": "subagent", "arguments": "{}"}}
+        lines = [
+            'data: ' + json.dumps({"choices": [{"delta": {"tool_calls": [call]}, "finish_reason": None}]}),
+            'data: ' + json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}),
+            "data: [DONE]",
+        ]
+        pls.http.stream = lambda *_a, **_k: LineStream(lines)
+        body = self.dsh_child(self.seed("a prompt"))
+        body["stream"] = True
+        response = self.post("/v1/chat/completions", body)
+        events = [json.loads(line[5:]) for line in response.text.splitlines() if line.startswith("data: {")]
+        self.assertFalse(any((e["choices"][0].get("delta") or {}).get("tool_calls") for e in events))
+        self.assertEqual(events[-1]["choices"][0]["finish_reason"], "stop")
+
     def test_a_blocked_child_spawn_is_logged(self):
         events = self.capture_log()
         self.spawning_local_reply()
@@ -725,6 +773,31 @@ class RouterTest(unittest.TestCase):
 
     def test_debug_state_carries_no_subscription_field(self):
         self.assertNotIn("sub", self.client.get("/debug/state").json())
+
+    def test_debug_records_what_went_in_and_what_came_out(self):
+        pls.DEBUG = True
+        pls.EVENTS.clear()
+        try:
+            pls.http.send = _fake_send_json([], completion("cloud answer"))
+            self.cloud_post(self.later(dsh_first_turn()))
+            events = list(pls.EVENTS)
+            page = self.client.get("/debug")
+        finally:
+            pls.DEBUG = False
+            pls.EVENTS.clear()
+        incoming = [event for event in events if event.get("event") == "in"]
+        outgoing = [event for event in events if event.get("event") == "out"]
+        self.assertEqual(len(incoming), 1)
+        self.assertEqual(outgoing[0]["req"], incoming[0]["req"])
+        self.assertIn("messages", incoming[0]["body"])
+        self.assertIn("cloud answer", json.dumps(outgoing[0]["body"]))
+        self.assertTrue(any(
+            event.get("event") == "route" and event.get("req") == incoming[0]["req"]
+            for event in events))
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Processed", page.text)
+        self.assertIn(">In<", page.text)
+        self.assertIn(">Out<", page.text)
 
     def through_the_socket(self):
         """Main chat and a subagent with the real decide and token clients."""
@@ -812,12 +885,12 @@ class RouterTest(unittest.TestCase):
 
     def test_a_new_prompt_is_decided_once(self):
         self.cloud_post(dsh_first_turn())
-        self.assertEqual(self.decided, [("privacy", DSH_PROMPT)])
+        self.assertEqual(self.decided, [("privacy", DSH_PROMPT), ("delegate", DSH_PROMPT)])
 
     def test_the_decision_uses_the_configured_policy(self):
         self.configure(policy="cost")
         self.cloud_post(dsh_first_turn())
-        self.assertEqual(self.decided, [("cost", DSH_PROMPT)])
+        self.assertEqual(self.decided, [("cost", DSH_PROMPT), ("delegate", DSH_PROMPT)])
 
     def test_a_side_call_without_tools_is_not_decided_under_cost(self):
         self.configure(policy="cost")
@@ -857,13 +930,13 @@ class RouterTest(unittest.TestCase):
     def test_the_same_prompt_on_a_later_request_is_not_decided_again(self):
         self.cloud_post(dsh_first_turn())
         self.cloud_post(dsh_first_turn())
-        self.assertEqual(len(self.decided), 1)
+        self.assertEqual(len(self.decided), 2)
 
     def test_a_tool_result_turn_decides_nothing_new(self):
         body = dsh_first_turn()
         self.cloud_post(body)
         self.cloud_post(self.later(body))
-        self.assertEqual(len(self.decided), 1)
+        self.assertEqual(len(self.decided), 2)
 
     # dsh hands subagent output to the parent as user messages, in these exact
     # shapes (captured from a dsh 0.1.7 session, text replaced).
@@ -885,7 +958,10 @@ class RouterTest(unittest.TestCase):
         body = self.later(dsh_first_turn())
         body["messages"] += [self.agent_message(), self.agent_finished()]
         self.cloud_post(body)
-        self.assertEqual([text for _, text in self.decided], [DSH_PROMPT])
+        self.assertEqual(
+            [text for pol, text in self.decided if pol != "delegate"],
+            [DSH_PROMPT],
+        )
 
     def test_a_reply_after_a_subagent_finished_need_not_launch_another(self):
         body = self.later(dsh_first_turn())
@@ -897,7 +973,9 @@ class RouterTest(unittest.TestCase):
         body = self.later(dsh_first_turn())
         body["messages"].append(self.agent_message())
         sent, _ = self.sent_to_cloud(body, None)
-        self.assertEqual(sent[0]["messages"][-1]["content"], pls.AGENT_MESSAGE_MASK)
+        content = json.dumps(sent[0]["messages"][-1]["content"])
+        self.assertIn("25 contacts", content)
+        self.assertNotIn("stays on this device", content)
 
     # -- streaming through the guard ----------------------------------------
 
@@ -957,11 +1035,14 @@ class RouterTest(unittest.TestCase):
         body = self.later(dsh_first_turn())
         body["messages"].append({"role": "user", "content": "now run the tests"})
         self.cloud_post(body)
-        self.assertEqual([text for _, text in self.decided], [DSH_PROMPT, "now run the tests"])
+        self.assertEqual(
+            [text for pol, text in self.decided if pol != "delegate"],
+            [DSH_PROMPT, "now run the tests"],
+        )
 
     def test_harness_context_is_never_decided(self):
         self.cloud_post(dsh_first_turn())
-        self.assertEqual(len(self.decided), 1)
+        self.assertEqual(len(self.decided), 2)
         self.assertNotIn("system-reminder", self.decided[0][1])
 
     def test_ensure_tasks_records_every_real_user_message(self):
@@ -976,7 +1057,7 @@ class RouterTest(unittest.TestCase):
         body = {"messages": [{"role": "user", "content": "one"}]}
         asyncio.run(pls.ensure_tasks(body, "privacy"))
         asyncio.run(pls.ensure_tasks(body, "privacy"))
-        self.assertEqual(len(self.decided), 1)
+        self.assertEqual(len(self.decided), 2)
 
     def test_task_ids_count_up_from_t1_within_a_session(self):
         body = {"messages": [{"role": "user", "content": "one"},
@@ -996,7 +1077,7 @@ class RouterTest(unittest.TestCase):
         body = {"messages": [{"role": "user", "content": "one"},
                              {"role": "user", "content": "two"}]}
         asyncio.run(pls.ensure_tasks(body, "privacy"))
-        self.assertEqual(len(self.decided), 1)
+        self.assertEqual(len(self.decided), 2)
         self.assertIn(key_of("one\n\ntwo", "one"), pls.TASKS)
 
     def test_the_parent_sees_one_task_line_however_many_turns_it_has(self):
@@ -1051,6 +1132,47 @@ class RouterTest(unittest.TestCase):
         response = self.cloud_post(body)
         return sent, response
 
+    def test_a_cloud_reply_is_demasked_before_it_reaches_the_chat(self):
+        value = "9 Nov 2026 12:46"
+        pls.mask_stores["deepseek"].mask(
+            "s", value, [{"start": 0, "end": len(value), "category": "date"}])
+        sent = []
+        pls.http.send = _fake_send_json(sent, completion("left on ⟦pii:1⟧"))
+        response = self.cloud_post(self.later(dsh_first_turn()))
+        self.assertIn(value, self.answer(response))
+        self.assertNotIn("⟦pii:1⟧", self.answer(response))
+
+    def test_a_demasked_reply_is_masked_again_on_the_next_turn(self):
+        value = "9 Nov 2026 12:46"
+        pls.mask_stores["deepseek"].mask(
+            "s", value, [{"start": 0, "end": len(value), "category": "date"}])
+        body = self.later(dsh_first_turn())
+        body["messages"].append({"role": "assistant", "content": f"left on {value}"})
+        sent, _ = self.sent_to_cloud(body, None)
+        assistant = sent[0]["messages"][-1]["content"]
+        self.assertEqual(assistant, "left on ⟦pii:1⟧")
+        self.assertNotIn(value, assistant)
+
+    def test_a_split_token_in_a_stream_is_demasked(self):
+        value = "9 Nov 2026 12:46"
+        pls.mask_stores["deepseek"].mask(
+            "s", value, [{"start": 0, "end": len(value), "category": "date"}])
+        token = "⟦pii:1⟧"
+        events = [
+            {"choices": [{"index": 0, "delta": {"content": "at " + token[:4]}}]},
+            {"choices": [{"index": 0, "delta": {"content": token[4:] + " done"}}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+        raw = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+
+        async def send(request, stream=False):
+            return FakeStream(raw.encode())
+
+        pls.http.send = send
+        response = self.cloud_post({**self.later(dsh_first_turn()), "stream": True})
+        self.assertIn(value, response.text)
+        self.assertNotIn("⟦pii:", response.text)
+
     def test_a_private_prompt_reaches_the_cloud_with_the_delegate_instruction(self):
         self.say("yes")
         sent, _ = self.sent_to_cloud(dsh_first_turn(PRIVATE_TEXT), "subagent")
@@ -1103,6 +1225,37 @@ class RouterTest(unittest.TestCase):
         record = self.record(DSH_PROMPT)
         self.assertEqual(sent[0]["messages"][1]["content"],
                          DSH_PROMPT + "\n\n" + pls.instruction(record))
+
+    def test_a_meta_question_does_not_get_the_delegate_instruction(self):
+        self.say("yes")
+        file_prompt = "Read notes.txt and summarize"
+        meta = "why did you launch 3?"
+
+        async def fake_decide(policy, text):
+            self.decided.append((policy, text))
+            if policy == "delegate":
+                if text == meta:
+                    return {"answer": "no"}
+                if text == file_prompt:
+                    return {"answer": "yes"}
+                return {"answer": "yes", "p_yes": 0.9}
+            return self.verdict
+
+        pls.decide = fake_decide
+
+        body = dsh_first_turn(file_prompt)
+        sent, _ = self.sent_to_cloud(body, "subagent")
+        file_record = self.record(file_prompt)
+        first_turn = sent[0]["messages"][1]["content"]
+        self.assertIn(pls.instruction(file_record), first_turn)
+        self.assertIn(pls.ROUTER_TAG, first_turn)
+
+        body = self.later(body)
+        body["messages"].append({"role": "user", "content": meta})
+        sent, _ = self.sent_to_cloud(body, None)
+        meta_content = sent[0]["messages"][-1]["content"]
+        self.assertNotIn(pls.ROUTER_TAG, meta_content)
+        self.assertNotIn("pls-task:", meta_content)
 
     def test_the_delegate_instruction_names_the_task_marker(self):
         text = pls.instruction({"id": "t7", "policy": "cost", "big": True, "summary": "summary"})
@@ -1365,7 +1518,7 @@ class RouterTest(unittest.TestCase):
         self.sent_to_cloud(body, "subagent")
         self.say("no")
         sent, _ = self.sent_to_cloud(body, "subagent")
-        self.assertEqual(len(self.decided), 2)
+        self.assertEqual(len(self.decided), 4)
         self.assertTrue(self.record(DSH_PROMPT)["decided"])
         self.assertIn(DSH_PROMPT, sent[0]["messages"][1]["content"])
 
@@ -1388,7 +1541,7 @@ class RouterTest(unittest.TestCase):
         pls.load_tasks()
         self.configure(policy="cost")
         self.cloud_post(dsh_first_turn())
-        self.assertEqual(self.decided, [("cost", DSH_PROMPT)])
+        self.assertEqual(self.decided, [("cost", DSH_PROMPT), ("delegate", DSH_PROMPT)])
 
     def test_tasks_json_is_readable_by_its_owner_only(self):
         self.sent_to_cloud(dsh_first_turn(), "subagent")
@@ -1694,6 +1847,28 @@ class RouterTest(unittest.TestCase):
         self.assertIsNone(asyncio.run(REAL_DECIDE("privacy", "some text")))
 
 
+class LineStream:
+    """A model-server event stream. Each entry is one SSE `data:` line."""
+
+    def __init__(self, lines, status=200):
+        self.lines = lines
+        self.status_code = status
+        self.headers = {"content-type": "text/event-stream"}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return None
+
+    async def aiter_lines(self):
+        for line in self.lines:
+            yield line
+
+    async def aread(self):
+        return b""
+
+
 class FakeStream:
     def __init__(self, body: bytes, status=200):
         self._body = body
@@ -1852,6 +2027,14 @@ class ProfileTest(unittest.TestCase):
         _, patched = self.stamped("sessions_spawn", {"task": "go", "model": "cloud/big"})
         self.assertNotIn("model", patched)
 
+    def test_a_second_spawn_is_dropped_when_the_chat_already_has_a_task(self):
+        record = self.seed("read the notes")
+        record["id"] = "abc123-t1"
+        pls.CURRENT_SESSION.set("abc123")
+        calls = {0: {"name": "subagent", "arguments": json.dumps({"prompt": "relay it"})}}
+        self.assertFalse(pls.stamp_subagent_calls(calls, None, "privacy"))
+        self.assertEqual(calls, {})
+
     def test_an_already_marked_openclaw_spawn_still_loses_its_model(self):
         self.use("openclaw")
         calls = {0: {"name": "sessions_spawn",
@@ -1860,6 +2043,12 @@ class ProfileTest(unittest.TestCase):
         self.assertNotIn("model", json.loads(calls[0]["arguments"]))
 
     # -- the guard and the parent's tools --------------------------------------
+
+    def test_a_question_the_delegate_call_declined_may_be_answered_in_text(self):
+        record = self.seed("why did you launch 3?")
+        record["instruct"] = False
+        self.assertTrue(pls.guard_verdict(set(), "privacy", record))
+        self.assertFalse(pls.must_spawn(record))
 
     def test_privacy_lets_each_parent_call_only_its_spawn_tool_for_a_pending_task(self):
         for harness in pls.PROFILES:

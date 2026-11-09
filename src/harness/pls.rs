@@ -14,7 +14,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ const COST_YES_THRESHOLD: f64 = 0.5;
 fn yes_threshold(policy: Policy) -> f64 {
     match policy {
         Policy::Privacy => PRIVACY_YES_THRESHOLD,
-        Policy::Cost => COST_YES_THRESHOLD,
+        Policy::Cost | Policy::Delegate => COST_YES_THRESHOLD,
     }
 }
 
@@ -68,6 +68,8 @@ pub(crate) enum Policy {
     Privacy,
     /// Large tasks go to the local subagent; the cloud plans.
     Cost,
+    /// Whether this turn should be told to launch a subagent.
+    Delegate,
 }
 
 impl Policy {
@@ -75,6 +77,7 @@ impl Policy {
         match self {
             Policy::Privacy => "privacy",
             Policy::Cost => "cost",
+            Policy::Delegate => "delegate",
         }
     }
 }
@@ -83,7 +86,10 @@ pub(crate) fn parse_policy(value: &str) -> Result<Policy, String> {
     match value {
         "privacy" => Ok(Policy::Privacy),
         "cost" => Ok(Policy::Cost),
-        other => Err(format!("unknown policy '{other}': use privacy or cost")),
+        "delegate" => Ok(Policy::Delegate),
+        other => Err(format!(
+            "unknown policy '{other}': use privacy, cost or delegate"
+        )),
     }
 }
 
@@ -102,6 +108,12 @@ pub(crate) fn decide_question(policy: Policy) -> contract::YesNoQuestion {
             "Would doing this request take many steps of tool use, such as \
              exploring a codebase, reading several files, writing or editing code, \
              building, running or debugging?"
+        }
+        // Yes appends the launch line. No leaves a question the parent can answer.
+        Policy::Delegate => {
+            "Does this request need work on the user's device, such as reading \
+             a file or system configuration? Answer no when it is only a question \
+             that does not read a file or system configuration."
         }
     };
     contract::YesNoQuestion {
@@ -434,6 +446,9 @@ impl Drop for Router {
 pub struct WallySocket {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
+    /// dev/ino of the file this listener bound. Drop unlinks only that file,
+    /// so a previous wally exiting cannot delete the socket the new one just bound.
+    identity: Arc<std::sync::Mutex<(u64, u64)>>,
     accept: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -442,17 +457,28 @@ impl WallySocket {
     fn start(decider: Option<ResolvedModelPaths>) -> Option<Self> {
         let decider = decider.and_then(Decider::start).map(Arc::new);
         let socket = socket_path();
-        let _ = std::fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket).ok()?;
-        let _ = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600));
-        listener.set_nonblocking(true).ok()?;
+        let (listener, identity) = bind_listener(&socket)?;
+        let identity = Arc::new(std::sync::Mutex::new(identity));
 
         let stop = Arc::new(AtomicBool::new(false));
         let accept = {
             let stop = Arc::clone(&stop);
-            let listener = listener.try_clone().ok()?;
+            let path = socket.clone();
+            let identity = Arc::clone(&identity);
             std::thread::spawn(move || {
+                let mut listener = listener;
                 while !stop.load(Ordering::SeqCst) {
+                    // A previous process's exit unlinks this path. The open fd
+                    // keeps accepting on an unnamed inode, and every decide
+                    // then fails with "no such file". Bind the name again.
+                    if !path.exists() {
+                        if let Some((fresh, fresh_id)) = bind_listener(&path) {
+                            listener = fresh;
+                            if let Ok(mut slot) = identity.lock() {
+                                *slot = fresh_id;
+                            }
+                        }
+                    }
                     match listener.accept() {
                         Ok((stream, _)) => {
                             let decider = decider.clone();
@@ -468,16 +494,41 @@ impl WallySocket {
         Some(WallySocket {
             stop,
             socket,
+            identity,
             accept: Some(accept),
         })
     }
+}
+
+/// Bind `socket`, replacing a dead socket file and refusing one that is still
+/// accepting. The returned pair is the listener and its dev/ino.
+#[cfg(unix)]
+fn bind_listener(socket: &std::path::Path) -> Option<(UnixListener, (u64, u64))> {
+    if socket.exists() {
+        if UnixStream::connect(socket).is_ok() {
+            return None;
+        }
+        let _ = std::fs::remove_file(socket);
+    }
+    let listener = UnixListener::bind(socket).ok()?;
+    let _ = std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600));
+    listener.set_nonblocking(true).ok()?;
+    let meta = std::fs::metadata(socket).ok()?;
+    Some((listener, (meta.dev(), meta.ino())))
 }
 
 #[cfg(unix)]
 impl Drop for WallySocket {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        let _ = std::fs::remove_file(&self.socket);
+        let ours = self.identity.lock().ok().map(|slot| *slot);
+        if std::fs::metadata(&self.socket)
+            .ok()
+            .map(|meta| (meta.dev(), meta.ino()))
+            == ours
+        {
+            let _ = std::fs::remove_file(&self.socket);
+        }
         if let Some(handle) = self.accept.take() {
             let _ = handle.join();
         }
@@ -1032,7 +1083,13 @@ fn start_with(
         base_url,
         token,
         exit_code: None,
-        socket: WallySocket::start(decider),
+        socket: match WallySocket::start(decider) {
+            Some(socket) => Some(socket),
+            None => {
+                out::error_line("the decision socket did not start; prompts will not be routed");
+                None
+            }
+        },
     })
 }
 

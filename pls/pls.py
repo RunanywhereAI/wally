@@ -218,7 +218,8 @@ def policy_prompt(policy: str) -> str:
             "folders and the system on the user's device. You never read, write or "
             "run anything yourself, and you have no other tool. When an instruction "
             "carries a `pls-task:` line, copy that line exactly as the first line of "
-            f"the subagent's {field}."
+            f"the subagent's {field}. A result that only says the subagent started "
+            "is not its report: wait for the report and do not launch another."
         )
     return (
         "\n\nYou are the planner in a cost-saving pair. Talk with the user and "
@@ -278,8 +279,9 @@ CHILD_RULES = {
         "names and numbers in it, and do not paste file contents or raw values."
     ),
     "local_only": (
-        " Nothing you return leaves this device: the main agent only learns that "
-        "the task ran. Finish the task completely here."
+        " When you finish, write a detailed report of what you found or did. "
+        "Keep file paths, names and numbers, and do not paste file contents. "
+        "Personal values in that report are replaced before the main agent sees it."
     ),
 }
 # Every child gets this line too, whatever its summary type.
@@ -308,6 +310,8 @@ TOKEN = os.environ.get("PLS_TOKEN", "")
 DEBUG = os.environ.get("PLS_DEBUG") == "1"
 EVENTS: "collections.deque[dict]" = collections.deque(maxlen=1000)
 SUBSCRIBERS: "set[asyncio.Queue]" = set()
+REQUEST_ID: contextvars.ContextVar[str] = contextvars.ContextVar("pls_req", default="")
+TRACE_CHARS = 16000
 privacy_gap_noted = False
 
 PROFILE_DIR = Path(
@@ -324,6 +328,29 @@ SERVER_SCRIPT = Path(__file__).with_name("model_server.py")
 
 app = FastAPI()
 http = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0))
+
+
+@app.middleware("http")
+async def trace_exchange(request: Request, call_next):
+    """When the debug console is on, remember each /v1 request and its reply."""
+    if not DEBUG or not request.url.path.startswith("/v1/"):
+        return await call_next(request)
+    req_id = secrets.token_hex(4)
+    token = REQUEST_ID.set(req_id)
+    request.scope["headers"] = [*request.scope["headers"], (b"x-pls-req", req_id.encode())]
+    raw = await request.body()
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except Exception:
+        parsed = {}
+    if isinstance(parsed, dict):
+        log({"event": "in", "req": req_id, "method": request.method,
+             "path": request.url.path, "body": trace_body(parsed)})
+    try:
+        response = await call_next(request)
+    finally:
+        REQUEST_ID.reset(token)
+    return attach_out(response, req_id)
 
 local_sem = asyncio.Semaphore(1)
 waiting = 0
@@ -422,12 +449,6 @@ def is_injected(message: dict) -> bool:
     runtime snapshot). Not what the person asked, so routing skips it."""
     return (message.get("role") == "user"
             and message_text(message).lstrip().startswith(profile().injected))
-
-
-AGENT_MESSAGE_MASK = (
-    "[router] A subagent sent a message here. Under the privacy policy it stays "
-    "on this device."
-)
 
 
 def is_agent_message(message: dict) -> bool:
@@ -656,12 +677,20 @@ async def ensure_tasks(body: dict, policy: str, request: Request | None = None) 
         if policy == "privacy":
             record["mask_session"] = mask_session_id(request, messages)
             record["masked"] = await mask_cloud_text(text, record["mask_session"])
+        delegate = await decide("delegate", text)
+        STATS["decisions"] += 1
+        if delegate is None:
+            STATS["decision_failures"] += 1
+        # A failed delegate call still appends, so a file task is not answered
+        # in the cloud. Only a clear "no" drops the launch line.
+        record["instruct"] = not (delegate and delegate.get("answer") == "no")
         TASKS[key] = record
         TASK_TEXT[record["id"]] = text
         fresh.append(record)
         log({"event": "decided", "task": record["id"], "policy": policy,
              "private": record["private"], "big": record["big"],
              "summary": record["summary"], "decided": record["decided"],
+             "instruct": record["instruct"],
              "p_yes": (verdict or {}).get("p_yes")})
     if fresh:
         save_tasks()
@@ -685,9 +714,16 @@ def instruction(record: dict) -> str:
     )
 
 
+def wants_instruction(record: dict) -> bool:
+    """A missing or failed delegate verdict still appends the launch line."""
+    return record.get("instruct", True) is not False
+
+
 def rewrite_prompt(message: dict, record: dict) -> dict:
     if record["policy"] == "privacy":
-        return {**message, "content": privacy_cloud_text(record, True)}
+        return {**message, "content": privacy_cloud_text(record, wants_instruction(record))}
+    if not wants_instruction(record):
+        return message
     extra = "\n\n" + instruction(record)
     content = message.get("content")
     if isinstance(content, list):
@@ -774,6 +810,40 @@ def _span_is_path(text: str, span: dict) -> bool:
     return piece.startswith(("/", "~/", "./", "../"))
 
 
+def _remask_content(store, session_id: str, content):
+    """Known values become tokens. A failed piece is left as it arrived."""
+    if isinstance(content, str):
+        return store.remask(session_id, content)
+    if isinstance(content, list):
+        parts = []
+        changed = False
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                text = store.remask(session_id, part["text"])
+                if text != part["text"]:
+                    changed = True
+                    parts.append({**part, "text": text})
+                    continue
+            parts.append(part)
+        return parts if changed else content
+    return content
+
+
+def remask_assistant_text(messages: list, session_id: str) -> list:
+    """Mask known values in the chat the cloud will read. The system prompt stays."""
+    store = open_mask_store()
+    if store is None or not session_id:
+        return messages
+    updated = []
+    for message in messages:
+        if message.get("role") == "system":
+            updated.append(message)
+            continue
+        content = _remask_content(store, session_id, message.get("content"))
+        updated.append(message if content == message.get("content") else {**message, "content": content})
+    return updated
+
+
 def demask_local_text(text: str, session_id: str) -> str:
     """demask against pls.mask_stores[profile().id].
 
@@ -786,6 +856,110 @@ def demask_local_text(text: str, session_id: str) -> str:
     if store is None:
         return text
     return store.demask(session_id, text)
+
+
+def split_open_token(text: str) -> tuple[str, str]:
+    """Hold a trailing `⟦pii:…` that has not closed yet."""
+    start = text.rfind("⟦")
+    if start < 0 or "⟧" in text[start:]:
+        return text, ""
+    return text[:start], text[start:]
+
+
+class ReplyDemask:
+    """Restore tokens in a streamed reply, holding one that is split mid-way."""
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.hold = ""
+
+    def feed(self, text: str, final: bool = False) -> str:
+        self.hold += text
+        if final:
+            ready, self.hold = self.hold, ""
+        else:
+            ready, self.hold = split_open_token(self.hold)
+        if not ready:
+            return ""
+        return demask_local_text(ready, self.session_id)
+
+    def flush(self) -> str:
+        return self.feed("", final=True)
+
+
+def _content_sse(text: str) -> bytes:
+    return sse(chunk("chatcmpl-pls-demask", int(time.time()), {"content": text})).encode()
+
+
+def map_sse_event(event: bytes, demask: ReplyDemask | None) -> list[bytes]:
+    """Demask text deltas. A non-text event flushes a held token first."""
+    if demask is None or not event.strip():
+        return [event]
+    raw = event.strip()
+    if not raw.startswith(b"data: ") or raw == b"data: [DONE]":
+        return _flush_then(demask, event)
+    try:
+        payload = json.loads(raw[len(b"data: "):])
+    except ValueError:
+        return _flush_then(demask, event)
+    found = []
+    finishing = False
+    for choice in payload.get("choices") or []:
+        if choice.get("finish_reason"):
+            finishing = True
+        delta = choice.get("delta")
+        if not isinstance(delta, dict) or delta.get("tool_calls"):
+            return _flush_then(demask, event)
+        text = delta.get("content")
+        if isinstance(text, str) and text:
+            found.append(delta)
+    if not found:
+        return _flush_then(demask, event)
+    emit = finishing
+    for delta in found:
+        ready = demask.feed(delta["content"], final=finishing)
+        if ready:
+            delta["content"] = ready
+            emit = True
+        else:
+            delta.pop("content", None)
+    if not emit:
+        return []
+    return [sse(payload).encode()]
+
+
+def _flush_then(demask: ReplyDemask, event: bytes) -> list[bytes]:
+    ready = demask.flush()
+    if not ready:
+        return [event]
+    return [_content_sse(ready), event]
+
+
+def demask_sse_bytes(raw: bytes, session_id: str) -> bytes:
+    if not raw or not session_id:
+        return raw
+    demask = ReplyDemask(session_id)
+    out: list[bytes] = []
+    pending = raw
+    while b"\n\n" in pending:
+        event, pending = pending.split(b"\n\n", 1)
+        out.extend(map_sse_event(event + b"\n\n", demask))
+    if pending:
+        out.extend(map_sse_event(pending, demask))
+    ready = demask.flush()
+    if ready:
+        out.append(_content_sse(ready))
+    return b"".join(out)
+
+
+def demask_reply(parsed: dict, session_id: str) -> None:
+    """Restore tokens in a buffered assistant message. Tool calls stay masked."""
+    if not session_id:
+        return
+    for choice in parsed.get("choices") or []:
+        message = choice.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            message["content"] = demask_local_text(message["content"], session_id)
 
 
 def attach_mask_safety(messages: list) -> None:
@@ -838,20 +1012,16 @@ def _drop_mask_safety(messages: list) -> list:
     ]
 
 
-def apply_policy(body: dict, policy: str) -> dict:
+def apply_policy(body: dict, policy: str, session_id: str = "") -> dict:
     """The cloud-bound copy of `body` under `policy`. Never mutates `body`.
 
     Every prompt with a record is rewritten the same way on every request, so
     a private prompt stays masked on later turns and the cloud prefix is stable.
     """
     original = body.get("messages") or []
-    messages = [
-        # A subagent's `send_message` skips the summary-type filter on its
-        # final answer, so under privacy what it says never reaches the cloud.
-        {**m, "content": AGENT_MESSAGE_MASK}
-        if policy == "privacy" and is_agent_message(m) else m
-        for m in original
-    ]
+    # A child's report is already span-masked on the way out of the local
+    # lane. Leave that text in place so the cloud parent can read it.
+    messages = list(original)
     session = session_of(original)
     for turn in prompt_turns(original):
         record = turn_record(original, turn, session)
@@ -864,7 +1034,8 @@ def apply_policy(body: dict, policy: str) -> dict:
             for index in turn:
                 messages[index] = {
                     **original[index],
-                    "content": privacy_cloud_text(record, pending and index == turn[-1]),
+                    "content": privacy_cloud_text(
+                        record, pending and index == turn[-1] and wants_instruction(record)),
                 }
         elif pending:
             messages[turn[-1]] = rewrite_prompt(original[turn[-1]], record)
@@ -888,6 +1059,8 @@ def apply_policy(body: dict, policy: str) -> dict:
     if policy == "privacy" and isinstance(body.get("tools"), list):
         shaped["tools"] = [t for t in body["tools"]
                            if (t.get("function") or {}).get("name") in profile().parent_tools]
+    if policy == "privacy" and session_id:
+        shaped["messages"] = remask_assistant_text(shaped["messages"], session_id)
     return shaped
 
 
@@ -907,7 +1080,8 @@ def mask_private_prompts(body: dict) -> dict:
             for index in turn:
                 messages[index] = {
                     **original[index],
-                    "content": privacy_cloud_text(record, pending and index == turn[-1]),
+                    "content": privacy_cloud_text(
+                        record, pending and index == turn[-1] and wants_instruction(record)),
                 }
     if _has_mask_token(messages):
         attach_mask_safety(messages)
@@ -1003,13 +1177,14 @@ def strip_marker(messages: list) -> list:
 def ad_hoc_record(policy: str) -> dict:
     """A task for a `subagent` call the parent made with no pending task.
 
-    Its text is already in the parent's own call, so it is never private;
-    under privacy the answer still stays on the device.
+    Its text is already in the parent's own call, so it is never private.
+    Under privacy the answer is span-masked on the way back.
     """
-    record = {"id": next_task_id(CURRENT_SESSION.get()), "policy": policy,
+    session = CURRENT_SESSION.get()
+    record = {"id": next_task_id(session), "policy": policy,
               "private": False, "big": True,
               "summary": "local_only" if policy == "privacy" else "summary",
-              "decided": True, "ad_hoc": True}
+              "decided": True, "ad_hoc": True, "mask_session": session}
     TASKS[f"ad-hoc:{record['id']}"] = record
     if persisted(record):
         save_tasks()
@@ -1043,6 +1218,13 @@ def resolve_child(messages: list, policy: str) -> tuple[str, list]:
         log({"event": "child_unknown_task", "task": task_id})
         return fallback, strip_marker(messages)
     mask_session = record.get("mask_session") if isinstance(record.get("mask_session"), str) else ""
+    if not mask_session:
+        # An ad-hoc child has no session of its own. Its task id is
+        # `<chat>-tN`, and the parent restores tokens from that chat.
+        prefix, sep, _number = task_id.rpartition("-t")
+        if sep and prefix:
+            mask_session = prefix
+            record["mask_session"] = prefix
     ACTIVE_MASK_SESSION.set(mask_session)
     if (task_id not in TASK_TEXT and isinstance(record.get("masked"), str) and mask_session):
         TASK_TEXT[task_id] = demask_local_text(record["masked"], mask_session)
@@ -1235,22 +1417,60 @@ def call_prompts(call: dict) -> list[str]:
     return [str(holder.get(key) or "") for holder, key in slots] or [""]
 
 
+def session_has_delegate() -> bool:
+    """Whether this chat already has a task a subagent was told to run."""
+    session = CURRENT_SESSION.get()
+    if not session:
+        return False
+    prefix = f"{session}-t"
+    return any(str(record.get("id", "")).startswith(prefix) and record.get("summary")
+               for record in TASKS.values())
+
+
+def drop_spawn_calls(calls: dict[int, dict]) -> None:
+    for index, call in list(calls.items()):
+        if is_spawn(call):
+            del calls[index]
+
+
 def stamp_subagent_calls(calls: dict[int, dict], record: dict | None, policy: str) -> bool:
     """Make every spawn call in a parent reply carry a `pls-task:` line.
 
     With one endpoint the marker is the only thing that tells a child request
     from main chat. An unmarked call takes the pending task when it has one
-    that delegates, otherwise a fresh `ad_hoc_record`. Returns whether any
-    call changed.
+    that delegates, otherwise a fresh `ad_hoc_record`. A second spawn while
+    that task already exists is removed instead. Returns whether any call
+    changed.
     """
     spawn_calls = [c for c in calls.values() if is_spawn(c)]
     if not spawn_calls:
         return False
     task = record if record and record.get("summary") else None
-    if task is None and any(prompt_needs_task(prompt)
-                            for c in spawn_calls for prompt in call_prompts(c)):
+    if task is not None and len(spawn_calls) > 1:
+        kept = False
+        for index, call in list(calls.items()):
+            if not is_spawn(call):
+                continue
+            if kept:
+                del calls[index]
+            else:
+                kept = True
+        log({"event": "extra_spawn_dropped", "task": task["id"]})
+    elif task is None and session_has_delegate() and any(
+            prompt_needs_task(prompt) for c in spawn_calls for prompt in call_prompts(c)):
+        drop_spawn_calls(calls)
+        log({"event": "extra_spawn_dropped", "session": CURRENT_SESSION.get()})
+        return False
+    elif task is None and any(prompt_needs_task(prompt)
+                              for c in spawn_calls for prompt in call_prompts(c)):
         task = ad_hoc_record(policy)
     return patch_call_args(calls, task)
+
+
+WAIT_FOR_CHILD = (
+    "[router] A subagent is already working on this. Wait for its report "
+    "and relay that. Do not launch another."
+)
 
 
 def call_events(calls: dict[int, dict]) -> list[str]:
@@ -1368,6 +1588,10 @@ def scan_pii(messages: list) -> dict:
 
 
 def log(event: dict) -> None:
+    if DEBUG:
+        req = REQUEST_ID.get()
+        if req and "req" not in event:
+            event = {**event, "req": req}
     print(json.dumps(event), file=sys.stderr, flush=True)
     if DEBUG:
         event = {"ts": round(time.time(), 3), **event}
@@ -1377,6 +1601,70 @@ def log(event: dict) -> None:
                 queue.put_nowait(event)
             except Exception:
                 pass
+
+
+def clip_value(value: Any) -> Any:
+    """A debug-panel copy. Long payloads keep a preview instead of the whole body."""
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        text = str(value)
+    if len(text) <= TRACE_CHARS:
+        return value
+    return {"truncated": True, "chars": len(text), "preview": text[:TRACE_CHARS]}
+
+
+def clip_bytes(raw: bytes) -> Any:
+    text = raw.decode("utf-8", errors="replace")
+    truncated = len(text) > TRACE_CHARS
+    if truncated:
+        text = text[:TRACE_CHARS]
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+    if parsed is not None and not truncated:
+        return parsed
+    if truncated:
+        return {"truncated": True, "chars": len(raw), "preview": text}
+    return text
+
+
+def trace_body(body: dict) -> dict:
+    """What a request carried, without headers. The bearer token never arrives here."""
+    kept: dict = {}
+    for key in ("model", "stream", "messages", "tool_choice", "max_tokens"):
+        if key in body:
+            kept[key] = body[key]
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        kept["tools"] = [
+            ((tool.get("function") or {}).get("name") or "")
+            if isinstance(tool, dict) else ""
+            for tool in tools
+        ]
+    return clip_value(kept)
+
+
+def attach_out(response, req_id: str):
+    """Record the response body once the client has read it."""
+    iterator = response.body_iterator
+
+    async def wrapped():
+        chunks = []
+        size = 0
+        async for chunk in iterator:
+            data = chunk.encode() if isinstance(chunk, str) else bytes(chunk)
+            if size < TRACE_CHARS:
+                chunks.append(data[: TRACE_CHARS - size])
+                size += len(data)
+            yield chunk
+        log({"event": "out", "req": req_id, "status": response.status_code,
+             "stream": isinstance(response, StreamingResponse),
+             "body": clip_bytes(b"".join(chunks))})
+
+    response.body_iterator = wrapped()
+    return response
 
 
 # --------------------------------------------------------------------------
@@ -1694,62 +1982,124 @@ def stats_reset(request: Request):
 
 
 DEBUG_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><title>PLS debug</title>
+<html><head><meta charset="utf-8"><title>PLS logs</title>
 <style>
 :root{color-scheme:dark}
-body{background:#0e1116;color:#c9d1d9;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0}
-header{position:sticky;top:0;background:#161b22;border-bottom:1px solid #30363d;padding:8px 12px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-h1{font-size:13px;margin:0;font-weight:600;color:#e6edf3}
-.pill{border:1px solid #30363d;border-radius:10px;padding:1px 8px;color:#8b949e}
-.pill b{color:#e6edf3}
-table{border-collapse:collapse;width:100%}
-th,td{text-align:left;padding:3px 8px;border-bottom:1px solid #21262d;vertical-align:top;white-space:pre-wrap}
-th{position:sticky;top:41px;background:#0e1116;color:#8b949e;font-weight:500}
-.cloud{color:#79c0ff}.local{color:#56d364}.blocked{color:#f0883e}.file{color:#d2a8ff}
-.pii{color:#f778ba}.dim{color:#6e7681}.warn{color:#e3b341}
-button.copy{padding:0 6px;font-size:11px;margin-left:8px}
-button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:3px 10px;cursor:pointer}
+body{background:#0e1116;color:#c9d1d9;font:14px/1.45 ui-sans-serif,system-ui,sans-serif;margin:0}
+header{position:sticky;top:0;background:#161b22;border-bottom:1px solid #30363d;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;z-index:1}
+h1{font-size:15px;margin:0;font-weight:500;color:#e6edf3}
+.pill{border:1px solid #30363d;border-radius:999px;padding:2px 10px;color:#8b949e;font-size:12px}
+.pill b{color:#e6edf3;font-weight:500}
+button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit}
+#log{display:flex;flex-direction:column;gap:8px;padding:12px 16px 32px}
+.empty{color:#8b949e;padding:24px 4px}
+details{background:#161b22;border:1px solid #30363d;border-radius:8px}
+summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:88px 72px 64px 52px 1fr;gap:8px;align-items:baseline;padding:10px 12px}
+summary::-webkit-details-marker{display:none}
+summary:hover{background:#1c2128}
+.time,.meta{color:#8b949e;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cloud{color:#79c0ff}.local{color:#56d364}.bad{color:#f0883e}
+.body{display:flex;flex-direction:column;gap:12px;padding:0 12px 12px}
+section h2{margin:0 0 6px;font-size:12px;font-weight:500;color:#8b949e}
+pre{margin:0;padding:10px;background:#0e1116;border-radius:6px;overflow:auto;max-height:320px;white-space:pre-wrap;word-break:break-word;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+ol{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+li{display:grid;grid-template-columns:140px 1fr;gap:8px}
+.step{color:#e6edf3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+@media(max-width:640px){
+ summary{grid-template-columns:72px 1fr}
+ .kind,.lane,.status{display:none}
+}
 </style></head><body>
 <header>
-<h1>PLS router</h1>
+<h1>PLS logs</h1>
 <span class="pill">mode <b id="mode">?</b></span>
-<span class="pill">local <b id="local">0</b></span>
-<span class="pill">cloud <b id="cloud">0</b></span>
-<span class="pill">pii files <b id="pii">0</b></span>
+<span class="pill">requests <b id="count">0</b></span>
 <button id="pause">pause</button><button id="clear">clear</button>
 <a href="/debug/export"><button>export</button></a>
 </header>
-<table><thead><tr><th>time</th><th>event</th><th>lane</th><th>path / file</th><th>detail</th></tr></thead><tbody id="rows"></tbody></table>
+<div id="log"><p class="empty" id="empty">No requests yet.</p></div>
 <script>
-const rows=document.getElementById('rows');let paused=false,n={local:0,cloud:0,pii:0};
+const logEl=document.getElementById('log');
+const empty=document.getElementById('empty');
+const cards=new Map();
+let paused=false;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 document.getElementById('pause').onclick=e=>{paused=!paused;e.target.textContent=paused?'resume':'pause'};
-document.getElementById('clear').onclick=()=>{rows.innerHTML=''};
+document.getElementById('clear').onclick=()=>{cards.clear();logEl.replaceChildren(empty);empty.hidden=false;document.getElementById('count').textContent='0'};
+function textOf(content){
+ if(typeof content==='string')return content;
+ if(Array.isArray(content))return content.map(p=>p&&p.text||'').join(' ');
+ return '';
+}
+function oneLine(text){
+ let out='', gap=false;
+ for(const c of text){
+  const code=c.charCodeAt(0);
+  const ws=code===9||code===10||code===13||code===32;
+  if(ws){ if(!gap){ out+=' '; gap=true; } }
+  else { out+=c; gap=false; }
+ }
+ return out.trim();
+}
+function summaryText(body){
+ const messages=body&&body.messages;
+ if(!Array.isArray(messages))return '';
+ for(let i=messages.length-1;i>=0;i--){
+  const text=oneLine(textOf(messages[i]&&messages[i].content));
+  if(text)return text.slice(0,160);
+ }
+ return '';
+}
+function pretty(value){
+ if(value==null)return '';
+ return typeof value==='string'?value:JSON.stringify(value,null,2);
+}
+function render(card){
+ const events=card.events;
+ const inn=events.find(e=>e.event==='in');
+ const out=[...events].reverse().find(e=>e.event==='out');
+ const steps=events.filter(e=>e.event!=='in'&&e.event!=='out');
+ const route=steps.find(e=>e.event==='route')||{};
+ const when=new Date((inn||events[0]).ts*1000).toLocaleTimeString();
+ const kind=route.kind||'';
+ const lane=route.lane||inn&&''||'';
+ const status=out?String(out.status):'…';
+ const title=inn?summaryText(inn.body):esc(events[0].event);
+ const statusCls=/^[45]/.test(status)?'bad':lane;
+ card.el.open=card.el.open;
+ card.el.querySelector('summary').innerHTML=
+  `<span class=time>${esc(when)}</span><span class=kind>${esc(kind)}</span>`+
+  `<span class="lane ${esc(lane)}">${esc(lane)}</span><span class="status ${esc(statusCls)}">${esc(status)}</span>`+
+  `<span class=title>${esc(title)}</span>`;
+ const stepHtml=steps.map(e=>{
+  const rest={...e};delete rest.ts;delete rest.event;delete rest.req;
+  return `<li><span class=step>${esc(e.event)}</span><span class=meta>${esc(pretty(rest))}</span></li>`;
+ }).join('')||'<li><span class=meta>No steps yet.</span></li>';
+ card.el.querySelector('.body').innerHTML=
+  `<section><h2>In</h2><pre>${esc(pretty(inn?inn.body:null)||'Nothing recorded.')}</pre></section>`+
+  `<section><h2>Processed</h2><ol>${stepHtml}</ol></section>`+
+  `<section><h2>Out</h2><pre>${esc(out?pretty(out.body):'Waiting for the reply.')}</pre></section>`;
+}
 function add(e){
- const t=new Date(e.ts*1000).toLocaleTimeString();
- const tr=document.createElement('tr');
- const lane=e.lane||(e.event==='local'||e.event==='local_done'?'local':'');
- if(lane==='local')n.local++; if(lane==='cloud')n.cloud++;
- if(e.event==='pii_file'){n.pii++;}
- document.getElementById('local').textContent=n.local;
- document.getElementById('cloud').textContent=n.cloud;
- document.getElementById('pii').textContent=n.pii;
+ const id=e.req||('loose-'+e.ts+'-'+e.event);
+ let card=cards.get(id);
+ if(!card){
+  const el=document.createElement('details');
+  el.innerHTML='<summary></summary><div class=body></div>';
+  card={el,events:[]};
+  cards.set(id,el&&card);
+  empty.hidden=true;
+  logEl.prepend(el);
+ }
+ card.events.push(e);
+ render(card);
+ document.getElementById('count').textContent=String(cards.size);
  if(e.mode)document.getElementById('mode').textContent=e.mode;
- const detail={...e};delete detail.ts;delete detail.event;delete detail.lane;delete detail.path;delete detail.file;
- const cls=e.event==='pii_file'?'file':e.event==='child_spawn_blocked'||e.event==='local_unavailable'?'blocked':e.event==='hint'?'warn':lane;
- const text=e.counts?'<span class=pii>'+esc(JSON.stringify(e.counts))+'</span> <span class=dim>'+esc(e.action)+'</span>':esc(e.message||JSON.stringify(detail));
- tr.innerHTML=`<td class=dim>${esc(t)}</td><td>${esc(e.event)}</td><td class=${esc(cls)}>${esc(lane)}</td>`+
-   `<td class=${esc(cls)}>${esc(e.path||e.file||'')}</td>`+
-   `<td>${text}<button class=copy title="copy json">copy</button></td>`;
- tr.querySelector('.copy').onclick=ev=>{
-   navigator.clipboard.writeText(JSON.stringify(e)).then(()=>{
-     ev.target.textContent='copied';setTimeout(()=>ev.target.textContent='copy',900);});
- };
- rows.prepend(tr);
 }
 fetch('/debug/state').then(r=>r.json()).then(s=>{
- document.getElementById('mode').textContent=s.mode;
- for(const e of s.events.reverse())add(e);
+ document.getElementById('mode').textContent=s.mode||'?';
+ for(const e of s.events)add(e);
  const es=new EventSource('/debug/events');
  es.onmessage=m=>{if(!paused)add(JSON.parse(m.data))};
 });
@@ -1823,6 +2173,9 @@ def withheld_completion(stream: bool) -> Response:
 
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 async def route(path: str, request: Request):
+    req_id = request.headers.get("x-pls-req", "")
+    if req_id:
+        REQUEST_ID.set(req_id)
     if path == "v1/models":
         # Limits ride along: Hermes reads a custom endpoint's window from
         # here and otherwise assumes 256K for both ids.
@@ -1883,7 +2236,8 @@ async def route(path: str, request: Request):
     CURRENT_SESSION.set(session_of(messages))
     await ensure_tasks(body, policy, request)
     record = pending_task(body)
-    shaped = apply_policy(body, policy)
+    session_id = mask_session_id(request, messages) if policy == "privacy" else ""
+    shaped = apply_policy(body, policy, session_id)
 
     pii = scan_pii(shaped.get("messages") or [])
     if pii["total"]:
@@ -1899,7 +2253,8 @@ async def route(path: str, request: Request):
         log({"event": "instructed", "task": record["id"], "policy": policy,
              "summary": record["summary"], "private": record["private"]})
     return await cloud(path, shaped, request, pii, guard=guard,
-                       policy=policy, record=record, parent=True)
+                       policy=policy, record=record, parent=True,
+                       mask_session=session_id)
 
 
 def _with_model(payload: bytes) -> bytes:
@@ -1966,17 +2321,23 @@ def calls_json(calls: dict[int, dict]) -> JSONResponse:
     })
 
 
+def must_spawn(record: dict | None) -> bool:
+    """The delegate decision already said this pending task needs a subagent."""
+    return bool(record and record.get("summary") and wants_instruction(record))
+
+
 def guard_verdict(names: set[str], policy: str, record: dict | None) -> bool:
     """Whether a cloud reply with these tool calls may reach the harness.
 
     `record` is the task of a prompt no assistant turn has answered yet.
+    A task the delegate call marked `instruct` false may be answered in text.
     """
     if policy == "privacy":
         if not names <= profile().parent_tools:
             return False
         # The result tools alone do not start the pending task.
-        return profile().spawn_tool in names if record else True
-    if record and record.get("summary"):
+        return profile().spawn_tool in names if must_spawn(record) else True
+    if must_spawn(record):
         return profile().spawn_tool in names
     return True
 
@@ -1999,7 +2360,7 @@ def blocked_reply() -> dict:
 async def cloud(path: str, body: dict, request: Request,
                 pii: dict | None = None, guard: bool = False,
                 policy: str = DEFAULT_POLICY, record: dict | None = None,
-                attempt: int = 0, parent: bool = False):
+                attempt: int = 0, parent: bool = False, mask_session: str = ""):
     """Send `body` to the cloud and relay its reply.
 
     `guard` judges the reply's tool calls; `parent` marks a main-chat reply,
@@ -2084,6 +2445,13 @@ async def cloud(path: str, body: dict, request: Request,
                 if raw is not None:
                     return calls_stream(calls)
                 return calls_json(calls)
+            if profile().spawn_tool in names and not any(is_spawn(c) for c in calls.values()):
+                log({"event": "guard", "outcome": "extra_spawn_dropped", "attempt": attempt})
+                note = {"id": "chatcmpl-pls-wait", "object": "chat.completion",
+                        "created": int(time.time()), "model": MODEL_ID,
+                        "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                            "role": "assistant", "content": WAIT_FOR_CHILD}}]}
+                return as_stream(note) if raw is not None else JSONResponse(note)
             log({"event": "guard", "outcome": "accepted", "attempt": attempt,
                  "saw": sorted(names)})
             if raw is not None:
@@ -2095,7 +2463,7 @@ async def cloud(path: str, body: dict, request: Request,
              "saw": sorted(names)})
         if attempt >= GUARD_RETRIES:
             STATS["guard_synth"] += 1
-            if record and record.get("summary"):
+            if must_spawn(record):
                 log({"event": "guard", "outcome": "synthesised", "task": record["id"]})
                 return synthetic_call(record) if raw is not None else synthetic_json(record)
             log({"event": "guard", "outcome": "blocked", "saw": sorted(names)})
@@ -2111,7 +2479,7 @@ async def cloud(path: str, body: dict, request: Request,
         }]}
         return await cloud(path, nudged, request, pii, guard=True,
                            policy=policy, record=record, attempt=attempt + 1,
-                           parent=parent)
+                           parent=parent, mask_session=mask_session)
 
     if not event_stream:
         payload = await response.aread()
@@ -2127,6 +2495,10 @@ async def cloud(path: str, body: dict, request: Request,
             parsed = json.loads(payload)
         except Exception:
             parsed = None
+        if policy == "privacy" and parent and isinstance(parsed, dict):
+            demask_reply(parsed, mask_session or mask_session_id(
+                request, body.get("messages") or []))
+            payload = json.dumps(parsed).encode()
         if guard and isinstance(parsed, dict):
             calls = calls_from_json(parsed)
             settled = await settle(calls, None)
@@ -2174,6 +2546,11 @@ async def cloud(path: str, body: dict, request: Request,
         holding = False
         streamed = False
         first_ms = None
+        reply_session = ""
+        if policy == "privacy" and parent:
+            reply_session = mask_session or mask_session_id(
+                request, body.get("messages") or [])
+        demask = ReplyDemask(reply_session) if reply_session else None
         try:
             async for piece in response.aiter_bytes():
                 if first_ms is None:
@@ -2188,10 +2565,13 @@ async def cloud(path: str, body: dict, request: Request,
                         held.append(event)
                         continue
                     for earlier in held:
-                        yield earlier
+                        for out in map_sse_event(earlier, demask):
+                            yield out
                     held.clear()
-                    yield event
-                    streamed = True
+                    for out in map_sse_event(event, demask):
+                        if out:
+                            streamed = True
+                        yield out
             if pending:
                 held.append(pending)
         finally:
@@ -2199,7 +2579,14 @@ async def cloud(path: str, body: dict, request: Request,
             log({"event": "cloud_done", "path": path, "first_byte_ms": first_ms,
                  "total_ms": elapsed(), "attempt": attempt, "streamed_text": streamed})
 
+        if demask is not None:
+            rest = demask.flush()
+            if rest:
+                yield _content_sse(rest)
+                streamed = True
         raw = b"".join(held)
+        if reply_session:
+            raw = demask_sse_bytes(raw, reply_session)
         calls = parse_calls(raw)
         names = {call["name"] for call in calls.values()}
         if not guard or guard_verdict(names, policy, record):
@@ -2210,6 +2597,14 @@ async def cloud(path: str, body: dict, request: Request,
                     yield sse(chunk("chatcmpl-pls-patch", int(time.time()),
                                     {"role": "assistant"})).encode()
                 for event in call_events(calls):
+                    yield event.encode()
+                return
+            if profile().spawn_tool in names and not any(is_spawn(c) for c in calls.values()):
+                log({"event": "guard", "outcome": "extra_spawn_dropped", "attempt": attempt})
+                if not streamed:
+                    yield sse(chunk("chatcmpl-pls-patch", int(time.time()),
+                                    {"role": "assistant"})).encode()
+                for event in text_events(WAIT_FOR_CHILD):
                     yield event.encode()
                 return
             if guard:
@@ -2232,7 +2627,7 @@ async def cloud(path: str, body: dict, request: Request,
             }]}
             retry = await cloud(path, nudged, request, pii, guard=True,
                                 policy=policy, record=record, attempt=attempt + 1,
-                                parent=parent)
+                                parent=parent, mask_session=mask_session)
             async for part in body_parts(retry):
                 yield part
             return
@@ -2241,7 +2636,7 @@ async def cloud(path: str, body: dict, request: Request,
         if not streamed:
             yield sse(chunk("chatcmpl-pls-patch", int(time.time()),
                             {"role": "assistant"})).encode()
-        if record and record.get("summary"):
+        if must_spawn(record):
             log({"event": "guard", "outcome": "synthesised", "task": record["id"]})
             synthetic = {0: {"name": profile().spawn_tool, "arguments": ""}}
             patch_call_args(synthetic, record)
@@ -2333,6 +2728,90 @@ async def local(path: str, body: dict, request: Request, config: dict):
             waiting = max(0, waiting - 1)
 
 
+def _forward_local_event(event: dict, dropped_spawn: list) -> dict | None:
+    """One model-server chunk, with a child spawn call removed.
+
+    `dropped_spawn` is a one-item flag the finish chunk reads, so a reply
+    that only tried to spawn a child ends as a normal stop.
+    """
+    choice = (event.get("choices") or [{}])[0]
+    delta = choice.get("delta") or {}
+    calls = delta.get("tool_calls") or []
+    denied = profile().child_denied
+    if calls:
+        kept = [c for c in calls if (c.get("function") or {}).get("name") not in denied]
+        if len(kept) != len(calls):
+            log({"event": "child_spawn_blocked",
+                 "saw": sorted({(c.get("function") or {}).get("name") for c in calls} - {None})})
+            if not kept:
+                dropped_spawn.append(True)
+                return None
+            choice = {**choice, "delta": {**delta, "tool_calls": kept}}
+            event = {**event, "choices": [choice]}
+    if dropped_spawn and choice.get("finish_reason") == "tool_calls":
+        event = {**event, "choices": [{**choice, "finish_reason": "stop"}]}
+    return event
+
+
+async def stream_local(port: int, path: str, body: dict, key: str,
+                       count: int, capped: bool, summary: str):
+    """Relay the model server's stream as each token arrives.
+
+    Buffering the reply and emitting it in one chunk makes the harness record
+    a decode window of about a millisecond, so a short subagent answer shows
+    up as tens of thousands of tokens per second.
+    """
+    url = f"http://127.0.0.1:{port}/{path.lstrip('/')}"
+    sent = {**body, "stream": True, "stream_options": {"include_usage": True}}
+
+    async def relay():
+        usage: dict = {}
+        dropped: list = []
+        try:
+            async with http.stream(
+                "POST", url, json=sent, headers={"x-session-affinity": key}
+            ) as response:
+                if response.status_code != 200:
+                    STATS["errors"] += 1
+                    yield await response.aread()
+                    return
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        yield b"data: [DONE]\n\n"
+                        continue
+                    try:
+                        event = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("usage"):
+                        usage = event["usage"]
+                    forwarded = _forward_local_event(event, dropped)
+                    if forwarded is None:
+                        continue
+                    yield f"data: {json.dumps(forwarded)}\n\n".encode()
+        except Exception as error:
+            STATS["errors"] += 1
+            log({"event": "local_error", "error": str(error)})
+            return
+        STATS["local_tokens"] += int(usage.get("total_tokens") or 0)
+        STATS["requests"] += 1
+        STATS["last"] = {
+            "lane": "local", "path": path, "summary": summary,
+            "turns": count, "capped": capped,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+        }
+        log({"event": "local_done", "turns": count, "capped": capped,
+             "summary": summary, "prompt_tokens": usage.get("prompt_tokens"),
+             "completion_tokens": usage.get("completion_tokens"), "stream": True})
+        log({"event": "local", **STATS["last"]})
+
+    return StreamingResponse(relay(), media_type="text/event-stream")
+
+
 async def local_inner(path: str, body: dict, request: Request, config: dict, summary: str):
     key = session_key(request, body)
     local_sessions.add(key)
@@ -2352,7 +2831,8 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, sum
                          if (t.get("function") or {}).get("name") not in profile().child_denied]
     inject_child_rules(body, summary)
     client_stream = bool(body.get("stream"))
-    body = {**body, "stream": False}
+    if not client_stream:
+        body = {**body, "stream": False}
     capped = count >= config["max_turns"]
     if capped:
         STATS["cap_hits"] += 1
@@ -2361,6 +2841,8 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, sum
 
     try:
         port = await ensure_model_server()
+        if client_stream:
+            return await stream_local(port, path, body, key, count, capped, summary)
         response = await http.post(
             f"http://127.0.0.1:{port}/{path.lstrip('/')}",
             json=body,
@@ -2406,18 +2888,19 @@ async def local_inner(path: str, body: dict, request: Request, config: dict, sum
     # The summary type only applies to a final answer; a tool call must pass
     # through intact or the child cannot continue.
     if not calls and message.get("content"):
-        if summary == "local_only":
-            message["content"] = WITHHELD
-            STATS["disclosure"]["local_only"] += 1
+        text = message["content"]
+        # Cost keeps a long answer short. Privacy keeps the full report and
+        # only records its values, so the chat can show them.
+        if summary != "local_only" and config["policy"] != "privacy" and len(text) > 400:
+            text = await summarise(text)
+        if config["policy"] == "privacy":
+            masked = await mask_summary(text, ACTIVE_MASK_SESSION.get())
+            if masked == SUMMARISE_FAILED:
+                text = masked
+            message["content"] = text
         else:
-            # A short answer summarises into something vaguer than itself.
-            if len(message["content"]) > 400:
-                message["content"] = await summarise(message["content"])
-            if config["policy"] == "privacy":
-                message["content"] = await mask_summary(
-                    message["content"], ACTIVE_MASK_SESSION.get())
-            message["content"] = short_paths(redact(message["content"]))
-            STATS["disclosure"]["summary"] += 1
+            message["content"] = short_paths(redact(text))
+        STATS["disclosure"]["local_only" if summary == "local_only" else "summary"] += 1
         choice["message"] = message
 
     log({"event": "local_done", "turns": count, "capped": capped,

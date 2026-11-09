@@ -120,6 +120,23 @@ class MaskStore:
             out = out[: match.start()] + value + out[match.end() :]
         return out
 
+    def remask(self, session_id: str, text: str) -> str:
+        """Put this session's values back behind their tokens.
+
+        Longer values go first, so one value is not cut out of another.
+        """
+        if not text:
+            return text
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT token, value FROM masks WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        for token, value in sorted(rows, key=lambda row: len(row[1]), reverse=True):
+            if value:
+                text = text.replace(value, token)
+        return text
+
     def _ranges(self, text: str, spans: list[dict]) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
         for span in spans:

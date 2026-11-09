@@ -104,6 +104,14 @@ class MaskStoreTest(unittest.TestCase):
         masked = self.store.mask("s1", PROMPT, [span(PROMPT, MAYA)])
         self.assertEqual(self.store.demask("s1", masked), PROMPT)
 
+    def test_remask_puts_the_longest_value_back_first(self):
+        self.store.mask("s1", "Nov 9", [span("Nov 9", "Nov 9", "date")])
+        longer = "Nov 9 evening"
+        self.store.mask("s1", longer, [span(longer, longer, "date")])
+        masked = self.store.remask("s1", "seen Nov 9 evening")
+        self.assertEqual(masked, "seen ⟦pii:2⟧")
+        self.assertNotIn("Nov 9", masked)
+
     def test_the_same_value_reuses_the_token(self):
         self.store.mask("s1", PROMPT, [span(PROMPT, MAYA)])
         again = f"ping {MAYA}"
@@ -422,7 +430,7 @@ class RouterMaskTest(unittest.TestCase):
         self.assertEqual(result, pls.SUMMARISE_FAILED)
         self.assertNotIn(MAYA, result)
 
-    def test_local_only_does_not_call_the_masker(self):
+    def test_local_only_masks_the_answer(self):
         pls.TASKS["local"] = {
             "id": "aabbcc-t1",
             "policy": "privacy",
@@ -431,6 +439,12 @@ class RouterMaskTest(unittest.TestCase):
             "decided": True,
             "mask_session": "s1",
         }
+
+        async def answer_with_email(url, json=None, headers=None):
+            self.local_bodies.append(json)
+            return FakeResponse(completion(f"wrote the row for {MAYA}"))
+
+        pls.http.post = answer_with_email
         before = len(self.classified)
         response = self.post({
             "model": "Hybrid-Wally-0.1-local",
@@ -440,9 +454,91 @@ class RouterMaskTest(unittest.TestCase):
                 "content": f"pls-task: aabbcc-t1\nemail {MAYA} please",
             }],
         })
-        self.assertEqual(len(self.classified), before)
-        self.assertEqual(
-            response.json()["choices"][0]["message"]["content"], pls.WITHHELD)
+        content = response.json()["choices"][0]["message"]["content"]
+        self.assertGreater(len(self.classified), before)
+        self.assertIn(MAYA, content)
+        self.assertEqual(rows(self.store, "s1"), [("⟦pii:1⟧", MAYA)])
+
+    def test_an_agent_report_is_masked_before_it_reaches_the_cloud(self):
+        self.store.mask("s1", MAYA, [span(MAYA, MAYA)])
+        agent = "0691463a-dc29-4cc6-b0a4-0c9375b4a6a0"
+        self.sent.clear()
+        response = self.post({
+            "model": "x",
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": [
+                    {"type": "text", "text": f"Background subagent {agent} finished and will do no further work."},
+                    {"type": "text", "text": f"Attendees: {MAYA}"},
+                ]},
+            ],
+            "tools": tool_defs("subagent"),
+        })
+        self.assertEqual(response.status_code, 200)
+        report = self.sent[0]["messages"][-1]["content"][1]["text"]
+        self.assertNotIn(MAYA, report)
+        self.assertIn("⟦pii:1⟧", report)
+
+    def test_a_child_without_a_mask_session_uses_the_chat_session(self):
+        pls.TASKS["local"] = {
+            "id": "aabbcc-t2",
+            "policy": "privacy",
+            "private": False,
+            "summary": "local_only",
+            "decided": True,
+        }
+
+        async def answer_with_email(url, json=None, headers=None):
+            return FakeResponse(completion(f"mtime {MAYA}"))
+
+        pls.http.post = answer_with_email
+        response = self.post({
+            "model": "Hybrid-Wally-0.1-local",
+            "stream": False,
+            "messages": [{"role": "user", "content": "pls-task: aabbcc-t2\nlist the folder"}],
+        })
+        content = response.json()["choices"][0]["message"]["content"]
+        self.assertIn(MAYA, content)
+        self.assertEqual(rows(self.store, "aabbcc"), [("⟦pii:1⟧", MAYA)])
+        self.assertEqual(count(self.store, ""), 0)
+
+    def test_a_reply_is_demasked_from_the_raw_prompt_session(self):
+        text = f"email {MAYA} please"
+        first = {
+            "model": "x",
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": text},
+            ],
+            "tools": tool_defs("subagent"),
+        }
+        call = {"id": "c", "type": "function", "function": {"name": "subagent", "arguments": "{}"}}
+
+        async def answer_with_call(request, stream=False):
+            return FakeResponse(completion("launch", [call]))
+
+        pls.http.send = answer_with_call
+        opened = self.client.post("/v1/chat/completions", json=first)
+        self.assertEqual(opened.status_code, 200)
+        follow = {
+            **first,
+            "messages": [
+                *first["messages"],
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": "c", "content": "done"},
+            ],
+        }
+
+        async def answer_with_token(request, stream=False):
+            return FakeResponse(completion("attendees ⟦pii:1⟧"))
+
+        pls.http.send = answer_with_token
+        response = self.client.post("/v1/chat/completions", json=follow)
+        content = response.json()["choices"][0]["message"]["content"]
+        self.assertIn(MAYA, content)
+        self.assertNotIn("⟦pii:1⟧", content)
 
     def test_a_restart_demasks_from_the_saved_record(self):
         self.main()

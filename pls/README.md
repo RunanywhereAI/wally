@@ -63,7 +63,7 @@ decides what the cloud parent is told, appended to that same user message:
 
 | Policy | Decision says | The cloud sees | Subagent answer |
 |---|---|---|---|
-| `privacy` (default) | private | the prompt with personal values replaced by tokens, plus `pls-task: tN` | withheld (`local_only`) |
+| `privacy` (default) | private | the prompt with personal values replaced by tokens, plus `pls-task: tN` | span-masked (`local_only`) |
 | `privacy` | not private | that same masked prompt, plus "launch a subagent, `pls-task: tN`" | summarised |
 | `cost` | large task | the prompt plus "launch a subagent, `pls-task: tN`" | summarised |
 | `cost` | small task | the prompt plus "do it yourself" | no subagent |
@@ -96,9 +96,11 @@ wally serves the router over a unix socket at `~/.config/wally/pls/pls.sock`
 
 ## Debug console (temporary)
 
-Set `PLS_DEBUG=1` on a hybrid launch. Open `<router url>/debug` and watch every
-request, its lane, its reason and every file's PII counts live. `/debug/state`
-holds the backlog, `/debug/events` is the stream. Remove once the MVP ships.
+Set `PLS_DEBUG=1` on a hybrid launch. Open `<router url>/debug`. Each row is
+one request: open it for what came in, the steps PLS took, and what went
+back out. The rows stay in memory for the launch. `/debug/state` holds that
+backlog, `/debug/events` is the live stream, `/debug/export` downloads it.
+Remove once the MVP ships.
 
 ## PII
 
@@ -108,8 +110,9 @@ a token `⟦pii:N⟧`. The map is one SQLite file per harness under
 `masks/<harness>.sqlite` (file `0600`, directory `0700`) and stays on this
 machine. The subagent and a summary on the way back use the same session.
 A summary is span-masked first; if that fails the parent gets the
-summary-failure sentence, not the answer. A private subagent answer is
-withheld. The mask file drops rows older than 7 days when it opens.
+summary-failure sentence, not the answer. A subagent's report is shown in full. Personal values in it are replaced
+before that text reaches the cloud, and the cloud's reply is restored
+before it is shown. The mask file drops rows older than 7 days when it opens.
 
 The regex still runs after the span mask, and it is the only pass under
 `cost`. It replaces emails, phone numbers, API keys, IPv4 addresses and

@@ -53,6 +53,12 @@ fn parse_policy_accepts_cost() {
 }
 
 #[test]
+fn parse_policy_accepts_delegate() {
+    assert_eq!(parse_policy("delegate").unwrap(), Policy::Delegate);
+    assert_eq!(Policy::Delegate.as_str(), "delegate");
+}
+
+#[test]
 fn parse_policy_rejects_an_unknown_name() {
     assert!(parse_policy("speed").is_err());
 }
@@ -71,6 +77,7 @@ fn parse_policy_rejects_an_empty_string() {
 fn a_policy_prints_the_name_it_was_parsed_from() {
     assert_eq!(Policy::Privacy.as_str(), "privacy");
     assert_eq!(Policy::Cost.as_str(), "cost");
+    assert_eq!(Policy::Delegate.as_str(), "delegate");
 }
 
 #[test]
@@ -84,12 +91,26 @@ fn the_cost_question_has_the_route_id() {
 }
 
 #[test]
+fn the_delegate_question_has_the_route_id() {
+    assert_eq!(decide_question(Policy::Delegate).id, "route");
+}
+
+#[test]
 fn the_two_policies_ask_different_questions() {
     let privacy = decide_question(Policy::Privacy);
     let cost = decide_question(Policy::Cost);
     assert!(!privacy.question.trim().is_empty());
     assert!(!cost.question.trim().is_empty());
     assert_ne!(privacy.question, cost.question);
+}
+
+#[test]
+fn the_delegate_question_differs_from_privacy_and_cost() {
+    let delegate = decide_question(Policy::Delegate);
+    let privacy = decide_question(Policy::Privacy);
+    let cost = decide_question(Policy::Cost);
+    assert_ne!(delegate.question, privacy.question);
+    assert_ne!(delegate.question, cost.question);
 }
 
 #[test]
@@ -241,6 +262,18 @@ fn a_decide_reply_above_one_half_answers_yes() {
 fn a_decide_reply_at_exactly_one_half_answers_yes() {
     let reply = decide_reply(Policy::Cost, &route_response(0.5), 5);
     assert_eq!(reply["answer"], "yes");
+}
+
+#[test]
+fn delegate_at_exactly_one_half_answers_yes() {
+    let reply = decide_reply(Policy::Delegate, &route_response(0.5), 5);
+    assert_eq!(reply["answer"], "yes");
+}
+
+#[test]
+fn delegate_at_0_49_answers_no() {
+    let reply = decide_reply(Policy::Delegate, &route_response(0.49), 5);
+    assert_eq!(reply["answer"], "no");
 }
 
 #[test]
