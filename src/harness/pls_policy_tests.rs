@@ -295,6 +295,12 @@ fn privacy_answers_no_only_below_its_threshold() {
 }
 
 #[test]
+fn privacy_at_exactly_0_3_answers_yes() {
+    let reply = decide_reply(Policy::Privacy, &route_response(0.3), 5);
+    assert_eq!(reply["answer"], "yes");
+}
+
+#[test]
 fn a_decide_reply_carries_the_model_name() {
     let reply = decide_reply(Policy::Cost, &route_response(0.9), 5);
     assert_eq!(reply["model"], "clef-flash-9b");

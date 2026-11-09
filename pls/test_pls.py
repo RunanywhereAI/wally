@@ -146,6 +146,13 @@ class RouterTest(unittest.TestCase):
 
         pls.ensure_model_server = fake_server
         pls.http.post = fake_post
+        previous_send = pls.http.send
+
+        async def default_send(request, stream=False):
+            return FakeResponse(completion("cloud answer"))
+
+        pls.http.send = default_send
+        self.addCleanup(setattr, pls.http, "send", previous_send)
         pls.cloud_credentials = fake_creds
         pls.decide = fake_decide
 

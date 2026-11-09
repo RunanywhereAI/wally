@@ -13,8 +13,8 @@ Options:
                               subagents on a local model
       --cloud-model TEXT      The cloud model the main agent uses with --hybrid
                               (default: your default model)
-      --policy TEXT           What --hybrid optimises for: privacy (default) or
-                              cost
+      --policy TEXT           What --hybrid optimises for: privacy (default),
+                              cost or delegate
 
 Examples:
   # Download the certified local model once

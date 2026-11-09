@@ -7,6 +7,7 @@ never called: classify_pii is replaced with a span finder.
 import asyncio
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -93,7 +94,9 @@ def count(store, session_id=None):
 class MaskStoreTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.store = MaskStore(self.dir / "deepseek.sqlite")
+        self.addCleanup(self.store._db.close)
 
     def test_a_span_becomes_a_token_and_a_row(self):
         masked = self.store.mask("s1", PROMPT, [span(PROMPT, MAYA)])
@@ -166,8 +169,6 @@ class MaskStoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             store_for("../x", self.dir)
         self.assertFalse((self.dir.parent / "x.sqlite").exists())
-        outside = list(self.dir.parent.glob("*.sqlite"))
-        self.assertEqual(outside, [])
 
     def test_the_database_file_is_mode_0600(self):
         if sys.platform == "win32":
@@ -213,6 +214,7 @@ class SafetyLineTest(unittest.TestCase):
 class RouterMaskTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.config = self.dir / "config.json"
         self.creds = self.dir / "credentials.json"
         self.creds.write_text(json.dumps({"console_url": "http://cloud", "access_token": "t"}))

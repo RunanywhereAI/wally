@@ -209,13 +209,15 @@ fn build_hybrid_llm_config(
     token: &str,
     cloud: &ModelLimits,
 ) -> String {
-    let model = |id: &str, context: i64, output: i64| {
+    let model = |id: &str, context: i64, output: i64, image: bool| {
         json!({
             "id": id,
             "name": id,
-            "input": ["text"],
+            "input": if image { json!(["text", "image"]) } else { json!(["text"]) },
             "contextWindow": context,
             "maxTokens": output,
+            // The hybrid parent is the router. Reasoning stays off here; the
+            // cloud model's own effort is not a field on ModelLimits.
             "reasoningEfforts": false,
         })
     };
@@ -223,9 +225,10 @@ fn build_hybrid_llm_config(
         HYBRID_LOCAL_MODEL_ID,
         HYBRID_LOCAL_CONTEXT,
         HYBRID_LOCAL_OUTPUT,
+        false,
     );
     let (context, output) = parent_limits(cloud);
-    let parent = model(HYBRID_MODEL_ID, context, output);
+    let parent = model(HYBRID_MODEL_ID, context, output, cloud.image_input);
     dump(&json!({
         "providers": {
             PROVIDER_ID: {
@@ -235,7 +238,7 @@ fn build_hybrid_llm_config(
                 "apiKeyEnv": key_variable,
                 // The router port is loopback but shared, so every request
                 // carries the launch secret.
-                "headers": { "x-pls-token": token },
+                "headers": { TOKEN_HEADER: token },
                 "models": [parent, subagent],
             }
         }

@@ -72,9 +72,11 @@ images go at full size; each time the same two cases were re-captured for that
 option row only; nothing else changed.
 
 `--hybrid`, `--cloud-model` and `--policy` remain on `wally deepseek` and
-`wally hermes` only. The opencode, openwork, and openclaw help goldens
-(`help__<cmd>`, `help__help__<cmd>`, and `alt_help__help__opencode`) no longer
-list those option rows; nothing else about them changed.
+`wally hermes` only. The deepseek and hermes help goldens
+(`help__deepseek`, `help__help__deepseek`, `help__hermes`,
+`help__help__hermes`) were re-captured from the Rust binary for those option
+rows only. The opencode, openwork, and openclaw help goldens never listed
+them.
 
 Re-capture from a binary (only when behaviour changes on purpose):
 

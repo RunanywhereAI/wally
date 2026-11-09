@@ -65,20 +65,38 @@ class MaskStore:
                 "ALTER TABLE masks ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"
             )
         now = int(time.time())
+        # A row with no timestamp predates retention. Refreshing it to "now"
+        # would keep personal values whose age is unknown.
+        self._db.execute("DELETE FROM masks WHERE created_at = 0 OR created_at < ?", (now - RETENTION_S,))
         self._db.execute(
-            "UPDATE masks SET created_at = ? WHERE created_at = 0", (now,)
+            """
+            CREATE TABLE IF NOT EXISTS token_seq (
+                session_id TEXT PRIMARY KEY,
+                highest INTEGER NOT NULL
+            )
+            """
         )
-        self._db.execute(
-            "DELETE FROM masks WHERE created_at < ?", (now - RETENTION_S,)
-        )
+        for session_id, token in self._db.execute("SELECT session_id, token FROM masks"):
+            match = TOKEN_RE.fullmatch(token)
+            if not match:
+                continue
+            number = int(match.group(1))
+            self._db.execute(
+                """
+                INSERT INTO token_seq (session_id, highest) VALUES (?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    highest = MAX(token_seq.highest, excluded.highest)
+                """,
+                (session_id, number),
+            )
         self._db.commit()
 
     def mask(self, session_id: str, text: str, spans: list[dict]) -> str:
         """Replace spans with tokens. Does not add MASK_SAFETY.
 
         Each span is {"start": int, "end": int, "category": str}.
-        Offsets are Python characters. category is stored and not
-        otherwise interpreted. An empty span list returns text unchanged.
+        Offsets are Python characters. category is not stored; the token
+        map only keeps the value. An empty span list returns text unchanged.
         """
         if not spans:
             return text
@@ -86,7 +104,9 @@ class MaskStore:
         with self._lock:
             try:
                 self._db.execute("BEGIN IMMEDIATE")
-                tokens = [self._token_for(session_id, text[start:end]) for start, end in ranges]
+                tokens = [
+                    self._token_for(session_id, text[start:end], text) for start, end in ranges
+                ]
                 self._db.commit()
             except Exception:
                 self._db.rollback()
@@ -132,10 +152,13 @@ class MaskStore:
                 "SELECT token, value FROM masks WHERE session_id = ?",
                 (session_id,),
             ).fetchall()
-        for token, value in sorted(rows, key=lambda row: len(row[1]), reverse=True):
-            if value:
-                text = text.replace(value, token)
-        return text
+        pairs = [(token, value) for token, value in rows if value]
+        pairs.sort(key=lambda row: len(row[1]), reverse=True)
+        if not pairs:
+            return text
+        pattern = re.compile("|".join(re.escape(value) for _, value in pairs))
+        lookup = {value: token for token, value in pairs}
+        return pattern.sub(lambda match: lookup[match.group(0)], text)
 
     def _ranges(self, text: str, spans: list[dict]) -> list[tuple[int, int]]:
         ranges: list[tuple[int, int]] = []
@@ -152,25 +175,35 @@ class MaskStore:
             last = end
         return ranges
 
-    def _token_for(self, session_id: str, value: str) -> str:
+    def _token_for(self, session_id: str, value: str, source: str) -> str:
         row = self._db.execute(
             "SELECT token FROM masks WHERE session_id = ? AND value = ?",
             (session_id, value),
         ).fetchone()
         if row is not None:
             return row[0]
-        highest = 0
-        for (token,) in self._db.execute(
-            "SELECT token FROM masks WHERE session_id = ?",
+        seq = self._db.execute(
+            "SELECT highest FROM token_seq WHERE session_id = ?",
             (session_id,),
-        ):
-            match = TOKEN_RE.fullmatch(token)
-            if match:
-                highest = max(highest, int(match.group(1)))
-        token = f"⟦pii:{highest + 1}⟧"
+        ).fetchone()
+        highest = seq[0] if seq else 0
+        # A literal ⟦pii:N⟧ already in the prompt is not one of our tokens.
+        # Numbering past it keeps demask from filling that literal with a value.
+        occupied = {int(match.group(1)) for match in TOKEN_RE.finditer(source)}
+        number = highest + 1
+        while number in occupied:
+            number += 1
+        token = f"⟦pii:{number}⟧"
         self._db.execute(
             "INSERT INTO masks (session_id, token, value, created_at) VALUES (?, ?, ?, ?)",
             (session_id, token, value, int(time.time())),
+        )
+        self._db.execute(
+            """
+            INSERT INTO token_seq (session_id, highest) VALUES (?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET highest = excluded.highest
+            """,
+            (session_id, number),
         )
         return token
 

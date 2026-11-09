@@ -211,6 +211,9 @@ pub(crate) fn configure_value(
     value["model_path"] = serde_json::json!(model_path);
     value["cloud_model"] = serde_json::json!(cloud_model);
     value["policy"] = serde_json::json!(policy.as_str());
+    // A previous launch may have left mode at "cloud". This write is a
+    // hybrid launch, so the router must not keep that and skip the local lane.
+    value["mode"] = serde_json::json!("hybrid");
     value
 }
 
@@ -484,7 +487,10 @@ impl WallySocket {
                             let decider = decider.clone();
                             // A decision can take seconds; it must not hold up
                             // a token request behind it.
-                            std::thread::spawn(move || answer(stream, decider));
+                            std::thread::spawn(move || {
+                                let _ = stream.set_nonblocking(false);
+                                answer(stream, decider)
+                            });
                         }
                         Err(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
                     }

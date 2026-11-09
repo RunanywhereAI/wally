@@ -60,8 +60,9 @@ def _merge_spans(spans: list) -> list:
     for span in sorted(spans, key=lambda item: (item[2], item[0], item[1])):
         if merged:
             last = merged[-1]
-            if span[2] == last[2] and span[0] <= last[1]:
-                merged[-1] = (last[0], max(last[1], span[1]), last[2], max(last[3], span[3]))
+            if span[0] < last[1]:
+                cat = last[2] if last[3] >= span[3] else span[2]
+                merged[-1] = (last[0], max(last[1], span[1]), cat, max(last[3], span[3]))
                 continue
         merged.append(span)
     return sorted(merged, key=lambda item: (item[0], item[1]))

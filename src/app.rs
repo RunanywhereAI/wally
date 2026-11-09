@@ -221,9 +221,19 @@ fn root_flags_before_passthrough(argv: &[String]) -> Vec<&str> {
         .collect()
 }
 
-/// wally's own flags on those subcommands. `-m`/`--model` and
-/// `--context-window` take a following value; the rest are booleans. The `=`
-/// forms carry their value inline.
+/// wally's own flags on those subcommands. `-m`/`--model`,
+/// `--context-window`, `--cloud-model` and `--policy` take a following
+/// value. `--serve`, `--restore`, `--cloud` and `--hybrid` are booleans.
+/// The `=` forms carry their value inline.
+fn is_hybrid_launch_flag(token: &str) -> bool {
+    token == "--cloud"
+        || token == "--hybrid"
+        || token == "--cloud-model"
+        || token.starts_with("--cloud-model=")
+        || token == "--policy"
+        || token.starts_with("--policy=")
+}
+
 fn consumes_following_value(token: &str) -> bool {
     token == "-m"
         || token == "--model"
@@ -232,7 +242,10 @@ fn consumes_following_value(token: &str) -> bool {
         || token == "--policy"
 }
 
-fn is_wally_flag(token: &str) -> bool {
+fn is_wally_flag(command: &str, token: &str) -> bool {
+    if is_hybrid_launch_flag(token) {
+        return command == "deepseek" || command == "hermes";
+    }
     token == "-m"
         || token == "--model"
         || token.starts_with("--model=")
@@ -241,12 +254,6 @@ fn is_wally_flag(token: &str) -> bool {
         || token.starts_with("--context-window=")
         || token == "--serve"
         || token == "--restore"
-        || token == "--cloud"
-        || token == "--hybrid"
-        || token == "--cloud-model"
-        || token.starts_with("--cloud-model=")
-        || token == "--policy"
-        || token.starts_with("--policy=")
         || token == "-h"
         || token == "--help"
 }
@@ -276,7 +283,7 @@ pub fn split_passthrough_argv(argv: &[String]) -> Vec<String> {
         if out[i] == "--" {
             return out; // the reader separated it already
         }
-        if !is_wally_flag(&out[i]) {
+        if !is_wally_flag(&out[sub], &out[i]) {
             out.insert(i, "--".to_string());
             return out;
         }

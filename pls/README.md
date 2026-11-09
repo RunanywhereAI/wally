@@ -112,7 +112,11 @@ machine. The subagent and a summary on the way back use the same session.
 A summary is span-masked first; if that fails the parent gets the
 summary-failure sentence, not the answer. A subagent's report is shown in full. Personal values in it are replaced
 before that text reaches the cloud, and the cloud's reply is restored
-before it is shown. The mask file drops rows older than 7 days when it opens.
+before it is shown. The mask file drops rows older than 7 days when it
+opens, and a row with no timestamp is dropped too. A session resumed after
+that still shows the cloud reply, with any `⟦pii:N⟧` whose value was dropped
+left as the token. New values number past every token this session has
+issued, including ones already purged.
 
 The regex still runs after the span mask, and it is the only pass under
 `cost`. It replaces emails, phone numbers, API keys, IPv4 addresses and
@@ -153,7 +157,7 @@ Missing or unparseable falls back to `hybrid`, `privacy` and 20 turns.
 ## Requirements
 
 `uv` on `PATH` or beside the binary. The first launch builds the venv
-(`mlx-vlm`, `fastapi`, `uvicorn`, `httpx`) — about 1–2 GB.
+(`mlx-vlm`, `mlx-lm`, `fastapi`, `uvicorn`, `httpx`) — about 1–2 GB.
 
 ## Limits
 

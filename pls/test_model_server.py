@@ -10,7 +10,9 @@ import os
 import unittest
 
 REAL_MODEL = os.environ.get("PLS_TEST_MODEL")
-os.environ.setdefault("PLS_MODEL", REAL_MODEL or "unused-by-fake-tests")
+if REAL_MODEL:
+    os.environ["PLS_MODEL"] = REAL_MODEL
+os.environ.setdefault("PLS_MODEL", "unused-by-fake-tests")
 
 from fastapi.testclient import TestClient
 

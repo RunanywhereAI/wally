@@ -18,6 +18,7 @@ import os
 import re
 import socket
 import sys
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -314,6 +315,7 @@ async def chat(request: Request):
                 "model": MODEL_ID,
                 "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
             }
+            stop = threading.Event()
             try:
                 yield f"data: {json.dumps(first)}\n\n"
 
@@ -322,14 +324,26 @@ async def chat(request: Request):
                 queue: asyncio.Queue = asyncio.Queue(maxsize=8)
                 done = object()
 
+                def offer(item) -> None:
+                    while not stop.is_set():
+                        try:
+                            asyncio.run_coroutine_threadsafe(queue.put(item), loop).result(timeout=0.5)
+                            return
+                        except TimeoutError:
+                            continue
+                        except Exception:
+                            return
+
                 def pump():
                     try:
                         for item in mlx_vlm.stream_generate(model, processor, prompt, **kwargs):
-                            asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+                            if stop.is_set():
+                                return
+                            offer(item)
                     except BaseException as error:  # noqa: BLE001 - relayed below
-                        asyncio.run_coroutine_threadsafe(queue.put(error), loop).result()
+                        offer(error)
                     finally:
-                        asyncio.run_coroutine_threadsafe(queue.put(done), loop).result()
+                        offer(done)
 
                 loop.run_in_executor(POOL, pump)
 
@@ -413,6 +427,7 @@ async def chat(request: Request):
                      "error": f"{type(error).__name__}: {error}"})
                 raise
             finally:
+                stop.set()
                 STATS["in_flight"] -= 1
 
         streaming = True

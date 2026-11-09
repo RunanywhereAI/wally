@@ -10,8 +10,6 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.models.qwen3 import ModelArgs, TransformerBlock
 
-_MASK_NEG = -1e9
-
 
 def build_model_args(backbone_cfg: dict) -> ModelArgs:
     rope_theta = backbone_cfg.get("rope_theta") or backbone_cfg.get(
@@ -52,7 +50,7 @@ class BiQwen3(nn.Module):
             # Additive, bidirectional, padding-aware: 0 for valid keys, -inf for pad.
             # Shape [B, 1, 1, L] broadcasts over heads and query positions.
             keep = attention_mask.astype(h.dtype)[:, None, None, :]
-            mask = (1.0 - keep) * _MASK_NEG
+            mask = (1.0 - keep) * mx.finfo(h.dtype).min
 
         for layer in self.layers:
             h = layer(h, mask, None)
