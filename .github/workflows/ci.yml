@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m venv /tmp/pls-test
-          /tmp/pls-test/bin/pip install --quiet fastapi httpx
+          /tmp/pls-test/bin/pip install --quiet fastapi httpx uvicorn
           cd pls
           /tmp/pls-test/bin/python -m unittest test_pls test_mask_store
       - name: install.sh output is byte-identical under bash, dash and sh
