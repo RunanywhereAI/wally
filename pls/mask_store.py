@@ -99,7 +99,8 @@ class MaskStore:
         map only keeps the value. An empty span list returns text unchanged.
         """
         if not spans:
-            self._reserve_literals(session_id, text)
+            if TOKEN_RE.search(text):
+                self._reserve_literals(session_id, text)
             return text
         ranges = self._ranges(text, spans)
         with self._lock:

@@ -117,8 +117,8 @@ class MaskStoreTest(unittest.TestCase):
         self.store.mask("s1", "Ann", [span("Ann", "Ann", "name")])
         self.assertEqual(self.store.remask("s1", "Annotations"), "Annotations")
         literal = "prefix ⟦pii:42⟧ suffix"
-        self.store.mask("s1", literal, [span(literal, literal, "secret")])
-        self.assertNotIn(literal, self.store.remask("s1", f"seen {literal}"))
+        token = self.store.mask("s1", literal, [span(literal, literal, "secret")])
+        self.assertEqual(self.store.remask("s1", f"seen {literal}"), f"seen {token}")
 
     def test_the_same_value_reuses_the_token(self):
         self.store.mask("s1", PROMPT, [span(PROMPT, MAYA)])
