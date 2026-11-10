@@ -289,8 +289,11 @@ pub fn register_harness(app: &mut App) {
                     Err(status) => return status,
                     Ok(Some((mut local, mut cloud, policy))) => {
                         if let Some(context) = saved_local_context() {
+                            let context = context.max(context_min_for(&agent.id));
                             std::env::set_var("PLS_MAX_KV", context.to_string());
-                            local = "mlx-pplx-coder-35b-4bit".to_string();
+                            if p.flag("--custom") {
+                                local = "mlx-pplx-coder-35b-4bit".to_string();
+                            }
                             if p.get_str("--cloud-model").is_none() {
                                 if let Some(saved) = saved_cloud_model() {
                                     cloud = saved;
@@ -449,6 +452,10 @@ fn ask(prompt: &str) -> Result<String, i32> {
     Ok(line.trim().to_string())
 }
 
+fn printable_model_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_graphic())
+}
+
 fn cloud_ids() -> Result<Vec<String>, i32> {
     let mut session =
         match crate::account::ConsoleSession::open(crate::account::ConsoleClient::default()) {
@@ -459,7 +466,10 @@ fn cloud_ids() -> Result<Vec<String>, i32> {
                     out::error_line(&error);
                     return Err(2);
                 }
-                return Ok(cached);
+                return Ok(cached
+                    .into_iter()
+                    .filter(|id| printable_model_id(id))
+                    .collect());
             }
         };
     match session.call(|client, url, token| client.fetch_models_within(url, token, 8_000)) {
@@ -467,7 +477,7 @@ fn cloud_ids() -> Result<Vec<String>, i32> {
             let ids: Vec<String> = models
                 .into_iter()
                 .map(|model| model.id)
-                .filter(|id| !id.is_empty())
+                .filter(|id| printable_model_id(id))
                 .collect();
             if ids.is_empty() {
                 out::error_line("the account has no cloud models");
@@ -482,7 +492,10 @@ fn cloud_ids() -> Result<Vec<String>, i32> {
                 out::error_line(&error);
                 Err(2)
             } else {
-                Ok(cached)
+                Ok(cached
+                    .into_iter()
+                    .filter(|id| printable_model_id(id))
+                    .collect())
             }
         }
     }

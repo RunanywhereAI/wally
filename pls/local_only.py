@@ -54,10 +54,11 @@ def main() -> None:
     prompt_tokens = len(tokenizer.encode(text))
     if prompt_tokens >= MAX_KV:
         raise SystemExit(f"prompt is {prompt_tokens} tokens; window is {MAX_KV}")
+    budget = min(64, MAX_OUT, MAX_KV - prompt_tokens)
     started = time.monotonic()
     out = mlx_vlm.generate(
         model, processor, text,
-        max_tokens=min(64, MAX_OUT),
+        max_tokens=budget,
         temperature=0.0,
         verbose=False,
         apc_manager=apc,

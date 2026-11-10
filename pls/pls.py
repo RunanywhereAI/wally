@@ -333,7 +333,7 @@ WATCH_DIR = CONFIG_DIR / "watch"
 
 app = FastAPI()
 if watch is not None:
-    watch.attach(app, lambda: WATCH_DIR)
+    watch.start(lambda: WATCH_DIR)
 http = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0))
 
 
@@ -791,6 +791,7 @@ async def mask_cloud_text(text: str, session_id: str) -> str | None:
         note_masking_off("classifier returned no span list")
         return None
     spans = [span for span in spans if not _span_is_path(text, span)]
+    spans = spans + _sensitive_path_spans(text)
     store = open_mask_store()
     if store is None:
         note_masking_off("mask store unavailable")
@@ -814,7 +815,29 @@ def _span_is_path(text: str, span: dict) -> bool:
     if start < 0 or end > len(text) or start >= end:
         return False
     piece = text[start:end].strip().strip("`\"'")
+    name = piece.rstrip("/").rsplit("/", 1)[-1]
+    if _SENSITIVE_FILE.search(name):
+        return False
     return piece.startswith(("/", "~/", "./", "../"))
+
+
+_SENSITIVE_FILE = re.compile(
+    r"(?i)(credential|secret|password|passwd|\.pem$|\.env$|id_rsa|api[_-]?key)"
+)
+_PATH_IN_TEXT = re.compile(r"(?:~|\.\.?|/[A-Za-z0-9._-])[^\s\"'`<>]*")
+
+
+def _sensitive_path_spans(text: str) -> list[dict]:
+    """Paths whose file name is a secret, even when the classifier skipped them."""
+    spans = []
+    for match in _PATH_IN_TEXT.finditer(text):
+        raw = match.group(0).rstrip(".,);]")
+        name = raw.rstrip("/").rsplit("/", 1)[-1]
+        if not _SENSITIVE_FILE.search(name):
+            continue
+        start = match.start()
+        spans.append({"start": start, "end": start + len(raw), "category": "path"})
+    return spans
 
 
 def _remask_content(store, session_id: str, content):
@@ -918,18 +941,21 @@ def map_sse_event(event: bytes, demask: ReplyDemask | None) -> list[bytes]:
         if not isinstance(delta, dict) or delta.get("tool_calls"):
             return _flush_then(demask, event)
         text = delta.get("content")
+        reasoning = delta.get("reasoning_content")
         if isinstance(text, str) and text:
-            found.append(delta)
+            found.append((delta, "content"))
+        if isinstance(reasoning, str) and reasoning:
+            found.append((delta, "reasoning_content"))
     if not found:
         return _flush_then(demask, event)
     emit = finishing
-    for delta in found:
-        ready = demask.feed(delta["content"], final=finishing)
+    for delta, field in found:
+        ready = demask.feed(delta[field], final=finishing)
         if ready:
-            delta["content"] = ready
+            delta[field] = ready
             emit = True
         else:
-            delta.pop("content", None)
+            delta.pop(field, None)
     if not emit:
         return []
     return [sse(payload).encode()]
@@ -965,8 +991,10 @@ def demask_reply(parsed: dict, session_id: str) -> None:
         return
     for choice in parsed.get("choices") or []:
         message = choice.get("message")
-        if isinstance(message, dict) and isinstance(message.get("content"), str):
-            message["content"] = demask_local_text(message["content"], session_id)
+        if isinstance(message, dict):
+            for field in ("content", "reasoning_content"):
+                if isinstance(message.get(field), str):
+                    message[field] = demask_local_text(message[field], session_id)
 
 
 def attach_mask_safety(messages: list) -> None:
@@ -1635,11 +1663,18 @@ def clip_bytes(raw: bytes) -> Any:
 
 
 def trace_body(body: dict) -> dict:
-    """What a request carried, without headers. The bearer token never arrives here."""
+    """What a request carried, without message text. The bearer token never arrives here."""
     kept: dict = {}
-    for key in ("model", "stream", "messages", "tool_choice", "max_tokens"):
+    for key in ("model", "stream", "tool_choice", "max_tokens"):
         if key in body:
             kept[key] = body[key]
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        kept["messages"] = [
+            {"role": message.get("role"), "chars": len(message_text(message))}
+            if isinstance(message, dict) else {"role": "", "chars": 0}
+            for message in messages
+        ]
     tools = body.get("tools")
     if isinstance(tools, list):
         kept["tools"] = [
@@ -2522,12 +2557,14 @@ async def local(path: str, body: dict, request: Request, config: dict):
             waiting += 1
             queued = True
             STATS["queued"] += 1
+            log({"event": "queued", "waiting": waiting})
     # Under privacy a subagent never overflows to the cloud, or its task
     # reaches it after all; it waits for the slot instead.
     if overflow and (config["policy"] == "privacy" or summary == "local_only"):
         overflow = False
     if overflow:
         STATS["overflow"] += 1
+        log({"event": "overflow"})
         response = await cloud(path, {**body, "messages": strip_marker(body["messages"])},
                                request)
         response.headers["x-pls-overflow"] = "1"

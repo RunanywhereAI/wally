@@ -794,29 +794,28 @@ class RouterTest(unittest.TestCase):
         self.assertNotIn("premium_blocked", pls.STATS)
 
     def test_the_watch_log_carries_no_subscription_field(self):
-        self.assertNotIn("sub", self.client.get("/watch/log").text)
+        pls.http.send = _fake_send_json([], completion("cloud answer"))
+        self.cloud_post(self.later(dsh_first_turn()))
+        for line in (pls.WATCH_DIR / "traffic.jsonl").read_text().splitlines():
+            self.assertNotIn("sub", json.loads(line))
 
     def test_watch_records_what_went_in_and_what_came_out(self):
         pls.http.send = _fake_send_json([], completion("cloud answer"))
         self.cloud_post(self.later(dsh_first_turn()))
         raw = (pls.WATCH_DIR / "traffic.jsonl").read_text()
         events = [json.loads(line) for line in raw.splitlines()]
-        page = self.client.get("/watch")
-        log = self.client.get("/watch/log")
         incoming = [event for event in events if event.get("event") == "in"]
         outgoing = [event for event in events if event.get("event") == "out"]
         self.assertEqual(len(incoming), 1)
         self.assertEqual(outgoing[0]["req"], incoming[0]["req"])
         self.assertIn("messages", incoming[0]["body"])
+        self.assertNotIn("What does this repo", json.dumps(incoming[0]["body"]))
         self.assertIn("cloud answer", json.dumps(outgoing[0]["body"]))
         self.assertTrue(any(
             event.get("event") == "route" and event.get("req") == incoming[0]["req"]
             for event in events))
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("PLS watch", page.text)
-        self.assertIn("Raw log", page.text)
-        self.assertEqual(log.status_code, 200)
-        self.assertIn("cloud answer", log.text)
+        self.assertEqual(self.client.get("/watch").status_code, 404)
+        self.assertEqual(self.client.get("/watch/log").status_code, 404)
 
     def through_the_socket(self):
         """Main chat and a subagent with the real decide and token clients."""
@@ -1160,6 +1159,35 @@ class RouterTest(unittest.TestCase):
         response = self.cloud_post(self.later(dsh_first_turn()))
         self.assertIn(value, self.answer(response))
         self.assertNotIn("⟦pii:1⟧", self.answer(response))
+
+    def test_reasoning_content_is_demasked_before_it_reaches_the_chat(self):
+        value = "secret-value"
+        pls.mask_stores["deepseek"].mask(
+            "s", value, [{"start": 0, "end": len(value), "category": "other"}])
+        body = (
+            b'data: ' + json.dumps({"choices": [{"index": 0, "delta": {
+                "reasoning_content": "\u27e6pii:1\u27e7 are personal"}}]}).encode()
+            + b"\n\n"
+            + b'data: ' + json.dumps({"choices": [{"index": 0, "delta": {},
+                "finish_reason": "stop"}]}).encode()
+            + b"\n\ndata: [DONE]\n\n"
+        )
+        async def send(request, stream=False):
+            return FakeStream(body)
+
+        pls.http.send = send
+        response = self.cloud_post({**self.later(dsh_first_turn()), "stream": True})
+        self.assertIn(value, response.text)
+        self.assertNotIn("\u27e6pii:1\u27e7", response.text)
+
+    def test_a_credentials_path_is_masked_as_personal(self):
+        text = "read /Users/home/Downloads/Siddhesh_credentials.csv now"
+        start = text.index("/")
+        end = text.index(" ", start)
+        self.assertFalse(pls._span_is_path(text, {"start": start, "end": end}))
+        spans = pls._sensitive_path_spans(text)
+        self.assertEqual(text[spans[0]["start"]:spans[0]["end"]],
+                         "/Users/home/Downloads/Siddhesh_credentials.csv")
 
     def test_a_demasked_reply_is_masked_again_on_the_next_turn(self):
         value = "9 Nov 2026 12:46"
@@ -1632,13 +1660,9 @@ class RouterTest(unittest.TestCase):
 
     # -- launch token ------------------------------------------------------
 
-    def test_the_watch_page_is_open_without_the_launch_token(self):
-        pls.TOKEN = "s3cret"
-        try:
-            self.assertEqual(self.client.get("/watch").status_code, 200)
-            self.assertEqual(self.client.get("/watch/log").status_code, 200)
-        finally:
-            pls.TOKEN = ""
+    def test_the_watch_routes_are_gone(self):
+        self.assertEqual(self.client.get("/watch").status_code, 404)
+        self.assertEqual(self.client.get("/watch/log").status_code, 404)
 
     def test_a_request_without_the_launch_token_is_refused(self):
         pls.TOKEN = "s3cret"

@@ -27,6 +27,7 @@ from typing import Any
 import mlx.core as mx
 import mlx_vlm
 from mlx_vlm.apc import APCManager
+from mlx_vlm.models import cache as mlx_cache
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
@@ -45,6 +46,28 @@ MAX_OUT = int(os.environ.get("PLS_MAX_OUT", "8192"))
 APC_BLOCKS = int(os.environ.get("PLS_APC_BLOCKS", "8192"))
 APC_CHECKPOINTS = int(os.environ.get("PLS_APC_CHECKPOINTS", "32"))
 APC_CHECKPOINT_INTERVAL = int(os.environ.get("PLS_APC_CHECKPOINT_INTERVAL", "4096"))
+
+
+def _kv_memory_profile(cache, token_count):
+    """The library profile reads `keys.shape`. An 8-bit cache stores keys as a list."""
+    if cache.keys is None:
+        return mlx_cache.CacheMemory()
+    keys = cache.keys[0] if isinstance(cache.keys, (list, tuple)) and cache.keys else cache.keys
+    if not hasattr(keys, "shape") or len(keys.shape) < 3:
+        size = mlx_cache.cache_nbytes(cache.keys) + mlx_cache.cache_nbytes(cache.values)
+        return mlx_cache.CacheMemory(
+            source_bytes=size, bytes_per_token=0, step=getattr(cache, "step", 1)
+        )
+    capacity = keys.shape[2]
+    size = mlx_cache.cache_nbytes(cache.keys) + mlx_cache.cache_nbytes(cache.values)
+    return mlx_cache.CacheMemory(
+        source_bytes=size,
+        bytes_per_token=size / capacity if capacity else 0,
+        step=getattr(cache, "step", 1),
+    )
+
+
+mlx_cache._kv_memory_profile = _kv_memory_profile
 
 app = FastAPI()
 model = None
@@ -195,6 +218,11 @@ async def chat(request: Request):
         )
     kwargs["max_tokens"] = budget
     kwargs["apc_manager"] = apc
+    # 8-bit cache. The weights stay 4-bit. Set PLS_KV_BITS=0 to keep full cache.
+    kv_bits = os.environ.get("PLS_KV_BITS", "8")
+    if kv_bits not in ("", "0"):
+        kwargs["kv_bits"] = float(kv_bits)
+        kwargs["quantized_kv_start"] = 0
 
     loop = asyncio.get_running_loop()
     cid = "chatcmpl-" + uuid.uuid4().hex[:24]

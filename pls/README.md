@@ -114,15 +114,13 @@ wally serves the router over a unix socket at `~/.config/wally/pls/pls.sock`
 (mode `0600`, path in `PLS_SOCKET`): `POST /decide` for the decision model and
 `GET /token` for the cloud token. Nothing is gated on a plan.
 
-## Watch
+## Log
 
-Open `<router url>/watch`. Summary shows latency (first byte and total, p50
-and p95), decision failures, guard retries, queue waits and the turns that
-will feel slow. Raw log is the same file, one JSON object per line. Nothing
-on `/watch` checks the launch token. The file is
-`~/.config/wally/pls/watch/traffic.jsonl`, so it can be read after the
-router has exited. Delete the `pls/watch` package and the router keeps
-running without the page.
+Each request is one JSON line in the profile `pls/watch/traffic.jsonl`
+(`~/.config/wally/pls/watch/` unless `WALLY_PROFILE_DIR` is set). The file is
+mode 0600. It keeps roles and lengths, not the raw prompt. Rows older than 7
+days are dropped, and only the newest 2000 lines are kept. Delete the
+`pls/watch` package and the router keeps running without the log.
 
 ## PII
 

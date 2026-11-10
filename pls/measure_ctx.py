@@ -104,7 +104,9 @@ def snapshot(stage: str, baseline: ProcessMemory) -> None:
 
 
 def main() -> None:
-    path = json.loads((Path.home() / ".config" / "wally" / "pls" / "config.json").read_text())["model_path"]
+    path = os.environ.get("PLS_MODEL") or json.loads(
+        (Path.home() / ".config" / "wally" / "pls" / "config.json").read_text()
+    )["model_path"]
     mx.set_cache_limit(0)
     baseline = process_memory()
     snapshot("baseline", baseline)

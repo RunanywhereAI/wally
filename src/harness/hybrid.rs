@@ -217,6 +217,7 @@ fn build_hybrid_llm_config(
     key_variable: &str,
     token: &str,
     cloud: &ModelLimits,
+    local_context: i64,
 ) -> String {
     let model = |id: &str, context: i64, output: i64, image: bool| {
         json!({
@@ -232,7 +233,7 @@ fn build_hybrid_llm_config(
     };
     let subagent = model(
         HYBRID_LOCAL_MODEL_ID,
-        local_context_window(),
+        local_context,
         HYBRID_LOCAL_OUTPUT,
         false,
     );
@@ -505,8 +506,13 @@ pub fn launch_deep_seek_hybrid(
     };
     let router = &hybrid.router;
     let cloud_limits = &hybrid.cloud;
-    let llm_config =
-        build_hybrid_llm_config(&router.base_url, KEY_VARIABLE, &router.token, cloud_limits);
+    let llm_config = build_hybrid_llm_config(
+        &router.base_url,
+        KEY_VARIABLE,
+        &router.token,
+        cloud_limits,
+        local_context_window(),
+    );
     let mut config = TemporaryConfig::new();
     if let Err(failure) = config.write(&build_hybrid_patch(&llm_config), ".yaml") {
         out::error_line(&failure);
@@ -546,8 +552,13 @@ mod tests {
     use serde_json::{json, Value};
 
     fn hybrid_config_with(cloud: &ModelLimits) -> Value {
-        let config =
-            build_hybrid_llm_config("http://127.0.0.1:1234", "WALLY_PLS_KEY", "tok", cloud);
+        let config = build_hybrid_llm_config(
+            "http://127.0.0.1:1234",
+            "WALLY_PLS_KEY",
+            "tok",
+            cloud,
+            HYBRID_LOCAL_CONTEXT,
+        );
         serde_json::from_str(&config).unwrap()
     }
 
@@ -602,6 +613,7 @@ mod tests {
             "WALLY_PLS_KEY",
             "tok",
             &ModelLimits::default(),
+            HYBRID_LOCAL_CONTEXT,
         );
         let patch = build_hybrid_patch(&config);
         assert!(!patch.contains("wally-local"));
@@ -615,6 +627,7 @@ mod tests {
             "WALLY_PLS_KEY",
             "tok",
             &ModelLimits::default(),
+            HYBRID_LOCAL_CONTEXT,
         );
         let patch = build_hybrid_patch(&config);
         // The row's own provider must survive the overlay, or dsh rejects the
@@ -632,6 +645,7 @@ mod tests {
             "K",
             "tok",
             &ModelLimits::default(),
+            HYBRID_LOCAL_CONTEXT,
         ));
         let row = patch
             .split("- id: ")
@@ -648,6 +662,7 @@ mod tests {
             "K",
             "tok",
             &ModelLimits::default(),
+            HYBRID_LOCAL_CONTEXT,
         ));
         let row = patch
             .split("- id: ")

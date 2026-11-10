@@ -1,33 +1,24 @@
-"""Traffic log for the router. Delete this package and the router still runs.
+"""Request log for the router. Delete this package and the router still runs.
 
-The log file stays on disk, so it can be read after the process exits.
-The page and the raw log are open on purpose: no token.
+One JSON object per line at <profile>/pls/watch/traffic.jsonl, mode 0600.
+Rows older than 7 days are dropped, and the file keeps the newest 2000 lines.
+There is no page.
 """
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Callable
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, PlainTextResponse
-
 _directory: Callable[[], Path] | None = None
+_KEEP_SECONDS = 7 * 24 * 60 * 60
+_KEEP_LINES = 2000
 
 
-def attach(app: FastAPI, directory: Callable[[], Path]) -> None:
+def start(directory: Callable[[], Path]) -> None:
     global _directory
     _directory = directory
-
-    @app.get("/watch")
-    def page():
-        html = Path(__file__).with_name("page.html").read_text()
-        return HTMLResponse(html)
-
-    @app.get("/watch/log")
-    def raw():
-        path = directory() / "traffic.jsonl"
-        text = path.read_text() if path.is_file() else ""
-        return PlainTextResponse(text)
 
 
 def record(event: dict) -> None:
@@ -35,6 +26,35 @@ def record(event: dict) -> None:
         return
     folder = _directory()
     folder.mkdir(parents=True, exist_ok=True)
+    os.chmod(folder, 0o700)
     path = folder / "traffic.jsonl"
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    _drop_old(path)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.chmod(path, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _drop_old(path: Path) -> None:
+    if not path.is_file():
+        return
+    cutoff = time.time() - _KEEP_SECONDS
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+        if float(event.get("ts") or 0) >= cutoff:
+            kept.append(line)
+    kept = kept[-_KEEP_LINES:]
+    if kept == lines:
+        return
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        if kept:
+            handle.write("\n".join(kept) + "\n")
