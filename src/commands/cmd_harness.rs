@@ -289,7 +289,7 @@ pub fn register_harness(app: &mut App) {
                     Err(status) => return status,
                     Ok(Some((mut local, mut cloud, policy))) => {
                         if let Some(context) = saved_local_context() {
-                            let context = context.max(context_min_for(&agent.id));
+                            let context = context.max(context_min_for(agent.id));
                             std::env::set_var("PLS_MAX_KV", context.to_string());
                             if p.flag("--custom") {
                                 local = "mlx-pplx-coder-35b-4bit".to_string();
@@ -303,7 +303,7 @@ pub fn register_harness(app: &mut App) {
                                 "hybrid defaults: context {context}, cloud {cloud}"
                             ));
                         } else if p.flag("--custom") {
-                            match custom_hybrid(&agent.id, &cloud) {
+                            match custom_hybrid(agent.id, &cloud) {
                                 Err(status) => return status,
                                 Ok(choice) => {
                                     cloud = choice.cloud;
@@ -383,9 +383,7 @@ fn saved_local_context() -> Option<i64> {
 }
 
 fn saved_cloud_model() -> Option<String> {
-    if saved_local_context().is_none() {
-        return None;
-    }
+    saved_local_context()?;
     config_json()
         .get("cloud_model")
         .and_then(|value| value.as_str())
