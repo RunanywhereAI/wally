@@ -1,0 +1,27 @@
+{
+  "_source": "dsh 0.1.7-rc.2 first turn, captured 2026-11-04, message bodies trimmed",
+  "model": "Hybrid-Wally-0.1",
+  "stream": true,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an AI agent powered by DeepSeek Harness.\n\nYou are a coding agent powered by the Hybrid-Wally-0.1 model.\n\nCheck the [exit code: N] marker on every bash result; investigate failures before moving on.\n\nUse the read tool \u2014 not shell com"
+    },
+    {
+      "role": "user",
+      "content": "What does this repo build? Answer in one line."
+    },
+    {
+      "role": "user",
+      "content": "<system-reminder>\nThe following workspace instructions may be relevant to your work. Use them as guidance when applicable. More specific instructions take precedence over broader ones. They do not override system, developer, or direct user "
+    },
+    {
+      "role": "user",
+      "content": "Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\nCurrent DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: \"/Users/h"
+    },
+    {
+      "role": "user",
+      "content": "<system-reminder>\nA skill is a reusable set of task-specific instructions. The following skills are available in this session:\n\n<available_skills>\n- `amazon-bedrock`: Builds generative AI applications on Amazon Bedrock. Covers model invocat\n...\ne Bases, creating agents, applying guardrails, deploying to AgentCore, migrating/porting/converting a Bedrock Agent (including i"
+    }
+  ]
+}

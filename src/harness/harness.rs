@@ -1318,6 +1318,12 @@ fn spawn(tool: &str, args: &[String]) -> i32 {
     // fork rather than exec: the local server lives in this process, and
     // replacing the image would take it down with us before the tool ran.
     //
+    // Ctrl-C reaches the tool and wally together, from the terminal. The tool
+    // decides what it means; wally outlives it so its own cleanup runs after
+    // the tool exits (the hybrid router, temp configs, a gateway Hermes left
+    // running). exec resets a caught signal to default, so the tool still
+    // gets its own Ctrl-C.
+    let _interrupt = crate::util::interrupt::on_interrupt(|| {});
     // SAFETY: fork() duplicates the process; the child branch below only
     // calls async-signal-safe functions (execvp, _exit) before either
     // replacing its image or exiting, and never returns into the rest of

@@ -187,7 +187,7 @@ impl Drop for ScopedEnv {
 /// Written into the temp directory rather than the person's own config tree:
 /// `~/.openclaw/config.json` is theirs, and a run of wally is not a reason to
 /// rewrite it.
-struct TemporaryConfig {
+pub(super) struct TemporaryConfig {
     path: Option<PathBuf>,
 }
 
@@ -195,7 +195,7 @@ struct TemporaryConfig {
 /// first that is set), else /tmp — and nothing unless that names an existing
 /// directory. `std::env::temp_dir()` is not the same: it reads only TMPDIR and,
 /// on macOS, falls back to the per-user /var/folders/…/T instead of /tmp.
-fn temp_directory_path() -> Option<PathBuf> {
+pub(super) fn temp_directory_path() -> Option<PathBuf> {
     #[cfg(not(windows))]
     let directory = ["TMPDIR", "TMP", "TEMP", "TEMPDIR"]
         .iter()
@@ -268,7 +268,7 @@ fn is_removable_leftover_config(metadata: &std::fs::Metadata, now: std::time::Sy
 /// which cannot be removed (already gone, permissions, a live process still
 /// holding it open on Windows), is silently skipped -- this is background
 /// housekeeping, never the operation the caller actually asked for.
-fn clean_leftover_configs() {
+pub(super) fn clean_leftover_configs() {
     let Some(directory) = temp_directory_path() else {
         return;
     };
@@ -297,11 +297,11 @@ fn clean_leftover_configs() {
 }
 
 impl TemporaryConfig {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         TemporaryConfig { path: None }
     }
 
-    fn write(&mut self, contents: &str, extension: &str) -> Result<(), String> {
+    pub(super) fn write(&mut self, contents: &str, extension: &str) -> Result<(), String> {
         let Some(directory) = temp_directory_path() else {
             return Err("no temp directory to write the agent config into".to_string());
         };
@@ -370,7 +370,7 @@ impl TemporaryConfig {
         Ok(())
     }
 
-    fn path(&self) -> String {
+    pub(super) fn path(&self) -> String {
         self.path
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned())
@@ -386,13 +386,13 @@ impl Drop for TemporaryConfig {
     }
 }
 
-const PROVIDER_ID: &str = "runanywhere";
+pub(super) const PROVIDER_ID: &str = "runanywhere";
 
 /// The environment variable the dsh and Prime Agent providers read the key
 /// from. Fixed rather than host-derived: both resolve the reference
 /// themselves and put no host rule on the name. It also keeps the key out of
 /// the files they read.
-const KEY_VARIABLE: &str = "RUNANYWHERE_API_KEY";
+pub(super) const KEY_VARIABLE: &str = "RUNANYWHERE_API_KEY";
 
 /// `agent.default_args` split on spaces, or `args` when the person passed
 /// any.
@@ -400,7 +400,7 @@ const KEY_VARIABLE: &str = "RUNANYWHERE_API_KEY";
 /// Theirs wins whole: a tool started with their own subcommand is theirs to
 /// drive, and mixing our default into it would produce a command line
 /// neither of us wrote.
-fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
+pub(super) fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
     if !args.is_empty() || agent.default_args.is_empty() {
         return args.to_vec();
     }
@@ -423,7 +423,7 @@ fn effective_args(agent: &Agent, args: &[String]) -> Vec<String> {
 /// matters more than it looks: OpenClaw otherwise derives it from the config
 /// file's own folder, so pointing `OPENCLAW_CONFIG_PATH` at a temp file
 /// would move their agents and sessions into the temp directory for the run.
-fn open_claw_state_directory() -> PathBuf {
+pub(super) fn open_claw_state_directory() -> PathBuf {
     // `var_os`, not `var`: `std::getenv` in C++ returns the raw bytes
     // regardless of encoding, and `std::filesystem::path` is encoding-agnostic
     // on POSIX, so a legacy-encoded HOME/OPENCLAW_* must still resolve here
@@ -453,7 +453,7 @@ fn open_claw_state_directory() -> PathBuf {
 /// Agents live under `<state>/agents/<id>/agent` unless their config entry
 /// (`agents.entries` or `agents.list`) names an `agentDir`, the same lookup as
 /// OpenClaw's `resolveAgentDir`.
-fn drop_stale_open_claw_provider(state: &Path, config: &str) {
+pub(super) fn drop_stale_open_claw_provider(state: &Path, config: &str) {
     let mut agent_dirs: Vec<PathBuf> = std::fs::read_dir(state.join("agents"))
         .map(|entries| {
             entries
@@ -569,13 +569,13 @@ fn expand_home(path: &str) -> PathBuf {
 /// context size `Resolve` starts it with, which is the honest number to
 /// declare.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ModelLimits {
-    context_window: i64,
-    max_output: i64,
-    input_per_mtok: i64,
-    output_per_mtok: i64,
-    image_input: bool,
-    text_only: bool,
+pub(crate) struct ModelLimits {
+    pub context_window: i64,
+    pub max_output: i64,
+    pub input_per_mtok: i64,
+    pub output_per_mtok: i64,
+    pub image_input: bool,
+    pub text_only: bool,
 }
 
 fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
@@ -588,6 +588,12 @@ fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
         return limits;
     }
 
+    console_limits(model)
+}
+
+/// What the console says a hosted model costs and how much it can hold.
+pub(super) fn console_limits(model: &str) -> ModelLimits {
+    let mut limits = ModelLimits::default();
     let credentials = match account::load() {
         Ok(c) => c,
         Err(_) => return limits,
@@ -622,7 +628,7 @@ fn lookup_limits(endpoint: &Endpoint, model: &str) -> ModelLimits {
 }
 
 /// Their current config document, or empty when they have none.
-fn read_open_claw_config() -> String {
+pub(super) fn read_open_claw_config() -> String {
     let path = match std::env::var_os("OPENCLAW_CONFIG_PATH") {
         Some(over) if !over.is_empty() => PathBuf::from(over),
         _ => {
@@ -634,6 +640,65 @@ fn read_open_claw_config() -> String {
         }
     };
     std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// The pid in a Hermes `gateway.pid` document when it names a gateway the
+/// TUI started for itself (`gateway run --idle-exit`). A gateway the person
+/// runs on their own (messaging, a service) has no `--idle-exit` and is None.
+pub(super) fn tui_gateway_pid_in(document: &str) -> Option<i32> {
+    let value: Value = serde_json::from_str(document).ok()?;
+    let started_by_tui = value
+        .get("argv")?
+        .as_array()?
+        .iter()
+        .any(|arg| arg.as_str() == Some("--idle-exit"));
+    let pid = i32::try_from(value.get("pid")?.as_i64()?).ok()?;
+    (started_by_tui && pid > 0).then_some(pid)
+}
+
+/// The live TUI gateway's pid, from `$HERMES_HOME/gateway.pid`.
+fn tui_gateway_pid() -> Option<i32> {
+    let home = hermes_config_path()?.parent()?.to_path_buf();
+    let pid = tui_gateway_pid_in(&std::fs::read_to_string(home.join("gateway.pid")).ok()?)?;
+    #[cfg(unix)]
+    {
+        // SAFETY: signal 0 only checks that the pid exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        alive.then_some(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        Some(pid)
+    }
+}
+
+/// Stops the gateway Hermes' TUI left running, if there is one. Returns
+/// false after saying so when it would not stop.
+///
+/// `--tui` talks to a detached gateway that outlives it and keeps the
+/// environment of the launch that started it. wally hands Hermes its endpoint
+/// in that environment, on a port that changes every launch, so a TUI that
+/// attaches to an earlier launch's gateway calls a server that is gone and
+/// never answers. Stopped before a launch so the TUI starts one with this
+/// launch's endpoint, and after, so nothing is left pointing at a dead port.
+pub(super) fn stop_tui_gateway(command: &str) -> bool {
+    let Some(pid) = tui_gateway_pid() else {
+        return true;
+    };
+    let stopped = std::process::Command::new(command)
+        .args(["gateway", "stop"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|exit| exit.success());
+    if !stopped {
+        out::error_line(&format!(
+            "could not stop the hermes gateway (pid {pid}) an earlier launch left running; \
+             run `hermes gateway stop`, then try again"
+        ));
+    }
+    stopped
 }
 
 /// Mirrors hermes_cli/runtime_provider._host_derived_api_key: strip the
@@ -1404,7 +1469,7 @@ pub fn prime_agent_argv(model: &str, child_args: &[String]) -> Vec<String> {
 /// single quote doubled. A temp path or model id has no business carrying a
 /// quote, but an unescaped one would break the whole patch document rather
 /// than fail loudly, so the boundary is closed here.
-fn yaml_single_quoted(value: &str) -> String {
+pub(super) fn yaml_single_quoted(value: &str) -> String {
     let mut escaped = String::from("'");
     for c in value.chars() {
         if c == '\'' {
@@ -1508,7 +1573,13 @@ pub fn launch_agent(agent: &Agent, model: &str, args: &[String], options: &Globa
                 "{} will talk to {model} through {}",
                 agent.id, endpoint.base_url
             ));
-            launch(agent.id, "", &hermes_argv(model, &child_args), options)
+            if !stop_tui_gateway(agent.command) {
+                release(&endpoint);
+                return 1;
+            }
+            let status = launch(agent.id, "", &hermes_argv(model, &child_args), options);
+            stop_tui_gateway(agent.command);
+            status
         }
         Handoff::ConfigFile => {
             let catalog = catalog_models_for(&endpoint, model);
@@ -2423,6 +2494,16 @@ mod tests {
             "low"
         );
         assert!(defaults.get("runanywhere/mimo-v2.6-pro").is_none());
+    }
+
+    #[test]
+    fn only_a_gateway_the_tui_started_is_one_wally_stops() {
+        let tui =
+            r#"{"pid": 25601, "argv": ["main.py", "gateway", "run", "--quiet", "--idle-exit"]}"#;
+        assert_eq!(tui_gateway_pid_in(tui), Some(25601));
+        let own = r#"{"pid": 25601, "argv": ["main.py", "gateway", "run"]}"#;
+        assert_eq!(tui_gateway_pid_in(own), None);
+        assert_eq!(tui_gateway_pid_in("not json"), None);
     }
 
     #[test]
