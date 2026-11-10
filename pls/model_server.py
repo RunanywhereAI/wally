@@ -35,17 +35,26 @@ import uvicorn
 MODEL_PATH = os.environ["PLS_MODEL"]
 MODEL_ID = os.environ.get("PLS_MODEL_ID", "Hybrid-Wally-0.1-local")
 # 64K: Hermes refuses a delegation model with a window under 64,000.
-MAX_KV = int(os.environ.get("PLS_MAX_KV", "65536"))
-MAX_OUT = int(os.environ.get("PLS_MAX_OUT", "8192"))
-# APC's defaults hold 2048 x 16 = 32k tokens and two checkpoints, taken every
-# 2048 tokens. Hybrid-attention models (the PPLX 35B) reuse only through
-# checkpoints, and one 12k subagent context alone takes six of them, so a
-# second subagent evicted the first and every turn re-prefilled past the
-# shared system prompt. Fewer, wider checkpoints and a higher cap keep several
-# live contexts.
-APC_BLOCKS = int(os.environ.get("PLS_APC_BLOCKS", "8192"))
-APC_CHECKPOINTS = int(os.environ.get("PLS_APC_CHECKPOINTS", "32"))
-APC_CHECKPOINT_INTERVAL = int(os.environ.get("PLS_APC_CHECKPOINT_INTERVAL", "4096"))
+from local_limits import (
+    APC_BLOCKS,
+    APC_CHECKPOINT_INTERVAL,
+    APC_CHECKPOINTS,
+    MAX_KV,
+    MAX_OUT,
+)
+
+
+def _parse_kv_bits() -> float | None:
+    raw = os.environ.get("PLS_KV_BITS", "8")
+    if raw in ("", "0"):
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        raise SystemExit(f"PLS_KV_BITS must be a number, got {raw!r}")
+
+
+KV_BITS = _parse_kv_bits()
 
 
 def _kv_memory_profile(cache, token_count):
@@ -218,10 +227,8 @@ async def chat(request: Request):
         )
     kwargs["max_tokens"] = budget
     kwargs["apc_manager"] = apc
-    # 8-bit cache. The weights stay 4-bit. Set PLS_KV_BITS=0 to keep full cache.
-    kv_bits = os.environ.get("PLS_KV_BITS", "8")
-    if kv_bits not in ("", "0"):
-        kwargs["kv_bits"] = float(kv_bits)
+    if KV_BITS is not None:
+        kwargs["kv_bits"] = KV_BITS
         kwargs["quantized_kv_start"] = 0
 
     loop = asyncio.get_running_loop()

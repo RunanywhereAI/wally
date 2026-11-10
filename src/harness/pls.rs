@@ -370,6 +370,7 @@ const PII_WEIGHTS: &str = include_str!("../../pls/pii_weights.py");
 const LOCK: &str = include_str!("../../pls/requirements.lock");
 const WATCH_PY: &str = include_str!("../../pls/watch/__init__.py");
 const KVC: &str = include_str!("../../pls/kvc.py");
+const LOCAL_LIMITS: &str = include_str!("../../pls/local_limits.py");
 
 /// A running router. Dropping it stops the process.
 pub struct Router {
@@ -757,7 +758,7 @@ fn materialise() -> Option<PathBuf> {
         "{:x}",
         fnv1a(
             format!(
-                "{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{MASK_STORE}\u{0}{PII_MODEL}\u{0}{PII_BACKBONE}\u{0}{PII_LABELS}\u{0}{PII_VITERBI}\u{0}{PII_WEIGHTS}\u{0}{LOCK}\u{0}{WATCH_PY}\u{0}{KVC}"
+                "{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{MASK_STORE}\u{0}{PII_MODEL}\u{0}{PII_BACKBONE}\u{0}{PII_LABELS}\u{0}{PII_VITERBI}\u{0}{PII_WEIGHTS}\u{0}{LOCK}\u{0}{WATCH_PY}\u{0}{KVC}\u{0}{LOCAL_LIMITS}"
             )
                 .as_bytes(),
         )
@@ -784,6 +785,7 @@ fn materialise() -> Option<PathBuf> {
     std::fs::create_dir_all(&watch_dir).ok()?;
     std::fs::write(watch_dir.join("__init__.py"), WATCH_PY).ok()?;
     std::fs::write(dir.join("kvc.py"), KVC).ok()?;
+    std::fs::write(dir.join("local_limits.py"), LOCAL_LIMITS).ok()?;
     std::fs::write(&marker, wanted).ok()?;
     Some(script)
 }

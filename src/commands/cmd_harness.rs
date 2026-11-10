@@ -288,9 +288,10 @@ pub fn register_harness(app: &mut App) {
                 match hybrid_request(p, g.no_color) {
                     Err(status) => return status,
                     Ok(Some((mut local, mut cloud, policy))) => {
+                        let mut local_context = crate::harness::HYBRID_LOCAL_CONTEXT;
                         if let Some(context) = saved_local_context() {
-                            let context = context.max(context_min_for(agent.id));
-                            std::env::set_var("PLS_MAX_KV", context.to_string());
+                            local_context = context.max(context_min_for(agent.id));
+                            std::env::set_var("PLS_MAX_KV", local_context.to_string());
                             if p.flag("--custom") {
                                 local = "mlx-pplx-coder-35b-4bit".to_string();
                             }
@@ -300,7 +301,7 @@ pub fn register_harness(app: &mut App) {
                                 }
                             }
                             out::status_line(&format!(
-                                "hybrid defaults: context {context}, cloud {cloud}"
+                                "hybrid defaults: context {local_context}, cloud {cloud}"
                             ));
                         } else if p.flag("--custom") {
                             match custom_hybrid(agent.id, &cloud) {
@@ -308,6 +309,7 @@ pub fn register_harness(app: &mut App) {
                                 Ok(choice) => {
                                     cloud = choice.cloud;
                                     local = "mlx-pplx-coder-35b-4bit".to_string();
+                                    local_context = choice.context;
                                     std::env::set_var("PLS_MAX_KV", choice.context.to_string());
                                     if choice.save {
                                         save_local_context(choice.context);
@@ -320,6 +322,7 @@ pub fn register_harness(app: &mut App) {
                             &local,
                             &cloud,
                             &policy,
+                            local_context,
                             &p.get_strs("args"),
                             g,
                         );
@@ -454,20 +457,25 @@ fn printable_model_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_graphic())
 }
 
+fn cached_or_error(error: &str) -> Result<Vec<String>, i32> {
+    let ids: Vec<String> = crate::account::cached_model_ids()
+        .into_iter()
+        .filter(|id| printable_model_id(id))
+        .collect();
+    if ids.is_empty() {
+        out::error_line(error);
+        Err(2)
+    } else {
+        Ok(ids)
+    }
+}
+
 fn cloud_ids() -> Result<Vec<String>, i32> {
     let mut session =
         match crate::account::ConsoleSession::open(crate::account::ConsoleClient::default()) {
             Ok(session) => session,
             Err(error) => {
-                let cached = crate::account::cached_model_ids();
-                if cached.is_empty() {
-                    out::error_line(&error);
-                    return Err(2);
-                }
-                return Ok(cached
-                    .into_iter()
-                    .filter(|id| printable_model_id(id))
-                    .collect());
+                return cached_or_error(&error);
             }
         };
     match session.call(|client, url, token| client.fetch_models_within(url, token, 8_000)) {
@@ -484,18 +492,7 @@ fn cloud_ids() -> Result<Vec<String>, i32> {
                 Ok(ids)
             }
         }
-        Err(error) => {
-            let cached = crate::account::cached_model_ids();
-            if cached.is_empty() {
-                out::error_line(&error);
-                Err(2)
-            } else {
-                Ok(cached
-                    .into_iter()
-                    .filter(|id| printable_model_id(id))
-                    .collect())
-            }
-        }
+        Err(error) => cached_or_error(&error),
     }
 }
 

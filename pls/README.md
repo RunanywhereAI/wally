@@ -116,11 +116,12 @@ wally serves the router over a unix socket at `~/.config/wally/pls/pls.sock`
 
 ## Log
 
-Each request is one JSON line in the profile `pls/watch/traffic.jsonl`
-(`~/.config/wally/pls/watch/` unless `WALLY_PROFILE_DIR` is set). The file is
-mode 0600. It keeps roles and lengths, not the raw prompt. Rows older than 7
-days are dropped, and only the newest 2000 lines are kept. Delete the
-`pls/watch` package and the router keeps running without the log.
+Each event is one JSON line in the profile `pls/watch/traffic.jsonl`
+(`~/.config/wally/pls/watch/` unless `WALLY_PROFILE_DIR` is set). Lines from
+the same request share a `req` id. The file is mode 0600. It keeps roles and
+lengths, not the raw prompt. Rows older than 7 days are dropped, and only the
+newest 2000 lines are kept. Delete the `pls/watch` package and the router
+keeps running without the log.
 
 ## PII
 

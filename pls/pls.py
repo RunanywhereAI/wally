@@ -791,7 +791,7 @@ async def mask_cloud_text(text: str, session_id: str) -> str | None:
         note_masking_off("classifier returned no span list")
         return None
     spans = [span for span in spans if not _span_is_path(text, span)]
-    spans = spans + _sensitive_path_spans(text)
+    spans = _merge_spans(spans + _sensitive_path_spans(text))
     store = open_mask_store()
     if store is None:
         note_masking_off("mask store unavailable")
@@ -824,7 +824,23 @@ def _span_is_path(text: str, span: dict) -> bool:
 _SENSITIVE_FILE = re.compile(
     r"(?i)(credential|secret|password|passwd|\.pem$|\.env$|id_rsa|api[_-]?key)"
 )
-_PATH_IN_TEXT = re.compile(r"(?:~|\.\.?|/[A-Za-z0-9._-])[^\s\"'`<>]*")
+_PATH_IN_TEXT = re.compile(
+    r"(?<![\w.])(?:~|(?:\./|\.\./)|/)[^\s\"'`<>]*"
+)
+
+
+def _merge_spans(spans: list[dict]) -> list[dict]:
+    """Drop a later span that overlaps one already kept."""
+    ordered = sorted(spans, key=lambda span: (span.get("start", 0), span.get("end", 0)))
+    kept: list[dict] = []
+    for span in ordered:
+        start, end = span.get("start"), span.get("end")
+        if not isinstance(start, int) or not isinstance(end, int):
+            continue
+        if kept and start < kept[-1]["end"]:
+            continue
+        kept.append(span)
+    return kept
 
 
 def _sensitive_path_spans(text: str) -> list[dict]:
@@ -917,11 +933,34 @@ class ReplyDemask:
         return self.feed("", final=True)
 
 
+def _field_sse(field: str, text: str) -> bytes:
+    return sse(chunk("chatcmpl-pls-demask", int(time.time()), {field: text})).encode()
+
+
 def _content_sse(text: str) -> bytes:
-    return sse(chunk("chatcmpl-pls-demask", int(time.time()), {"content": text})).encode()
+    return _field_sse("content", text)
 
 
-def map_sse_event(event: bytes, demask: ReplyDemask | None) -> list[bytes]:
+class ReplyDemasks:
+    """Separate restore buffers, so a split token cannot cross fields."""
+
+    def __init__(self, session_id: str):
+        self.content = ReplyDemask(session_id)
+        self.reasoning = ReplyDemask(session_id)
+
+    def for_field(self, field: str) -> ReplyDemask:
+        if field == "reasoning_content":
+            return self.reasoning
+        return self.content
+
+    def flush_all(self) -> list[tuple[str, str]]:
+        return [
+            ("content", self.content.flush()),
+            ("reasoning_content", self.reasoning.flush()),
+        ]
+
+
+def map_sse_event(event: bytes, demask: ReplyDemasks | None) -> list[bytes]:
     """Demask text deltas. A non-text event flushes a held token first."""
     if demask is None or not event.strip():
         return [event]
@@ -950,7 +989,7 @@ def map_sse_event(event: bytes, demask: ReplyDemask | None) -> list[bytes]:
         return _flush_then(demask, event)
     emit = finishing
     for delta, field in found:
-        ready = demask.feed(delta[field], final=finishing)
+        ready = demask.for_field(field).feed(delta[field], final=finishing)
         if ready:
             delta[field] = ready
             emit = True
@@ -961,17 +1000,22 @@ def map_sse_event(event: bytes, demask: ReplyDemask | None) -> list[bytes]:
     return [sse(payload).encode()]
 
 
-def _flush_then(demask: ReplyDemask, event: bytes) -> list[bytes]:
-    ready = demask.flush()
-    if not ready:
+def _flush_then(demask: ReplyDemasks, event: bytes) -> list[bytes]:
+    out = [
+        _field_sse(field, ready)
+        for field, ready in demask.flush_all()
+        if ready
+    ]
+    if not out:
         return [event]
-    return [_content_sse(ready), event]
+    out.append(event)
+    return out
 
 
 def demask_sse_bytes(raw: bytes, session_id: str) -> bytes:
     if not raw or not session_id:
         return raw
-    demask = ReplyDemask(session_id)
+    demask = ReplyDemasks(session_id)
     out: list[bytes] = []
     pending = raw
     while b"\n\n" in pending:
@@ -979,9 +1023,9 @@ def demask_sse_bytes(raw: bytes, session_id: str) -> bytes:
         out.extend(map_sse_event(event + b"\n\n", demask))
     if pending:
         out.extend(map_sse_event(pending, demask))
-    ready = demask.flush()
-    if ready:
-        out.append(_content_sse(ready))
+    for field, ready in demask.flush_all():
+        if ready:
+            out.append(_field_sse(field, ready))
     return b"".join(out)
 
 
@@ -2400,7 +2444,7 @@ async def cloud(path: str, body: dict, request: Request,
         if policy == "privacy" and parent:
             reply_session = mask_session or mask_session_id(
                 request, body.get("messages") or [])
-        demask = ReplyDemask(reply_session) if reply_session else None
+        demask = ReplyDemasks(reply_session) if reply_session else None
         try:
             async for piece in response.aiter_bytes():
                 if first_ms is None:
@@ -2430,10 +2474,10 @@ async def cloud(path: str, body: dict, request: Request,
                  "total_ms": elapsed(), "attempt": attempt, "streamed_text": streamed})
 
         if demask is not None:
-            rest = demask.flush()
-            if rest:
-                yield _content_sse(rest)
-                streamed = True
+            for field, rest in demask.flush_all():
+                if rest:
+                    yield _field_sse(field, rest)
+                    streamed = True
         raw = b"".join(held)
         if reply_session:
             raw = demask_sse_bytes(raw, reply_session)

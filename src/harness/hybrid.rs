@@ -34,12 +34,15 @@ pub fn launch_hybrid(
     model: &str,
     cloud_model: &str,
     policy: &str,
+    local_context: i64,
     args: &[String],
     options: &GlobalOptions,
 ) -> i32 {
     match agent.id {
         "hermes" => launch_hermes_hybrid(agent, model, cloud_model, policy, args, options),
-        "deepseek" => launch_deep_seek_hybrid(model, cloud_model, policy, args, options),
+        "deepseek" => {
+            launch_deep_seek_hybrid(model, cloud_model, policy, local_context, args, options)
+        }
         _ => {
             out::error_line(&format!("{} has no hybrid launch", agent.id));
             2
@@ -195,17 +198,8 @@ pub const HYBRID_MODEL_ID: &str = "Hybrid-Wally-0.1";
 pub const HYBRID_LOCAL_MODEL_ID: &str = "Hybrid-Wally-0.1-local";
 
 /// The local lane's limits: the model server's KV cap and reply cap.
-pub(super) const HYBRID_LOCAL_CONTEXT: i64 = 65536;
+pub(crate) const HYBRID_LOCAL_CONTEXT: i64 = 65536;
 pub(super) const HYBRID_LOCAL_OUTPUT: i64 = 8192;
-
-/// The window `--custom` chose for this launch, or the built-in cap.
-fn local_context_window() -> i64 {
-    std::env::var("PLS_MAX_KV")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(HYBRID_LOCAL_CONTEXT)
-}
 
 /// The one-provider `llm-pi-ai` config for a hybrid launch. `cloud` is what
 /// the console says the parent's cloud model can hold: the parent's model
@@ -491,6 +485,7 @@ pub fn launch_deep_seek_hybrid(
     model: &str,
     cloud_model: &str,
     policy: &str,
+    local_context: i64,
     args: &[String],
     options: &GlobalOptions,
 ) -> i32 {
@@ -511,7 +506,7 @@ pub fn launch_deep_seek_hybrid(
         KEY_VARIABLE,
         &router.token,
         cloud_limits,
-        local_context_window(),
+        local_context,
     );
     let mut config = TemporaryConfig::new();
     if let Err(failure) = config.write(&build_hybrid_patch(&llm_config), ".yaml") {
