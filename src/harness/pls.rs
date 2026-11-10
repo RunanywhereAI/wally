@@ -368,6 +368,9 @@ const PII_LABELS: &str = include_str!("../../pls/pii_labels.py");
 const PII_VITERBI: &str = include_str!("../../pls/pii_viterbi.py");
 const PII_WEIGHTS: &str = include_str!("../../pls/pii_weights.py");
 const LOCK: &str = include_str!("../../pls/requirements.lock");
+const WATCH_PY: &str = include_str!("../../pls/watch/__init__.py");
+const WATCH_PAGE: &str = include_str!("../../pls/watch/page.html");
+const KVC: &str = include_str!("../../pls/kvc.py");
 
 /// A running router. Dropping it stops the process.
 pub struct Router {
@@ -755,7 +758,7 @@ fn materialise() -> Option<PathBuf> {
         "{:x}",
         fnv1a(
             format!(
-                "{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{MASK_STORE}\u{0}{PII_MODEL}\u{0}{PII_BACKBONE}\u{0}{PII_LABELS}\u{0}{PII_VITERBI}\u{0}{PII_WEIGHTS}\u{0}{LOCK}"
+                "{SCRIPT}\u{0}{MODEL_SERVER}\u{0}{MASK_STORE}\u{0}{PII_MODEL}\u{0}{PII_BACKBONE}\u{0}{PII_LABELS}\u{0}{PII_VITERBI}\u{0}{PII_WEIGHTS}\u{0}{LOCK}\u{0}{WATCH_PY}\u{0}{WATCH_PAGE}\u{0}{KVC}"
             )
                 .as_bytes(),
         )
@@ -778,6 +781,11 @@ fn materialise() -> Option<PathBuf> {
     ] {
         std::fs::write(dir.join(name), body).ok()?;
     }
+    let watch_dir = dir.join("watch");
+    std::fs::create_dir_all(&watch_dir).ok()?;
+    std::fs::write(watch_dir.join("__init__.py"), WATCH_PY).ok()?;
+    std::fs::write(watch_dir.join("page.html"), WATCH_PAGE).ok()?;
+    std::fs::write(dir.join("kvc.py"), KVC).ok()?;
     std::fs::write(&marker, wanted).ok()?;
     Some(script)
 }
@@ -1019,8 +1027,6 @@ fn start_with(
         .env("PLS_PARENT_PID", std::process::id().to_string())
         .env("PLS_TOKEN", &token)
         .env("PLS_SOCKET", socket_path())
-        // The debug console is temporary; forwarded only when set.
-        .env("PLS_DEBUG", std::env::var("PLS_DEBUG").unwrap_or_default())
         .env("PYTHONUNBUFFERED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1081,9 +1087,7 @@ fn start_with(
     let _ = std::fs::write(pid_path(), format!("{} {}", child.id(), script.display()));
     let base_url = format!("http://127.0.0.1:{port}");
     out::status_line(&format!("router ready on {base_url}"));
-    if std::env::var("PLS_DEBUG").as_deref() == Ok("1") {
-        out::status_line(&format!("debug console: {base_url}/debug"));
-    }
+    out::status_line(&format!("watch: {base_url}/watch"));
     Some(Router {
         child,
         base_url,

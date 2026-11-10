@@ -22,7 +22,6 @@ Binds port 0 and prints `{"port": N}` on stdout once listening.
 
 import asyncio
 import atexit
-import collections
 import contextvars
 import dataclasses
 import hashlib
@@ -45,6 +44,15 @@ import uvicorn
 
 import pii_model
 from mask_store import MASK_SAFETY, TOKEN_RE, MaskStore, store_for
+
+try:
+    import watch
+except ImportError:
+    watch = None
+try:
+    import kvc
+except ImportError:
+    kvc = None
 
 MODEL_ID = "Hybrid-Wally-0.1"
 # The harness names subagents with this id so it compacts their context at the
@@ -306,10 +314,6 @@ PLS_SOCKET = os.environ.get("PLS_SOCKET", "")
 # Per-launch secret. The port is loopback but shared, so without it any local
 # process could spend the account's cloud quota through this bearer token.
 TOKEN = os.environ.get("PLS_TOKEN", "")
-# Debug console: remove once the MVP ships.
-DEBUG = os.environ.get("PLS_DEBUG") == "1"
-EVENTS: "collections.deque[dict]" = collections.deque(maxlen=1000)
-SUBSCRIBERS: "set[asyncio.Queue]" = set()
 REQUEST_ID: contextvars.ContextVar[str] = contextvars.ContextVar("pls_req", default="")
 TRACE_CHARS = 16000
 privacy_gap_noted = False
@@ -325,15 +329,18 @@ TASKS_PATH = CONFIG_DIR / "tasks.json"
 CREDENTIALS_PATH = PROFILE_DIR / "credentials.json"
 PID_PATH = CONFIG_DIR / "pls.pid"
 SERVER_SCRIPT = Path(__file__).with_name("model_server.py")
+WATCH_DIR = CONFIG_DIR / "watch"
 
 app = FastAPI()
+if watch is not None:
+    watch.attach(app, lambda: WATCH_DIR)
 http = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0))
 
 
 @app.middleware("http")
 async def trace_exchange(request: Request, call_next):
-    """When the debug console is on, remember each /v1 request and its reply."""
-    if not DEBUG or not request.url.path.startswith("/v1/"):
+    """Remember each /v1 request and its reply in the watch log."""
+    if watch is None or not request.url.path.startswith("/v1/"):
         return await call_next(request)
     req_id = secrets.token_hex(4)
     token = REQUEST_ID.set(req_id)
@@ -1588,19 +1595,16 @@ def scan_pii(messages: list) -> dict:
 
 
 def log(event: dict) -> None:
-    if DEBUG:
-        req = REQUEST_ID.get()
-        if req and "req" not in event:
-            event = {**event, "req": req}
+    req = REQUEST_ID.get()
+    if req and "req" not in event:
+        event = {**event, "req": req}
+    event = {"ts": round(time.time(), 3), **event}
     print(json.dumps(event), file=sys.stderr, flush=True)
-    if DEBUG:
-        event = {"ts": round(time.time(), 3), **event}
-        EVENTS.append(event)
-        for queue in list(SUBSCRIBERS):
-            try:
-                queue.put_nowait(event)
-            except Exception:
-                pass
+    if watch is not None:
+        try:
+            watch.record(event)
+        except Exception:
+            pass
 
 
 def clip_value(value: Any) -> Any:
@@ -1957,201 +1961,12 @@ def token_rejected(request: Request):
     return None
 
 
-@app.get("/stats")
-def stats(request: Request):
-    if rejected := token_rejected(request):
-        return rejected
-    data = dict(STATS)
-    data["mode"] = read_config()["mode"]
-    data["waiting"] = waiting
-    data["model_port"] = model_port
-    return data
-
-
-@app.post("/stats/reset")
-def stats_reset(request: Request):
-    if rejected := token_rejected(request):
-        return rejected
-    for key in ("requests", "errors", "queued", "overflow", "local_turns",
-                "cloud_tokens", "local_tokens", "cap_hits", "guard_retries",
-                "guard_synth", "decisions", "decision_failures"):
-        STATS[key] = 0
-    STATS["disclosure"] = {"summary": 0, "local_only": 0}
-    STATS["last"] = None
-    return {"ok": True}
-
-
-DEBUG_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><title>PLS logs</title>
-<style>
-:root{color-scheme:dark}
-body{background:#0e1116;color:#c9d1d9;font:14px/1.45 ui-sans-serif,system-ui,sans-serif;margin:0}
-header{position:sticky;top:0;background:#161b22;border-bottom:1px solid #30363d;padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;z-index:1}
-h1{font-size:15px;margin:0;font-weight:500;color:#e6edf3}
-.pill{border:1px solid #30363d;border-radius:999px;padding:2px 10px;color:#8b949e;font-size:12px}
-.pill b{color:#e6edf3;font-weight:500}
-button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;cursor:pointer;font:inherit}
-#log{display:flex;flex-direction:column;gap:8px;padding:12px 16px 32px}
-.empty{color:#8b949e;padding:24px 4px}
-details{background:#161b22;border:1px solid #30363d;border-radius:8px}
-summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:88px 72px 64px 52px 1fr;gap:8px;align-items:baseline;padding:10px 12px}
-summary::-webkit-details-marker{display:none}
-summary:hover{background:#1c2128}
-.time,.meta{color:#8b949e;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cloud{color:#79c0ff}.local{color:#56d364}.bad{color:#f0883e}
-.body{display:flex;flex-direction:column;gap:12px;padding:0 12px 12px}
-section h2{margin:0 0 6px;font-size:12px;font-weight:500;color:#8b949e}
-pre{margin:0;padding:10px;background:#0e1116;border-radius:6px;overflow:auto;max-height:320px;white-space:pre-wrap;word-break:break-word;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
-ol{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
-li{display:grid;grid-template-columns:140px 1fr;gap:8px}
-.step{color:#e6edf3;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-@media(max-width:640px){
- summary{grid-template-columns:72px 1fr}
- .kind,.lane,.status{display:none}
-}
-</style></head><body>
-<header>
-<h1>PLS logs</h1>
-<span class="pill">mode <b id="mode">?</b></span>
-<span class="pill">requests <b id="count">0</b></span>
-<button id="pause">pause</button><button id="clear">clear</button>
-<a href="/debug/export"><button>export</button></a>
-</header>
-<div id="log"><p class="empty" id="empty">No requests yet.</p></div>
-<script>
-const logEl=document.getElementById('log');
-const empty=document.getElementById('empty');
-const cards=new Map();
-let paused=false;
-const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-document.getElementById('pause').onclick=e=>{paused=!paused;e.target.textContent=paused?'resume':'pause'};
-document.getElementById('clear').onclick=()=>{cards.clear();logEl.replaceChildren(empty);empty.hidden=false;document.getElementById('count').textContent='0'};
-function textOf(content){
- if(typeof content==='string')return content;
- if(Array.isArray(content))return content.map(p=>p&&p.text||'').join(' ');
- return '';
-}
-function oneLine(text){
- let out='', gap=false;
- for(const c of text){
-  const code=c.charCodeAt(0);
-  const ws=code===9||code===10||code===13||code===32;
-  if(ws){ if(!gap){ out+=' '; gap=true; } }
-  else { out+=c; gap=false; }
- }
- return out.trim();
-}
-function summaryText(body){
- const messages=body&&body.messages;
- if(!Array.isArray(messages))return '';
- for(let i=messages.length-1;i>=0;i--){
-  const text=oneLine(textOf(messages[i]&&messages[i].content));
-  if(text)return text.slice(0,160);
- }
- return '';
-}
-function pretty(value){
- if(value==null)return '';
- return typeof value==='string'?value:JSON.stringify(value,null,2);
-}
-function render(card){
- const events=card.events;
- const inn=events.find(e=>e.event==='in');
- const out=[...events].reverse().find(e=>e.event==='out');
- const steps=events.filter(e=>e.event!=='in'&&e.event!=='out');
- const route=steps.find(e=>e.event==='route')||{};
- const when=new Date((inn||events[0]).ts*1000).toLocaleTimeString();
- const kind=route.kind||'';
- const lane=route.lane||inn&&''||'';
- const status=out?String(out.status):'…';
- const title=inn?summaryText(inn.body):esc(events[0].event);
- const statusCls=/^[45]/.test(status)?'bad':lane;
- card.el.open=card.el.open;
- card.el.querySelector('summary').innerHTML=
-  `<span class=time>${esc(when)}</span><span class=kind>${esc(kind)}</span>`+
-  `<span class="lane ${esc(lane)}">${esc(lane)}</span><span class="status ${esc(statusCls)}">${esc(status)}</span>`+
-  `<span class=title>${esc(title)}</span>`;
- const stepHtml=steps.map(e=>{
-  const rest={...e};delete rest.ts;delete rest.event;delete rest.req;
-  return `<li><span class=step>${esc(e.event)}</span><span class=meta>${esc(pretty(rest))}</span></li>`;
- }).join('')||'<li><span class=meta>No steps yet.</span></li>';
- card.el.querySelector('.body').innerHTML=
-  `<section><h2>In</h2><pre>${esc(pretty(inn?inn.body:null)||'Nothing recorded.')}</pre></section>`+
-  `<section><h2>Processed</h2><ol>${stepHtml}</ol></section>`+
-  `<section><h2>Out</h2><pre>${esc(out?pretty(out.body):'Waiting for the reply.')}</pre></section>`;
-}
-function add(e){
- const id=e.req||('loose-'+e.ts+'-'+e.event);
- let card=cards.get(id);
- if(!card){
-  const el=document.createElement('details');
-  el.innerHTML='<summary></summary><div class=body></div>';
-  card={el,events:[]};
-  cards.set(id,el&&card);
-  empty.hidden=true;
-  logEl.prepend(el);
- }
- card.events.push(e);
- render(card);
- document.getElementById('count').textContent=String(cards.size);
- if(e.mode)document.getElementById('mode').textContent=e.mode;
-}
-fetch('/debug/state').then(r=>r.json()).then(s=>{
- document.getElementById('mode').textContent=s.mode||'?';
- for(const e of s.events)add(e);
- const es=new EventSource('/debug/events');
- es.onmessage=m=>{if(!paused)add(JSON.parse(m.data))};
-});
-</script></body></html>"""
-
 
 @app.get("/favicon.ico")
 def favicon():
     return Response(b"", media_type="image/x-icon", status_code=204)
 
 
-@app.get("/debug")
-def debug_page():
-    if not DEBUG:
-        return JSONResponse({"error": {"message": "debug console off (start with PLS_DEBUG=1)"}}, status_code=404)
-    return Response(DEBUG_PAGE, media_type="text/html")
-
-
-@app.get("/debug/state")
-def debug_state(request: Request):
-    if rejected := token_rejected(request):
-        return rejected
-    return {"mode": read_config()["mode"], "events": list(EVENTS)}
-
-
-@app.get("/debug/export")
-def debug_export(request: Request):
-    if rejected := token_rejected(request):
-        return rejected
-    body = "\n".join(json.dumps(event) for event in EVENTS)
-    return Response(
-        body + "\n",
-        media_type="application/x-ndjson",
-        headers={"content-disposition": 'attachment; filename="pls-events.ndjson"'},
-    )
-
-
-@app.get("/debug/events")
-async def debug_events(request: Request):
-    if rejected := token_rejected(request):
-        return rejected
-    queue: asyncio.Queue = asyncio.Queue()
-    SUBSCRIBERS.add(queue)
-
-    async def stream():
-        try:
-            while True:
-                yield "data: " + json.dumps(await queue.get()) + "\n\n"
-        finally:
-            SUBSCRIBERS.discard(queue)
-
-    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 def withheld_completion(stream: bool) -> Response:
@@ -2694,6 +2509,8 @@ async def local(path: str, body: dict, request: Request, config: dict):
                            request)
 
     summary, messages = resolve_child(list(body.get("messages") or []), config["policy"])
+    if kvc is not None:
+        messages = kvc.order(messages, is_injected)
     body = {**body, "messages": messages}
 
     overflow = False

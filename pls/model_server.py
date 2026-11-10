@@ -161,13 +161,6 @@ def health():
     return {"ok": model is not None}
 
 
-@app.get("/stats")
-def stats():
-    s = dict(STATS)
-    s["context_headroom"] = MAX_KV - s["peak_context"]
-    return s
-
-
 @app.post("/v1/chat/completions")
 async def chat(request: Request):
     body: dict[str, Any] = await request.json()

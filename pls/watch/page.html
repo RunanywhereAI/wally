@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PLS watch</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; color: #1c1917; background: #fafaf9; }
+  header { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid #e7e5e4; background: #fff; position: sticky; top: 0; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  button { font: inherit; background: #fff; border: 1px solid #d6d3d1; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  button.on { background: #1c1917; color: #fff; border-color: #1c1917; }
+  main { padding: 16px; display: grid; gap: 16px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  .card { background: #fff; border: 1px solid #e7e5e4; border-radius: 8px; padding: 10px 12px; }
+  .card b { display: block; font-size: 18px; font-weight: 600; }
+  .card span { color: #78716c; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e7e5e4; vertical-align: top; font-size: 13px; }
+  th { color: #78716c; font-weight: 500; }
+  .bad { color: #b91c1c; }
+  #raw { display: none; max-height: calc(100vh - 72px); overflow: auto; }
+  .event { background: #fff; border: 1px solid #e7e5e4; border-radius: 8px; padding: 8px 10px; margin: 0 0 8px; }
+  .event b { font-weight: 600; }
+  .event pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; font: 12px/1.4 ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PLS watch</h1>
+  <button id="ui" class="on" type="button">Summary</button>
+  <button id="rawbtn" type="button">Raw log</button>
+  <span id="meta"></span>
+</header>
+<main>
+  <section id="board">
+    <div class="cards" id="cards"></div>
+    <div id="hurts"></div>
+    <table>
+      <thead><tr><th>When</th><th>Request</th><th>Lane</th><th>First byte</th><th>Total</th><th>What hurt</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+  <div id="raw"></div>
+</main>
+<script>
+const SLOW_FIRST = 2000;
+const SLOW_TOTAL = 8000;
+
+function pct(values, p) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * (sorted.length - 1)));
+  return sorted[index];
+}
+function ms(value) {
+  return value == null ? "—" : Math.round(value) + " ms";
+}
+function clock(ts) {
+  if (!ts) return "";
+  return new Date(ts * 1000).toLocaleTimeString();
+}
+
+function summarise(events) {
+  const byReq = new Map();
+  const cloudMs = [];
+  const firstMs = [];
+  let errors = 0, overflows = 0, queued = 0, decideFails = 0, guards = 0, unavailable = 0;
+  for (const event of events) {
+    const name = event.event;
+    if (name === "cloud_error" || name === "summary_failed" || name === "tasks_save_failed") errors += 1;
+    if (name === "decide_failed") decideFails += 1;
+    if (name === "local_unavailable") unavailable += 1;
+    if (event.overflow) overflows += 1;
+    if (name === "guard" && event.outcome && event.outcome !== "accepted") guards += 1;
+    const req = event.req;
+    if (!req) continue;
+    const row = byReq.get(req) || { req, notes: [] };
+    if (name === "in") row.started = event.ts;
+    if (name === "route") { row.kind = event.kind; row.lane = event.lane; }
+    if (name === "cloud_done" || name === "local") {
+      if (event.first_byte_ms != null) { row.first = event.first_byte_ms; firstMs.push(event.first_byte_ms); }
+      if (event.total_ms != null) { row.total = event.total_ms; cloudMs.push(event.total_ms); }
+      if (event.turn_ms != null) row.total = event.turn_ms;
+    }
+    if (name === "out" && row.started) row.round = Math.round((event.ts - row.started) * 1000);
+    if (name === "queued") queued += 1;
+    if (event.outcome === "rejected" || event.outcome === "blocked" || event.outcome === "synthesised")
+      row.notes.push("guard " + event.outcome);
+    if (name === "decide_failed") row.notes.push("decision failed");
+    if (name === "local_unavailable") row.notes.push("local model down");
+    if (name === "summary_failed") row.notes.push("summary failed");
+    if (name === "cloud_error") row.notes.push("cloud error");
+    byReq.set(req, row);
+  }
+  for (const row of byReq.values()) {
+    const first = row.first;
+    const total = row.total != null ? row.total : row.round;
+    if (first != null && first >= SLOW_FIRST) row.notes.push("slow first byte");
+    if (total != null && total >= SLOW_TOTAL) row.notes.push("slow reply");
+  }
+  return { byReq, cloudMs, firstMs, errors, overflows, queued, decideFails, guards, unavailable };
+}
+
+function shown(value, depth) {
+  if (depth > 4) return "…";
+  if (typeof value === "string") return value.length > 500 ? value.slice(0, 500) + " …(" + value.length + " chars)" : value;
+  if (Array.isArray(value)) return value.slice(0, 8).map(item => shown(item, depth + 1));
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).slice(0, 24)) out[key] = shown(value[key], depth + 1);
+    return out;
+  }
+  return value;
+}
+
+function render(text) {
+  const events = text.split("\n").filter(Boolean).map(line => {
+    try { return JSON.parse(line); } catch (error) { return null; }
+  }).filter(Boolean);
+  const stats = summarise(events);
+  const cards = [
+    ["Requests", stats.byReq.size],
+    ["First byte p50", ms(pct(stats.firstMs, 50))],
+    ["First byte p95", ms(pct(stats.firstMs, 95))],
+    ["Total p50", ms(pct(stats.cloudMs, 50))],
+    ["Total p95", ms(pct(stats.cloudMs, 95))],
+    ["Decision failures", stats.decideFails],
+    ["Guard retries", stats.guards],
+    ["Queue waits", stats.queued],
+    ["Overflows", stats.overflows],
+    ["Local down", stats.unavailable],
+    ["Errors", stats.errors],
+  ];
+  document.getElementById("cards").innerHTML = cards.map(([label, value]) =>
+    `<div class="card"><b>${value}</b><span>${label}</span></div>`).join("");
+  const hurts = [];
+  if (stats.decideFails) hurts.push("A failed decision fails safe: privacy hides the prompt, cost refuses to delegate. That changes what the person sees.");
+  if (stats.unavailable) hurts.push("The local model did not start. Privacy withholds the answer. Cost sends the task to the cloud.");
+  if (stats.guards) hurts.push("The parent was asked again, or the router wrote the subagent call itself. The turn feels stuck.");
+  if (stats.firstMs.some(value => value >= SLOW_FIRST)) hurts.push("Time to first byte is over 2s. The harness looks frozen before any text.");
+  if (stats.cloudMs.some(value => value >= SLOW_TOTAL)) hurts.push("A reply took over 8s. Long turns are the usual complaint.");
+  if (stats.queued || stats.overflows) hurts.push("The local lane was busy. Privacy waits. Cost spills onto the cloud.");
+  document.getElementById("hurts").innerHTML = hurts.length
+    ? "<p class='bad'>" + hurts.join(" ") + "</p>"
+    : "<p>Nothing in this log is slow or failing.</p>";
+  const rows = [...stats.byReq.values()].slice(-40).reverse();
+  document.getElementById("rows").innerHTML = rows.map(row => `<tr>
+    <td>${clock(row.started)}</td>
+    <td>${row.req}</td>
+    <td>${row.kind || ""} ${row.lane || ""}</td>
+    <td>${ms(row.first)}</td>
+    <td>${ms(row.total != null ? row.total : row.round)}</td>
+    <td class="${row.notes.length ? "bad" : ""}">${row.notes.join(", ")}</td>
+  </tr>`).join("");
+  document.getElementById("meta").textContent = events.length + " events";
+  const raw = document.getElementById("raw");
+  raw.replaceChildren();
+  if (!events.length) {
+    raw.textContent = "No events yet. The file is ~/.config/wally/pls/watch/traffic.jsonl";
+    return;
+  }
+  for (const event of events.slice(-80)) {
+    const block = document.createElement("div");
+    block.className = "event";
+    const title = document.createElement("b");
+    title.textContent = clock(event.ts) + "  " + (event.event || "") + (event.req ? "  " + event.req : "");
+    const body = document.createElement("pre");
+    body.textContent = JSON.stringify(shown(event, 0), null, 2);
+    block.append(title, body);
+    raw.append(block);
+  }
+}
+
+function show(which) {
+  document.getElementById("board").style.display = which === "ui" ? "" : "none";
+  document.getElementById("raw").style.display = which === "raw" ? "block" : "none";
+  document.getElementById("ui").classList.toggle("on", which === "ui");
+  document.getElementById("rawbtn").classList.toggle("on", which === "raw");
+}
+document.getElementById("ui").onclick = () => show("ui");
+document.getElementById("rawbtn").onclick = () => show("raw");
+
+async function load() {
+  const response = await fetch("/watch/log");
+  render(await response.text());
+}
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>

@@ -23,6 +23,10 @@ pub(crate) fn add_hybrid_flags(command: &mut App) {
         ValueType::Text,
         "What --hybrid optimises for: privacy (default) or cost",
     );
+    command.add_flag(
+        "--custom",
+        "After --hybrid, ask for the local context window and the cloud model",
+    );
 }
 
 /// The hybrid launch a parsed command asks for: `Ok(Some((local, cloud,
@@ -34,7 +38,14 @@ pub(crate) fn hybrid_request(
     no_color: bool,
 ) -> Result<Option<(String, String, String)>, i32> {
     if !p.flag("--hybrid") {
-        for flag in ["--cloud-model", "--policy"] {
+        for flag in ["--cloud-model", "--policy", "--custom"] {
+            if flag == "--custom" {
+                if p.flag("--custom") {
+                    out::error_line("--custom only applies with --hybrid");
+                    return Err(2);
+                }
+                continue;
+            }
             if p.get_str(flag).is_some_and(|value| !value.is_empty()) {
                 out::error_line(&format!("{flag} only applies with --hybrid"));
                 return Err(2);
@@ -45,10 +56,16 @@ pub(crate) fn hybrid_request(
     // `-m` names the *local* model here, so an absent one must not be filled
     // with the cloud default.
     let local = p.get_str("--model").unwrap_or_default();
-    let cloud = p
-        .get_str("--cloud-model")
-        .unwrap_or_else(|| resolve_default_model("", no_color));
-    if harness::refuse_decisions_model(Some(cloud.as_str())) {
+    let cloud = if p.flag("--custom") {
+        // A passed id is only a suggestion for the questions. Do not fill in
+        // the account default before the person has answered.
+        p.get_str("--cloud-model").unwrap_or_default()
+    } else {
+        p.get_str("--cloud-model").unwrap_or_else(|| {
+            saved_cloud_model().unwrap_or_else(|| resolve_default_model("", no_color))
+        })
+    };
+    if !cloud.is_empty() && harness::refuse_decisions_model(Some(cloud.as_str())) {
         return Err(2);
     }
     let policy = p
@@ -270,7 +287,31 @@ pub fn register_harness(app: &mut App) {
             if harness::HYBRID_COMMANDS.contains(&agent.id) {
                 match hybrid_request(p, g.no_color) {
                     Err(status) => return status,
-                    Ok(Some((local, cloud, policy))) => {
+                    Ok(Some((mut local, mut cloud, policy))) => {
+                        if let Some(context) = saved_local_context() {
+                            std::env::set_var("PLS_MAX_KV", context.to_string());
+                            local = "mlx-pplx-coder-35b-4bit".to_string();
+                            if p.get_str("--cloud-model").is_none() {
+                                if let Some(saved) = saved_cloud_model() {
+                                    cloud = saved;
+                                }
+                            }
+                            out::status_line(&format!(
+                                "hybrid defaults: context {context}, cloud {cloud}"
+                            ));
+                        } else if p.flag("--custom") {
+                            match custom_hybrid(&agent.id, &cloud) {
+                                Err(status) => return status,
+                                Ok(choice) => {
+                                    cloud = choice.cloud;
+                                    local = "mlx-pplx-coder-35b-4bit".to_string();
+                                    std::env::set_var("PLS_MAX_KV", choice.context.to_string());
+                                    if choice.save {
+                                        save_local_context(choice.context);
+                                    }
+                                }
+                            }
+                        }
                         return harness::launch_hybrid(
                             &agent,
                             &local,
@@ -287,5 +328,241 @@ pub fn register_harness(app: &mut App) {
                 resolve_default_model(&p.get_str("--model").unwrap_or_default(), g.no_color);
             harness::launch_agent(&agent, &model, &p.get_strs("args"), g)
         });
+    }
+}
+
+/// What `--custom` collected.
+struct CustomChoice {
+    context: i64,
+    cloud: String,
+    save: bool,
+}
+
+/// Lowest local window. A new sub-agent prompt in this session was about 14k tokens.
+const CONTEXT_MIN: i64 = 16_384;
+/// `max_position_embeddings` of mlx-pplx-coder-35b.
+const CONTEXT_MAX: i64 = 262_144;
+/// Hermes will not delegate to a model that advertises under this.
+const HERMES_CONTEXT_MIN: i64 = 64_000;
+/// Process peak at 16,384 tokens on the 35B coder: 22.156 GiB.
+const PPLX_PEAK_AT_16K: u64 = 23_788_551_831;
+/// Process-peak growth between the 4,096 and 16,384 runs: 133,256 bytes per token.
+const PPLX_PEAK_PER_TOKEN: u64 = 133_256;
+
+/// The context window whose measured prefill peak fits in `available` bytes.
+fn context_for_free_ram(available: u64) -> i64 {
+    let tokens =
+        CONTEXT_MIN as u64 + available.saturating_sub(PPLX_PEAK_AT_16K) / PPLX_PEAK_PER_TOKEN;
+    (tokens as i64).clamp(CONTEXT_MIN, CONTEXT_MAX)
+}
+
+fn context_min_for(harness: &str) -> i64 {
+    if harness == "hermes" {
+        HERMES_CONTEXT_MIN
+    } else {
+        CONTEXT_MIN
+    }
+}
+
+fn config_json() -> serde_json::Value {
+    let path = crate::harness::pls::config_file();
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn saved_local_context() -> Option<i64> {
+    config_json()
+        .get("local_context")
+        .and_then(|value| value.as_i64())
+        .filter(|value| *value > 0)
+}
+
+fn saved_cloud_model() -> Option<String> {
+    if saved_local_context().is_none() {
+        return None;
+    }
+    config_json()
+        .get("cloud_model")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn save_local_context(context: i64) {
+    let path = crate::harness::pls::config_file();
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
+    let mut value = config_json();
+    value["local_context"] = serde_json::json!(context);
+    let _ = std::fs::write(path, value.to_string());
+}
+
+fn available_bytes() -> Option<u64> {
+    let out = std::process::Command::new("vm_stat").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut page = 16_384u64;
+    let mut pages = 0u64;
+    for line in text.lines() {
+        if let Some(rest) = line.split("page size of ").nth(1) {
+            if let Some(n) = rest.split_whitespace().next() {
+                if let Ok(size) = n.parse::<u64>() {
+                    page = size;
+                }
+            }
+        }
+        let interesting = line.contains("Pages free")
+            || line.contains("Pages inactive")
+            || line.contains("Pages speculative");
+        if !interesting {
+            continue;
+        }
+        let number = line
+            .split(':')
+            .nth(1)
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches('.');
+        if let Ok(count) = number.parse::<u64>() {
+            pages += count;
+        }
+    }
+    if pages == 0 {
+        None
+    } else {
+        Some(pages.saturating_mul(page))
+    }
+}
+
+fn ask(prompt: &str) -> Result<String, i32> {
+    if !crate::util::term::stdin_is_tty() || !crate::util::term::stderr_is_tty() {
+        out::error_line("--custom needs a terminal");
+        return Err(2);
+    }
+    eprint!("{prompt}");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
+        out::error_line("no answer");
+        return Err(2);
+    }
+    Ok(line.trim().to_string())
+}
+
+fn cloud_ids() -> Result<Vec<String>, i32> {
+    let mut session =
+        match crate::account::ConsoleSession::open(crate::account::ConsoleClient::default()) {
+            Ok(session) => session,
+            Err(error) => {
+                let cached = crate::account::cached_model_ids();
+                if cached.is_empty() {
+                    out::error_line(&error);
+                    return Err(2);
+                }
+                return Ok(cached);
+            }
+        };
+    match session.call(|client, url, token| client.fetch_models_within(url, token, 8_000)) {
+        Ok(models) => {
+            let ids: Vec<String> = models
+                .into_iter()
+                .map(|model| model.id)
+                .filter(|id| !id.is_empty())
+                .collect();
+            if ids.is_empty() {
+                out::error_line("the account has no cloud models");
+                Err(2)
+            } else {
+                Ok(ids)
+            }
+        }
+        Err(error) => {
+            let cached = crate::account::cached_model_ids();
+            if cached.is_empty() {
+                out::error_line(&error);
+                Err(2)
+            } else {
+                Ok(cached)
+            }
+        }
+    }
+}
+
+fn pick_cloud(passed: &str, ids: &[String]) -> Result<String, i32> {
+    if !passed.is_empty() {
+        let use_passed = harness::confirm(&format!("Use {passed} as the cloud model? [y/N] "));
+        if use_passed {
+            return Ok(passed.to_string());
+        }
+    }
+    out::status_line("Cloud models:");
+    for (index, id) in ids.iter().enumerate() {
+        eprintln!("  {}: {id}", index + 1);
+    }
+    loop {
+        let answer = ask("Type the cloud model id, or its number: ")?;
+        if let Ok(index) = answer.parse::<usize>() {
+            if let Some(id) = index.checked_sub(1).and_then(|index| ids.get(index)) {
+                return Ok(id.clone());
+            }
+        }
+        if ids.iter().any(|id| id == &answer) {
+            return Ok(answer);
+        }
+        out::error_line("that model is not in the list");
+    }
+}
+
+fn custom_hybrid(harness: &str, passed_cloud: &str) -> Result<CustomChoice, i32> {
+    let min = context_min_for(harness);
+    let context = loop {
+        let answer = ask(&format!("Context window ({min}-{CONTEXT_MAX}), or auto: "))?;
+        if answer.eq_ignore_ascii_case("auto") {
+            let Some(free) = available_bytes() else {
+                out::error_line("could not read free memory; type a number");
+                continue;
+            };
+            let picked = context_for_free_ram(free).max(min);
+            out::status_line(&format!(
+                "auto context window: {picked} ({:.1} GB free)",
+                free as f64 / 1024.0 / 1024.0 / 1024.0
+            ));
+            break picked;
+        }
+        match answer.parse::<i64>() {
+            Ok(value) if (min..=CONTEXT_MAX).contains(&value) => break value,
+            _ => out::error_line(&format!(
+                "type a number from {min} to {CONTEXT_MAX}, or auto"
+            )),
+        }
+    };
+
+    let ids = cloud_ids()?;
+    let cloud = pick_cloud(passed_cloud, &ids)?;
+    if harness::refuse_decisions_model(Some(cloud.as_str())) {
+        return Err(2);
+    }
+    let save = harness::confirm("Make this the default hybrid configuration? [y/N] ");
+    Ok(CustomChoice {
+        context,
+        cloud,
+        save,
+    })
+}
+
+#[cfg(test)]
+mod custom_tests {
+    use super::*;
+
+    #[test]
+    fn auto_context_fits_the_measured_35b_cost() {
+        let available = PPLX_PEAK_AT_16K + (65_536 - CONTEXT_MIN as u64) * PPLX_PEAK_PER_TOKEN;
+        assert_eq!(context_for_free_ram(available), 65_536);
+    }
+
+    #[test]
+    fn auto_context_stays_inside_the_model_limits() {
+        assert_eq!(context_for_free_ram(0), CONTEXT_MIN);
+        assert_eq!(context_for_free_ram(u64::MAX), CONTEXT_MAX);
     }
 }

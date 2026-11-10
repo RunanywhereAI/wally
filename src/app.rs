@@ -228,6 +228,7 @@ fn root_flags_before_passthrough(argv: &[String]) -> Vec<&str> {
 fn is_hybrid_launch_flag(token: &str) -> bool {
     token == "--cloud"
         || token == "--hybrid"
+        || token == "--custom"
         || token == "--cloud-model"
         || token.starts_with("--cloud-model=")
         || token == "--policy"

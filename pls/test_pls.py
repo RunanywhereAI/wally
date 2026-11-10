@@ -113,6 +113,7 @@ class RouterTest(unittest.TestCase):
         pls.CONFIG_PATH = self.config
         pls.CREDENTIALS_PATH = self.creds
         pls.TASKS_PATH = self.dir / "tasks.json"
+        pls.WATCH_DIR = self.dir / "watch"
         pls.TASKS.clear()
         pls.TASK_TEXT.clear()
         pls.SESSION_NEXT.clear()
@@ -417,6 +418,20 @@ class RouterTest(unittest.TestCase):
         sent = self.local_bodies[-1]["messages"]
         self.assertEqual(next(m for m in sent if m["role"] == "user")["content"], "list the files")
         self.assertNotIn("pls-task:", json.dumps(sent))
+
+    def test_the_task_is_placed_after_the_harness_context(self):
+        record = self.seed("read the file")
+        body = self.dsh_child(record)
+        body["messages"] = [
+            body["messages"][0],
+            {"role": "user", "content": f"pls-task: {record['id']}\nread the file"},
+            {"role": "user", "content": "Current runtime context. This snapshot supersedes earlier ones."},
+        ]
+        self.post("/v1/chat/completions", body)
+        roles = [(m["role"], m["content"][:24]) for m in self.local_bodies[-1]["messages"]]
+        self.assertEqual(roles[1][0], "user")
+        self.assertTrue(roles[1][1].startswith("Current runtime context"))
+        self.assertEqual(self.local_bodies[-1]["messages"][-1]["content"], "read the file")
 
     def test_a_child_with_an_unknown_id_is_masked_under_privacy(self):
         record = {"id": "t424242"}
@@ -778,20 +793,16 @@ class RouterTest(unittest.TestCase):
                 self.assertFalse(hasattr(pls, name))
         self.assertNotIn("premium_blocked", pls.STATS)
 
-    def test_debug_state_carries_no_subscription_field(self):
-        self.assertNotIn("sub", self.client.get("/debug/state").json())
+    def test_the_watch_log_carries_no_subscription_field(self):
+        self.assertNotIn("sub", self.client.get("/watch/log").text)
 
-    def test_debug_records_what_went_in_and_what_came_out(self):
-        pls.DEBUG = True
-        pls.EVENTS.clear()
-        try:
-            pls.http.send = _fake_send_json([], completion("cloud answer"))
-            self.cloud_post(self.later(dsh_first_turn()))
-            events = list(pls.EVENTS)
-            page = self.client.get("/debug")
-        finally:
-            pls.DEBUG = False
-            pls.EVENTS.clear()
+    def test_watch_records_what_went_in_and_what_came_out(self):
+        pls.http.send = _fake_send_json([], completion("cloud answer"))
+        self.cloud_post(self.later(dsh_first_turn()))
+        raw = (pls.WATCH_DIR / "traffic.jsonl").read_text()
+        events = [json.loads(line) for line in raw.splitlines()]
+        page = self.client.get("/watch")
+        log = self.client.get("/watch/log")
         incoming = [event for event in events if event.get("event") == "in"]
         outgoing = [event for event in events if event.get("event") == "out"]
         self.assertEqual(len(incoming), 1)
@@ -802,9 +813,10 @@ class RouterTest(unittest.TestCase):
             event.get("event") == "route" and event.get("req") == incoming[0]["req"]
             for event in events))
         self.assertEqual(page.status_code, 200)
-        self.assertIn("Processed", page.text)
-        self.assertIn(">In<", page.text)
-        self.assertIn(">Out<", page.text)
+        self.assertIn("PLS watch", page.text)
+        self.assertIn("Raw log", page.text)
+        self.assertEqual(log.status_code, 200)
+        self.assertIn("cloud answer", log.text)
 
     def through_the_socket(self):
         """Main chat and a subagent with the real decide and token clients."""
@@ -1620,28 +1632,11 @@ class RouterTest(unittest.TestCase):
 
     # -- launch token ------------------------------------------------------
 
-    def test_stats_and_debug_require_the_launch_token(self):
+    def test_the_watch_page_is_open_without_the_launch_token(self):
         pls.TOKEN = "s3cret"
         try:
-            for path in ("/stats", "/debug/state", "/debug/export"):
-                with self.subTest(path=path):
-                    self.assertEqual(self.client.get(path).status_code, 401)
-            self.assertEqual(self.client.post("/stats/reset").status_code, 401)
-            self.assertEqual(asyncio.run(self._events_status()), 401)
-        finally:
-            pls.TOKEN = ""
-
-    async def _events_status(self):
-        transport = httpx.ASGITransport(app=pls.app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://router") as client:
-            response = await client.get("/debug/events")
-            return response.status_code
-
-    def test_stats_accepts_the_launch_token(self):
-        pls.TOKEN = "s3cret"
-        try:
-            response = self.client.get("/stats", headers={"x-pls-token": "s3cret"})
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(self.client.get("/watch").status_code, 200)
+            self.assertEqual(self.client.get("/watch/log").status_code, 200)
         finally:
             pls.TOKEN = ""
 

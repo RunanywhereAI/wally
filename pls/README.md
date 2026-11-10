@@ -2,8 +2,9 @@
 
 A loopback router with one endpoint, `/v1/chat/completions`, for the main
 chat and every subagent. `/v1/models` lists two ids, `Hybrid-Wally-0.1` for
-the parent and `Hybrid-Wally-0.1-local` for subagents; the second only tells
-the harness to compact at the local model's window. Each entry carries
+the parent and `Hybrid-Wally-0.1-local` for subagents. The local id is also
+how a child request is recognised, together with `x-parent-session-id`
+(opencode) and a prompt that starts `pls-task:`. Each entry carries
 `context_length` and `max_completion_tokens` (Hermes reads them). Routing reads
 the request:
 
@@ -46,6 +47,14 @@ the text the harness adds around a child's prompt.
 |---|---|---|---|---|
 | `deepseek` | `subagent.prompt` | `subagent`, `subagent_fork`, `send_message` | dsh's "Your parent agent id…" note | `--patch` overlay |
 | `hermes` | `delegate_task.tasks[].goal` | `delegate_task`, `send_message` | none | `HERMES_MANAGED_DIR` temp overlay |
+| `opencode-v2` | `subagent.prompt` (`agent` required) | `subagent`, `task` | the "You are a subagent spawned…" preface | config `harness` |
+| `opencode-v1` | `task.prompt` (`subagent_type` required) | `subagent`, `task` | none | config `harness`; OpenWork uses this |
+| `openclaw` | `sessions_spawn.task` | `sessions_spawn`, `subagents` | the OpenClaw context block | config `harness` |
+
+`wally <harness> --hybrid` is `deepseek` or `hermes` only. The other
+profiles are what `config.json` `harness` names; `opencode` reads as
+`opencode-v2` and `openwork` as `opencode-v1`. An unknown name reads as
+`deepseek`.
 
 The synthesised call fills the fields each harness requires. Hermes
 `delegate_task` with `action: list|steer|stop` starts nothing and is left
@@ -58,15 +67,20 @@ reports. The Hermes patterns come from source, not yet from a loopback capture.
 ## Policies
 
 Each new user prompt goes to a local decision model (`mlx-clef-flash-9b-4bit`,
-served by wally on its socket as `POST /decide`). Its answer
-decides what the cloud parent is told, appended to that same user message:
+served by wally on its socket as `POST /decide`). Two questions are asked.
+The policy question decides the record. A second `delegate` question decides
+whether the launch line is appended. `delegate` is not a `--policy` value.
 
-| Policy | Decision says | The cloud sees | Subagent answer |
+| Policy | Policy decision | The cloud sees | Subagent answer |
 |---|---|---|---|
-| `privacy` (default) | private | the prompt with personal values replaced by tokens, plus `pls-task: tN` | span-masked (`local_only`) |
-| `privacy` | not private | that same masked prompt, plus "launch a subagent, `pls-task: tN`" | summarised |
+| `privacy` (default) | private | the prompt with personal values replaced by tokens. The launch line is added only when `delegate` is not a clear no | full local report; personal values replaced before the parent sees it (`local_only`) |
+| `privacy` | not private | that same masked prompt. The launch line is added on the same rule | summarised |
 | `cost` | large task | the prompt plus "launch a subagent, `pls-task: tN`" | summarised |
 | `cost` | small task | the prompt plus "do it yourself" | no subagent |
+
+A clear `delegate` no drops the launch line on every policy. A failed
+`delegate` call still appends it. A failed policy decision fails safe:
+`privacy` treats the prompt as private, `cost` treats it as small.
 
 Under `privacy` the parent is offered only its spawn tool, and any other
 tool call in its reply is dropped and asked again; after two tries the router
@@ -74,8 +88,9 @@ emits the subagent call itself. The `pls-task:` id is how the subagent side
 finds its summary type and, for a private prompt, the real text. If the masker
 fails, the cloud gets the whole-prompt placeholder and not the raw prompt.
 
-If the decision model is unavailable, `privacy` treats every prompt as
-private and `cost` lets the cloud do everything. Records live in
+If the decision socket is missing, both calls fail the same way: `privacy`
+treats every prompt as private and `cost` tells the parent to do the task
+itself. Records live in
 `tasks.json` (mode `0600`): the masked prompt and its session, not a second
 copy of the raw prompt. A resumed session demasks from that pair.
 
@@ -83,10 +98,15 @@ copy of the raw prompt. A resumed session demasks from that pair.
 
 A subagent runs on the local model and cannot launch another: it loses its
 profile's spawning and messaging tools under both policies, and its system
-prompt says so once. A local reply that still calls one has the
+prompt says so once. `kvc.py` places the harness's own messages before the
+task, so the system prompt and that harness block are the token prefix every
+new sub-agent in the launch reuses. The task stays last, because it changes. A second spawn while one child is already running is
+dropped. A local reply that still calls one has the
 call dropped (`child_spawn_blocked`). If the local model cannot start,
-privacy withholds the subagent's answer and cost sends it to the cloud with
-the marker stripped (`local_unavailable`).
+privacy returns the withheld sentence and cost sends the same request to the
+cloud with the marker stripped (`local_unavailable`). A full local queue
+(depth 8) overflows to the cloud under `cost`; `privacy` and a `local_only`
+task wait instead.
 
 ## Socket
 
@@ -94,13 +114,15 @@ wally serves the router over a unix socket at `~/.config/wally/pls/pls.sock`
 (mode `0600`, path in `PLS_SOCKET`): `POST /decide` for the decision model and
 `GET /token` for the cloud token. Nothing is gated on a plan.
 
-## Debug console (temporary)
+## Watch
 
-Set `PLS_DEBUG=1` on a hybrid launch. Open `<router url>/debug`. Each row is
-one request: open it for what came in, the steps PLS took, and what went
-back out. The rows stay in memory for the launch. `/debug/state` holds that
-backlog, `/debug/events` is the live stream, `/debug/export` downloads it.
-Remove once the MVP ships.
+Open `<router url>/watch`. Summary shows latency (first byte and total, p50
+and p95), decision failures, guard retries, queue waits and the turns that
+will feel slow. Raw log is the same file, one JSON object per line. Nothing
+on `/watch` checks the launch token. The file is
+`~/.config/wally/pls/watch/traffic.jsonl`, so it can be read after the
+router has exited. Delete the `pls/watch` package and the router keeps
+running without the page.
 
 ## PII
 
@@ -121,8 +143,8 @@ issued, including ones already purged.
 The regex still runs after the span mask, and it is the only pass under
 `cost`. It replaces emails, phone numbers, API keys, IPv4 addresses and
 IBANs with `[email]`, `[phone]`, `[key]`, `[iban]` and `[ipv4]`. Counts,
-attributed to the file path the text mentions, travel in `x-pls-pii` and
-`/stats`. The values do not.
+attributed to the file path the text mentions, travel in `x-pls-pii`.
+The values do not. The counts are also in the watch log.
 
 ## Mode
 
@@ -134,8 +156,9 @@ attributed to the file path the text mentions, travel in `x-pls-pii` and
   "cloud_limits": { "context_length": 200000, "max_completion_tokens": 32000 } }
 ```
 
-`harness` and `cloud_limits` are written by each launch; an unknown harness
-reads as `deepseek`, and a missing limit as the local one.
+`harness` and `cloud_limits` are written by each launch. A hybrid launch
+sets `mode` to `hybrid`, so a previous `cloud` does not stick. An unknown
+harness reads as `deepseek`, and a missing limit as the local one.
 
 - `cloud`: everything goes to the cloud exactly as the harness sent it, and
   the local model is never loaded. Switching a session here and back is safe.
@@ -152,6 +175,7 @@ Missing or unparseable falls back to `hybrid`, `privacy` and 20 turns.
 ~/.config/wally/pls/masks/          one <harness>.sqlite per harness (0700)
 ~/.config/wally/pls/venv/           built once from requirements.lock
 ~/.config/wally/pls/pls.pid         swept on the next start
+~/.config/wally/pls/watch/traffic.jsonl   request log, kept after exit
 ```
 
 ## Requirements

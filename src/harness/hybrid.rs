@@ -198,6 +198,15 @@ pub const HYBRID_LOCAL_MODEL_ID: &str = "Hybrid-Wally-0.1-local";
 pub(super) const HYBRID_LOCAL_CONTEXT: i64 = 65536;
 pub(super) const HYBRID_LOCAL_OUTPUT: i64 = 8192;
 
+/// The window `--custom` chose for this launch, or the built-in cap.
+fn local_context_window() -> i64 {
+    std::env::var("PLS_MAX_KV")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(HYBRID_LOCAL_CONTEXT)
+}
+
 /// The one-provider `llm-pi-ai` config for a hybrid launch. `cloud` is what
 /// the console says the parent's cloud model can hold: the parent's model
 /// entry declares those limits and the subagent's the local ones, because a
@@ -223,7 +232,7 @@ fn build_hybrid_llm_config(
     };
     let subagent = model(
         HYBRID_LOCAL_MODEL_ID,
-        HYBRID_LOCAL_CONTEXT,
+        local_context_window(),
         HYBRID_LOCAL_OUTPUT,
         false,
     );
