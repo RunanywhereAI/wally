@@ -159,8 +159,11 @@ infra, so the bindings read both. The pin follows new infra (`prod`);
 legacy serves them, refreshed with `sync_from_inferenceinfra.py --legacy-from
 <InferenceInfra at main>`. The generator (`--legacy-contract`) adds what only
 legacy sends (enum values, optional properties, whole schemas such as the
-`/v1/me` account) and refuses a field the two type differently. Delete both
-legacy files once legacy is retired.
+`/v1/me` account), reads a field as optional unless both servers require it
+and neither sends null, and refuses a field the two type differently or a union
+whose variants differ. `versions.toml` records the legacy decisions file's
+source commit and sha256; `--check` holds that commit to the legacy CLI slice's.
+Delete both legacy files, and those two keys, once legacy is retired.
 `test_wally_contract` and `python3 contracts/sync_from_inferenceinfra.py
 --check` fail the build if the header, the pin, and the artifact drift.
 The separately vendored `contracts/wally-decisions-public-v1.openapi.json` is

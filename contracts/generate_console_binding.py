@@ -160,9 +160,11 @@ def merge_legacy(schemas: dict, legacy_schemas: dict) -> dict:
 
     A legacy-only schema is added whole. A legacy-only enum value is appended
     after the pinned contract's own. A legacy-only object property is added and
-    is never required: the new server does not send it. Anything else that
-    differs is refused (SystemExit naming `Schema.property`), since a binding
-    that silently picks one side would fail to parse the other server."""
+    is never required: the new server does not send it. A property of a shared
+    object stays required only when both contracts require it and neither lets
+    it be null; otherwise the reader would default it silently for one server.
+    Anything else that differs is refused (SystemExit naming the schema), since
+    a binding that silently picks one side would fail to parse the other server."""
     merged = json.loads(json.dumps(schemas))
     for name, legacy in legacy_schemas.items():
         current = merged.get(name)
@@ -181,7 +183,17 @@ def merge_legacy(schemas: dict, legacy_schemas: dict) -> dict:
             ]
         elif kind == "object":
             properties = current.setdefault("properties", {})
-            for prop, legacy_prop in legacy.get("properties", {}).items():
+            legacy_properties = legacy.get("properties", {})
+            legacy_required = set(legacy.get("required", []))
+            if "required" in current:
+                current["required"] = [
+                    prop
+                    for prop in current["required"]
+                    if prop in legacy_required
+                    and prop in legacy_properties
+                    and not _resolve_type(legacy_properties[prop], legacy_schemas)[1]
+                ]
+            for prop, legacy_prop in legacy_properties.items():
                 if prop not in properties:
                     properties[prop] = json.loads(json.dumps(legacy_prop))
                     continue
@@ -195,7 +207,9 @@ def merge_legacy(schemas: dict, legacy_schemas: dict) -> dict:
                         f"contract and {theirs} in the legacy contract"
                     )
         elif kind == "union":
-            if current.get("discriminator") != legacy.get("discriminator"):
+            if current.get("discriminator") != legacy.get("discriminator") or current.get(
+                "oneOf"
+            ) != legacy.get("oneOf"):
                 raise SystemExit(
                     f"legacy contract conflict: {name} has different variants in the "
                     "pinned and legacy contracts"

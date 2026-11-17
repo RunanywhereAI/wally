@@ -279,6 +279,76 @@ class LegacyMergeTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Code", result.stderr)
 
+    def test_a_field_only_the_pinned_contract_requires_is_read_as_optional(self):
+        """Pinned requires it, legacy does not send it: a required reader would default it silently."""
+        current, legacy = self._pair()
+        me = current["components"]["schemas"]["Me"]
+        me["properties"]["plan"] = {"type": "string"}
+        me["required"] = ["email", "plan"]
+        result = self._render(current, legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("pub plan: Option<String>,", result.stdout)
+        self.assertIn("pub email: String,", result.stdout)
+
+    def test_a_field_legacy_sends_as_optional_or_null_is_read_as_optional(self):
+        for how in ("not_required", "nullable"):
+            with self.subTest(how=how):
+                current, legacy = self._pair()
+                legacy_me = legacy["components"]["schemas"]["Me"]
+                if how == "not_required":
+                    legacy_me["required"] = ["kind"]
+                else:
+                    legacy_me["properties"]["email"] = {"type": ["string", "null"]}
+                result = self._render(current, legacy)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("pub email: Option<String>,", result.stdout)
+
+    def _union_pair(self) -> tuple[dict, dict]:
+        def union(*variants: str) -> dict:
+            return {
+                "oneOf": [{"$ref": f"#/components/schemas/{v}"} for v in variants],
+                "discriminator": {
+                    "propertyName": "kind",
+                    "mapping": {v.lower(): f"#/components/schemas/{v}" for v in variants},
+                },
+            }
+
+        def variant() -> dict:
+            return {"type": "object", "properties": {"kind": {"type": "string"}}}
+
+        current = _tiny_contract(A=variant(), B=variant(), U=union("A", "B"))
+        legacy = _tiny_contract(A=variant(), B=variant(), C=variant(), U=union("A", "B"))
+        return current, legacy
+
+    def test_identical_unions_merge(self):
+        current, legacy = self._union_pair()
+        result = self._render(current, legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("pub enum U", result.stdout)
+
+    def test_a_union_variant_only_legacy_has_is_refused(self):
+        """Comparing the discriminator alone missed a variant listed only in `oneOf`."""
+        current, legacy = self._union_pair()
+        legacy_u = legacy["components"]["schemas"]["U"]
+        legacy_u["oneOf"].append({"$ref": "#/components/schemas/C"})
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("U has different variants", result.stderr)
+        legacy_u["discriminator"]["mapping"]["c"] = "#/components/schemas/C"
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("U has different variants", result.stderr)
+
+    def test_a_scalar_alias_typed_differently_is_refused(self):
+        current = _tiny_contract(Id={"type": "string", "maxLength": 8})
+        legacy = _tiny_contract(Id={"type": "integer"})
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Id has a different type", result.stderr)
+        legacy = _tiny_contract(Id={"type": "string", "maxLength": 16})
+        result = self._render(current, legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_committed_legacy_pins_carry_provenance(self):
         """The legacy extract names the InferenceInfra commit legacy production runs."""
         document = json.loads(LEGACY_EXTRACT.read_text(encoding="utf-8"))
@@ -293,6 +363,82 @@ class LegacyMergeTests(unittest.TestCase):
         self.assertIn('"organization_limit_reached"', binding)
         self.assertIn('"coding_plan_full"', binding)
         self.assertIn("pub account: Option<IdentityAccount>,", binding)
+
+
+def _load_sync_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("wally_contract_sync", SYNC)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+
+
+class LegacyPairGuardTests(unittest.TestCase):
+    """The sync script's own refusals around the legacy pair."""
+
+    def test_check_refuses_a_half_pair(self):
+        sync = _load_sync_module()
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "absent.json"
+            for attr in ("LEGACY_EXTRACT", "DECISIONS_LEGACY"):
+                with self.subTest(missing=attr):
+                    saved = getattr(sync, attr)
+                    setattr(sync, attr, missing)
+                    try:
+                        with self.assertRaises(SystemExit) as raised:
+                            sync.check_local()
+                    finally:
+                        setattr(sync, attr, saved)
+                    self.assertIn("half there", str(raised.exception))
+
+    def test_check_refuses_a_legacy_decisions_file_that_does_not_match_its_record(self):
+        sync = _load_sync_module()
+        with tempfile.TemporaryDirectory() as directory:
+            forged = Path(directory) / DECISIONS_LEGACY.name
+            forged.write_bytes(DECISIONS_LEGACY.read_bytes() + b"\n")
+            sync.DECISIONS_LEGACY = forged
+            with self.assertRaises(SystemExit) as raised:
+                sync.check_local()
+        self.assertIn("decisions_legacy_contract_sha256", str(raised.exception))
+
+    def test_check_refuses_a_legacy_decisions_record_from_another_commit(self):
+        """The legacy decisions file and the legacy CLI slice are cut from one main commit."""
+        sync = _load_sync_module()
+        with tempfile.TemporaryDirectory() as directory:
+            versions = Path(directory) / "versions.toml"
+            text = sync.VERSIONS.read_text(encoding="utf-8")
+            recorded = sync._versions_value("decisions_legacy_source_commit")
+            versions.write_text(text.replace(recorded, "0" * 40), encoding="utf-8")
+            sync.VERSIONS = versions
+            with self.assertRaises(SystemExit) as raised:
+                sync.check_local()
+        self.assertIn("decisions_legacy_source_commit", str(raised.exception))
+
+    def test_legacy_from_refuses_a_checkout_not_at_main(self):
+        sync = _load_sync_module()
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "contracts").mkdir()
+            (repo / sync.CONTROL_PLANE).write_text("{}", encoding="utf-8")
+            (repo / sync.DECISIONS_ARTIFACT).write_text("{}", encoding="utf-8")
+            _git(repo, "init", "-q", "-b", "staging")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-q", "-m", "seed")
+            before = LEGACY_EXTRACT.read_bytes(), DECISIONS_LEGACY.read_bytes()
+            with self.assertRaises(SystemExit) as raised:
+                sync.legacy_from(repo, force=True)
+            self.assertIn("is not at InferenceInfra main", str(raised.exception))
+            self.assertEqual(before, (LEGACY_EXTRACT.read_bytes(), DECISIONS_LEGACY.read_bytes()))
 
 
 if __name__ == "__main__":

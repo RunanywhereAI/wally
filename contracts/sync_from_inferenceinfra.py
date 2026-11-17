@@ -22,7 +22,9 @@ consumer cannot read that private repository from CI.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +38,7 @@ DECISIONS_CONTRACT = ROOT / "wally-decisions-public-v1.openapi.json"
 DECISIONS_BINDING = REPO / "src" / "account" / "decisions_contract.rs"
 LEGACY_EXTRACT = ROOT / "wally-cli-v1.legacy.openapi.json"
 DECISIONS_LEGACY = ROOT / "wally-decisions-public-v1.legacy.openapi.json"
+VERSIONS = REPO / "versions.toml"
 DECISIONS_ARTIFACT = "contracts/wally-decisions-public-v1.openapi.json"
 CONTROL_PLANE = "contracts/control-plane-v1.openapi.json"
 # The two files a sync regenerates from scratch. Named once so the destination
@@ -46,7 +49,35 @@ LEGACY_GENERATED = (
     "contracts/wally-decisions-public-v1.legacy.openapi.json",
     "src/account/console_contract.rs",
     "src/account/decisions_contract.rs",
+    "versions.toml",
 )
+# versions.toml keys that record where the legacy decisions file came from. The
+# legacy CLI slice carries its own x-runanywhere-source; the decisions file is a
+# byte copy, so its source lives here and --check holds the two to one commit.
+LEGACY_DECISIONS_COMMIT_KEY = "decisions_legacy_source_commit"
+LEGACY_DECISIONS_SHA_KEY = "decisions_legacy_contract_sha256"
+
+
+def _versions_value(key: str) -> str | None:
+    match = re.search(rf'^{key} = "([^"]*)"$', VERSIONS.read_text(encoding="utf-8"), re.M)
+    return match.group(1) if match else None
+
+
+def _record_legacy_decisions(commit: str, digest: str) -> None:
+    text = VERSIONS.read_text(encoding="utf-8")
+    missing = []
+    for key, value in ((LEGACY_DECISIONS_COMMIT_KEY, commit), (LEGACY_DECISIONS_SHA_KEY, digest)):
+        line = f'{key} = "{value}"'
+        if re.search(rf"^{key} = ", text, re.M):
+            text = re.sub(rf'^{key} = "[^"]*"$', line, text, count=1, flags=re.M)
+        else:
+            missing.append(line)
+    if missing:
+        anchor = re.search(r'^decisions_contract_sha256 = "[^"]*"$', text, re.M)
+        if anchor is None:
+            raise SystemExit("versions.toml has no decisions_contract_sha256 to record beside")
+        text = text[: anchor.end()] + "".join("\n" + line for line in missing) + text[anchor.end() :]
+    VERSIONS.write_text(text, encoding="utf-8")
 
 
 def _decisions_argv(check: bool) -> list[str]:
@@ -137,6 +168,22 @@ def check_local(extract: Path = EXTRACT) -> None:
         legacy_source = _provenance(
             LEGACY_EXTRACT, "--legacy-from /path/to/InferenceInfra-at-main"
         )
+        recorded_commit = _versions_value(LEGACY_DECISIONS_COMMIT_KEY)
+        recorded_sha = _versions_value(LEGACY_DECISIONS_SHA_KEY)
+        if recorded_commit != legacy_source["commit"]:
+            raise SystemExit(
+                f"versions.toml {LEGACY_DECISIONS_COMMIT_KEY} is {recorded_commit!r}, but "
+                f"{LEGACY_EXTRACT.name} was cut from {legacy_source['commit']}: the legacy "
+                "pair must come from one InferenceInfra main commit. Run: python3 "
+                "contracts/sync_from_inferenceinfra.py --legacy-from /path/to/InferenceInfra-at-main"
+            )
+        digest = hashlib.sha256(DECISIONS_LEGACY.read_bytes()).hexdigest()
+        if recorded_sha != digest:
+            raise SystemExit(
+                f"{DECISIONS_LEGACY.name} has sha256 {digest}, but versions.toml "
+                f"{LEGACY_DECISIONS_SHA_KEY} records {recorded_sha!r}: it is not the copy "
+                f"cut from InferenceInfra main {recorded_commit}"
+            )
         legacy = f"; legacy {legacy_source['commit'][:8]}, {legacy_source['branch']}"
     stamp = f"{source['commit'][:8]}, {source['branch']}, {source['artifact']}"
     if extract.resolve() != EXTRACT.resolve():
@@ -275,7 +322,9 @@ def legacy_from(from_repo: Path, force: bool = False) -> None:
             "main",
         ]
     )
-    DECISIONS_LEGACY.write_bytes(decisions.read_bytes())
+    decisions_bytes = decisions.read_bytes()
+    DECISIONS_LEGACY.write_bytes(decisions_bytes)
+    _record_legacy_decisions(commit, hashlib.sha256(decisions_bytes).hexdigest())
     _run([sys.executable, str(GENERATOR)])
     _run(_decisions_argv(check=False))
     print(f"synced legacy InferenceInfra {commit[:8]} (main)")
