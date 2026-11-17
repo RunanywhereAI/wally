@@ -9,6 +9,14 @@ Options:
   -h, --help                  Show help
   -m, --model TEXT            A model on this machine, or a hosted one from your
                               account
+      --hybrid                Run the main agent on a cloud model and its
+                              subagents on a local model
+      --cloud-model TEXT      The cloud model the main agent uses with --hybrid
+                              (default: your default model)
+      --policy TEXT           What --hybrid optimises for: privacy (default) or
+                              cost
+      --custom                After --hybrid, ask for the local context window
+                              and the cloud model
 
 Examples:
   # Download the certified local model once

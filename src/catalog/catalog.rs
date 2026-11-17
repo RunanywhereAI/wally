@@ -3106,6 +3106,110 @@ const LFM3_OMNI_MLX_FILES: &[CatalogFile] = &[
     },
 ];
 
+const PPLX_COMPUTER_35B_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 23099,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/generation_config.json",
+        filename: "generation_config.json",
+        required: true,
+        size_bytes: 202,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/chat_template.jinja",
+        filename: "chat_template.jinja",
+        required: true,
+        size_bytes: 7764,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 19989325,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 1161,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/model.safetensors.index.json",
+        filename: "model.safetensors.index.json",
+        required: true,
+        size_bytes: 187263,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/model-00001-of-00004.safetensors",
+        filename: "model-00001-of-00004.safetensors",
+        required: true,
+        size_bytes: 5343699971,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/model-00002-of-00004.safetensors",
+        filename: "model-00002-of-00004.safetensors",
+        required: true,
+        size_bytes: 5368473227,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/model-00003-of-00004.safetensors",
+        filename: "model-00003-of-00004.safetensors",
+        required: true,
+        size_bytes: 5368324768,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-computer-qwen-3-6-35b-a3b-mlx-20260709/resolve/254eff1d21b52edae294d907dc78efd546e98628/model-00004-of-00004.safetensors",
+        filename: "model-00004-of-00004.safetensors",
+        required: true,
+        size_bytes: 3428527845,
+        checksum_sha256: None,
+    },
+];
+
+const PPLX_PII_MASKING_FILES: &[CatalogFile] = &[
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-pii-masking-MLX/resolve/015ceb51ade576a3da77edf1a387a86ce24adb89/config.json",
+        filename: "config.json",
+        required: true,
+        size_bytes: 2105,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-pii-masking-MLX/resolve/015ceb51ade576a3da77edf1a387a86ce24adb89/tokenizer.json",
+        filename: "tokenizer.json",
+        required: true,
+        size_bytes: 11422936,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-pii-masking-MLX/resolve/015ceb51ade576a3da77edf1a387a86ce24adb89/tokenizer_config.json",
+        filename: "tokenizer_config.json",
+        required: true,
+        size_bytes: 398,
+        checksum_sha256: None,
+    },
+    CatalogFile {
+        url: "https://huggingface.co/perplexity-ai/pplx-pii-masking-MLX/resolve/015ceb51ade576a3da77edf1a387a86ce24adb89/weights.safetensors",
+        filename: "weights.safetensors",
+        required: true,
+        size_bytes: 779459602,
+        checksum_sha256: None,
+    },
+];
+
 const CATALOG: &[CatalogEntry] = &[
     // --- LLM (LlamaCpp / GGUF) ---
     // Name carries Q8_0 on purpose: this is the one GGUF artifact in the
@@ -5283,6 +5387,42 @@ const CATALOG: &[CatalogEntry] = &[
         memory_required_bytes: 0,
         cua_profile: "",
         merge_key: Some("gliner-2.5-decide"),
+        harness_compatible: false,
+    },
+    CatalogEntry {
+        id: "mlx-pplx-coder-35b-4bit",
+        alias: Some("pplx-coder"),
+        name: "Pplx Coder 35B",
+        category: v1::ModelCategory::Language,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: PPLX_COMPUTER_35B_FILES,
+        download_size_bytes: 19529234625,
+        context_length: 262144,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: Some("pplx-coder-35b"),
+        harness_compatible: true,
+    },
+    CatalogEntry {
+        // Language only so the catalog cut lists it. It is the span masker,
+        // not a chat model, so an empty --hybrid must not pick it.
+        id: "mlx-pplx-pii-masking",
+        alias: Some("pplx-pii"),
+        name: "Pplx PII masking",
+        category: v1::ModelCategory::Language,
+        framework: v1::InferenceFramework::Mlx,
+        format: v1::ModelFormat::Safetensors,
+        url: None,
+        files: PPLX_PII_MASKING_FILES,
+        download_size_bytes: 790885041,
+        context_length: 4096,
+        supports_thinking: false,
+        memory_required_bytes: 0,
+        cua_profile: "",
+        merge_key: None,
         harness_compatible: false,
     },
 ];

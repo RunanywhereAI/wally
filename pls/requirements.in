@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+httpx
+mlx-vlm
+mlx-lm

@@ -221,14 +221,37 @@ fn root_flags_before_passthrough(argv: &[String]) -> Vec<&str> {
         .collect()
 }
 
-/// wally's own flags on those subcommands. `-m`/`--model` and
-/// `--context-window` take a following value; the rest are booleans. The `=`
-/// forms carry their value inline.
-fn consumes_following_value(token: &str) -> bool {
-    token == "-m" || token == "--model" || token == "--context-window"
+/// wally's own flags on those subcommands. `-m`/`--model`,
+/// `--context-window`, `--cloud-model` and `--policy` take a following
+/// value. `--serve`, `--restore`, `--cloud` and `--hybrid` are booleans.
+/// The `=` forms carry their value inline.
+fn is_hybrid_launch_flag(token: &str) -> bool {
+    token == "--cloud"
+        || token == "--hybrid"
+        || token == "--custom"
+        || token == "--cloud-model"
+        || token.starts_with("--cloud-model=")
+        || token == "--policy"
+        || token.starts_with("--policy=")
 }
 
-fn is_wally_flag(token: &str) -> bool {
+fn consumes_following_value(token: &str) -> bool {
+    token == "-m"
+        || token == "--model"
+        || token == "--context-window"
+        || token == "--cloud-model"
+        || token == "--policy"
+}
+
+fn is_wally_flag(command: &str, token: &str) -> bool {
+    // OpenCode's hosted-endpoint switch is wally's flag. The other hybrid
+    // flags belong only to deepseek and hermes.
+    if token == "--cloud" && command == "opencode" {
+        return true;
+    }
+    if is_hybrid_launch_flag(token) {
+        return command == "deepseek" || command == "hermes";
+    }
     token == "-m"
         || token == "--model"
         || token.starts_with("--model=")
@@ -237,7 +260,6 @@ fn is_wally_flag(token: &str) -> bool {
         || token.starts_with("--context-window=")
         || token == "--serve"
         || token == "--restore"
-        || token == "--cloud"
         || token == "-h"
         || token == "--help"
 }
@@ -267,7 +289,7 @@ pub fn split_passthrough_argv(argv: &[String]) -> Vec<String> {
         if out[i] == "--" {
             return out; // the reader separated it already
         }
-        if !is_wally_flag(&out[i]) {
+        if !is_wally_flag(&out[sub], &out[i]) {
             out.insert(i, "--".to_string());
             return out;
         }
@@ -493,6 +515,69 @@ mod tests {
 
     fn argv(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn hybrid_flags_stay_on_wally_side_of_the_passthrough_split() {
+        // `--hybrid` and `--cloud-model` are wally's own; without them in the
+        // wally-flag list a `--` is inserted before them and dsh rejects them.
+        let split = split_passthrough_argv(&argv(&[
+            "wally",
+            "deepseek",
+            "--hybrid",
+            "-m",
+            "qwen3-4b",
+            "--cloud-model",
+            "glm-5.3-flash",
+            "do",
+            "the",
+            "thing",
+        ]));
+        assert_eq!(
+            split,
+            argv(&[
+                "wally",
+                "deepseek",
+                "--hybrid",
+                "-m",
+                "qwen3-4b",
+                "--cloud-model",
+                "glm-5.3-flash",
+                "--",
+                "do",
+                "the",
+                "thing",
+            ])
+        );
+    }
+
+    #[test]
+    fn the_policy_flag_stays_on_wally_side_of_the_passthrough_split() {
+        let split = split_passthrough_argv(&argv(&[
+            "wally",
+            "deepseek",
+            "--hybrid",
+            "--policy",
+            "cost",
+            "-m",
+            "/models/pplx",
+            "--cloud-model",
+            "deepseek-v4.1-flash",
+        ]));
+        assert_eq!(
+            split,
+            argv(&[
+                "wally",
+                "deepseek",
+                "--hybrid",
+                "--policy",
+                "cost",
+                "-m",
+                "/models/pplx",
+                "--cloud-model",
+                "deepseek-v4.1-flash",
+            ])
+        );
     }
 
     #[test]

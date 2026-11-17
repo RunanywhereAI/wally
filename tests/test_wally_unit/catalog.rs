@@ -218,11 +218,29 @@ fn catalog_lookup() {
                 && catalog::find("mlx-qwen3-1.7b").is_none(),
             "only the certified Qwen3 4B MLX row should remain harness-compatible"
         );
+
+        let coder = catalog::find("pplx-coder").expect("pplx-coder should resolve on Apple");
+        assert_eq!(coder.id, "mlx-pplx-coder-35b-4bit");
+        assert_eq!(coder.framework, v1::InferenceFramework::Mlx);
+        assert_eq!(coder.context_length, 262144);
+        assert!(coder.harness_compatible);
+        assert_eq!(
+            catalog::find("mlx-pplx-coder-35b-4bit").map(|entry| entry.id),
+            Some(coder.id)
+        );
+
+        let pii = catalog::find("pplx-pii").expect("pplx-pii should resolve on Apple");
+        assert_eq!(pii.id, "mlx-pplx-pii-masking");
+        assert_eq!(pii.category, v1::ModelCategory::Language);
+        assert!(!pii.harness_compatible);
+        assert_eq!(pii.files.len(), 4);
     }
     #[cfg(not(target_os = "macos"))]
     assert!(
-        catalog::find("mlx-qwen3").is_none(),
-        "mlx-qwen3 should be hidden off Apple"
+        catalog::find("mlx-qwen3").is_none()
+            && catalog::find("pplx-coder").is_none()
+            && catalog::find("mlx-pplx-pii-masking").is_none(),
+        "MLX rows should be hidden off Apple"
     );
 
     // maple-preview is a llama.cpp row; kits without that backend (the public

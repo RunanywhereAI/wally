@@ -256,6 +256,17 @@ The credential is a normal API key with the customer's credit behind it. Treat
 it as one: it goes in the profile file at `0600` and nowhere else, and it is
 never logged.
 
+## Python router, no Rust rebuild
+
+`pls/*.py` is the router. The binary embeds those files and writes them to
+the profile `pls` directory (`~/.config/wally/pls/` unless `WALLY_PROFILE_DIR`
+moves the profile) when `assets.sha` does not match. A change that stays
+inside `pls/` does not need a Rust rebuild for a local try: copy the changed
+files into that directory and leave `assets.sha` alone, or the next launch
+puts the embedded copy back. The copy is not what ships. A release still
+needs a rebuild so the embedded files are the ones in the binary. Rebuild
+when `src/` or the launch path changes too.
+
 ## Building against the SDK
 
 `WALLY_SDK_KIT` points at a built kit, not at SDK source. `cmake/sdk-pin.cmake`
