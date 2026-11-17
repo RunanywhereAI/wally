@@ -343,6 +343,12 @@
           "access_programme_closed",
           "not_staff",
           "invalid_transition",
+          "coding_plan_closed",
+          "coding_plan_already_applied",
+          "student_email_required",
+          "student_email_unverified",
+          "student_code_invalid",
+          "coding_plan_full",
           "team_access_denied",
           "team_session_stale",
           "team_role_required",
@@ -2515,8 +2521,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "development",
-    "commit": "5a4af2cec8a0aa7414ecaf7d1051025ca8a370fc",
+    "branch": "feat/coding-plan-applications",
+    "commit": "b80286a668b3438474919383190d58d1f5bef612",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }

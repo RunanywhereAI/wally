@@ -10,7 +10,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "75cdbe852e8df76d9792b7bf0544fd75a8a8b055774846331a2f816bd04445d1";
+    "c2b27718ba3d8aa136f12d8355e03be64c13780f7c04fe47ea5d4399b7a5db78";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AccountKind {
@@ -80,6 +80,12 @@ pub enum ApiErrorCode {
     KAccessProgrammeClosed,
     KNotStaff,
     KInvalidTransition,
+    KCodingPlanClosed,
+    KCodingPlanAlreadyApplied,
+    KStudentEmailRequired,
+    KStudentEmailUnverified,
+    KStudentCodeInvalid,
+    KCodingPlanFull,
     KTeamAccessDenied,
     KTeamSessionStale,
     KTeamRoleRequired,
@@ -131,6 +137,12 @@ impl ApiErrorCode {
             ApiErrorCode::KAccessProgrammeClosed => "access_programme_closed",
             ApiErrorCode::KNotStaff => "not_staff",
             ApiErrorCode::KInvalidTransition => "invalid_transition",
+            ApiErrorCode::KCodingPlanClosed => "coding_plan_closed",
+            ApiErrorCode::KCodingPlanAlreadyApplied => "coding_plan_already_applied",
+            ApiErrorCode::KStudentEmailRequired => "student_email_required",
+            ApiErrorCode::KStudentEmailUnverified => "student_email_unverified",
+            ApiErrorCode::KStudentCodeInvalid => "student_code_invalid",
+            ApiErrorCode::KCodingPlanFull => "coding_plan_full",
             ApiErrorCode::KTeamAccessDenied => "team_access_denied",
             ApiErrorCode::KTeamSessionStale => "team_session_stale",
             ApiErrorCode::KTeamRoleRequired => "team_role_required",
@@ -182,6 +194,12 @@ impl ApiErrorCode {
             "access_programme_closed" => Ok(ApiErrorCode::KAccessProgrammeClosed),
             "not_staff" => Ok(ApiErrorCode::KNotStaff),
             "invalid_transition" => Ok(ApiErrorCode::KInvalidTransition),
+            "coding_plan_closed" => Ok(ApiErrorCode::KCodingPlanClosed),
+            "coding_plan_already_applied" => Ok(ApiErrorCode::KCodingPlanAlreadyApplied),
+            "student_email_required" => Ok(ApiErrorCode::KStudentEmailRequired),
+            "student_email_unverified" => Ok(ApiErrorCode::KStudentEmailUnverified),
+            "student_code_invalid" => Ok(ApiErrorCode::KStudentCodeInvalid),
+            "coding_plan_full" => Ok(ApiErrorCode::KCodingPlanFull),
             "team_access_denied" => Ok(ApiErrorCode::KTeamAccessDenied),
             "team_session_stale" => Ok(ApiErrorCode::KTeamSessionStale),
             "team_role_required" => Ok(ApiErrorCode::KTeamRoleRequired),
