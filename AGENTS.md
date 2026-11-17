@@ -146,7 +146,21 @@ One field goes the other way: the export's `next_cursor` is required, and a
 defaulted one would read as the last page, so `console.rs` fails a page that
 omits it rather than end the export early. The decisions error's `code` and
 `type` are exempt the same way as `provider`: an unknown value is lifted out
-before parsing, so the refusal's message still reaches the person.
+before parsing, so the refusal's message still reaches the person. The
+console's `ApiError.code` is exempt the same way (`console_api_error` in
+`console.rs`): an unknown code reads as no code, never as `card_required`, and
+the server's message is still shown.
+
+Until inference.runanywhere.ai moves to the new infrastructure, a released CLI
+talks to legacy production (InferenceInfra `main`, GCP), and after it to new
+infra, so the bindings read both. The pin follows new infra (`prod`);
+`contracts/wally-cli-v1.legacy.openapi.json` and
+`contracts/wally-decisions-public-v1.legacy.openapi.json` are the same slices as
+legacy serves them, refreshed with `sync_from_inferenceinfra.py --legacy-from
+<InferenceInfra at main>`. The generator (`--legacy-contract`) adds what only
+legacy sends (enum values, optional properties, whole schemas such as the
+`/v1/me` account) and refuses a field the two type differently. Delete both
+legacy files once legacy is retired.
 `test_wally_contract` and `python3 contracts/sync_from_inferenceinfra.py
 --check` fail the build if the header, the pin, and the artifact drift.
 The separately vendored `contracts/wally-decisions-public-v1.openapi.json` is
@@ -232,6 +246,9 @@ committed source. `cmake/env-loader.cmake` reads `.env`; real environment
 variables win. CI takes them from repository variables, and a fork that has
 not defined them sets `WALLY_CONSOLE_OPTIONAL=1`, producing a binary that
 resolves no default console until `WALLY_CONSOLE_URL` is set.
+
+CI and release read the optional second origin from the repository variable
+`WALLY_PROD_CONSOLE_WEB_ORIGIN_ALT` (empty when unset).
 
 `TrustedBrowserOrigins()` pairs the two: it trusts the configured approval
 origins while talking to the configured API, and for any other API origin it
