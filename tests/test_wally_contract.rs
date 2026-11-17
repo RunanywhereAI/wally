@@ -56,6 +56,29 @@ fn binding_matches_the_pinned_contract() {
 }
 
 #[test]
+fn bindings_match_the_legacy_contracts_they_merge() {
+    // Released CLIs talk to legacy production until the DNS flip, so each
+    // binding also reads what only legacy sends. The legacy pin is checked
+    // the same way as the contract pin: a hash in the header of the file
+    // generated from it.
+    use sha2::{Digest, Sha256};
+    use wally::account::decisions_contract;
+    const LEGACY: &[u8] = include_bytes!("../contracts/wally-cli-v1.legacy.openapi.json");
+    const DECISIONS_LEGACY: &[u8] =
+        include_bytes!("../contracts/wally-decisions-public-v1.legacy.openapi.json");
+    assert_eq!(
+        hex::encode(Sha256::digest(LEGACY)),
+        contract::LEGACY_CONTRACT_SHA256,
+        "legacy contract hash drifted from the generated binding"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(DECISIONS_LEGACY)),
+        decisions_contract::LEGACY_CONTRACT_SHA256,
+        "legacy decisions contract hash drifted from the generated binding"
+    );
+}
+
+#[test]
 fn decisions_binding_matches_the_pinned_contract() {
     use sha2::{Digest, Sha256};
     use wally::account::decisions_contract;

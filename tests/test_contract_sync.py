@@ -177,5 +177,117 @@ class ExtractorNarrowingTests(unittest.TestCase):
         )
 
 
+GENERATOR = REPO / "contracts" / "generate_console_binding.py"
+LEGACY_EXTRACT = REPO / "contracts" / "wally-cli-v1.legacy.openapi.json"
+DECISIONS_LEGACY = REPO / "contracts" / "wally-decisions-public-v1.legacy.openapi.json"
+
+
+def _tiny_contract(**schemas: dict) -> dict:
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": "t", "version": "1"},
+        "paths": {},
+        "components": {"schemas": schemas},
+    }
+
+
+class LegacyMergeTests(unittest.TestCase):
+    """Until the DNS flip the CLI talks to legacy; after it, to new infra. The binding reads both.
+
+    generate_console_binding.py --legacy-contract adds what only legacy sends (enum values,
+    optional properties, whole schemas) to the binding of the pinned contract, and refuses a
+    property the two type differently, since no one reader parses both."""
+
+    def _render(self, current: dict, legacy: dict | None) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            current_path = Path(directory) / "current.json"
+            current_path.write_text(json.dumps(current), encoding="utf-8")
+            output = Path(directory) / "out.rs"
+            argv = [
+                sys.executable,
+                str(GENERATOR),
+                "--contract",
+                str(current_path),
+                "--output",
+                str(output),
+            ]
+            if legacy is not None:
+                legacy_path = Path(directory) / "legacy.json"
+                legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+                argv += ["--legacy-contract", str(legacy_path)]
+            result = subprocess.run(argv, cwd=REPO, capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                result.stdout = output.read_text(encoding="utf-8")
+            return result
+
+    def _pair(self) -> tuple[dict, dict]:
+        current = _tiny_contract(
+            Code={"type": "string", "enum": ["forbidden", "organization_limit_reached"]},
+            Me={
+                "type": "object",
+                "required": ["email"],
+                "properties": {"email": {"type": "string"}},
+            },
+        )
+        legacy = _tiny_contract(
+            Code={"type": "string", "enum": ["forbidden", "coding_plan_full"]},
+            Kind={"type": "string", "enum": ["personal", "team"]},
+            Me={
+                "type": "object",
+                "required": ["email", "kind"],
+                "properties": {
+                    "email": {"type": "string"},
+                    "kind": {"$ref": "#/components/schemas/Kind"},
+                },
+            },
+        )
+        return current, legacy
+
+    def test_legacy_only_values_properties_and_schemas_are_added(self):
+        current, legacy = self._pair()
+        result = self._render(current, legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+        binding = result.stdout
+        # Both servers' codes parse: the new one first, then what only legacy sends.
+        self.assertIn('"organization_limit_reached" => Ok(Code::KOrganizationLimitReached)', binding)
+        self.assertIn('"coding_plan_full" => Ok(Code::KCodingPlanFull)', binding)
+        # A legacy-only schema is emitted, and a legacy-only property is read as optional
+        # (new infra never sends it), even where legacy marks it required.
+        self.assertIn("pub enum Kind", binding)
+        self.assertIn("pub kind: Option<Kind>,", binding)
+        self.assertIn("pub email: String,", binding)
+        self.assertIn("pub const LEGACY_CONTRACT_SHA256", binding)
+
+    def test_no_legacy_contract_renders_the_pinned_contract_alone(self):
+        current, _legacy = self._pair()
+        result = self._render(current, None)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("coding_plan_full", result.stdout)
+        self.assertNotIn("LEGACY_CONTRACT_SHA256", result.stdout)
+
+    def test_a_property_typed_differently_is_refused(self):
+        current, legacy = self._pair()
+        legacy["components"]["schemas"]["Me"]["properties"]["email"] = {"type": "integer"}
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Me.email", result.stderr)
+
+    def test_a_schema_that_changes_kind_is_refused(self):
+        current, legacy = self._pair()
+        legacy["components"]["schemas"]["Code"] = {"type": "object", "properties": {}}
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Code", result.stderr)
+
+    def test_committed_legacy_pins_carry_provenance(self):
+        """The legacy extract names the InferenceInfra commit legacy production runs."""
+        document = json.loads(LEGACY_EXTRACT.read_text(encoding="utf-8"))
+        source = document.get("x-runanywhere-source") or {}
+        for key in ("repository", "commit", "branch", "artifact"):
+            self.assertTrue(source.get(key), key)
+        self.assertEqual("main", source["branch"])
+        self.assertTrue(DECISIONS_LEGACY.is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
