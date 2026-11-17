@@ -11,7 +11,7 @@ use serde_json::Value;
 
 /// SHA-256 of contracts/wally-cli-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "c2b27718ba3d8aa136f12d8355e03be64c13780f7c04fe47ea5d4399b7a5db78";
+    "a5aa18c7313cb026884da5b55ee967fbd1eabdfe77f0e441d73c24a82d5c9a07";
 
 /// SHA-256 of contracts/wally-cli-v1.legacy.openapi.json, the legacy slice merged in.
 pub const LEGACY_CONTRACT_SHA256: &str =
@@ -63,6 +63,10 @@ pub enum ApiErrorCode {
     KExpiredApiKey,
     KGatewayUnavailable,
     KIdempotencyKeyReused,
+    KAccessProgrammeClosed,
+    KAccessRequestExists,
+    KAccessRequestClosed,
+    KInvalidTransition,
     KInsufficientCredit,
     KInvalidApiKey,
     KModelNotEntitled,
@@ -80,11 +84,42 @@ pub enum ApiErrorCode {
     KReconciliationUnverified,
     KRetentionManagedByRunanywhere,
     KCardRequired,
-    KAccessRequestExists,
-    KAccessRequestClosed,
-    KAccessProgrammeClosed,
+    KInvalidAccountId,
+    KAccountNotFound,
+    KIdentityEmailInUse,
+    KRoleForbidden,
+    KOrganizationPlaygroundUnavailable,
+    KOperatorUnknown,
+    KOperatorForbidden,
+    KOperatorScope,
+    KEmailNotConfirmed,
+    KInvitationNotFound,
+    KInvitationExpired,
+    KAlreadyAMember,
+    KLastOwner,
+    KRoleNotAvailable,
+    KPersonalAccount,
+    KInvitationPending,
+    KTooManyPendingInvitations,
+    KOrganizationLimitReached,
+    KMemberNotFound,
+    KAccountHasPaidCredit,
+    KAccountHasLiveReservation,
+    KAccountHasDedicatedPool,
+    KAlreadyAPartner,
+    KNotAPartner,
+    KGatewayTaken,
+    KUnknownPriceVersion,
+    KModelNotPriced,
+    KGoLiveEvidenceMissing,
+    KNoticeTooShort,
+    KStopScopeInvalid,
+    KInvoicedBillingOff,
+    KInvoicedBalanceOutstanding,
+    KPartnerHasOwnBook,
+    KUnknownPriceBook,
+    KOperationNotRetryable,
     KNotStaff,
-    KInvalidTransition,
     KCodingPlanClosed,
     KCodingPlanAlreadyApplied,
     KStudentEmailRequired,
@@ -120,6 +155,10 @@ impl ApiErrorCode {
             ApiErrorCode::KExpiredApiKey => "expired_api_key",
             ApiErrorCode::KGatewayUnavailable => "gateway_unavailable",
             ApiErrorCode::KIdempotencyKeyReused => "idempotency_key_reused",
+            ApiErrorCode::KAccessProgrammeClosed => "access_programme_closed",
+            ApiErrorCode::KAccessRequestExists => "access_request_exists",
+            ApiErrorCode::KAccessRequestClosed => "access_request_closed",
+            ApiErrorCode::KInvalidTransition => "invalid_transition",
             ApiErrorCode::KInsufficientCredit => "insufficient_credit",
             ApiErrorCode::KInvalidApiKey => "invalid_api_key",
             ApiErrorCode::KModelNotEntitled => "model_not_entitled",
@@ -137,11 +176,44 @@ impl ApiErrorCode {
             ApiErrorCode::KReconciliationUnverified => "reconciliation_unverified",
             ApiErrorCode::KRetentionManagedByRunanywhere => "retention_managed_by_runanywhere",
             ApiErrorCode::KCardRequired => "card_required",
-            ApiErrorCode::KAccessRequestExists => "access_request_exists",
-            ApiErrorCode::KAccessRequestClosed => "access_request_closed",
-            ApiErrorCode::KAccessProgrammeClosed => "access_programme_closed",
+            ApiErrorCode::KInvalidAccountId => "invalid_account_id",
+            ApiErrorCode::KAccountNotFound => "account_not_found",
+            ApiErrorCode::KIdentityEmailInUse => "identity_email_in_use",
+            ApiErrorCode::KRoleForbidden => "role_forbidden",
+            ApiErrorCode::KOrganizationPlaygroundUnavailable => {
+                "organization_playground_unavailable"
+            }
+            ApiErrorCode::KOperatorUnknown => "operator_unknown",
+            ApiErrorCode::KOperatorForbidden => "operator_forbidden",
+            ApiErrorCode::KOperatorScope => "operator_scope",
+            ApiErrorCode::KEmailNotConfirmed => "email_not_confirmed",
+            ApiErrorCode::KInvitationNotFound => "invitation_not_found",
+            ApiErrorCode::KInvitationExpired => "invitation_expired",
+            ApiErrorCode::KAlreadyAMember => "already_a_member",
+            ApiErrorCode::KLastOwner => "last_owner",
+            ApiErrorCode::KRoleNotAvailable => "role_not_available",
+            ApiErrorCode::KPersonalAccount => "personal_account",
+            ApiErrorCode::KInvitationPending => "invitation_pending",
+            ApiErrorCode::KTooManyPendingInvitations => "too_many_pending_invitations",
+            ApiErrorCode::KOrganizationLimitReached => "organization_limit_reached",
+            ApiErrorCode::KMemberNotFound => "member_not_found",
+            ApiErrorCode::KAccountHasPaidCredit => "account_has_paid_credit",
+            ApiErrorCode::KAccountHasLiveReservation => "account_has_live_reservation",
+            ApiErrorCode::KAccountHasDedicatedPool => "account_has_dedicated_pool",
+            ApiErrorCode::KAlreadyAPartner => "already_a_partner",
+            ApiErrorCode::KNotAPartner => "not_a_partner",
+            ApiErrorCode::KGatewayTaken => "gateway_taken",
+            ApiErrorCode::KUnknownPriceVersion => "unknown_price_version",
+            ApiErrorCode::KModelNotPriced => "model_not_priced",
+            ApiErrorCode::KGoLiveEvidenceMissing => "go_live_evidence_missing",
+            ApiErrorCode::KNoticeTooShort => "notice_too_short",
+            ApiErrorCode::KStopScopeInvalid => "stop_scope_invalid",
+            ApiErrorCode::KInvoicedBillingOff => "invoiced_billing_off",
+            ApiErrorCode::KInvoicedBalanceOutstanding => "invoiced_balance_outstanding",
+            ApiErrorCode::KPartnerHasOwnBook => "partner_has_own_book",
+            ApiErrorCode::KUnknownPriceBook => "unknown_price_book",
+            ApiErrorCode::KOperationNotRetryable => "operation_not_retryable",
             ApiErrorCode::KNotStaff => "not_staff",
-            ApiErrorCode::KInvalidTransition => "invalid_transition",
             ApiErrorCode::KCodingPlanClosed => "coding_plan_closed",
             ApiErrorCode::KCodingPlanAlreadyApplied => "coding_plan_already_applied",
             ApiErrorCode::KStudentEmailRequired => "student_email_required",
@@ -177,6 +249,10 @@ impl ApiErrorCode {
             "expired_api_key" => Ok(ApiErrorCode::KExpiredApiKey),
             "gateway_unavailable" => Ok(ApiErrorCode::KGatewayUnavailable),
             "idempotency_key_reused" => Ok(ApiErrorCode::KIdempotencyKeyReused),
+            "access_programme_closed" => Ok(ApiErrorCode::KAccessProgrammeClosed),
+            "access_request_exists" => Ok(ApiErrorCode::KAccessRequestExists),
+            "access_request_closed" => Ok(ApiErrorCode::KAccessRequestClosed),
+            "invalid_transition" => Ok(ApiErrorCode::KInvalidTransition),
             "insufficient_credit" => Ok(ApiErrorCode::KInsufficientCredit),
             "invalid_api_key" => Ok(ApiErrorCode::KInvalidApiKey),
             "model_not_entitled" => Ok(ApiErrorCode::KModelNotEntitled),
@@ -194,11 +270,44 @@ impl ApiErrorCode {
             "reconciliation_unverified" => Ok(ApiErrorCode::KReconciliationUnverified),
             "retention_managed_by_runanywhere" => Ok(ApiErrorCode::KRetentionManagedByRunanywhere),
             "card_required" => Ok(ApiErrorCode::KCardRequired),
-            "access_request_exists" => Ok(ApiErrorCode::KAccessRequestExists),
-            "access_request_closed" => Ok(ApiErrorCode::KAccessRequestClosed),
-            "access_programme_closed" => Ok(ApiErrorCode::KAccessProgrammeClosed),
+            "invalid_account_id" => Ok(ApiErrorCode::KInvalidAccountId),
+            "account_not_found" => Ok(ApiErrorCode::KAccountNotFound),
+            "identity_email_in_use" => Ok(ApiErrorCode::KIdentityEmailInUse),
+            "role_forbidden" => Ok(ApiErrorCode::KRoleForbidden),
+            "organization_playground_unavailable" => {
+                Ok(ApiErrorCode::KOrganizationPlaygroundUnavailable)
+            }
+            "operator_unknown" => Ok(ApiErrorCode::KOperatorUnknown),
+            "operator_forbidden" => Ok(ApiErrorCode::KOperatorForbidden),
+            "operator_scope" => Ok(ApiErrorCode::KOperatorScope),
+            "email_not_confirmed" => Ok(ApiErrorCode::KEmailNotConfirmed),
+            "invitation_not_found" => Ok(ApiErrorCode::KInvitationNotFound),
+            "invitation_expired" => Ok(ApiErrorCode::KInvitationExpired),
+            "already_a_member" => Ok(ApiErrorCode::KAlreadyAMember),
+            "last_owner" => Ok(ApiErrorCode::KLastOwner),
+            "role_not_available" => Ok(ApiErrorCode::KRoleNotAvailable),
+            "personal_account" => Ok(ApiErrorCode::KPersonalAccount),
+            "invitation_pending" => Ok(ApiErrorCode::KInvitationPending),
+            "too_many_pending_invitations" => Ok(ApiErrorCode::KTooManyPendingInvitations),
+            "organization_limit_reached" => Ok(ApiErrorCode::KOrganizationLimitReached),
+            "member_not_found" => Ok(ApiErrorCode::KMemberNotFound),
+            "account_has_paid_credit" => Ok(ApiErrorCode::KAccountHasPaidCredit),
+            "account_has_live_reservation" => Ok(ApiErrorCode::KAccountHasLiveReservation),
+            "account_has_dedicated_pool" => Ok(ApiErrorCode::KAccountHasDedicatedPool),
+            "already_a_partner" => Ok(ApiErrorCode::KAlreadyAPartner),
+            "not_a_partner" => Ok(ApiErrorCode::KNotAPartner),
+            "gateway_taken" => Ok(ApiErrorCode::KGatewayTaken),
+            "unknown_price_version" => Ok(ApiErrorCode::KUnknownPriceVersion),
+            "model_not_priced" => Ok(ApiErrorCode::KModelNotPriced),
+            "go_live_evidence_missing" => Ok(ApiErrorCode::KGoLiveEvidenceMissing),
+            "notice_too_short" => Ok(ApiErrorCode::KNoticeTooShort),
+            "stop_scope_invalid" => Ok(ApiErrorCode::KStopScopeInvalid),
+            "invoiced_billing_off" => Ok(ApiErrorCode::KInvoicedBillingOff),
+            "invoiced_balance_outstanding" => Ok(ApiErrorCode::KInvoicedBalanceOutstanding),
+            "partner_has_own_book" => Ok(ApiErrorCode::KPartnerHasOwnBook),
+            "unknown_price_book" => Ok(ApiErrorCode::KUnknownPriceBook),
+            "operation_not_retryable" => Ok(ApiErrorCode::KOperationNotRetryable),
             "not_staff" => Ok(ApiErrorCode::KNotStaff),
-            "invalid_transition" => Ok(ApiErrorCode::KInvalidTransition),
             "coding_plan_closed" => Ok(ApiErrorCode::KCodingPlanClosed),
             "coding_plan_already_applied" => Ok(ApiErrorCode::KCodingPlanAlreadyApplied),
             "student_email_required" => Ok(ApiErrorCode::KStudentEmailRequired),
@@ -285,7 +394,6 @@ impl CliUsageWindowLabel {
 pub enum ErrorCode {
     #[default]
     KBadRequest,
-    KContextLengthExceeded,
     KNotFound,
     KPayloadTooLarge,
     KUnprocessable,
@@ -314,13 +422,13 @@ pub enum ErrorCode {
     KSpoolUnhealthy,
     KCold,
     KTimeout,
+    KContextLengthExceeded,
 }
 
 impl ErrorCode {
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrorCode::KBadRequest => "bad_request",
-            ErrorCode::KContextLengthExceeded => "context_length_exceeded",
             ErrorCode::KNotFound => "not_found",
             ErrorCode::KPayloadTooLarge => "payload_too_large",
             ErrorCode::KUnprocessable => "unprocessable",
@@ -349,13 +457,13 @@ impl ErrorCode {
             ErrorCode::KSpoolUnhealthy => "spool_unhealthy",
             ErrorCode::KCold => "cold",
             ErrorCode::KTimeout => "timeout",
+            ErrorCode::KContextLengthExceeded => "context_length_exceeded",
         }
     }
 
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
             "bad_request" => Ok(ErrorCode::KBadRequest),
-            "context_length_exceeded" => Ok(ErrorCode::KContextLengthExceeded),
             "not_found" => Ok(ErrorCode::KNotFound),
             "payload_too_large" => Ok(ErrorCode::KPayloadTooLarge),
             "unprocessable" => Ok(ErrorCode::KUnprocessable),
@@ -384,6 +492,7 @@ impl ErrorCode {
             "spool_unhealthy" => Ok(ErrorCode::KSpoolUnhealthy),
             "cold" => Ok(ErrorCode::KCold),
             "timeout" => Ok(ErrorCode::KTimeout),
+            "context_length_exceeded" => Ok(ErrorCode::KContextLengthExceeded),
             other => Err(format!("unknown ErrorCode: {other}")),
         }
     }
@@ -702,6 +811,7 @@ impl CancelRequestResponse {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CatalogModelResponse {
+    pub cache_write_per_mtok: Option<i64>,
     pub cached_input_per_mtok: i64,
     pub decisions_image_input: bool,
     pub decisions_only: bool,
@@ -717,6 +827,16 @@ impl CatalogModelResponse {
             .as_object()
             .ok_or_else(|| "expected a JSON object".to_string())?;
         let mut result = Self::default();
+        match object.get("cache_write_per_mtok") {
+            Some(field) if !field.is_null() => {
+                result.cache_write_per_mtok = Some(
+                    field
+                        .as_i64()
+                        .ok_or_else(|| "expected an integer".to_string())?,
+                );
+            }
+            _ => {}
+        }
         match object.get("cached_input_per_mtok") {
             Some(field) if !field.is_null() => {
                 result.cached_input_per_mtok = field
@@ -780,6 +900,9 @@ impl CatalogModelResponse {
 
     pub fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
+        if let Some(item) = &self.cache_write_per_mtok {
+            map.insert("cache_write_per_mtok".to_string(), Value::from(*item));
+        }
         map.insert(
             "cached_input_per_mtok".to_string(),
             Value::from(self.cached_input_per_mtok),
@@ -1760,11 +1883,11 @@ impl IdentityAccount {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct IdentityResponse {
-    pub account: Option<IdentityAccount>,
     pub email: String,
     pub monthly_token_limit: i64,
     pub plan: CliPlan,
     pub tokens_this_month: i64,
+    pub account: Option<IdentityAccount>,
 }
 
 impl IdentityResponse {
@@ -1773,12 +1896,6 @@ impl IdentityResponse {
             .as_object()
             .ok_or_else(|| "expected a JSON object".to_string())?;
         let mut result = Self::default();
-        match object.get("account") {
-            Some(field) if !field.is_null() => {
-                result.account = Some(IdentityAccount::from_json(field)?);
-            }
-            _ => {}
-        }
         match object.get("email") {
             Some(field) if !field.is_null() => {
                 result.email = field
@@ -1814,14 +1931,17 @@ impl IdentityResponse {
             }
             _ => {}
         }
+        match object.get("account") {
+            Some(field) if !field.is_null() => {
+                result.account = Some(IdentityAccount::from_json(field)?);
+            }
+            _ => {}
+        }
         Ok(result)
     }
 
     pub fn to_json(&self) -> Value {
         let mut map = serde_json::Map::new();
-        if let Some(item) = &self.account {
-            map.insert("account".to_string(), item.to_json());
-        }
         map.insert("email".to_string(), Value::String(self.email.clone()));
         map.insert(
             "monthly_token_limit".to_string(),
@@ -1835,6 +1955,9 @@ impl IdentityResponse {
             "tokens_this_month".to_string(),
             Value::from(self.tokens_this_month),
         );
+        if let Some(item) = &self.account {
+            map.insert("account".to_string(), item.to_json());
+        }
         Value::Object(map)
     }
 }

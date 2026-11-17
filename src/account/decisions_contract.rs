@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 /// SHA-256 of contracts/wally-decisions-public-v1.openapi.json this file was built from.
 pub const CONTRACT_SHA256: &str =
-    "30362a607e5552e1815f4a4424d6d84bf9c783c67b31aa9d8b4463959411ff75";
+    "d64858479015fc7ec022e93cccc8add93dafa998488fecd210bfbcf6f51b9693";
 
 /// SHA-256 of contracts/wally-decisions-public-v1.legacy.openapi.json, the legacy slice merged in.
 pub const LEGACY_CONTRACT_SHA256: &str =
@@ -22,7 +22,6 @@ pub const LEGACY_CONTRACT_SHA256: &str =
 pub enum ErrorCode {
     #[default]
     KBadRequest,
-    KContextLengthExceeded,
     KNotFound,
     KPayloadTooLarge,
     KUnprocessable,
@@ -51,13 +50,13 @@ pub enum ErrorCode {
     KSpoolUnhealthy,
     KCold,
     KTimeout,
+    KContextLengthExceeded,
 }
 
 impl ErrorCode {
     pub fn as_str(&self) -> &'static str {
         match self {
             ErrorCode::KBadRequest => "bad_request",
-            ErrorCode::KContextLengthExceeded => "context_length_exceeded",
             ErrorCode::KNotFound => "not_found",
             ErrorCode::KPayloadTooLarge => "payload_too_large",
             ErrorCode::KUnprocessable => "unprocessable",
@@ -86,13 +85,13 @@ impl ErrorCode {
             ErrorCode::KSpoolUnhealthy => "spool_unhealthy",
             ErrorCode::KCold => "cold",
             ErrorCode::KTimeout => "timeout",
+            ErrorCode::KContextLengthExceeded => "context_length_exceeded",
         }
     }
 
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
             "bad_request" => Ok(ErrorCode::KBadRequest),
-            "context_length_exceeded" => Ok(ErrorCode::KContextLengthExceeded),
             "not_found" => Ok(ErrorCode::KNotFound),
             "payload_too_large" => Ok(ErrorCode::KPayloadTooLarge),
             "unprocessable" => Ok(ErrorCode::KUnprocessable),
@@ -121,6 +120,7 @@ impl ErrorCode {
             "spool_unhealthy" => Ok(ErrorCode::KSpoolUnhealthy),
             "cold" => Ok(ErrorCode::KCold),
             "timeout" => Ok(ErrorCode::KTimeout),
+            "context_length_exceeded" => Ok(ErrorCode::KContextLengthExceeded),
             other => Err(format!("unknown ErrorCode: {other}")),
         }
     }

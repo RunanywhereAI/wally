@@ -288,6 +288,12 @@ class LegacyMergeTests(unittest.TestCase):
         self.assertEqual("main", source["branch"])
         self.assertTrue(DECISIONS_LEGACY.is_file())
 
+    def test_committed_binding_reads_both_servers_codes(self):
+        binding = (REPO / "src" / "account" / "console_contract.rs").read_text(encoding="utf-8")
+        self.assertIn('"organization_limit_reached"', binding)
+        self.assertIn('"coding_plan_full"', binding)
+        self.assertIn("pub account: Option<IdentityAccount>,", binding)
+
 
 if __name__ == "__main__":
     unittest.main()
