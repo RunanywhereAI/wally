@@ -981,12 +981,36 @@ const REFUSAL_MAX_CHARS: usize = 240;
 /// terminal to echo the session it was just handed). `access_token` empty
 /// (no session was in play yet, e.g. `/auth/cli/start`) skips that filter.
 fn console_refusal_message(response: &HttpResponse, access_token: &str) -> Option<String> {
-    parse_object(response)
-        .ok()
-        .and_then(|object| contract::ApiError::from_json(&object).ok())
-        .map(|error| error.message)
+    console_api_error(response)
+        .map(|(_code, message)| message)
         .filter(|message| display_text_is_safe(message, 2048))
         .filter(|message| access_token.is_empty() || !message.contains(access_token))
+}
+
+/// A refusal body read as the contract's `ApiError`: its code, when the
+/// binding knows it, and its message.
+///
+/// Released CLIs talk to legacy production until inference.runanywhere.ai
+/// moves, and to the new infrastructure after it; either can send a code this
+/// build has never seen. `code` is a closed enum in the binding, and an unknown
+/// value would fail the whole body and lose the sentence a person needs, so,
+/// as with the decisions error, an unknown code is lifted out before parsing
+/// and reads as `None`: never as a code this build acts on (card_required).
+fn console_api_error(response: &HttpResponse) -> Option<(Option<contract::ApiErrorCode>, String)> {
+    let mut body = parse_object(response).ok()?;
+    // Lift only an unknown string; a code of the wrong type still fails the
+    // contract read, like every other field.
+    let unknown = body
+        .get("code")
+        .and_then(|code| code.as_str())
+        .is_some_and(|code| contract::ApiErrorCode::parse(code).is_err());
+    if unknown {
+        body.as_object_mut()?.remove("code");
+    }
+    let known = body.get("code").is_some_and(|code| !code.is_null());
+    contract::ApiError::from_json(&body)
+        .ok()
+        .map(|error| (known.then_some(error.code), error.message))
 }
 
 /// `message` cut to one terminal line, attributed to `operation`.
@@ -1044,10 +1068,8 @@ fn decisions_refusal(response: &HttpResponse) -> Option<DecisionsRefusal> {
 /// filter (`console_refusal_message`).
 fn is_card_required(response: &HttpResponse) -> bool {
     response.status == 403
-        && parse_object(response)
-            .ok()
-            .and_then(|object| contract::ApiError::from_json(&object).ok())
-            .is_some_and(|error| error.code == contract::ApiErrorCode::KCardRequired)
+        && console_api_error(response)
+            .is_some_and(|(code, _message)| code == Some(contract::ApiErrorCode::KCardRequired))
 }
 
 /// Every console failure in this file is phrased here, so this is the one
