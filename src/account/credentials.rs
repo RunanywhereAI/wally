@@ -15,6 +15,9 @@ pub struct Credentials {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_at: i64,
+    /// The account plan last seen (`beta`, `coding_plan`). Empty on a session
+    /// saved before this field existed. Not a secret.
+    pub plan: String,
 }
 
 impl std::fmt::Debug for Credentials {
@@ -39,6 +42,7 @@ impl std::fmt::Debug for Credentials {
                 },
             )
             .field("expires_at", &self.expires_at)
+            .field("plan", &self.plan)
             .finish()
     }
 }
@@ -1112,6 +1116,7 @@ pub fn load() -> Result<Credentials, String> {
         credentials.console_url = normalize_console_url(&stored_url)?;
     }
     credentials.email = json_string_field(map, "email")?;
+    credentials.plan = json_string_field(map, "plan")?;
     let access_token = json_string_field(map, "access_token")?;
     let refresh_token = json_string_field(map, "refresh_token")?;
     if (!access_token.is_empty() && !session_token_is_safe(&access_token))
@@ -1151,6 +1156,7 @@ pub fn save(credentials: &Credentials) -> Result<(), String> {
         "access_token": credentials.access_token,
         "refresh_token": credentials.refresh_token,
         "expires_at": credentials.expires_at,
+        "plan": credentials.plan,
     });
     let rendered = crate::io::json::dump_pretty(&document, 2) + "\n";
     write_document(&path, &rendered)

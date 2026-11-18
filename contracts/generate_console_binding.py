@@ -295,7 +295,14 @@ def _from_value_expr(base: str, var: str, enums: set[str], objects: set[str]) ->
 
 
 def _emit_enum(name: str, schema: dict) -> str:
-    values = schema["enum"]
+    values = list(schema["enum"])
+    # The server's CliPlan is still only "beta". A released CLI that rejects
+    # any other string fails login the moment the api sends a coding-plan
+    # value. This client knows "coding_plan" and reads every other string as
+    # beta, so the next plan name does not break this build.
+    tolerant = name == "CliPlan"
+    if tolerant and "coding_plan" not in values:
+        values.append("coding_plan")
     variants = [(v, _enum_variant(v)) for v in values]
 
     lines = ["#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]"]
@@ -315,14 +322,19 @@ def _emit_enum(name: str, schema: dict) -> str:
     lines.append("    }")
     lines.append("")
     # Rejects an unknown value rather than silently defaulting -- the same
-    # posture as the from_json this replaces.
+    # posture as the from_json this replaces. CliPlan is the exception: an
+    # unknown plan is beta, so a plan name this build does not know yet still
+    # parses the grant, the identity, and the login poll.
     lines.append("    pub fn parse(raw: &str) -> Result<Self, String> {")
     lines.append("        match raw {")
     for v, variant in variants:
         lines.append(f'            "{v}" => Ok({name}::{variant}),')
-    lines.append(
-        f'            other => Err(format!("unknown {name}: {{other}}")),'
-    )
+    if tolerant:
+        lines.append(f"            _other => Ok({name}::{variants[0][1]}),")
+    else:
+        lines.append(
+            f'            other => Err(format!("unknown {name}: {{other}}")),'
+        )
     lines.append("        }")
     lines.append("    }")
     lines.append("}")

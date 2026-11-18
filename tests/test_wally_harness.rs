@@ -31,6 +31,7 @@ fn seed(access_token: &str, refresh_token: &str, expires_at: i64) -> Result<(), 
         access_token: access_token.to_string(),
         refresh_token: refresh_token.to_string(),
         expires_at,
+        plan: String::new(),
     };
     account::save(&credentials)
 }
@@ -1177,6 +1178,7 @@ fn launch_open_code_cloud_with_refreshes_before_the_catalog_cache_gate() {
         access_token: "stale-access-token".to_string(),
         refresh_token: "stale-refresh-token".to_string(),
         expires_at: now_seconds() - 1,
+        plan: String::new(),
     })
     .expect("seed credentials");
 

@@ -198,6 +198,27 @@ fn request_and_response_round_trip() {
     assert_eq!(poll_approved.status, contract::PollStatus::KApproved);
     assert_eq!(poll_approved.access_token.as_deref(), Some("sk-x"));
     assert_eq!(poll_approved.plan, Some(contract::CliPlan::KBeta));
+    let coding_plan = serde_json::json!({
+        "status": "approved",
+        "access_token": "sk-x",
+        "email": "a@b.co",
+        "expires_in": 3600,
+        "plan": "coding_plan",
+        "refresh_token": "r-x",
+    });
+    let poll_coding = contract::PollResponse::from_json(&coding_plan).expect("parses");
+    assert_eq!(poll_coding.plan, Some(contract::CliPlan::KCodingPlan));
+    let unknown_plan = serde_json::json!({
+        "status": "approved",
+        "access_token": "sk-x",
+        "email": "a@b.co",
+        "expires_in": 3600,
+        "plan": "some-future-plan",
+        "refresh_token": "r-x",
+    });
+    let poll_unknown =
+        contract::PollResponse::from_json(&unknown_plan).expect("unknown plan parses");
+    assert_eq!(poll_unknown.plan, Some(contract::CliPlan::KBeta));
 
     // An unknown enum value is a hard parse error, never a silent default.
     let unknown = serde_json::json!({"status": "banana"});

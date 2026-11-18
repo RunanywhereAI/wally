@@ -109,6 +109,9 @@ pub(crate) fn refresh_session(
                 } else {
                     3600
                 };
+            if !grant.plan.is_empty() {
+                credentials.plan = grant.plan;
+            }
             account::save(credentials).map_err(|message| SessionError {
                 message,
                 unverified: false,
@@ -151,6 +154,13 @@ pub fn verify_cloud_session(
             message: error,
             unverified: result == account::IdentityResult::Unavailable,
         });
+    }
+    // The plan is read on the next launch. Saving it here means a coding-plan
+    // subscription shows up without another login. A failed save leaves the
+    // session usable; the plan stays what it was.
+    if credentials.plan != identity.plan {
+        credentials.plan = identity.plan;
+        let _ = account::save(credentials);
     }
     Ok(identity.email)
 }

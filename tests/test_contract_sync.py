@@ -258,6 +258,14 @@ class LegacyMergeTests(unittest.TestCase):
         self.assertIn("pub email: String,", binding)
         self.assertIn("pub const LEGACY_CONTRACT_SHA256", binding)
 
+    def test_cli_plan_knows_coding_plan_and_reads_anything_else_as_beta(self):
+        current = _tiny_contract(CliPlan={"type": "string", "enum": ["beta"]})
+        result = self._render(current, None)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('"coding_plan" => Ok(CliPlan::KCodingPlan)', result.stdout)
+        self.assertIn("_other => Ok(CliPlan::KBeta)", result.stdout)
+        self.assertNotIn("unknown CliPlan", result.stdout)
+
     def test_no_legacy_contract_renders_the_pinned_contract_alone(self):
         current, _legacy = self._pair()
         result = self._render(current, None)

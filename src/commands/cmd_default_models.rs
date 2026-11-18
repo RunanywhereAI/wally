@@ -7,11 +7,39 @@ use crate::cli_formatter::{cli_color, color_output_enabled, examples_footer, Exa
 use crate::config::preferences::{self, DefaultModelSource};
 use crate::io::output as out;
 
+/// The one model a coding-plan account's keyed list names, when the server
+/// has cut that list to a single id. A longer list is left alone: the CLI
+/// does not filter it and does not hardcode a model id.
+fn coding_plan_model() -> Option<String> {
+    let credentials = crate::account::load().ok()?;
+    if credentials.plan != crate::account::console_contract::CliPlan::KCodingPlan.as_str()
+        || !credentials.signed_in()
+    {
+        return None;
+    }
+    let console = crate::account::ConsoleClient::default();
+    let (result, models, _) =
+        console.fetch_models(&credentials.console_url, &credentials.access_token);
+    if result != crate::account::IdentityResult::Ok || models.len() != 1 {
+        return None;
+    }
+    let id = models.into_iter().next()?.id;
+    if !crate::harness::model_id_is_safe(&id) {
+        return None;
+    }
+    Some(id)
+}
+
 /// The model a harness launch should use: `explicit_model` when given, else the
-/// effective default (env, file, then the built-in id — see config::preferences).
+/// single model on a coding-plan account, else the effective default (env,
+/// file, then the built-in id — see config::preferences).
 /// Prints a blue notice when a default fills in for an omitted `-m`.
 pub fn resolve_default_model(explicit_model: &str, no_color: bool) -> String {
-    let effective = preferences::resolve_model(explicit_model);
+    let effective = if explicit_model.is_empty() {
+        coding_plan_model().unwrap_or_else(|| preferences::resolve_model(explicit_model))
+    } else {
+        preferences::resolve_model(explicit_model)
+    };
     // Announce only when a default filled in for an omitted -m, so the launch
     // never silently picks a model the reader did not name. Blue, so it reads
     // as a notice rather than an error or an ordinary status line.
