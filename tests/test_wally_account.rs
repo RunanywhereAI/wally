@@ -922,6 +922,73 @@ fn a_card_required_message_is_filtered_like_any_refusal() {
     assert_eq!(failure.message, "Wally Cloud refused the refresh");
 }
 
+// Released CLIs talk to legacy production until the DNS flip and to new infra
+// after it, and either server can send an error code this build has never
+// seen. The code is not what a person needs; the server's sentence is. A code
+// the binding does not know must never cost the message, and must never read
+// as card_required.
+fn refusing_console(code: &'static str, message: &'static str) -> ConsoleClient {
+    ConsoleClient::new(Some(
+        Arc::new(move |_: &HttpRequest| -> Result<HttpResponse, String> {
+            Ok(HttpResponse {
+                status: 403,
+                body: json(serde_json::json!({ "code": code, "message": message })),
+                ..Default::default()
+            })
+        }) as Transport,
+    ))
+}
+
+#[test]
+fn a_refusal_with_an_unknown_code_keeps_the_servers_message() {
+    let authorization = Authorization {
+        request_code: "ABCD-EFGH".to_string(),
+        poll_secret: "poll-secret".to_string(),
+        ..Authorization::default()
+    };
+    for (code, message) in [
+        // A code neither pinned contract knows (a server newer than this build).
+        (
+            "a_code_from_a_newer_server",
+            "Ask an owner to raise the limit.",
+        ),
+        // New infra only.
+        (
+            "organization_limit_reached",
+            "This organization has reached its limit.",
+        ),
+        // Legacy only.
+        ("coding_plan_full", "The coding plan is full."),
+    ] {
+        let client = refusing_console(code, message);
+        let outcome = client.poll("https://console.example.test", &authorization);
+        assert_ne!(outcome.result, PollResult::CardRequired, "{code}");
+        assert_eq!(
+            outcome.error,
+            format!("Wally Cloud refused the poll: {message}"),
+            "{code}"
+        );
+        let failure = client
+            .refresh("https://api.example.test", "refresh-token")
+            .expect_err("a refused refresh must fail");
+        assert!(!failure.card_required, "{code}");
+        assert_eq!(
+            failure.message,
+            format!("Wally Cloud refused the refresh: {message}"),
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn a_refusal_with_an_unknown_code_is_still_filtered() {
+    let client = refusing_console("a_code_from_a_newer_server", "\u{1b}[31mred\nsecond line");
+    let failure = client
+        .refresh("https://api.example.test", "refresh-token")
+        .expect_err("a refused refresh must fail");
+    assert_eq!(failure.message, "Wally Cloud refused the refresh");
+}
+
 #[test]
 fn a_rate_limit_surfaces_its_retry_after() {
     // A 429 with a numeric Retry-After: the error a caller sees should name the

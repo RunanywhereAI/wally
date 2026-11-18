@@ -45,7 +45,7 @@
             }
           }
         },
-        "description": "A per-key or per-account limit (capacity and overload, on every route, are 503 with Retry-After)",
+        "description": "Entitlement or GPU admission capacity limit",
         "headers": {
           "Access-Control-Expose-Headers": {
             "description": "Response headers a browser client may read",
@@ -182,7 +182,7 @@
         "type": "object"
       },
       "DecisionImage": {
-        "description": "A PNG, JPEG or WebP image as a base64 data URL (data:image/png;base64,...); HEIC and other types are refused with 400, so convert them to JPEG first. The bytes must be an image of the type the URL names. The model sees each image at between 65,536 and 262,144 pixels: a larger one is resized to that before it is scored, so it may be sent at its original size, up to 64 million pixels for a JPEG and 24 million for a PNG or WebP (a larger one is refused with 400). Every image is decoded and re-encoded before the model sees it, and only its pixels are kept: EXIF (including GPS location), XMP, IPTC, comments and the ICC profile are removed and never forwarded. Its pixels are passed as decoded: a colour profile is ignored, as the model itself ignores it, so a Display P3 photo's stored values are read as they are, not converted. EXIF orientation is not applied: the model sees the pixels as they are stored, so a photo whose camera recorded it sideways is seen sideways; rotate it upright before sending it.",
+        "description": "A PNG, JPEG or WebP image as a base64 data URL (data:image/png;base64,...). Reserved: image input is not available on this API yet, and a request that carries images is refused with 400 before anything is billed (see images).",
         "maxLength": 25165824,
         "minLength": 23,
         "pattern": "^data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$",
@@ -262,7 +262,7 @@
         "description": "POST /v1/decisions: score typed questions about one input with a decision model, in prefill, without generating text. Each question is answered with a probability per option. Text fields are strings only.",
         "properties": {
           "images": {
-            "description": "Images every question is asked about, shown to the model before the input, in order. Only a model that takes images accepts them; any other refuses the request with 400 before anything is billed. Each image is part of every question's prompt, so it counts toward each question's limit and is billed once per question. With images the whole request body may be up to 24 MiB, of which at most 1 MiB outside the images; a larger one, or one still too large once its images are resized, is refused with 400 and nothing is billed. Original photos may be sent as they are: an image larger than the model uses is resized to the size the model sees before it is scored, and billed at that size. No URL is fetched.",
+            "description": "Images every question would be asked about. Image input is not available on this API yet: no decision model takes images here for now, so a request that carries images is refused with 400 before anything is billed. The field is reserved, and its limits will be published when a model takes images. No URL is fetched.",
             "items": {
               "$ref": "#/components/schemas/DecisionImage"
             },
@@ -354,7 +354,6 @@
       "ErrorCode": {
         "enum": [
           "bad_request",
-          "context_length_exceeded",
           "not_found",
           "payload_too_large",
           "unprocessable",
@@ -1326,11 +1325,11 @@
     "source_schemas": {
       "error": {
         "path": "public/error.schema.json",
-        "sha256": "a4baccaee41d59861925d3205d84092cda90f050561ea4832b82cd38514b07b2"
+        "sha256": "039c2486e4656d05d7478918111cb2b9bbc21cdfc46953b4680629849c6d4d15"
       },
       "request": {
         "path": "public/decisions_request.schema.json",
-        "sha256": "19b58ab4ed78a457c89928cbd62119159efcc95767314cce0da47cb87efa8e4d"
+        "sha256": "5ed22f0e491359f713fd1e02f301caef1b5d10e7e56f1895986c31691e3628e6"
       },
       "response": {
         "path": "public/decisions_response.schema.json",

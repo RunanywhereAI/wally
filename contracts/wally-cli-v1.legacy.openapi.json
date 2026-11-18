@@ -1,0 +1,2528 @@
+{
+  "components": {
+    "parameters": {
+      "CancelRequestHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/CancelRequestHeaderAuthorizationValue"
+        }
+      },
+      "CancelRequestPathRequestIdParameter": {
+        "in": "path",
+        "name": "request_id",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CancelRequestPathRequestIdValue"
+        }
+      },
+      "GetCliUsageHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCliUsageHeaderAuthorizationValue"
+        }
+      },
+      "GetCliUsageQueryDaysParameter": {
+        "in": "query",
+        "name": "days",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCliUsageQueryDaysValue"
+        }
+      },
+      "GetCliUsageQueryLimitParameter": {
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCliUsageQueryLimitValue"
+        }
+      },
+      "GetCliUsageQueryModelParameter": {
+        "in": "query",
+        "name": "model",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCliUsageQueryModelValue"
+        }
+      },
+      "GetCurrentIdentityHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCurrentIdentityHeaderAuthorizationValue"
+        }
+      },
+      "GetCurrentIdentityHeaderXUserEmailParameter": {
+        "in": "header",
+        "name": "x-user-email",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCurrentIdentityHeaderXUserEmailValue"
+        }
+      },
+      "GetCurrentIdentityHeaderXUserIdParameter": {
+        "in": "header",
+        "name": "x-user-id",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/GetCurrentIdentityHeaderXUserIdValue"
+        }
+      },
+      "ListCliUsageRequestsHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsHeaderAuthorizationValue"
+        }
+      },
+      "ListCliUsageRequestsQueryApiKeyIdParameter": {
+        "in": "query",
+        "name": "api_key_id",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryApiKeyIdValue"
+        }
+      },
+      "ListCliUsageRequestsQueryCursorParameter": {
+        "in": "query",
+        "name": "cursor",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryCursorValue"
+        }
+      },
+      "ListCliUsageRequestsQueryLimitParameter": {
+        "in": "query",
+        "name": "limit",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryLimitValue"
+        }
+      },
+      "ListCliUsageRequestsQueryModelParameter": {
+        "in": "query",
+        "name": "model",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryModelValue"
+        }
+      },
+      "ListCliUsageRequestsQueryRequestIdParameter": {
+        "in": "query",
+        "name": "request_id",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryRequestIdValue"
+        }
+      },
+      "ListCliUsageRequestsQueryResponseRequestIdParameter": {
+        "in": "query",
+        "name": "response_request_id",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryResponseRequestIdValue"
+        }
+      },
+      "ListCliUsageRequestsQuerySinceParameter": {
+        "in": "query",
+        "name": "since",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQuerySinceValue"
+        }
+      },
+      "ListCliUsageRequestsQueryStatusCodeParameter": {
+        "in": "query",
+        "name": "status_code",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryStatusCodeValue"
+        }
+      },
+      "ListCliUsageRequestsQueryUntilParameter": {
+        "in": "query",
+        "name": "until",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/ListCliUsageRequestsQueryUntilValue"
+        }
+      },
+      "RevokeCliAuthorizationHeaderAuthorizationParameter": {
+        "in": "header",
+        "name": "authorization",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/RevokeCliAuthorizationHeaderAuthorizationValue"
+        }
+      }
+    },
+    "responses": {
+      "ApiError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        },
+        "description": "Typed control-plane error",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds before retrying. Sent only with a 503 that clears on its own: `control_plane_overloaded`, when no database connection came free, and a billing action refused while another holds the account's customer or every billing place.",
+            "schema": {
+              "$ref": "#/components/schemas/RetryAfterSeconds"
+            }
+          }
+        }
+      },
+      "Error": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "OpenAI-shaped error; raw upstream bodies are never returned",
+        "headers": {
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "A per-key or per-account limit (capacity and overload, on every route, are 503 with Retry-After)",
+        "headers": {
+          "Access-Control-Expose-Headers": {
+            "description": "Response headers a browser client may read",
+            "schema": {
+              "$ref": "#/components/schemas/AccessControlExposeHeaders"
+            }
+          },
+          "Retry-After": {
+            "description": "Seconds before retrying when supplied",
+            "schema": {
+              "$ref": "#/components/schemas/RetryAfterSeconds"
+            }
+          },
+          "Server-Timing": {
+            "description": "Pre-stream phase timings when supplied",
+            "schema": {
+              "$ref": "#/components/schemas/ServerTiming"
+            }
+          },
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OpenAIError"
+            }
+          }
+        },
+        "description": "Missing, malformed, or unknown Cloud key",
+        "headers": {
+          "x-request-id": {
+            "description": "Request correlation id",
+            "schema": {
+              "$ref": "#/components/schemas/RequestId"
+            }
+          }
+        }
+      },
+      "ValidationFailed": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        },
+        "description": "Request failed contract validation"
+      }
+    },
+    "schemas": {
+      "AccessControlExposeHeaders": {
+        "description": "The response headers a browser client may read, as a comma-separated list; it names x-request-id, Retry-After and Server-Timing when the response carries them.",
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "AccountKind": {
+        "enum": [
+          "personal",
+          "team"
+        ],
+        "title": "AccountKind",
+        "type": "string"
+      },
+      "ApiError": {
+        "additionalProperties": false,
+        "description": "One closed error shape for every non-public control-plane route.",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ApiErrorCode"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ApiError",
+        "type": "object"
+      },
+      "ApiErrorCode": {
+        "enum": [
+          "invalid_request",
+          "unauthorized",
+          "forbidden",
+          "not_found",
+          "method_not_allowed",
+          "conflict",
+          "gone",
+          "payload_too_large",
+          "rate_limited",
+          "internal_error",
+          "upstream_unavailable",
+          "service_unavailable",
+          "timeout",
+          "bad_request",
+          "control_plane_overloaded",
+          "default_key_unavailable",
+          "expired_api_key",
+          "gateway_unavailable",
+          "idempotency_key_reused",
+          "insufficient_credit",
+          "invalid_api_key",
+          "model_not_entitled",
+          "not_in_cohort",
+          "provisioning_unavailable",
+          "proxy_retired",
+          "revoked_api_key",
+          "signup_method_not_allowed",
+          "upstream_contract_violation",
+          "user_rate_limited",
+          "gateway_not_configured",
+          "gateway_timeout",
+          "gateway_protocol_error",
+          "gateway_operation_pending",
+          "reconciliation_unverified",
+          "retention_managed_by_runanywhere",
+          "card_required",
+          "access_request_exists",
+          "access_request_closed",
+          "access_programme_closed",
+          "not_staff",
+          "invalid_transition",
+          "coding_plan_closed",
+          "coding_plan_already_applied",
+          "student_email_required",
+          "student_email_unverified",
+          "student_code_invalid",
+          "coding_plan_full",
+          "team_access_denied",
+          "team_session_stale",
+          "team_role_required",
+          "personal_account_only",
+          "last_team_owner"
+        ],
+        "title": "ApiErrorCode",
+        "type": "string"
+      },
+      "CancelRequestHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "CancelRequestPathRequestIdValue": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9._:-]+$",
+        "title": "Request Id",
+        "type": "string"
+      },
+      "CancelRequestResponse": {
+        "additionalProperties": false,
+        "description": "Answer to a cancel that reached an in-flight request the caller owns.\n\n`status` is \"cancelling\", not \"cancelled\": the node has ended the request's\ncontext and told the engine to abort; the stream's own end and its\nsettlement follow a moment later on their own path.",
+        "properties": {
+          "request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "cancelling",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
+        ],
+        "title": "CancelRequestResponse",
+        "type": "object"
+      },
+      "CatalogModelResponse": {
+        "additionalProperties": false,
+        "description": "One entitled model, priced. Straight from `pricing.catalog()` - the same\nnumbers the credit gate charges against, so a published price cannot drift\nfrom a billed one (G7).",
+        "properties": {
+          "cached_input_per_mtok": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cached Input Per Mtok",
+            "type": "integer"
+          },
+          "decisions_image_input": {
+            "description": "True when POST /v1/decisions takes `images` for the model; any other model refuses them. constants.toml [[models]] decisions_image_input.",
+            "title": "Decisions Image Input",
+            "type": "boolean"
+          },
+          "decisions_only": {
+            "description": "True when the model serves only POST /v1/decisions and /v1/systemone; its chat and text completions are refused. constants.toml [[models]] decisions_only.",
+            "title": "Decisions Only",
+            "type": "boolean"
+          },
+          "display_name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_per_mtok": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Input Per Mtok",
+            "type": "integer"
+          },
+          "output_per_mtok": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Output Per Mtok",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "input_per_mtok",
+          "output_per_mtok",
+          "cached_input_per_mtok",
+          "decisions_only",
+          "decisions_image_input"
+        ],
+        "title": "CatalogModelResponse",
+        "type": "object"
+      },
+      "CliClient": {
+        "enum": [
+          "rcli"
+        ],
+        "title": "CliClient",
+        "type": "string"
+      },
+      "CliPlan": {
+        "enum": [
+          "beta"
+        ],
+        "title": "CliPlan",
+        "type": "string"
+      },
+      "CliPollRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "poll_secret": {
+            "maxLength": 128,
+            "minLength": 32,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Poll Secret",
+            "type": "string"
+          },
+          "request_code": {
+            "maxLength": 64,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Request Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_code",
+          "poll_secret"
+        ],
+        "title": "CliPollRequest",
+        "type": "object"
+      },
+      "CliRefreshRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "refresh_token": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Refresh Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "CliRefreshRequest",
+        "type": "object"
+      },
+      "CliStartRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/CliClient"
+          },
+          "hostname": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Hostname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname",
+          "client"
+        ],
+        "title": "CliStartRequest",
+        "type": "object"
+      },
+      "CliStartResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_in": {
+            "maximum": 2147483647.0,
+            "minimum": 1.0,
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "interval": {
+            "maximum": 2147483647.0,
+            "minimum": 1.0,
+            "title": "Interval",
+            "type": "integer"
+          },
+          "poll_secret": {
+            "maxLength": 128,
+            "minLength": 32,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Poll Secret",
+            "type": "string"
+          },
+          "request_code": {
+            "maxLength": 64,
+            "minLength": 16,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Request Code",
+            "type": "string"
+          },
+          "verification_url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^https?://",
+            "title": "Verification Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_code",
+          "poll_secret",
+          "verification_url",
+          "expires_in",
+          "interval"
+        ],
+        "title": "CliStartResponse",
+        "type": "object"
+      },
+      "CliUsageEvent": {
+        "additionalProperties": false,
+        "description": "One request, as the CLI shows it.\n\nA narrower projection than the console's: no prompt text, and none of the\nmax-token accounting a terminal has no use for.",
+        "properties": {
+          "cached_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Cached Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cost Micros",
+            "type": "integer"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "pattern": "^[a-z][a-z0-9._-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "harness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Harness"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Model",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status_code": {
+            "maximum": 599.0,
+            "minimum": 100.0,
+            "title": "Status Code",
+            "type": "integer"
+          },
+          "ts_start": {
+            "format": "date-time",
+            "title": "Ts Start",
+            "type": "string"
+          },
+          "ttft_ms": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft Ms"
+          }
+        },
+        "required": [
+          "request_id",
+          "model",
+          "harness",
+          "prompt_tokens",
+          "completion_tokens",
+          "cached_tokens",
+          "cost_micros",
+          "ttft_ms",
+          "status_code",
+          "error_code",
+          "ts_start"
+        ],
+        "title": "CliUsageEvent",
+        "type": "object"
+      },
+      "CliUsageResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credit": {
+            "$ref": "#/components/schemas/CreditResponse"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/UsageModelRollup"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "recent": {
+            "items": {
+              "$ref": "#/components/schemas/CliUsageEvent"
+            },
+            "title": "Recent",
+            "type": "array"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/UsageTimelinePoint"
+            },
+            "title": "Timeline",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/UsageTotals"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/CliUsageWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "credit",
+          "totals",
+          "windows",
+          "timeline",
+          "models",
+          "recent"
+        ],
+        "title": "CliUsageResponse",
+        "type": "object"
+      },
+      "CliUsageWindow": {
+        "additionalProperties": false,
+        "description": "Spend over a window ending now, not a calendar bucket.\n\n`timeline` cannot answer this. It groups by `usage_date`, so its finest\ngrain is a whole day and its most recent point is \"today so far\", which\ndrifts from an hour to a day depending on what time it is read. It also\ncarries no `cached_tokens`. `UsageTotals` carries all four numbers a\nterminal shows, so a window is a totals query with a different `since`.\n\n`seconds` is the span, carried so a client never has to parse `window`.",
+        "properties": {
+          "seconds": {
+            "maximum": 2147483647.0,
+            "minimum": 1.0,
+            "title": "Seconds",
+            "type": "integer"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/UsageTotals"
+          },
+          "window": {
+            "$ref": "#/components/schemas/CliUsageWindowLabel"
+          }
+        },
+        "required": [
+          "window",
+          "seconds",
+          "totals"
+        ],
+        "title": "CliUsageWindow",
+        "type": "object"
+      },
+      "CliUsageWindowLabel": {
+        "description": "The two windows `rcli usage` draws. Closed, because the endpoint offers\nno way to ask for a third: a client can switch on these and be exhaustive.",
+        "enum": [
+          "1h",
+          "24h"
+        ],
+        "title": "CliUsageWindowLabel",
+        "type": "string"
+      },
+      "CountryCode": {
+        "description": "An ISO 3166-1 alpha-2 country code.",
+        "pattern": "^[A-Z]{2}$",
+        "type": "string"
+      },
+      "CreditResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "balance_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": -9007199254740991.0,
+            "title": "Balance Micros",
+            "type": "integer"
+          },
+          "granted_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Granted Micros",
+            "type": "integer"
+          },
+          "spent_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Spent Micros",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "balance_micros",
+          "granted_micros",
+          "spent_micros"
+        ],
+        "title": "CreditResponse",
+        "type": "object"
+      },
+      "ErrorCode": {
+        "enum": [
+          "bad_request",
+          "context_length_exceeded",
+          "not_found",
+          "payload_too_large",
+          "unprocessable",
+          "invalid_api_key",
+          "expired_api_key",
+          "revoked_api_key",
+          "insufficient_credit",
+          "account_frozen",
+          "model_not_entitled",
+          "not_in_cohort",
+          "user_rate_limited",
+          "request_cancelled",
+          "quota_exceeded",
+          "capacity_exceeded",
+          "idempotency_key_reused",
+          "unsupported_endpoint",
+          "proxy_retired",
+          "gateway_unavailable",
+          "control_plane_overloaded",
+          "credit_gate_unavailable",
+          "upstream_contract_violation",
+          "unattributed_key",
+          "internal",
+          "bad_gateway",
+          "draining",
+          "spool_unhealthy",
+          "cold",
+          "timeout"
+        ],
+        "type": "string"
+      },
+      "ErrorMessage": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ErrorParameter": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ErrorType": {
+        "enum": [
+          "invalid_request_error",
+          "authentication_error",
+          "permission_error",
+          "rate_limit_error",
+          "quota",
+          "capacity",
+          "server_error",
+          "timeout"
+        ],
+        "type": "string"
+      },
+      "GetCliUsageHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "GetCliUsageQueryDaysValue": {
+        "default": 30,
+        "maximum": 365,
+        "minimum": 1,
+        "title": "Days",
+        "type": "integer"
+      },
+      "GetCliUsageQueryLimitValue": {
+        "default": 20,
+        "maximum": 200,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "GetCliUsageQueryModelValue": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "GetCurrentIdentityHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "GetCurrentIdentityHeaderXUserEmailValue": {
+        "default": "",
+        "maxLength": 320,
+        "title": "X-User-Email",
+        "type": "string"
+      },
+      "GetCurrentIdentityHeaderXUserIdValue": {
+        "default": "",
+        "maxLength": 255,
+        "title": "X-User-Id",
+        "type": "string"
+      },
+      "GrantResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "access_token": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Access Token",
+            "type": "string"
+          },
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@[^\\s@]+$",
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_in": {
+            "maximum": 2147483647.0,
+            "minimum": 1.0,
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/CliPlan"
+          },
+          "refresh_token": {
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Refresh Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token",
+          "email",
+          "plan",
+          "expires_in"
+        ],
+        "title": "GrantResponse",
+        "type": "object"
+      },
+      "Harness": {
+        "enum": [
+          "claude_code",
+          "claude_desktop",
+          "opencode",
+          "hermes",
+          "openclaw",
+          "deepseek",
+          "console",
+          "playground",
+          "rcli",
+          "sdk",
+          "unknown",
+          "cursor",
+          "continue",
+          "aider",
+          "cline",
+          "roo",
+          "zed",
+          "openai_sdk",
+          "langchain",
+          "llamaindex",
+          "curl",
+          "codex"
+        ],
+        "title": "Harness",
+        "type": "string"
+      },
+      "IdentityAccount": {
+        "additionalProperties": false,
+        "description": "The account a credential acts on (teams). Additive: a CLI that does not\nknow it ignores it, and it is absent while teams are off.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "title": "IdentityAccount",
+        "type": "object"
+      },
+      "IdentityResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IdentityAccount"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@[^\\s@]+$",
+            "title": "Email",
+            "type": "string"
+          },
+          "monthly_token_limit": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Monthly Token Limit",
+            "type": "integer"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/CliPlan"
+          },
+          "tokens_this_month": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Tokens This Month",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "email",
+          "plan",
+          "tokens_this_month",
+          "monthly_token_limit"
+        ],
+        "title": "IdentityResponse",
+        "type": "object"
+      },
+      "ListCliUsageRequestsHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "ListCliUsageRequestsQueryApiKeyIdValue": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Api Key Id"
+      },
+      "ListCliUsageRequestsQueryCursorValue": {
+        "anyOf": [
+          {
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cursor"
+      },
+      "ListCliUsageRequestsQueryLimitValue": {
+        "default": 100,
+        "maximum": 200,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "ListCliUsageRequestsQueryModelValue": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "ListCliUsageRequestsQueryRequestIdValue": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Request Id"
+      },
+      "ListCliUsageRequestsQueryResponseRequestIdValue": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Response Request Id"
+      },
+      "ListCliUsageRequestsQuerySinceValue": {
+        "format": "date-time",
+        "title": "Since",
+        "type": "string"
+      },
+      "ListCliUsageRequestsQueryStatusCodeValue": {
+        "anyOf": [
+          {
+            "maximum": 599,
+            "minimum": 100,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Status Code"
+      },
+      "ListCliUsageRequestsQueryUntilValue": {
+        "format": "date-time",
+        "title": "Until",
+        "type": "string"
+      },
+      "ModelCatalogResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "effective_from": {
+            "maxLength": 35,
+            "minLength": 20,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}",
+            "title": "Effective From",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogModelResponse"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "pricing_version": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Pricing Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pricing_version",
+          "effective_from",
+          "models"
+        ],
+        "title": "ModelCatalogResponse",
+        "type": "object"
+      },
+      "ModelList": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PublicModel"
+            },
+            "type": "array"
+          },
+          "object": {
+            "const": "list"
+          }
+        },
+        "required": [
+          "object",
+          "data"
+        ],
+        "type": "object"
+      },
+      "ModelOwner": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "ModelReasoning": {
+        "additionalProperties": false,
+        "description": "How this model reasons (docs/reference/gateway.md, Reasoning budget). levels: the native reasoning_effort levels, empty for a model that only switches thinking on or off; default_level: the level a request naming none runs at; thinking_off: whether reasoning_effort none turns thinking off; thinking_ceiling_tokens: the safety ceiling on thinking; budget_enforced: whether max_tokens caps the answer with thinking budgeted separately (reasoning.max_tokens a hard thinking limit).",
+        "properties": {
+          "budget_enforced": {
+            "type": "boolean"
+          },
+          "default_level": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelReasoningLevel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/ModelReasoningLevel"
+            },
+            "maxItems": 7,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "thinking_ceiling_tokens": {
+            "maximum": 2097152,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "thinking_off": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "levels",
+          "default_level",
+          "thinking_off",
+          "thinking_ceiling_tokens",
+          "budget_enforced"
+        ],
+        "type": "object"
+      },
+      "ModelReasoningLevel": {
+        "description": "A reasoning_effort name. Held equal to chat_completions_request.schema.json's ReasoningEffort by contracts/tests/test_contracts.py, so this schema stays self-contained.",
+        "enum": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "type": "string"
+      },
+      "OpenAIError": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/OpenAIErrorDetail"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "OpenAIErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "$ref": "#/components/schemas/ErrorMessage"
+          },
+          "param": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorParameter"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/ErrorType"
+          }
+        },
+        "required": [
+          "message",
+          "type"
+        ],
+        "type": "object"
+      },
+      "OpenRouterDatacenter": {
+        "additionalProperties": false,
+        "description": "One place a model is served from, as OpenRouter's legacy format names it: the country only.",
+        "properties": {
+          "country_code": {
+            "$ref": "#/components/schemas/CountryCode"
+          }
+        },
+        "required": [
+          "country_code"
+        ],
+        "type": "object"
+      },
+      "OpenRouterFeature": {
+        "description": "One request feature, as OpenRouter names it (for example tools, reasoning). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenRouterInputModality": {
+        "description": "One input modality, as OpenRouter names it (for example text, image). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenRouterOutputModality": {
+        "description": "One output modality, as OpenRouter names it (for example text). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenRouterPricing": {
+        "additionalProperties": false,
+        "description": "USD per ONE token, as decimal strings so no float rounds them. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+        "properties": {
+          "completion": {
+            "$ref": "#/components/schemas/UsdPerToken"
+          },
+          "input_cache_read": {
+            "$ref": "#/components/schemas/UsdPerToken"
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/UsdPerToken"
+          }
+        },
+        "required": [
+          "prompt",
+          "completion"
+        ],
+        "type": "object"
+      },
+      "OpenRouterQuantization": {
+        "description": "A weight precision, as OpenRouter names it (for example fp8, nvfp4). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "OpenRouterSamplingParameter": {
+        "description": "One sampling parameter, as OpenRouter names it (for example temperature, top_p). Informational: a plain string, never an enum, so a value added later cannot fail a client's parser; the vocabulary is enforced where the value is generated (scripts/generate_constants.py).",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "PollResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "access_token": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Token"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "minLength": 3,
+                "pattern": "^[^\\s@]+@[^\\s@]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CliPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PollStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "PollResponse",
+        "type": "object"
+      },
+      "PollStatus": {
+        "enum": [
+          "pending",
+          "approved",
+          "denied",
+          "expired"
+        ],
+        "title": "PollStatus",
+        "type": "string"
+      },
+      "PublicModel": {
+        "additionalProperties": false,
+        "properties": {
+          "context_length": {
+            "description": "The whole context window in tokens, prompt and output together -- not max_input_tokens, which is the largest prompt this deployment still answers. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "created": {
+            "description": "OpenAI-shaped creation timestamp (unix seconds) the gateway reports; informational.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "datacenters": {
+            "description": "Where the model is served from: one entry per country. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterDatacenter"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": {
+            "description": "One line of public prose about the model as served: what the other fields alone cannot say. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
+          "hugging_face_id": {
+            "description": "The Hugging Face repository OpenRouter groups this model's providers by (org/repo), or empty when the model is not on Hugging Face. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "maxLength": 255,
+            "pattern": "^([A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*)?$",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/PublicModelId"
+          },
+          "input_modalities": {
+            "description": "What a request may carry. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterInputModality"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "max_input_tokens": {
+            "description": "The advertised ceiling on input tokens for this model -- what an OpenAI-shaped coding agent reads to decide when to compact. It is the largest prompt the engine still answers with one output token, not the raw context length: a prompt longer than this is refused with 400 before it is billed. null means the deployment has not established one.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_output_length": {
+            "description": "The most output tokens one request can be granted. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_output_tokens": {
+            "description": "The advertised ceiling on output tokens, when the deployment declares one separately from the context window. null means this model draws output from the single budget max_input_tokens already describes.",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "description": "The gateway's model mode; every Wally model is a chat model.",
+            "enum": [
+              "chat"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The model's display name. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "object": {
+            "const": "model"
+          },
+          "output_modalities": {
+            "description": "What a response carries. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterOutputModality"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "owned_by": {
+            "$ref": "#/components/schemas/ModelOwner"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/OpenRouterPricing"
+          },
+          "quantization": {
+            "$ref": "#/components/schemas/OpenRouterQuantization",
+            "description": "The served weights' precision, as OpenRouter names it. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it."
+          },
+          "reasoning": {
+            "$ref": "#/components/schemas/ModelReasoning"
+          },
+          "supported_features": {
+            "description": "The request features this model honours, each measured live; an absent name is unsupported. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterFeature"
+            },
+            "type": "array",
+            "uniqueItems": true
+          },
+          "supported_sampling_parameters": {
+            "description": "The sampling parameters this model honours, each measured live; an absent name is unsupported. OpenRouter's legacy provider field (openrouter.ai/docs 'Provider Integration (Legacy Format)'), added by the gateway to an entry whose model is described to OpenRouter; OpenAI clients ignore it.",
+            "items": {
+              "$ref": "#/components/schemas/OpenRouterSamplingParameter"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "owned_by"
+        ],
+        "type": "object"
+      },
+      "PublicModelId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+        "type": "string"
+      },
+      "RequestId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "RetryAfterSeconds": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "RevokeCliAuthorizationHeaderAuthorizationValue": {
+        "default": "",
+        "maxLength": 8192,
+        "title": "Authorization",
+        "type": "string"
+      },
+      "ServerTiming": {
+        "description": "W3C Server-Timing. As a HEADER it carries pre-stream phases only, for example the gateway's authorize call and the sidecar's ra-queue (time waiting for a seat) and ra-admit (the sidecar's own work before the request reached the model). Time to first token is never in the header, because it is not known when the headers are sent; on a streaming response it arrives as a Server-Timing TRAILER named ra-ttft, after the last SSE frame. Metric names are not a closed set: ignore a name you do not know, and treat the trailer as optional.",
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "UsageModelRollup": {
+        "additionalProperties": false,
+        "properties": {
+          "cached_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cached Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cost Micros",
+            "type": "integer"
+          },
+          "model": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Model",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "requests": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "model",
+          "requests",
+          "prompt_tokens",
+          "completion_tokens",
+          "cached_tokens",
+          "cost_micros"
+        ],
+        "title": "UsageModelRollup",
+        "type": "object"
+      },
+      "UsageProvider": {
+        "enum": [
+          "self_hosted_sglang",
+          "vertex_ai",
+          "unknown"
+        ],
+        "title": "UsageProvider",
+        "type": "string"
+      },
+      "UsageRequestPage": {
+        "additionalProperties": false,
+        "description": "One page of an account's settled request history, newest first.\n\nEvery row is a settled usage event: a hold still open, or a request refused\nbefore anything wrote usage for it, is not in this list. `as_of` is the\nsnapshot the first page took, a minute behind the ledger's clock; every\npage of one export (follow\n`next_cursor`, sending the same `since`, `until` and filters) reports rows\nwritten at or before it, and `totals` covers all of them. A request that\nsettles later appears in the next fresh export. `next_cursor` is null on\nthe last page.",
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/UsageRequestRecord"
+            },
+            "title": "Requests",
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/UsageRequestTotals"
+          }
+        },
+        "required": [
+          "as_of",
+          "totals",
+          "requests",
+          "next_cursor"
+        ],
+        "title": "UsageRequestPage",
+        "type": "object"
+      },
+      "UsageRequestRecord": {
+        "additionalProperties": false,
+        "description": "One settled request, as the ledger recorded and charged it.\n\n`cost_micros` is the amount charged: the priced cost, or 0 when the failure\nwas ours (status >= 500). `noncached_prompt_tokens` is DERIVED, not an\nengine count: the prompt less its cached subset, clamped the way pricing\nclamps it, so it is the fresh input `cost_micros` was priced on.\n`reasoning_tokens` is reported as the engine sent it and is not guaranteed\nto be a subset of `completion_tokens`. `request_id` is the ledger's own,\nunique id; `response_request_id` is the `x-request-id` the response carried,\nwhich is what a client logs, and is null when none was recorded.\n`ts_start`/`ts_end` are when the request ran; `recorded_at` is when the\nledger wrote the row. No prompt or completion text, key material or account\nidentity is ever included.",
+        "properties": {
+          "api_key_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Id"
+          },
+          "cached_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Cached Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cost Micros",
+            "type": "integer"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "finish_reason": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finish Reason"
+          },
+          "max_tokens_granted": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens Granted"
+          },
+          "max_tokens_requested": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens Requested"
+          },
+          "model": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "title": "Model",
+            "type": "string"
+          },
+          "noncached_prompt_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Noncached Prompt Tokens",
+            "type": "integer"
+          },
+          "pricing_version": {
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "title": "Pricing Version",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageProvider"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasoning_tokens": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "response_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Request Id"
+          },
+          "status_code": {
+            "maximum": 599.0,
+            "minimum": 100.0,
+            "title": "Status Code",
+            "type": "integer"
+          },
+          "stream": {
+            "title": "Stream",
+            "type": "boolean"
+          },
+          "tpot_ms": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tpot Ms"
+          },
+          "ts_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ts End"
+          },
+          "ts_start": {
+            "format": "date-time",
+            "title": "Ts Start",
+            "type": "string"
+          },
+          "ttft_ms": {
+            "anyOf": [
+              {
+                "maximum": 2147483647.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttft Ms"
+          }
+        },
+        "required": [
+          "request_id",
+          "response_request_id",
+          "api_key_id",
+          "model",
+          "provider",
+          "status_code",
+          "error_code",
+          "finish_reason",
+          "stream",
+          "ts_start",
+          "ts_end",
+          "recorded_at",
+          "prompt_tokens",
+          "cached_tokens",
+          "noncached_prompt_tokens",
+          "completion_tokens",
+          "reasoning_tokens",
+          "max_tokens_requested",
+          "max_tokens_granted",
+          "ttft_ms",
+          "tpot_ms",
+          "cost_micros",
+          "pricing_version"
+        ],
+        "title": "UsageRequestRecord",
+        "type": "object"
+      },
+      "UsageRequestTotals": {
+        "additionalProperties": false,
+        "description": "The whole snapshot's totals, identical on every page of one export.",
+        "properties": {
+          "cached_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cached Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cost Micros",
+            "type": "integer"
+          },
+          "noncached_prompt_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Noncached Prompt Tokens",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Reasoning Tokens",
+            "type": "integer"
+          },
+          "requests": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "prompt_tokens",
+          "cached_tokens",
+          "noncached_prompt_tokens",
+          "completion_tokens",
+          "reasoning_tokens",
+          "cost_micros"
+        ],
+        "title": "UsageRequestTotals",
+        "type": "object"
+      },
+      "UsageTimelinePoint": {
+        "additionalProperties": false,
+        "properties": {
+          "completion_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cost Micros",
+            "type": "integer"
+          },
+          "date": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "title": "Date",
+            "type": "string"
+          },
+          "prompt_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "requests": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "date",
+          "requests",
+          "prompt_tokens",
+          "completion_tokens",
+          "cost_micros"
+        ],
+        "title": "UsageTimelinePoint",
+        "type": "object"
+      },
+      "UsageTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "cached_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cached Tokens",
+            "type": "integer"
+          },
+          "completion_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Completion Tokens",
+            "type": "integer"
+          },
+          "cost_micros": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cost Micros",
+            "type": "integer"
+          },
+          "prompt_tokens": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "requests": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Requests",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "prompt_tokens",
+          "completion_tokens",
+          "cached_tokens",
+          "cost_micros"
+        ],
+        "title": "UsageTotals",
+        "type": "object"
+      },
+      "UsdPerToken": {
+        "description": "A non-negative USD amount per token as a plain decimal string: never exponent form, no trailing zeros.",
+        "maxLength": 64,
+        "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$",
+        "type": "string"
+      }
+    }
+  },
+  "info": {
+    "description": "CLI-facing operations extracted from control-plane-v1.openapi.json by contracts/extract-cli-contract.py. Do not hand-edit.",
+    "title": "Wally CLI control-plane contract (extract)",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/auth/cli/poll": {
+      "post": {
+        "operationId": "pollCliAuthorization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliPollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PollResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "summary": "Poll",
+        "tags": [
+          "cli auth"
+        ]
+      }
+    },
+    "/auth/cli/refresh": {
+      "post": {
+        "operationId": "refreshCliAuthorization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "summary": "Refresh",
+        "tags": [
+          "cli auth"
+        ]
+      }
+    },
+    "/auth/cli/revoke": {
+      "post": {
+        "description": "Invalidate both halves of an RCLI login.\n\nThe response is always 204, including for an unknown or already-revoked\ncredential. Logout is safe to retry after a lost response, and callers do\nnot get a token-validity oracle.",
+        "operationId": "revokeCliAuthorization",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RevokeCliAuthorizationHeaderAuthorizationParameter"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "summary": "Revoke",
+        "tags": [
+          "cli auth"
+        ]
+      }
+    },
+    "/auth/cli/start": {
+      "post": {
+        "description": "Open an authorization request. Unauthenticated by design: the terminal\nhas no credential yet, which is the reason this flow exists.\n\nBeing unauthenticated is also why it is rate limited. Nothing here costs a\ncustomer anything, but a row is written per call and the endpoint is public.",
+        "operationId": "startCliAuthorization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CliStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliStartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "summary": "Start",
+        "tags": [
+          "cli auth"
+        ]
+      }
+    },
+    "/v1/cli/usage": {
+      "get": {
+        "description": "One read: the balance, the window's totals, and how they were spent.\n\nA terminal draws its whole report in one go, so splitting this across three\nround-trips would only give the CLI three chances to render a report whose\nparts disagree about when they were taken.",
+        "operationId": "getCliUsage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/GetCliUsageQueryDaysParameter"
+          },
+          {
+            "$ref": "#/components/parameters/GetCliUsageQueryModelParameter"
+          },
+          {
+            "$ref": "#/components/parameters/GetCliUsageQueryLimitParameter"
+          },
+          {
+            "$ref": "#/components/parameters/GetCliUsageHeaderAuthorizationParameter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CliUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Usage",
+        "tags": [
+          "cli"
+        ]
+      }
+    },
+    "/v1/cli/usage/requests": {
+      "get": {
+        "description": "The account's settled requests in `[since, until)`, newest first.\n\nBoth ends must carry a timezone and span at most 31 days. To read the next\npage, send the same window and filters with `cursor` set to the previous\npage's `next_cursor`; a cursor from a different window, filter set or\naccount is refused rather than reinterpreted. `api_key_id` and\n`request_id` narrow within this account only, so another account's key or\nrequest reads as an empty page, never as a 404.\n\n`response_request_id` finds the rows for the `x-request-id` a response\ncarried -- the id a client logs; `request_id` is the ledger's own. The\nformer is a label rather than a key, so it may match more than one row.",
+        "operationId": "listCliUsageRequests",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQuerySinceParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryUntilParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryModelParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryStatusCodeParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryRequestIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryApiKeyIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryResponseRequestIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryLimitParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsQueryCursorParameter"
+          },
+          {
+            "$ref": "#/components/parameters/ListCliUsageRequestsHeaderAuthorizationParameter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageRequestPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Usage Requests",
+        "tags": [
+          "cli"
+        ]
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "description": "`rcli whoami`. Authenticated by the API key the CLI was issued, because\nthat is the only credential it has.\n\nThe contract declares that key as `BearerAuth`. The same Authorization\nheader also carries the console's signed PropelAuth session token, and\nwhere PropelAuth is not configured, never in production, the `X-User-Id`\nand `X-User-Email` development identity headers are accepted instead.\nNeither is a separate security scheme: this contract declares no console\nsession scheme on any operation, and the development headers are not a\ncredential.",
+        "operationId": "getCurrentIdentity",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/GetCurrentIdentityHeaderAuthorizationParameter"
+          },
+          {
+            "$ref": "#/components/parameters/GetCurrentIdentityHeaderXUserIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/GetCurrentIdentityHeaderXUserEmailParameter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Me",
+        "tags": [
+          "cli auth"
+        ]
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            },
+            "description": "Available model aliases"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List models available to the current key",
+        "tags": [
+          "inference"
+        ]
+      }
+    },
+    "/v1/models/catalog": {
+      "get": {
+        "description": "Which models we serve and what they cost.\n\nThe console used to name a single model from a config constant, which was\ntrue when the endpoint served one and became wrong the moment LiteLLM sat in\nfront of three. Prices come from the same catalog the gate charges against,\nso a published price cannot drift from a billed one.",
+        "operationId": "getModelCatalog",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "summary": "Model Catalog",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/v1/requests/{request_id}/cancel": {
+      "post": {
+        "description": "End an in-flight request the caller's key started (#440).\n\n`request_id` is the `x-request-id` the customer received on the response\nbeing cancelled. The GPU nodes are asked on this service's behalf with the\ncredential they already hold for this ledger (see services/cancel.py), and\neach ends the request only if that key started it. Anything else -- an id\nnobody is serving, a request that already finished, someone else's -- is\nthe same 404, so this route cannot be used to learn about other customers'\nrequests. A successful cancel is 202: the node has told the engine to stop;\nthe stream's end and its settlement follow on their own path.",
+        "operationId": "cancelRequest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CancelRequestPathRequestIdParameter"
+          },
+          {
+            "$ref": "#/components/parameters/CancelRequestHeaderAuthorizationParameter"
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "default": {
+            "$ref": "#/components/responses/ApiError"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Cancel Request",
+        "tags": [
+          "console"
+        ]
+      }
+    }
+  },
+  "x-runanywhere-source": {
+    "artifact": "contracts/control-plane-v1.openapi.json",
+    "branch": "main",
+    "commit": "97f4799832d1931c6462aa0de6406735210e6053",
+    "repository": "RunanywhereAI/InferenceInfra"
+  }
+}

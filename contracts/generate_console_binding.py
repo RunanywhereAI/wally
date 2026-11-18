@@ -22,6 +22,16 @@ the build if the two drift.
 Run it and commit the file whenever the pinned contract changes. Never edit
 generated bindings by hand. With no path arguments, the historical console
 contract/output remain the defaults.
+
+`--legacy-contract` names the same slice as legacy production serves it. Until
+inference.runanywhere.ai moves to the new infrastructure, a released CLI talks
+to legacy, and after it to new infra, so one binding has to read both: what only
+legacy sends (an enum value, a property, a whole schema) is added to the pinned
+contract's types, a legacy-only property is always optional, and a property the
+two type differently is refused, because no single reader parses both. The
+console binding takes `contracts/wally-cli-v1.legacy.openapi.json` by default
+when that file exists; delete it once legacy is retired and the binding goes
+back to the pinned contract alone.
 """
 
 from __future__ import annotations
@@ -36,6 +46,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONTRACT = ROOT / "wally-cli-v1.openapi.json"
 DEFAULT_OUTPUT = ROOT.parent / "src" / "account" / "console_contract.rs"
+DEFAULT_LEGACY = ROOT / "wally-cli-v1.legacy.openapi.json"
 
 INT = "i64"
 FLOAT = "f64"
@@ -67,7 +78,11 @@ def _resolve_type(schema: dict, schemas: dict) -> tuple[str, bool]:
         target = schemas.get(name, {})
         # Constrained scalar aliases have no emitted type of their own -- only
         # objects, unions and enums get one -- so inline their primitive.
-        if target.get("type") in {"string", "integer", "number", "boolean"} and "enum" not in target:
+        if (
+            isinstance(target.get("type"), str)
+            and target["type"] in {"string", "integer", "number", "boolean"}
+            and "enum" not in target
+        ):
             return _resolve_type(target, schemas)
         return name, False
     if "const" in schema:
@@ -128,6 +143,85 @@ def _resolve_type(schema: dict, schemas: dict) -> tuple[str, bool]:
 
 def _is_enum(schema: dict) -> bool:
     return "enum" in schema and schema.get("type") == "string"
+
+
+def _schema_kind(schema: dict) -> str:
+    if _is_enum(schema):
+        return "enum"
+    if "oneOf" in schema:
+        return "union"
+    if schema.get("type") == "object":
+        return "object"
+    return "scalar"
+
+
+def merge_legacy(schemas: dict, legacy_schemas: dict) -> dict:
+    """`schemas` plus what only `legacy_schemas` carries; a copy, never the source.
+
+    A legacy-only schema is added whole. A legacy-only enum value is appended
+    after the pinned contract's own. A legacy-only object property is added and
+    is never required: the new server does not send it. A property of a shared
+    object stays required only when both contracts require it and neither lets
+    it be null; otherwise the reader would default it silently for one server.
+    Anything else that differs is refused (SystemExit naming the schema), since
+    a binding that silently picks one side would fail to parse the other server."""
+    merged = json.loads(json.dumps(schemas))
+    for name, legacy in legacy_schemas.items():
+        current = merged.get(name)
+        if current is None:
+            merged[name] = json.loads(json.dumps(legacy))
+            continue
+        kind, legacy_kind = _schema_kind(current), _schema_kind(legacy)
+        if kind != legacy_kind:
+            raise SystemExit(
+                f"legacy contract conflict: {name} is a {kind} in the pinned contract "
+                f"and a {legacy_kind} in the legacy contract"
+            )
+        if kind == "enum":
+            current["enum"] = current["enum"] + [
+                value for value in legacy["enum"] if value not in current["enum"]
+            ]
+        elif kind == "object":
+            properties = current.setdefault("properties", {})
+            legacy_properties = legacy.get("properties", {})
+            legacy_required = set(legacy.get("required", []))
+            if "required" in current:
+                current["required"] = [
+                    prop
+                    for prop in current["required"]
+                    if prop in legacy_required
+                    and prop in legacy_properties
+                    and not _resolve_type(legacy_properties[prop], legacy_schemas)[1]
+                ]
+            for prop, legacy_prop in legacy_properties.items():
+                if prop not in properties:
+                    properties[prop] = json.loads(json.dumps(legacy_prop))
+                    continue
+                if properties[prop] == legacy_prop:
+                    continue
+                ours = _resolve_type(properties[prop], merged)[0]
+                theirs = _resolve_type(legacy_prop, legacy_schemas)[0]
+                if ours != theirs:
+                    raise SystemExit(
+                        f"legacy contract conflict: {name}.{prop} is {ours} in the pinned "
+                        f"contract and {theirs} in the legacy contract"
+                    )
+        elif kind == "union":
+            if current.get("discriminator") != legacy.get("discriminator") or current.get(
+                "oneOf"
+            ) != legacy.get("oneOf"):
+                raise SystemExit(
+                    f"legacy contract conflict: {name} has different variants in the "
+                    "pinned and legacy contracts"
+                )
+        elif current != legacy and (
+            _resolve_type(current, merged)[0] != _resolve_type(legacy, legacy_schemas)[0]
+        ):
+            raise SystemExit(
+                f"legacy contract conflict: {name} has a different type in the pinned "
+                "and legacy contracts"
+            )
+    return merged
 
 
 def _to_value_expr(base: str, var: str, enums: set[str], objects: set[str], is_ref: bool) -> str:
@@ -352,11 +446,20 @@ def _rustfmt(source: str) -> str:
     return result.stdout
 
 
-def render(contract_path: Path, operation_id: str | None = None) -> str:
+def render(
+    contract_path: Path,
+    operation_id: str | None = None,
+    legacy_path: Path | None = None,
+) -> str:
     raw = contract_path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     document = json.loads(raw)
     schemas = document["components"]["schemas"]
+    legacy_digest = None
+    if legacy_path is not None:
+        legacy_raw = legacy_path.read_bytes()
+        legacy_digest = hashlib.sha256(legacy_raw).hexdigest()
+        schemas = merge_legacy(schemas, json.loads(legacy_raw)["components"]["schemas"])
 
     if operation_id:
         operation = next(
@@ -469,6 +572,18 @@ def render(contract_path: Path, operation_id: str | None = None) -> str:
         f'pub const CONTRACT_SHA256: &str = "{digest}";',
         "",
     ]
+    if legacy_path is not None:
+        out[1:2] = [
+            f"// contracts/{contract_path.name}, plus what only legacy production sends",
+            f"// (contracts/{legacy_path.name}). DO NOT EDIT.",
+        ]
+        out.extend(
+            [
+                f"/// SHA-256 of contracts/{legacy_path.name}, the legacy slice merged in.",
+                f'pub const LEGACY_CONTRACT_SHA256: &str = "{legacy_digest}";',
+                "",
+            ]
+        )
     if needs_btree:
         out.insert(out.index("use serde_json::Value;"), "use std::collections::BTreeMap;")
     for name in sorted(enums):
@@ -510,10 +625,19 @@ def main() -> None:
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--operation-id", help="generate only types reachable from this operation")
+    parser.add_argument(
+        "--legacy-contract",
+        type=Path,
+        help="the same slice as legacy production serves it, merged in additively "
+        f"(default for the console binding: {DEFAULT_LEGACY.name} when it exists)",
+    )
     args = parser.parse_args()
     contract_path = args.contract.resolve()
     output = args.output.resolve()
-    rendered = render(contract_path, args.operation_id)
+    legacy_path = args.legacy_contract.resolve() if args.legacy_contract else None
+    if legacy_path is None and contract_path == DEFAULT_CONTRACT.resolve() and DEFAULT_LEGACY.is_file():
+        legacy_path = DEFAULT_LEGACY.resolve()
+    rendered = render(contract_path, args.operation_id, legacy_path)
     if args.check:
         current = output.read_text(encoding="utf-8") if output.exists() else ""
         if current != rendered:
@@ -522,6 +646,7 @@ def main() -> None:
                 "  python3 contracts/generate_console_binding.py"
                 f" --contract {args.contract} --output {args.output}"
                 + (f" --operation-id {args.operation_id}" if args.operation_id else "")
+                + (f" --legacy-contract {args.legacy_contract}" if args.legacy_contract else "")
                 + "\n"
                 "and commit the result.\n"
             )

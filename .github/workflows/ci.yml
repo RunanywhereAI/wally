@@ -22,11 +22,12 @@ permissions:
 # variables, not secrets. A fork does not have them unless its owner defines
 # them; WALLY_CONSOLE_OPTIONAL lets that build finish with no default console
 # instead of failing configure. This repo always sets the variables, so a
-# missing one here is still a hard failure. The alt origin is optional and
-# unset here.
+# missing one here is still a hard failure. The alt origin is optional: empty
+# when the repository variable is unset, the same value release.yml bakes in.
 env:
   WALLY_BAKED_CONSOLE_API_URL: ${{ vars.WALLY_PROD_CONSOLE_API_URL }}
   WALLY_BAKED_CONSOLE_WEB_ORIGIN: ${{ vars.WALLY_PROD_CONSOLE_WEB_ORIGIN }}
+  WALLY_BAKED_CONSOLE_WEB_ORIGIN_ALT: ${{ vars.WALLY_PROD_CONSOLE_WEB_ORIGIN_ALT }}
   WALLY_CONSOLE_OPTIONAL: ${{ (github.event.repository.fork || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork)) && '1' || '' }}
 
 concurrency:

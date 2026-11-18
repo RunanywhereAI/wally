@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The CLI contract sync wrapper describes itself and refuses a pin with no provenance."""
+"""The CLI contract sync wrapper describes itself and refuses a pin with no provenance; the extractor carves the slice."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SYNC = REPO / "contracts" / "sync_from_inferenceinfra.py"
 EXTRACT = REPO / "contracts" / "wally-cli-v1.openapi.json"
+EXTRACTOR = REPO / "contracts" / "extract-cli-contract.py"
 
 
 def _check(*extra: str) -> subprocess.CompletedProcess[str]:
@@ -100,6 +101,344 @@ class ContractSyncTests(unittest.TestCase):
                 source[field] = ""
                 document["x-runanywhere-source"] = source
                 self._assert_refused(document, field)
+
+
+class ExtractorNarrowingTests(unittest.TestCase):
+    """`GET /v1/models` is carved to the one form the CLI reads (extract-cli-contract.py)."""
+
+    def _extract(self, source: dict) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "control-plane-v1.openapi.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            output = Path(directory) / "extract.json"
+            result = subprocess.run(
+                [sys.executable, str(EXTRACTOR), str(source_path), "--output", str(output)],
+                cwd=REPO,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+            return json.loads(output.read_text(encoding="utf-8"))
+
+    def _source_with_a_format_query(self) -> dict:
+        """The committed extract, with listModels as the control plane describes it once the
+        models list can also answer `?format=openrouter-v2`: a format query, and a `oneOf`
+        response with no discriminator whose second branch is a shape the generator cannot read."""
+        document = json.loads(EXTRACT.read_text(encoding="utf-8"))
+        components = document["components"]
+        components["parameters"]["ModelListFormatQuery"] = {
+            "in": "query",
+            "name": "format",
+            "required": False,
+            "schema": {"enum": ["openrouter-v2"], "type": "string"},
+        }
+        components["schemas"]["OpenRouterModelDocumentList"] = {
+            "type": "object",
+            "properties": {"data": {"type": "array", "items": {"type": "object"}}},
+        }
+        components["schemas"]["ModelListResponse"] = {
+            "oneOf": [
+                {"$ref": "#/components/schemas/ModelList"},
+                {"$ref": "#/components/schemas/OpenRouterModelDocumentList"},
+            ]
+        }
+        operation = document["paths"]["/v1/models"]["get"]
+        operation["parameters"] = [{"$ref": "#/components/parameters/ModelListFormatQuery"}]
+        operation["responses"]["200"]["content"]["application/json"]["schema"] = {
+            "$ref": "#/components/schemas/ModelListResponse"
+        }
+        return document
+
+    def test_models_list_keeps_only_the_default_form(self):
+        extract = self._extract(self._source_with_a_format_query())
+        operation = extract["paths"]["/v1/models"]["get"]
+        self.assertEqual(
+            {"$ref": "#/components/schemas/ModelList"},
+            operation["responses"]["200"]["content"]["application/json"]["schema"],
+        )
+        self.assertNotIn("parameters", operation)
+        self.assertNotIn("ModelListFormatQuery", extract["components"]["parameters"])
+        self.assertNotIn("ModelListResponse", extract["components"]["schemas"])
+        self.assertNotIn("OpenRouterModelDocumentList", extract["components"]["schemas"])
+
+    def test_the_other_form_changing_does_not_move_the_slice(self):
+        before = self._source_with_a_format_query()
+        after = self._source_with_a_format_query()
+        after["components"]["schemas"]["OpenRouterModelDocumentList"]["properties"]["next"] = {
+            "type": "string"
+        }
+        self.assertEqual(self._extract(before), self._extract(after))
+
+    def test_a_source_without_the_format_query_is_carried_unchanged(self):
+        document = json.loads(EXTRACT.read_text(encoding="utf-8"))
+        self.assertEqual(
+            document["paths"], self._extract(document)["paths"]
+        )
+
+
+GENERATOR = REPO / "contracts" / "generate_console_binding.py"
+LEGACY_EXTRACT = REPO / "contracts" / "wally-cli-v1.legacy.openapi.json"
+DECISIONS_LEGACY = REPO / "contracts" / "wally-decisions-public-v1.legacy.openapi.json"
+
+
+def _tiny_contract(**schemas: dict) -> dict:
+    return {
+        "openapi": "3.1.0",
+        "info": {"title": "t", "version": "1"},
+        "paths": {},
+        "components": {"schemas": schemas},
+    }
+
+
+class LegacyMergeTests(unittest.TestCase):
+    """Until the DNS flip the CLI talks to legacy; after it, to new infra. The binding reads both.
+
+    generate_console_binding.py --legacy-contract adds what only legacy sends (enum values,
+    optional properties, whole schemas) to the binding of the pinned contract, and refuses a
+    property the two type differently, since no one reader parses both."""
+
+    def _render(self, current: dict, legacy: dict | None) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            current_path = Path(directory) / "current.json"
+            current_path.write_text(json.dumps(current), encoding="utf-8")
+            output = Path(directory) / "out.rs"
+            argv = [
+                sys.executable,
+                str(GENERATOR),
+                "--contract",
+                str(current_path),
+                "--output",
+                str(output),
+            ]
+            if legacy is not None:
+                legacy_path = Path(directory) / "legacy.json"
+                legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+                argv += ["--legacy-contract", str(legacy_path)]
+            result = subprocess.run(argv, cwd=REPO, capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                result.stdout = output.read_text(encoding="utf-8")
+            return result
+
+    def _pair(self) -> tuple[dict, dict]:
+        current = _tiny_contract(
+            Code={"type": "string", "enum": ["forbidden", "organization_limit_reached"]},
+            Me={
+                "type": "object",
+                "required": ["email"],
+                "properties": {"email": {"type": "string"}},
+            },
+        )
+        legacy = _tiny_contract(
+            Code={"type": "string", "enum": ["forbidden", "coding_plan_full"]},
+            Kind={"type": "string", "enum": ["personal", "team"]},
+            Me={
+                "type": "object",
+                "required": ["email", "kind"],
+                "properties": {
+                    "email": {"type": "string"},
+                    "kind": {"$ref": "#/components/schemas/Kind"},
+                },
+            },
+        )
+        return current, legacy
+
+    def test_legacy_only_values_properties_and_schemas_are_added(self):
+        current, legacy = self._pair()
+        result = self._render(current, legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+        binding = result.stdout
+        # Both servers' codes parse: the new one first, then what only legacy sends.
+        self.assertIn('"organization_limit_reached" => Ok(Code::KOrganizationLimitReached)', binding)
+        self.assertIn('"coding_plan_full" => Ok(Code::KCodingPlanFull)', binding)
+        # A legacy-only schema is emitted, and a legacy-only property is read as optional
+        # (new infra never sends it), even where legacy marks it required.
+        self.assertIn("pub enum Kind", binding)
+        self.assertIn("pub kind: Option<Kind>,", binding)
+        self.assertIn("pub email: String,", binding)
+        self.assertIn("pub const LEGACY_CONTRACT_SHA256", binding)
+
+    def test_no_legacy_contract_renders_the_pinned_contract_alone(self):
+        current, _legacy = self._pair()
+        result = self._render(current, None)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("coding_plan_full", result.stdout)
+        self.assertNotIn("LEGACY_CONTRACT_SHA256", result.stdout)
+
+    def test_a_property_typed_differently_is_refused(self):
+        current, legacy = self._pair()
+        legacy["components"]["schemas"]["Me"]["properties"]["email"] = {"type": "integer"}
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Me.email", result.stderr)
+
+    def test_a_schema_that_changes_kind_is_refused(self):
+        current, legacy = self._pair()
+        legacy["components"]["schemas"]["Code"] = {"type": "object", "properties": {}}
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Code", result.stderr)
+
+    def test_a_field_only_the_pinned_contract_requires_is_read_as_optional(self):
+        """Pinned requires it, legacy does not send it: a required reader would default it silently."""
+        current, legacy = self._pair()
+        me = current["components"]["schemas"]["Me"]
+        me["properties"]["plan"] = {"type": "string"}
+        me["required"] = ["email", "plan"]
+        result = self._render(current, legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("pub plan: Option<String>,", result.stdout)
+        self.assertIn("pub email: String,", result.stdout)
+
+    def test_a_field_legacy_sends_as_optional_or_null_is_read_as_optional(self):
+        for how in ("not_required", "nullable"):
+            with self.subTest(how=how):
+                current, legacy = self._pair()
+                legacy_me = legacy["components"]["schemas"]["Me"]
+                if how == "not_required":
+                    legacy_me["required"] = ["kind"]
+                else:
+                    legacy_me["properties"]["email"] = {"type": ["string", "null"]}
+                result = self._render(current, legacy)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn("pub email: Option<String>,", result.stdout)
+
+    def _union_pair(self) -> tuple[dict, dict]:
+        def union(*variants: str) -> dict:
+            return {
+                "oneOf": [{"$ref": f"#/components/schemas/{v}"} for v in variants],
+                "discriminator": {
+                    "propertyName": "kind",
+                    "mapping": {v.lower(): f"#/components/schemas/{v}" for v in variants},
+                },
+            }
+
+        def variant() -> dict:
+            return {"type": "object", "properties": {"kind": {"type": "string"}}}
+
+        current = _tiny_contract(A=variant(), B=variant(), U=union("A", "B"))
+        legacy = _tiny_contract(A=variant(), B=variant(), C=variant(), U=union("A", "B"))
+        return current, legacy
+
+    def test_identical_unions_merge(self):
+        current, legacy = self._union_pair()
+        result = self._render(current, legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("pub enum U", result.stdout)
+
+    def test_a_union_variant_only_legacy_has_is_refused(self):
+        """Comparing the discriminator alone missed a variant listed only in `oneOf`."""
+        current, legacy = self._union_pair()
+        legacy_u = legacy["components"]["schemas"]["U"]
+        legacy_u["oneOf"].append({"$ref": "#/components/schemas/C"})
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("U has different variants", result.stderr)
+        legacy_u["discriminator"]["mapping"]["c"] = "#/components/schemas/C"
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("U has different variants", result.stderr)
+
+    def test_a_scalar_alias_typed_differently_is_refused(self):
+        current = _tiny_contract(Id={"type": "string", "maxLength": 8})
+        legacy = _tiny_contract(Id={"type": "integer"})
+        result = self._render(current, legacy)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Id has a different type", result.stderr)
+        legacy = _tiny_contract(Id={"type": "string", "maxLength": 16})
+        result = self._render(current, legacy)
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_committed_legacy_pins_carry_provenance(self):
+        """The legacy extract names the InferenceInfra commit legacy production runs."""
+        document = json.loads(LEGACY_EXTRACT.read_text(encoding="utf-8"))
+        source = document.get("x-runanywhere-source") or {}
+        for key in ("repository", "commit", "branch", "artifact"):
+            self.assertTrue(source.get(key), key)
+        self.assertEqual("main", source["branch"])
+        self.assertTrue(DECISIONS_LEGACY.is_file())
+
+    def test_committed_binding_reads_both_servers_codes(self):
+        binding = (REPO / "src" / "account" / "console_contract.rs").read_text(encoding="utf-8")
+        self.assertIn('"organization_limit_reached"', binding)
+        self.assertIn('"coding_plan_full"', binding)
+        self.assertIn("pub account: Option<IdentityAccount>,", binding)
+
+
+def _load_sync_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("wally_contract_sync", SYNC)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+
+
+class LegacyPairGuardTests(unittest.TestCase):
+    """The sync script's own refusals around the legacy pair."""
+
+    def test_check_refuses_a_half_pair(self):
+        sync = _load_sync_module()
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "absent.json"
+            for attr in ("LEGACY_EXTRACT", "DECISIONS_LEGACY"):
+                with self.subTest(missing=attr):
+                    saved = getattr(sync, attr)
+                    setattr(sync, attr, missing)
+                    try:
+                        with self.assertRaises(SystemExit) as raised:
+                            sync.check_local()
+                    finally:
+                        setattr(sync, attr, saved)
+                    self.assertIn("half there", str(raised.exception))
+
+    def test_check_refuses_a_legacy_decisions_file_that_does_not_match_its_record(self):
+        sync = _load_sync_module()
+        with tempfile.TemporaryDirectory() as directory:
+            forged = Path(directory) / DECISIONS_LEGACY.name
+            forged.write_bytes(DECISIONS_LEGACY.read_bytes() + b"\n")
+            sync.DECISIONS_LEGACY = forged
+            with self.assertRaises(SystemExit) as raised:
+                sync.check_local()
+        self.assertIn("decisions_legacy_contract_sha256", str(raised.exception))
+
+    def test_check_refuses_a_legacy_decisions_record_from_another_commit(self):
+        """The legacy decisions file and the legacy CLI slice are cut from one main commit."""
+        sync = _load_sync_module()
+        with tempfile.TemporaryDirectory() as directory:
+            versions = Path(directory) / "versions.toml"
+            text = sync.VERSIONS.read_text(encoding="utf-8")
+            recorded = sync._versions_value("decisions_legacy_source_commit")
+            versions.write_text(text.replace(recorded, "0" * 40), encoding="utf-8")
+            sync.VERSIONS = versions
+            with self.assertRaises(SystemExit) as raised:
+                sync.check_local()
+        self.assertIn("decisions_legacy_source_commit", str(raised.exception))
+
+    def test_legacy_from_refuses_a_checkout_not_at_main(self):
+        sync = _load_sync_module()
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "contracts").mkdir()
+            (repo / sync.CONTROL_PLANE).write_text("{}", encoding="utf-8")
+            (repo / sync.DECISIONS_ARTIFACT).write_text("{}", encoding="utf-8")
+            _git(repo, "init", "-q", "-b", "staging")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-q", "-m", "seed")
+            before = LEGACY_EXTRACT.read_bytes(), DECISIONS_LEGACY.read_bytes()
+            with self.assertRaises(SystemExit) as raised:
+                sync.legacy_from(repo, force=True)
+            self.assertIn("is not at InferenceInfra main", str(raised.exception))
+            self.assertEqual(before, (LEGACY_EXTRACT.read_bytes(), DECISIONS_LEGACY.read_bytes()))
 
 
 if __name__ == "__main__":

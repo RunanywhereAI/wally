@@ -4,6 +4,13 @@
     python3 contracts/sync_from_inferenceinfra.py --from /path/to/InferenceInfra
     python3 contracts/sync_from_inferenceinfra.py --check
     python3 contracts/sync_from_inferenceinfra.py --check --from /path/to/InferenceInfra
+    python3 contracts/sync_from_inferenceinfra.py --legacy-from /path/to/InferenceInfra-at-main
+
+`--legacy-from` refreshes the legacy pair: the CLI slice and the decisions
+contract as legacy production (InferenceInfra `main`, GCP) serves them. Released
+CLIs talk to legacy until inference.runanywhere.ai moves to the new infra, so the
+bindings also read what only legacy sends (generate_console_binding.py
+--legacy-contract). Delete both legacy files once legacy is retired.
 
 `--check` without `--from` is the hermetic CI gate: the generated
 `console_contract.rs` matches the committed extract, and the extract records
@@ -15,7 +22,9 @@ consumer cannot read that private repository from CI.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,10 +36,65 @@ GENERATOR = ROOT / "generate_console_binding.py"
 EXTRACT = ROOT / "wally-cli-v1.openapi.json"
 DECISIONS_CONTRACT = ROOT / "wally-decisions-public-v1.openapi.json"
 DECISIONS_BINDING = REPO / "src" / "account" / "decisions_contract.rs"
+LEGACY_EXTRACT = ROOT / "wally-cli-v1.legacy.openapi.json"
+DECISIONS_LEGACY = ROOT / "wally-decisions-public-v1.legacy.openapi.json"
+VERSIONS = REPO / "versions.toml"
+DECISIONS_ARTIFACT = "contracts/wally-decisions-public-v1.openapi.json"
 CONTROL_PLANE = "contracts/control-plane-v1.openapi.json"
 # The two files a sync regenerates from scratch. Named once so the destination
 # guard and the error message cannot drift apart.
 GENERATED = ("contracts/wally-cli-v1.openapi.json", "src/account/console_contract.rs")
+LEGACY_GENERATED = (
+    "contracts/wally-cli-v1.legacy.openapi.json",
+    "contracts/wally-decisions-public-v1.legacy.openapi.json",
+    "src/account/console_contract.rs",
+    "src/account/decisions_contract.rs",
+    "versions.toml",
+)
+# versions.toml keys that record where the legacy decisions file came from. The
+# legacy CLI slice carries its own x-runanywhere-source; the decisions file is a
+# byte copy, so its source lives here and --check holds the two to one commit.
+LEGACY_DECISIONS_COMMIT_KEY = "decisions_legacy_source_commit"
+LEGACY_DECISIONS_SHA_KEY = "decisions_legacy_contract_sha256"
+
+
+def _versions_value(key: str) -> str | None:
+    match = re.search(rf'^{key} = "([^"]*)"$', VERSIONS.read_text(encoding="utf-8"), re.M)
+    return match.group(1) if match else None
+
+
+def _record_legacy_decisions(commit: str, digest: str) -> None:
+    text = VERSIONS.read_text(encoding="utf-8")
+    missing = []
+    for key, value in ((LEGACY_DECISIONS_COMMIT_KEY, commit), (LEGACY_DECISIONS_SHA_KEY, digest)):
+        line = f'{key} = "{value}"'
+        if re.search(rf"^{key} = ", text, re.M):
+            text = re.sub(rf'^{key} = "[^"]*"$', line, text, count=1, flags=re.M)
+        else:
+            missing.append(line)
+    if missing:
+        anchor = re.search(r'^decisions_contract_sha256 = "[^"]*"$', text, re.M)
+        if anchor is None:
+            raise SystemExit("versions.toml has no decisions_contract_sha256 to record beside")
+        text = text[: anchor.end()] + "".join("\n" + line for line in missing) + text[anchor.end() :]
+    VERSIONS.write_text(text, encoding="utf-8")
+
+
+def _decisions_argv(check: bool) -> list[str]:
+    argv = [sys.executable, str(GENERATOR)]
+    if check:
+        argv.append("--check")
+    argv += [
+        "--contract",
+        str(DECISIONS_CONTRACT),
+        "--output",
+        str(DECISIONS_BINDING),
+        "--operation-id",
+        "createDecisions",
+    ]
+    if DECISIONS_LEGACY.is_file():
+        argv += ["--legacy-contract", str(DECISIONS_LEGACY)]
+    return argv
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -78,7 +142,7 @@ def _run(argv: list[str]) -> None:
         raise SystemExit(result.returncode)
 
 
-def check_local(extract: Path = EXTRACT) -> None:
+def _provenance(extract: Path, how: str) -> dict:
     if not extract.is_file():
         raise SystemExit(f"missing {extract}")
     document = json.loads(extract.read_text(encoding="utf-8"))
@@ -87,9 +151,40 @@ def check_local(extract: Path = EXTRACT) -> None:
         if not source.get(key):
             raise SystemExit(
                 f"{extract.name} is missing x-runanywhere-source.{key}. "
-                "Run: python3 contracts/sync_from_inferenceinfra.py "
-                "--from /path/to/InferenceInfra"
+                f"Run: python3 contracts/sync_from_inferenceinfra.py {how}"
             )
+    return source
+
+
+def check_local(extract: Path = EXTRACT) -> None:
+    source = _provenance(extract, "--from /path/to/InferenceInfra")
+    if LEGACY_EXTRACT.is_file() != DECISIONS_LEGACY.is_file():
+        raise SystemExit(
+            "the legacy pair is half there: keep both "
+            f"{LEGACY_EXTRACT.name} and {DECISIONS_LEGACY.name}, or delete both"
+        )
+    legacy = ""
+    if LEGACY_EXTRACT.is_file():
+        legacy_source = _provenance(
+            LEGACY_EXTRACT, "--legacy-from /path/to/InferenceInfra-at-main"
+        )
+        recorded_commit = _versions_value(LEGACY_DECISIONS_COMMIT_KEY)
+        recorded_sha = _versions_value(LEGACY_DECISIONS_SHA_KEY)
+        if recorded_commit != legacy_source["commit"]:
+            raise SystemExit(
+                f"versions.toml {LEGACY_DECISIONS_COMMIT_KEY} is {recorded_commit!r}, but "
+                f"{LEGACY_EXTRACT.name} was cut from {legacy_source['commit']}: the legacy "
+                "pair must come from one InferenceInfra main commit. Run: python3 "
+                "contracts/sync_from_inferenceinfra.py --legacy-from /path/to/InferenceInfra-at-main"
+            )
+        digest = hashlib.sha256(DECISIONS_LEGACY.read_bytes()).hexdigest()
+        if recorded_sha != digest:
+            raise SystemExit(
+                f"{DECISIONS_LEGACY.name} has sha256 {digest}, but versions.toml "
+                f"{LEGACY_DECISIONS_SHA_KEY} records {recorded_sha!r}: it is not the copy "
+                f"cut from InferenceInfra main {recorded_commit}"
+            )
+        legacy = f"; legacy {legacy_source['commit'][:8]}, {legacy_source['branch']}"
     stamp = f"{source['commit'][:8]}, {source['branch']}, {source['artifact']}"
     if extract.resolve() != EXTRACT.resolve():
         # An alternate extract proves nothing about what ships. generate_console
@@ -107,23 +202,11 @@ def check_local(extract: Path = EXTRACT) -> None:
         print(f"alternate extract provenance OK ({stamp})")
         return
     _run([sys.executable, str(GENERATOR), "--check"])
-    _run(
-        [
-            sys.executable,
-            str(GENERATOR),
-            "--check",
-            "--contract",
-            str(DECISIONS_CONTRACT),
-            "--output",
-            str(DECISIONS_BINDING),
-            "--operation-id",
-            "createDecisions",
-        ]
-    )
-    print(f"Wally CLI lock OK ({stamp})")
+    _run(_decisions_argv(check=True))
+    print(f"Wally CLI lock OK ({stamp}{legacy})")
 
 
-def _dirty_generated() -> list[str]:
+def _dirty_generated(paths: tuple[str, ...] = GENERATED) -> list[str]:
     """The generated files that differ from HEAD in this repo, if any.
 
     `diff --name-only HEAD` rather than `status --porcelain` on purpose: it
@@ -132,7 +215,7 @@ def _dirty_generated() -> list[str]:
     leading column and silently truncate the first path.) Both files are
     tracked, so nothing is missed by not reporting untracked entries.
     """
-    changed = _git(REPO, "diff", "--name-only", "HEAD", "--", *GENERATED)
+    changed = _git(REPO, "diff", "--name-only", "HEAD", "--", *paths)
     return [line.strip() for line in changed.splitlines() if line.strip()]
 
 
@@ -198,6 +281,55 @@ def sync_from(from_repo: Path, force: bool = False) -> None:
     print(f"synced InferenceInfra {commit[:8]} ({branch})")
 
 
+def legacy_from(from_repo: Path, force: bool = False) -> None:
+    """Refresh the legacy pair from a checkout of what legacy production runs (InferenceInfra main)."""
+    if not from_repo.is_dir():
+        raise SystemExit(f"--legacy-from {from_repo} is not a directory")
+    if _git(from_repo, "status", "--porcelain"):
+        raise SystemExit(f"--legacy-from {from_repo} has a dirty working tree")
+    if not force:
+        clobbered = _dirty_generated(LEGACY_GENERATED)
+        if clobbered:
+            raise SystemExit(
+                "these files have uncommitted changes and a legacy sync would overwrite "
+                "them:\n  " + "\n  ".join(clobbered) + "\nCommit or stash them first, or pass --force."
+            )
+    source = from_repo / CONTROL_PLANE
+    decisions = from_repo / DECISIONS_ARTIFACT
+    for path in (source, decisions):
+        if not path.is_file():
+            raise SystemExit(f"missing {path}")
+    commit = _git(from_repo, "rev-parse", "HEAD")
+    names = _pointed_names(from_repo, "refs/heads") + [
+        name
+        for name in (_strip_remote(n) for n in _pointed_names(from_repo, "refs/remotes"))
+        if name
+    ]
+    if "main" not in names:
+        # Legacy production deploys InferenceInfra main; a pair cut from anything else
+        # would make the binding read a server nobody runs.
+        raise SystemExit(f"--legacy-from {from_repo} is not at InferenceInfra main")
+    _run(
+        [
+            sys.executable,
+            str(EXTRACTOR),
+            str(source),
+            "--output",
+            str(LEGACY_EXTRACT),
+            "--source-commit",
+            commit,
+            "--source-branch",
+            "main",
+        ]
+    )
+    decisions_bytes = decisions.read_bytes()
+    DECISIONS_LEGACY.write_bytes(decisions_bytes)
+    _record_legacy_decisions(commit, hashlib.sha256(decisions_bytes).hexdigest())
+    _run([sys.executable, str(GENERATOR)])
+    _run(_decisions_argv(check=False))
+    print(f"synced legacy InferenceInfra {commit[:8]} (main)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from", dest="from_repo", type=Path, help="InferenceInfra checkout")
@@ -205,6 +337,12 @@ def main() -> None:
         "--check",
         action="store_true",
         help="fail if the committed pin is stale (hermetic without --from)",
+    )
+    parser.add_argument(
+        "--legacy-from",
+        dest="legacy_repo",
+        type=Path,
+        help="InferenceInfra checkout at main (legacy production): refresh the legacy pair",
     )
     parser.add_argument(
         "--force",
@@ -222,10 +360,12 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
-    if args.from_repo is None and not args.check:
+    if args.from_repo is None and args.legacy_repo is None and not args.check:
         parser.error("pass --from <InferenceInfra checkout> and/or --check")
     if args.from_repo is not None:
         sync_from(args.from_repo.resolve(), force=args.force)
+    if args.legacy_repo is not None:
+        legacy_from(args.legacy_repo.resolve(), force=args.force)
     if args.check:
         check_local(args.extract)
 

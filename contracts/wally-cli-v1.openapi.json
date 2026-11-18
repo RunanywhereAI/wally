@@ -207,7 +207,7 @@
             }
           }
         },
-        "description": "A per-key or per-account limit (capacity and overload, on every route, are 503 with Retry-After)",
+        "description": "Entitlement or GPU admission capacity limit",
         "headers": {
           "Access-Control-Expose-Headers": {
             "description": "Response headers a browser client may read",
@@ -271,14 +271,6 @@
         "minLength": 1,
         "type": "string"
       },
-      "AccountKind": {
-        "enum": [
-          "personal",
-          "team"
-        ],
-        "title": "AccountKind",
-        "type": "string"
-      },
       "ApiError": {
         "additionalProperties": false,
         "description": "One closed error shape for every non-public control-plane route.",
@@ -321,6 +313,10 @@
           "expired_api_key",
           "gateway_unavailable",
           "idempotency_key_reused",
+          "access_programme_closed",
+          "access_request_exists",
+          "access_request_closed",
+          "invalid_transition",
           "insufficient_credit",
           "invalid_api_key",
           "model_not_entitled",
@@ -338,22 +334,41 @@
           "reconciliation_unverified",
           "retention_managed_by_runanywhere",
           "card_required",
-          "access_request_exists",
-          "access_request_closed",
-          "access_programme_closed",
-          "not_staff",
-          "invalid_transition",
-          "coding_plan_closed",
-          "coding_plan_already_applied",
-          "student_email_required",
-          "student_email_unverified",
-          "student_code_invalid",
-          "coding_plan_full",
-          "team_access_denied",
-          "team_session_stale",
-          "team_role_required",
-          "personal_account_only",
-          "last_team_owner"
+          "invalid_account_id",
+          "account_not_found",
+          "identity_email_in_use",
+          "role_forbidden",
+          "organization_playground_unavailable",
+          "operator_unknown",
+          "operator_forbidden",
+          "operator_scope",
+          "email_not_confirmed",
+          "invitation_not_found",
+          "invitation_expired",
+          "already_a_member",
+          "last_owner",
+          "role_not_available",
+          "personal_account",
+          "invitation_pending",
+          "too_many_pending_invitations",
+          "organization_limit_reached",
+          "member_not_found",
+          "account_has_paid_credit",
+          "account_has_live_reservation",
+          "account_has_dedicated_pool",
+          "already_a_partner",
+          "not_a_partner",
+          "gateway_taken",
+          "unknown_price_version",
+          "model_not_priced",
+          "go_live_evidence_missing",
+          "notice_too_short",
+          "stop_scope_invalid",
+          "invoiced_billing_off",
+          "invoiced_balance_outstanding",
+          "partner_has_own_book",
+          "unknown_price_book",
+          "operation_not_retryable"
         ],
         "title": "ApiErrorCode",
         "type": "string"
@@ -398,6 +413,12 @@
         "additionalProperties": false,
         "description": "One entitled model, priced. Straight from `pricing.catalog()` - the same\nnumbers the credit gate charges against, so a published price cannot drift\nfrom a billed one (G7).",
         "properties": {
+          "cache_write_per_mtok": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Cache Write Per Mtok",
+            "type": "integer"
+          },
           "cached_input_per_mtok": {
             "maximum": 9007199254740991.0,
             "minimum": 0.0,
@@ -801,7 +822,6 @@
       "ErrorCode": {
         "enum": [
           "bad_request",
-          "context_length_exceeded",
           "not_found",
           "payload_too_large",
           "unprocessable",
@@ -978,46 +998,9 @@
         "title": "Harness",
         "type": "string"
       },
-      "IdentityAccount": {
-        "additionalProperties": false,
-        "description": "The account a credential acts on (teams). Additive: a CLI that does not\nknow it ignores it, and it is absent while teams are off.",
-        "properties": {
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/AccountKind"
-          },
-          "name": {
-            "maxLength": 120,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "kind"
-        ],
-        "title": "IdentityAccount",
-        "type": "object"
-      },
       "IdentityResponse": {
         "additionalProperties": false,
         "properties": {
-          "account": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IdentityAccount"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "email": {
             "maxLength": 320,
             "minLength": 3,
@@ -1210,7 +1193,7 @@
       },
       "ModelReasoning": {
         "additionalProperties": false,
-        "description": "How this model reasons (docs/reference/gateway.md, Reasoning budget). levels: the native reasoning_effort levels, empty for a model that only switches thinking on or off; default_level: the level a request naming none runs at; thinking_off: whether reasoning_effort none turns thinking off; thinking_ceiling_tokens: the safety ceiling on thinking; budget_enforced: whether max_tokens caps the answer with thinking budgeted separately (reasoning.max_tokens a hard thinking limit).",
+        "description": "How this model reasons (docs/reference/models.md, Reasoning levels and thinking ceilings). levels: the native reasoning_effort levels, empty for a model that only switches thinking on or off; default_level: the level a request naming none runs at; thinking_off: whether reasoning_effort none turns thinking off; thinking_ceiling_tokens: the safety ceiling on thinking; budget_enforced: whether max_tokens caps the answer with thinking budgeted separately (reasoning.max_tokens a hard thinking limit).",
         "properties": {
           "budget_enforced": {
             "type": "boolean"
@@ -2375,7 +2358,7 @@
     },
     "/v1/me": {
       "get": {
-        "description": "`rcli whoami`. Authenticated by the API key the CLI was issued, because\nthat is the only credential it has.\n\nThe contract declares that key as `BearerAuth`. The same Authorization\nheader also carries the console's signed PropelAuth session token, and\nwhere PropelAuth is not configured, never in production, the `X-User-Id`\nand `X-User-Email` development identity headers are accepted instead.\nNeither is a separate security scheme: this contract declares no console\nsession scheme on any operation, and the development headers are not a\ncredential.",
+        "description": "`rcli whoami`. Authenticated by the API key the CLI was issued, because\nthat is the only credential it has.\n\nThe contract declares that key as `BearerAuth`. The same Authorization\nheader also carries the console session token, and where no identity\nprovider is configured, never in production, the `X-User-Id`\nand `X-User-Email` development identity headers are accepted instead.\nNeither is a separate security scheme: this contract declares no console\nsession scheme on any operation, and the development headers are not a\ncredential.",
         "operationId": "getCurrentIdentity",
         "parameters": [
           {
@@ -2419,6 +2402,7 @@
     },
     "/v1/models": {
       "get": {
+        "description": "With a key, the models that key may call. With no credentials at all, every model this deployment serves publicly, in the same format. An invalid or revoked key is refused 401, never answered with the public list.",
         "operationId": "listModels",
         "responses": {
           "200": {
@@ -2429,7 +2413,15 @@
                 }
               }
             },
-            "description": "Available model aliases"
+            "description": "Available model aliases",
+            "headers": {
+              "x-request-id": {
+                "description": "Request correlation id",
+                "schema": {
+                  "$ref": "#/components/schemas/RequestId"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -2444,9 +2436,10 @@
         "security": [
           {
             "BearerAuth": []
-          }
+          },
+          {}
         ],
-        "summary": "List models available to the current key",
+        "summary": "List models",
         "tags": [
           "inference"
         ]
@@ -2454,7 +2447,7 @@
     },
     "/v1/models/catalog": {
       "get": {
-        "description": "Which models we serve and what they cost.\n\nThe console used to name a single model from a config constant, which was\ntrue when the endpoint served one and became wrong the moment LiteLLM sat in\nfront of three. Prices come from the same catalog the gate charges against,\nso a published price cannot drift from a billed one.",
+        "description": "Which models we serve and what they cost.\n\nThe console used to name a single model from a config constant, which was\ntrue when the endpoint served one and became wrong the moment LiteLLM sat in\nfront of three. Prices come from the same catalog the gate charges against,\nso a published price cannot drift from a billed one.\n\nAnonymous, and the same answer for everyone, except that a signed-in account also sees the\nprivate models granted to it (`private_grants.models_by_account`), named and priced, so the\nconsole does not show its usage of one as \"Retired\". The credential is read from the request\nand not declared, so the published contract is unchanged; a caller who cannot be shown to be\nsigned in gets the anonymous answer, never an error, and nothing is made for them\n(`security.optional_account`). When no grant exists at all nothing is queried for the caller.",
         "operationId": "getModelCatalog",
         "responses": {
           "200": {
@@ -2479,7 +2472,7 @@
     },
     "/v1/requests/{request_id}/cancel": {
       "post": {
-        "description": "End an in-flight request the caller's key started (#440).\n\n`request_id` is the `x-request-id` the customer received on the response\nbeing cancelled. The GPU nodes are asked on this service's behalf with the\ncredential they already hold for this ledger (see services/cancel.py), and\neach ends the request only if that key started it. Anything else -- an id\nnobody is serving, a request that already finished, someone else's -- is\nthe same 404, so this route cannot be used to learn about other customers'\nrequests. A successful cancel is 202: the node has told the engine to stop;\nthe stream's end and its settlement follow on their own path.",
+        "description": "End an in-flight request the caller's key started (#440).\n\n`request_id` is the `x-request-id` the customer received on the response\nbeing cancelled. In `push` mode (the default) the meters are asked on this\nservice's behalf with an ID token for their own address (see services/cancel.py). In `pull`\nmode (`RA_CANCEL_MODE`, ADR 0449) this service calls nothing: it writes a cancel intent that\neach registered cell fetches, and waits up to 3 seconds for the cell's answer. Either way each\nnode ends the request only if that key started it, and anything else -- an id nobody is\nserving, a request that already finished, someone else's, or (pull) a cancel no\ncell confirmed in time -- is the same 404, so this route cannot be used to learn\nabout other customers' requests. A successful cancel is 202: the node has told\nthe engine to stop; the stream's end and its settlement follow on their own path.",
         "operationId": "cancelRequest",
         "parameters": [
           {
@@ -2503,6 +2496,23 @@
           "422": {
             "$ref": "#/components/responses/ValidationFailed"
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "The key has made 30 cancel calls in the last minute, or too many of its calls (4) or this instance's (64) are waiting (only when cancel_mode is pull); ask again after the Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "$ref": "#/components/responses/ApiError"
           }
@@ -2521,8 +2531,8 @@
   },
   "x-runanywhere-source": {
     "artifact": "contracts/control-plane-v1.openapi.json",
-    "branch": "feat/coding-plan-applications",
-    "commit": "b80286a668b3438474919383190d58d1f5bef612",
+    "branch": "prod",
+    "commit": "85c44d915c02be41d401d862a0941298480e09b6",
     "repository": "RunanywhereAI/InferenceInfra"
   }
 }
