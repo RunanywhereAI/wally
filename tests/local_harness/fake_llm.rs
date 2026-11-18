@@ -314,6 +314,7 @@ fn main() {
             access_token: token,
             refresh_token: String::new(),
             expires_at,
+            plan: String::new(),
         };
         if let Err(error) = wally::account::save(&credentials) {
             eprintln!("fixture credential setup failed: {error}");

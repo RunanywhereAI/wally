@@ -202,6 +202,9 @@ fn apply_grant(grant: &Grant, credentials: &mut Credentials) {
     if !grant.email.is_empty() {
         credentials.email = grant.email.clone();
     }
+    if !grant.plan.is_empty() {
+        credentials.plan = grant.plan.clone();
+    }
     credentials.expires_at = epoch_seconds()
         + if grant.expires_in > 0 {
             grant.expires_in

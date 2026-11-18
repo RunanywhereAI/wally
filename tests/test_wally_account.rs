@@ -117,6 +117,7 @@ fn credential_roundtrip_and_permissions() {
         access_token: "access-secret-that-must-not-be-logged".to_string(),
         refresh_token: "refresh-secret-that-must-not-be-logged".to_string(),
         expires_at: 123456789,
+        plan: "coding_plan".to_string(),
     };
     account::save(&expected).expect("save");
 
@@ -146,6 +147,7 @@ fn credential_roundtrip_and_permissions() {
     assert_eq!(actual.access_token, expected.access_token);
     assert_eq!(actual.refresh_token, expected.refresh_token);
     assert_eq!(actual.expires_at, expected.expires_at);
+    assert_eq!(actual.plan, expected.plan);
 
     account::clear().expect("clear");
     assert!(!std::path::Path::new(&account::credentials_path()).exists());
@@ -314,6 +316,7 @@ fn credentials_round_trip_through_a_non_ascii_profile_path() {
         access_token: "a-token".to_string(),
         refresh_token: "r-token".to_string(),
         expires_at: 123,
+        plan: String::new(),
     };
     account::save(&saved).expect("save into a non-ASCII profile directory");
 
@@ -1983,6 +1986,7 @@ fn stale_session(home: &TempHome, client: ConsoleClient) -> ConsoleSession {
         access_token: "stale-token".to_string(),
         refresh_token: "old-refresh".to_string(),
         expires_at: 0,
+        plan: String::new(),
     };
     account::save(&credentials).expect("save");
     assert!(home.path().exists());
@@ -2649,6 +2653,7 @@ fn an_unreachable_console_on_refresh_is_not_a_reason_to_log_in_again() {
         access_token: "stale-token".to_string(),
         refresh_token: "old-refresh".to_string(),
         expires_at: 1,
+        plan: String::new(),
     };
     let error = ConsoleSession::resume(console_refusing_then_unreachable(), credentials, 1_000)
         .err()
@@ -2674,6 +2679,7 @@ fn a_refreshed_session_expires_on_the_clock_it_was_opened_with() {
         access_token: "stale-token".to_string(),
         refresh_token: "old-refresh".to_string(),
         expires_at: NOW - 1,
+        plan: String::new(),
     };
     account::save(&credentials).expect("save");
     ConsoleSession::resume(client, credentials, NOW).expect("refreshed on open");

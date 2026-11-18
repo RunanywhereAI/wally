@@ -30,6 +30,7 @@ fn seed(expires_at: i64) -> Result<(), String> {
         access_token: "old-access-token".to_string(),
         refresh_token: "refresh-token".to_string(),
         expires_at,
+        plan: String::new(),
     };
     account::save(&credentials)
 }

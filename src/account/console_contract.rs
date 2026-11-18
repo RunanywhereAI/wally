@@ -349,19 +349,22 @@ impl CliClient {
 pub enum CliPlan {
     #[default]
     KBeta,
+    KCodingPlan,
 }
 
 impl CliPlan {
     pub fn as_str(&self) -> &'static str {
         match self {
             CliPlan::KBeta => "beta",
+            CliPlan::KCodingPlan => "coding_plan",
         }
     }
 
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw {
             "beta" => Ok(CliPlan::KBeta),
-            other => Err(format!("unknown CliPlan: {other}")),
+            "coding_plan" => Ok(CliPlan::KCodingPlan),
+            _other => Ok(CliPlan::KBeta),
         }
     }
 }
